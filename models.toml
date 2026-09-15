@@ -33,8 +33,27 @@ cfg_scale      = 5.0
 sampler        = "euler"
 upscale_factor = 2.0          # FSR: 768 -> 1536
 sharpness      = 0.35         # CAS sharpness, 0..1
-refine_steps    = 2           # "High quality" img2img refine (0 = disabled)
+# "Refine image": a low-denoise img2img pass at base res (0 steps = disabled).
+# Steps are *effective* denoising steps — rustimage scales the schedule it hands
+# sd.cpp by 1/strength, since sd.cpp trims img2img schedules by strength rather
+# than scaling them. Strength must be 0.05..1.0.
+refine_steps    = 2
 refine_strength = 0.30
+# "Hi-res pass": a second img2img at the OUTPUT resolution, which is what adds
+# detail the FSR upscale can't invent. Optionally enlarges first (the UI picks a
+# factor up to 4×). 0 steps = disabled, and no button appears. Effective steps,
+# same as refine_steps above — this is the pass that decides how sharp the
+# result looks, so raise it before reaching for sharpness.
+hires_steps     = 8
+hires_strength  = 0.30
+# Longest side the hi-res diffusion may run at. Anything beyond it is reached
+# with a final FSR upscale instead — past ~2048 SDXL's quality drops and the
+# cost climbs quadratically. Measured on a 7900 XTX at 8 steps: 1536² ≈ 12 s,
+# 2048² ≈ 20 s (both ~10 GB VRAM, with flash attention below).
+hires_max_side  = 2048
+# Flash attention for the hi-res pass. Worth 6× at 2048² (122 s -> 20 s); turn
+# it off only if your GPU/driver can't do it.
+hires_flash_attn = true
 # weight_type  = "q8_0"       # optional on-the-fly quantization
 # extra_args   = ["--diffusion-fa"]
 
@@ -55,3 +74,5 @@ refine_strength = 0.30
 # sharpness      = 0.35
 # refine_steps    = 2
 # refine_strength = 0.30
+# hires_steps     = 6           # Turbo models need fewer steps here too
+# hires_strength  = 0.30

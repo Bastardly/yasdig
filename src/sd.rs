@@ -4,7 +4,7 @@
 //! [`Profile`], with `weight_type`/`extra_args` escape hatches so CLI changes
 //! need only a config edit.
 
-use crate::config::{Config, Profile};
+use crate::config::{Config, Profile, MIN_STRENGTH};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -52,9 +52,17 @@ impl<'a> SdRunner<'a> {
         self.run(cmd, "txt2img")
     }
 
-    /// image-to-image low-denoise refine (the "High quality" toggle). Reads
-    /// `init`, writes `out`, using the profile's refine_* params.
-    pub fn img2img_refine(
+    /// Low-denoise image-to-image. Reads `init`, writes `out`. Drives both the
+    /// base-resolution refine and the hi-res pass, which differ only in their
+    /// strength/steps and in needing the large-image memory flags.
+    ///
+    /// `steps` is how many denoising steps the pass should actually run. That is
+    /// deliberately not the number handed to `--steps` — see below.
+    ///
+    /// `big_image` adds `--vae-tiling` and (unless the profile disables it)
+    /// `--diffusion-fa`. Both matter above ~1536²: measured on a 7900 XTX, a
+    /// 2048² pass takes 122 s without flash attention and 20 s with it.
+    pub fn img2img(
         &self,
         p: &Profile,
         prompt: &str,
@@ -62,13 +70,32 @@ impl<'a> SdRunner<'a> {
         seed: i64,
         init: &Path,
         out: &Path,
+        strength: f32,
+        steps: u32,
+        big_image: bool,
+        label: &str,
     ) -> Result<()> {
         let mut cmd = self.base_cmd(p, prompt, negative, seed, out);
         // sd.cpp derives dimensions from the init image, so no -W/-H here.
         cmd.args(["-i", &path_str(init)]);
-        cmd.args(["--strength", &format!("{}", p.refine_strength)]);
-        cmd.args(["--steps", &p.refine_steps.max(1).to_string()]);
-        self.run(cmd, "img2img refine")
+        cmd.args(["--strength", &format!("{strength}")]);
+        // sd.cpp *trims* an img2img schedule by strength instead of scaling it:
+        // it keeps the last `t_enc = steps * strength` steps of a `steps`-long
+        // schedule. So `--steps 2 --strength 0.3` gives t_enc = 0 and starts at
+        // a sigma near zero — the image comes back untouched. Scale the schedule
+        // up by 1/strength so the trim lands on the steps the caller asked for;
+        // this is the same compensation sd.cpp applies to its own hires-fix
+        // (pipeline/request.cpp, "sd-webui behavior"). The trim keeps one extra
+        // sigma, so the pass runs steps + 1 — near enough not to correct for.
+        let sched = ((steps.max(1) as f32) / strength.max(MIN_STRENGTH)).ceil() as u32;
+        cmd.args(["--steps", &sched.max(1).to_string()]);
+        if big_image {
+            cmd.arg("--vae-tiling");
+            if p.hires_flash_attn {
+                cmd.arg("--diffusion-fa");
+            }
+        }
+        self.run(cmd, label)
     }
 
     /// Flags common to both modes.

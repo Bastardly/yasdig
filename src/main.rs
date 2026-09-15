@@ -5,10 +5,12 @@
 //! serialized (no VRAM thrash). Routes:
 //!   GET  /            -> static web UI
 //!   GET  /templates   -> JSON list of model profiles
-//!   POST /generate    -> {prompt, template, negative?, seed?, quality?}
-//!                        -> {image_base64, width, height, seed, refine_id, timings}
-//!   POST /refine      -> {refine_id}  (refine a previous unrefined result)
-//!                        -> same shape, with refine_id null
+//!   POST /generate    -> {prompt, template, negative?, seed?, ...overrides}
+//!                        -> {image_base64, width, height, seed, image_id,
+//!                            can_refine, can_hires, timings}
+//!   POST /refine      -> {image_id}            img2img at base resolution
+//!   POST /hires       -> {image_id, upscale}   img2img at output resolution
+//!                        both return the same shape as /generate
 
 mod config;
 mod fsr;
@@ -34,8 +36,10 @@ struct Job {
 
 enum JobKind {
     Generate(GenRequest),
-    /// Refine a base image the engine retained from an earlier generation.
+    /// Refine the base image the engine retained from an earlier generation.
     Refine(u64),
+    /// Re-diffuse an earlier result at output resolution, optionally enlarging.
+    Hires { id: u64, upscale: f32 },
 }
 
 fn main() -> Result<()> {
@@ -85,6 +89,7 @@ fn main() -> Result<()> {
                     let result = match job.kind {
                         JobKind::Generate(req) => engine.run(&req),
                         JobKind::Refine(id) => engine.refine(id),
+                        JobKind::Hires { id, upscale } => engine.hires(id, upscale),
                     };
                     let _ = job.reply.send(result);
                 }
@@ -153,6 +158,7 @@ fn handle_conn(
         }
         ("POST", "/generate") => handle_generate(&mut conn, job_tx, &req.body),
         ("POST", "/refine") => handle_refine(&mut conn, job_tx, &req.body),
+        ("POST", "/hires") => handle_hires(&mut conn, job_tx, &req.body),
         _ => conn.respond(404, "text/plain", b"not found"),
     }
 }
@@ -167,8 +173,6 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         #[serde(default)]
         seed: Option<i64>,
         #[serde(default)]
-        quality: Option<bool>,
-        #[serde(default)]
         steps: Option<u32>,
         #[serde(default)]
         cfg_scale: Option<f32>,
@@ -178,17 +182,19 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         width: Option<u32>,
         #[serde(default)]
         height: Option<u32>,
+        #[serde(default)]
+        refine_steps: Option<u32>,
+        #[serde(default)]
+        refine_strength: Option<f32>,
+        #[serde(default)]
+        hires_steps: Option<u32>,
+        #[serde(default)]
+        hires_strength: Option<f32>,
     }
 
-    let dto: Dto = match serde_json::from_slice(body) {
-        Ok(d) => d,
-        Err(e) => {
-            return conn.respond(
-                400,
-                "application/json",
-                error_json(&format!("bad request: {e}")).as_bytes(),
-            );
-        }
+    let dto: Dto = match parse_json::<Dto>(conn, body)? {
+        Some(d) => d,
+        None => return Ok(()),
     };
 
     let req = GenRequest {
@@ -196,38 +202,74 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         template: dto.template,
         negative: dto.negative,
         seed: dto.seed.unwrap_or(-1),
-        quality: dto.quality.unwrap_or(false),
         steps: dto.steps,
         cfg_scale: dto.cfg_scale,
         sampler: dto.sampler,
         width: dto.width,
         height: dto.height,
+        refine_steps: dto.refine_steps,
+        refine_strength: dto.refine_strength,
+        hires_steps: dto.hires_steps,
+        hires_strength: dto.hires_strength,
     };
 
     submit(conn, job_tx, JobKind::Generate(req), 500)
 }
 
-/// Refine an earlier unrefined result, identified by the `refine_id` that
-/// generation returned. An unknown id means the base image is gone (evicted or
-/// the server restarted), which is a client-side staleness problem — 400, not 500.
+/// Escalate the quality of an earlier result, identified by the `image_id` that
+/// generation returned. An unknown id means the intermediates are gone (evicted
+/// or the server restarted), which is a client-side staleness problem — 400, not
+/// 500. The same goes for asking for a pass the image can't take.
 fn handle_refine(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
-        refine_id: u64,
+        image_id: u64,
     }
 
-    let dto: Dto = match serde_json::from_slice(body) {
-        Ok(d) => d,
+    match parse_json::<Dto>(conn, body)? {
+        Some(dto) => submit(conn, job_tx, JobKind::Refine(dto.image_id), 400),
+        None => Ok(()),
+    }
+}
+
+fn handle_hires(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+        #[serde(default)]
+        upscale: Option<f32>,
+    }
+
+    match parse_json::<Dto>(conn, body)? {
+        Some(dto) => submit(
+            conn,
+            job_tx,
+            JobKind::Hires {
+                id: dto.image_id,
+                upscale: dto.upscale.unwrap_or(1.0),
+            },
+            400,
+        ),
+        None => Ok(()),
+    }
+}
+
+/// Parse a JSON request body, writing a 400 and returning `None` if it's malformed.
+fn parse_json<T: serde::de::DeserializeOwned>(
+    conn: &mut http::Connection,
+    body: &[u8],
+) -> Result<Option<T>> {
+    match serde_json::from_slice(body) {
+        Ok(v) => Ok(Some(v)),
         Err(e) => {
-            return conn.respond(
+            conn.respond(
                 400,
                 "application/json",
                 error_json(&format!("bad request: {e}")).as_bytes(),
-            );
+            )?;
+            Ok(None)
         }
-    };
-
-    submit(conn, job_tx, JobKind::Refine(dto.refine_id), 400)
+    }
 }
 
 /// Enqueue GPU work, wait for the worker, and write the JSON response.
@@ -267,26 +309,28 @@ fn submit(
     }
 }
 
-/// The image plus its metadata as JSON. `refine_id` is null when the result
-/// can't be refined further, which is what the UI keys the Refine button off.
+/// The image plus its metadata as JSON. `can_refine` / `can_hires` say which
+/// escalations are still available for `image_id`, which is what the UI keys
+/// the buttons above the image off.
 fn result_json(res: &GenResult) -> String {
     let b64 = base64::engine::general_purpose::STANDARD.encode(&res.png);
-    let refine_id = match res.refine_id {
-        Some(id) => id.to_string(),
-        None => "null".to_string(),
-    };
     format!(
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refined\":{},\
-         \"refine_id\":{},\"timings\":{{\"gen_ms\":{},\"fsr_ms\":{},\"refine_ms\":{}}}}}",
+         \"hires_passes\":{},\"image_id\":{},\"can_refine\":{},\"can_hires\":{},\
+         \"timings\":{{\"gen_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{}}}}}",
         b64,
         res.width,
         res.height,
         res.seed,
         res.refined,
-        refine_id,
+        res.hires_passes,
+        res.image_id,
+        res.can_refine,
+        res.can_hires,
         res.timings.gen_ms,
         res.timings.fsr_ms,
         res.timings.refine_ms,
+        res.timings.hires_ms,
     )
 }
 
@@ -303,7 +347,9 @@ fn build_models_json(cfg: &Config) -> String {
             format!(
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
-                 \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\"can_refine\":{}}}",
+                 \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\
+                 \"refine_steps\":{},\"refine_strength\":{},\
+                 \"hires_steps\":{},\"hires_strength\":{}}}",
                 json_str(&p.name),
                 json_str(&p.description),
                 p.discovered,
@@ -315,7 +361,10 @@ fn build_models_json(cfg: &Config) -> String {
                 p.steps,
                 p.cfg_scale,
                 json_str(&p.sampler),
-                p.refine_steps > 0,
+                p.refine_steps,
+                p.refine_strength,
+                p.hires_steps,
+                p.hires_strength,
             )
         })
         .collect();

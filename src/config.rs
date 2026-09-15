@@ -9,7 +9,7 @@
 //! Both are merged into a single name→[`Profile`] registry the rest of the app
 //! uses.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -99,6 +99,14 @@ pub struct Defaults {
     #[serde(default = "default_refine_strength")]
     pub refine_strength: f32,
     #[serde(default)]
+    pub hires_steps: u32,
+    #[serde(default = "default_hires_strength")]
+    pub hires_strength: f32,
+    #[serde(default = "default_hires_max_side")]
+    pub hires_max_side: u32,
+    #[serde(default = "default_true")]
+    pub hires_flash_attn: bool,
+    #[serde(default)]
     pub weight_type: Option<String>,
     #[serde(default)]
     pub extra_args: Vec<String>,
@@ -116,6 +124,10 @@ impl Default for Defaults {
             sharpness: default_sharpness(),
             refine_steps: 0,
             refine_strength: default_refine_strength(),
+            hires_steps: 0,
+            hires_strength: default_hires_strength(),
+            hires_max_side: default_hires_max_side(),
+            hires_flash_attn: true,
             weight_type: None,
             extra_args: Vec::new(),
         }
@@ -139,8 +151,16 @@ pub struct Template {
     pub sharpness: f32,
     #[serde(default)]
     pub refine_steps: u32,
-    #[serde(default)]
+    #[serde(default = "default_refine_strength")]
     pub refine_strength: f32,
+    #[serde(default)]
+    pub hires_steps: u32,
+    #[serde(default = "default_hires_strength")]
+    pub hires_strength: f32,
+    #[serde(default = "default_hires_max_side")]
+    pub hires_max_side: u32,
+    #[serde(default = "default_true")]
+    pub hires_flash_attn: bool,
     #[serde(default)]
     pub weight_type: Option<String>,
     #[serde(default)]
@@ -174,6 +194,26 @@ fn default_sharpness() -> f32 {
 fn default_refine_strength() -> f32 {
     0.30
 }
+// Same denoise as the base-res refine: enough to resolve real detail at the
+// larger size, low enough that the composition doesn't drift.
+fn default_hires_strength() -> f32 {
+    0.30
+}
+/// Longest side the hi-res diffusion pass may run at. SDXL's quality falls off
+/// past this, and the cost climbs quadratically; anything beyond it is reached
+/// with a final (cheap) FSR upscale instead.
+fn default_hires_max_side() -> u32 {
+    2048
+}
+fn default_true() -> bool {
+    true
+}
+
+/// Lowest img2img denoise strength we accept. sd.cpp trims an img2img schedule
+/// by strength, so we scale the schedule up by `1 / strength` to compensate
+/// (see `SdRunner::img2img`) — a floor keeps that from exploding, and a
+/// strength of 0 would make the pass a silent no-op.
+pub const MIN_STRENGTH: f32 = 0.05;
 
 /// A fully-resolved, ready-to-run model entry (from a template or discovery).
 #[derive(Debug, Clone)]
@@ -190,12 +230,36 @@ pub struct Profile {
     pub sharpness: f32,
     pub refine_steps: u32,
     pub refine_strength: f32,
+    pub hires_steps: u32,
+    pub hires_strength: f32,
+    pub hires_max_side: u32,
+    pub hires_flash_attn: bool,
     pub weight_type: Option<String>,
     pub extra_args: Vec<String>,
     /// True if this came from a folder scan rather than an explicit template.
     pub discovered: bool,
     /// True if the checkpoint file actually exists on disk.
     pub exists: bool,
+}
+
+impl Profile {
+    /// Reject denoise strengths that would make a pass a no-op (or blow up the
+    /// compensated schedule). Called once per resolved profile at load, and
+    /// again in the pipeline after per-request overrides are applied.
+    pub fn validate(&self) -> Result<()> {
+        for (field, v) in [
+            ("refine_strength", self.refine_strength),
+            ("hires_strength", self.hires_strength),
+        ] {
+            if !(MIN_STRENGTH..=1.0).contains(&v) {
+                bail!(
+                    "'{}': {field} is {v}, must be between {MIN_STRENGTH} and 1.0",
+                    self.name
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Config {
@@ -211,6 +275,13 @@ impl Config {
             _ => PathBuf::from("."),
         };
         cfg.base_dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+
+        // Catch unusable denoise settings at startup rather than on the first
+        // refine, where they'd surface as a pass that silently does nothing.
+        for p in cfg.registry().values() {
+            p.validate()
+                .with_context(|| format!("in {}", path.display()))?;
+        }
         Ok(cfg)
     }
 
@@ -275,6 +346,10 @@ impl Config {
                     sharpness: t.sharpness,
                     refine_steps: t.refine_steps,
                     refine_strength: t.refine_strength,
+                    hires_steps: t.hires_steps,
+                    hires_strength: t.hires_strength,
+                    hires_max_side: t.hires_max_side,
+                    hires_flash_attn: t.hires_flash_attn,
                     weight_type: t.weight_type.clone(),
                     extra_args: t.extra_args.clone(),
                     discovered: false,
@@ -315,6 +390,10 @@ impl Config {
                     sharpness: d.sharpness,
                     refine_steps: d.refine_steps,
                     refine_strength: d.refine_strength,
+                    hires_steps: d.hires_steps,
+                    hires_strength: d.hires_strength,
+                    hires_max_side: d.hires_max_side,
+                    hires_flash_attn: d.hires_flash_attn,
                     weight_type: d.weight_type.clone(),
                     extra_args: d.extra_args.clone(),
                     discovered: true,

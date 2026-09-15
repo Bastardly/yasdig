@@ -33,17 +33,30 @@
   textarea { resize: vertical; min-height: 64px; }
   .row { display: flex; gap: 12px; flex-wrap: wrap; }
   .row > div { flex: 1 1 160px; }
-  .check { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
-  .check input { width: auto; }
-  .check label { margin: 0; color: #e6edf3; }
   button {
     margin-top: 16px; width: 100%; padding: 11px; font: inherit; font-weight: 600;
     background: #238636; color: #fff; border: 0; border-radius: 8px; cursor: pointer;
   }
   /* Declared before :disabled — same specificity, so source order decides. */
-  button.secondary { background: #1f6feb; margin-top: 12px; }
+  button.secondary { background: #1f6feb; }
   button:disabled { background: #30363d; color: #8b949e; cursor: default; }
-  .result img { max-width: 100%; border-radius: 10px; border: 1px solid #30363d; display: block; margin-top: 12px; }
+  /* The escalation controls sit above the image; they share a row when the
+     column is wide enough and stack when it isn't. */
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .actions button { margin-top: 0; width: auto; flex: 1 1 140px; padding: 9px 14px; }
+  .actions select { width: auto; flex: 0 0 auto; }
+  .result img {
+    max-width: 100%; border-radius: 10px; border: 1px solid #30363d;
+    display: block; margin-top: 12px; cursor: zoom-in;
+  }
+  /* Full-size viewer: the image keeps its natural dimensions and the dialog
+     scrolls, so you inspect it at true 1:1 instead of a fitted preview. */
+  #lightbox {
+    width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh;
+    margin: 0; padding: 0; border: 0; background: transparent; overflow: auto;
+  }
+  #lightbox::backdrop { background: rgba(0, 0, 0, .85); }
+  #lightbox img { display: block; cursor: zoom-out; }
   .meta { font-size: 13px; color: #8b949e; }
   .meta b { color: #e6edf3; font-weight: 600; }
   .err { color: #ff7b72; white-space: pre-wrap; font-size: 13px; margin-top: 12px; }
@@ -66,7 +79,7 @@
     <textarea id="prompt" placeholder="a lovely cat, cinematic lighting">a lovely cat, cinematic lighting</textarea>
 
     <label for="negative">Negative prompt (optional)</label>
-    <input id="negative" placeholder="blurry, low quality">
+    <input id="negative" placeholder="blurry, low quality" value="watermark, worst quality, low quality">
 
     <div class="row">
       <div>
@@ -79,8 +92,7 @@
       </div>
     </div>
 
-    <details id="adv">
-      <summary>Advanced (per-generation overrides)</summary>
+
       <div class="row">
         <div>
           <label for="steps">Steps</label>
@@ -113,12 +125,34 @@
       </div>
       <p class="sub" style="margin:8px 0 0">Turbo/LCM models: try steps 1–4, CFG 1.
         Standard SDXL: steps ~20, CFG ~5.</p>
-    </details>
 
-    <div class="check">
-      <input id="quality" type="checkbox">
-      <label for="quality">High quality (img2img refine pass)</label>
-    </div>
+      <div class="row">
+        <div>
+          <label for="rsteps">Refine steps</label>
+          <input id="rsteps" type="number" min="0" max="100">
+        </div>
+        <div>
+          <label for="rstrength">Refine strength</label>
+          <input id="rstrength" type="number" step="0.05" min="0.05" max="1">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="hsteps">Hi-res steps</label>
+          <input id="hsteps" type="number" min="0" max="100">
+        </div>
+        <div>
+          <label for="hstrength">Hi-res strength</label>
+          <input id="hstrength" type="number" step="0.05" min="0.05" max="1">
+        </div>
+      </div>
+      <p class="sub" style="margin:8px 0 0">Refine and hi-res are img2img passes
+        over the image you already have, run from the buttons above the result.
+        <b>Steps</b> is how many denoising steps actually run — more steps resolve
+        more detail, which is what cures a soft upscale. <b>Strength</b> is how far
+        the pass may move from the source: 0.3 touches it up, 0.7 reinterprets it.
+        <b>0 steps</b> disables a pass and hides its button.</p>
+
 
     <button id="go">Generate</button>
     <div id="err" class="err"></div>
@@ -128,12 +162,14 @@
   </div>
 </div>
 
+<dialog id="lightbox"><img alt="full size result"></dialog>
+
 <script>
 const $ = (id) => document.getElementById(id);
 let models = [];
-// Handle for refining the image currently on screen; null when it can't be
-// refined (already refined, model has refine_steps = 0, or nothing generated).
-let refineId = null;
+// Server-side handle for the image currently on screen, used to escalate its
+// quality; null before anything is generated, or once the handle goes stale.
+let imageId = null;
 
 function currentModel() {
   return models.find((m) => m.name === $('template').value);
@@ -148,6 +184,10 @@ function syncAdvanced() {
   $('sampler').value = m.sampler;
   $('w').value = m.base_width;
   $('h').value = m.base_height;
+  $('rsteps').value = m.refine_steps;
+  $('rstrength').value = m.refine_strength;
+  $('hsteps').value = m.hires_steps;
+  $('hstrength').value = m.hires_strength;
 }
 
 async function loadModels() {
@@ -178,42 +218,71 @@ function bar(name, ms, max) {
     <span class="val">${ms} ms</span></div>`;
 }
 
-// Info first, image last: on a narrow screen the metadata and the Refine
-// button stay visible without scrolling past a tall image.
+const UPSCALES = [[1, '1× (same size)'], [1.5, '1.5×'], [2, '2×'], [3, '3×'], [4, '4×']];
+
+// Info first, image last: on a narrow screen the metadata and the action
+// buttons stay visible without scrolling past a tall image.
 function render(data) {
   const t = data.timings;
-  const total = t.gen_ms + t.fsr_ms + t.refine_ms;
-  const max = Math.max(t.gen_ms, t.fsr_ms, t.refine_ms, 1);
-  let bars = '';
-  if (t.gen_ms) bars += bar('generate', t.gen_ms, max);
-  bars += bar('fsr', t.fsr_ms, max);
-  if (data.refined) bars += bar('refine', t.refine_ms, max);
+  const stages = [['generate', t.gen_ms], ['fsr', t.fsr_ms],
+                  ['refine', t.refine_ms], ['hi-res', t.hires_ms]];
+  const total = stages.reduce((sum, [, ms]) => sum + ms, 0);
+  const max = Math.max(...stages.map(([, ms]) => ms), 1);
+  const bars = stages.filter(([, ms]) => ms > 0)
+    .map(([name, ms]) => bar(name, ms, max)).join('');
 
-  refineId = data.refine_id ?? null;
-  const refineBtn = refineId === null ? ''
-    : '<button id="refine" class="secondary">Refine image</button>';
+  imageId = data.image_id;
+  let actions = '';
+  if (data.can_refine) {
+    actions += '<button id="refine" class="secondary">Refine image</button>';
+  }
+  if (data.can_hires) {
+    const opts = UPSCALES.map(([v, label]) =>
+      `<option value="${v}"${v === 2 ? ' selected' : ''}>${label}</option>`).join('');
+    actions += `<select id="upfactor" title="Upscale before the hi-res pass">${opts}</select>
+      <button id="hires" class="secondary">Hi-res pass</button>`;
+  }
+
+  const tags = (data.refined ? ' · refined' : '')
+    + (data.hires_passes ? ` · hi-res ×${data.hires_passes}` : '');
+  const src = `data:image/png;base64,${data.image_base64}`;
 
   $('result').innerHTML = `
     <div class="meta"><b>${data.width}×${data.height}</b> · seed <b>${data.seed}</b>
-      · total <b>${total} ms</b>${data.refined ? ' · refined' : ''}</div>
+      · total <b>${total} ms</b>${tags}</div>
     <div class="bars">${bars}</div>
-    ${refineBtn}
-    <img src="data:image/png;base64,${data.image_base64}" alt="result">`;
+    ${actions ? `<div class="actions">${actions}</div>` : ''}
+    <div id="rerr" class="err"></div>
+    <img src="${src}" alt="result" title="Click to view at full size">`;
 
-  const rb = $('refine');
-  if (rb) rb.addEventListener('click', refine);
+  $('result').querySelector('img').addEventListener('click', () => showFullSize(src));
+  if ($('refine')) $('refine').addEventListener('click', refine);
+  if ($('hires')) $('hires').addEventListener('click', hires);
 }
 
-// The GPU worker is serialized, so both actions lock out together.
-function setBusy(on, label) {
-  const go = $('go');
-  go.disabled = on;
-  go.textContent = on && label ? label : 'Generate';
-  const rb = $('refine');
-  if (rb) {
-    rb.disabled = on;
-    rb.textContent = on && label ? label : 'Refine image';
+// The image is already a data: URL on the page, so this re-uses it rather than
+// fetching anything; the dialog scrolls it at its natural size.
+function showFullSize(src) {
+  const box = $('lightbox');
+  box.querySelector('img').src = src;
+  box.showModal();
+  box.scrollTop = 0;
+  box.scrollLeft = 0;
+}
+
+const IDLE_LABELS = { go: 'Generate', refine: 'Refine image', hires: 'Hi-res pass' };
+
+// The GPU worker is serialized, so every action locks out together; only the
+// one that started the work says what it's doing.
+function setBusy(active, label) {
+  for (const [id, idle] of Object.entries(IDLE_LABELS)) {
+    const b = $(id);
+    if (b) {
+      b.disabled = !!active;
+      b.textContent = id === active ? label : idle;
+    }
   }
+  if ($('upfactor')) $('upfactor').disabled = !!active;
 }
 
 async function post(path, payload) {
@@ -231,31 +300,41 @@ async function post(path, payload) {
   return data;
 }
 
-// Refines the retained base image server-side — no txt2img re-run, and the
-// result matches what the "High quality" checkbox would have produced.
-async function refine() {
-  if (refineId === null) return;
-  setBusy(true, 'Refining…');
-  $('err').textContent = '';
+// Escalate the quality of the image on screen. The server works from the
+// intermediates it retained, so no stage is ever recomputed.
+// Failures report next to the buttons that caused them: #err lives in the left
+// control column, which on a wide screen is nowhere near the result. The slot is
+// part of render()'s output, and render() only runs on success, so the one from
+// the last successful render is still on the page to write into.
+const escErr = (msg) => { ($('rerr') || $('err')).textContent = msg; };
+
+async function escalate(which, path, payload, label) {
+  if (imageId === null) return;
+  setBusy(which, label);
+  escErr('');
   try {
-    render(await post('/refine', { refine_id: refineId }));
+    render(await post(path, { image_id: imageId, ...payload }));
   } catch (e) {
-    $('err').textContent = String(e.message || e);
-    // 400 = the base image is gone (evicted, or the server restarted), so the
-    // button is dead; keep the image on screen. Any other failure is
-    // retryable — the server keeps the base image.
+    escErr(String(e.message || e));
+    // 400 = the pass isn't available any more (evicted, or the server
+    // restarted), so the controls are dead; keep the image on screen. Any
+    // other failure is retryable — the server kept its intermediates.
     if (e.status === 400) {
-      refineId = null;
-      const rb = $('refine');
-      if (rb) rb.remove();
+      imageId = null;
+      const row = document.querySelector('.actions');
+      if (row) row.remove();
     }
   } finally {
-    setBusy(false);
+    setBusy(null);
   }
 }
 
+const refine = () => escalate('refine', '/refine', {}, 'Refining…');
+const hires = () => escalate('hires', '/hires',
+  { upscale: parseFloat($('upfactor').value) }, 'Hi-res pass…');
+
 async function generate() {
-  setBusy(true, 'Generating…');
+  setBusy('go', 'Generating…');
   $('err').textContent = '';
   try {
     const numOr = (id) => {
@@ -267,23 +346,29 @@ async function generate() {
       template: $('template').value,
       negative: $('negative').value || null,
       seed: parseInt($('seed').value, 10),
-      quality: $('quality').checked,
       steps: numOr('steps'),
       cfg_scale: numOr('cfg'),
       sampler: $('sampler').value || null,
       width: numOr('w'),
       height: numOr('h'),
+      refine_steps: numOr('rsteps'),
+      refine_strength: numOr('rstrength'),
+      hires_steps: numOr('hsteps'),
+      hires_strength: numOr('hstrength'),
     };
     render(await post('/generate', payload));
   } catch (e) {
     $('err').textContent = String(e.message || e);
   } finally {
-    setBusy(false);
+    setBusy(null);
   }
 }
 
 $('go').addEventListener('click', generate);
+// Each model carries its own defaults, so re-fill the controls on switch.
 $('template').addEventListener('change', syncAdvanced);
+// Click anywhere in the viewer to dismiss it; <dialog> handles Escape itself.
+$('lightbox').addEventListener('click', () => $('lightbox').close());
 loadModels();
 </script>
 </body>

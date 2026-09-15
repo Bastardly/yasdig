@@ -8,8 +8,13 @@ via [`wgpu`](https://github.com/gfx-rs/wgpu) — no second diffusion pass, no ML
 no Python anywhere in the build or runtime.
 
 ```
-prompt ──▶ sd-cli (Vulkan, distilled, 512px) ──▶ FSR upscale+sharpen (wgpu) ──▶ [optional img2img refine] ──▶ PNG
+prompt ──▶ sd-cli (Vulkan, distilled, 512px) ──▶ FSR upscale+sharpen (wgpu) ──▶ PNG
+                                                        │
+        on demand, from the buttons above the result:   ├─▶ refine   img2img at base resolution
+                                                        └─▶ hi-res   img2img at output resolution (±upscale)
 ```
+
+Generation stays cheap; quality is escalated afterwards, only on the images worth it.
 
 A tiny std-only HTTP server glues it together and serves a single static HTML page.
 
@@ -97,7 +102,10 @@ Key template fields:
 | `steps`, `cfg_scale`, `sampler` | sd.cpp params (Turbo → few steps, cfg 1, `euler`) |
 | `upscale_factor` | FSR upscale (e.g. `2.0`: 512 → 1024) |
 | `sharpness` | CAS sharpness, 0..1 |
-| `refine_steps` / `refine_strength` | the "High quality" img2img toggle (0 steps = disabled) |
+| `refine_steps` / `refine_strength` | the "Refine image" img2img pass, at base res (0 steps = disabled) |
+| `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, at output res (0 steps = disabled) |
+| `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job |
+| `hires_flash_attn` | `--diffusion-fa` for the hi-res pass (default true; worth 6× at 2048²) |
 | `weight_type` *(opt)* | on-the-fly quantization, e.g. `q8_0`, via sd-cli `--type` |
 | `extra_args` *(opt)* | arbitrary flags passed verbatim to sd-cli |
 
@@ -113,9 +121,20 @@ cargo run --release
 Open <http://127.0.0.1:8080>, pick a model, type a prompt, Generate. The result shows
 output resolution, seed, and per-stage timings (generate / fsr / refine).
 
-The refine pass can be applied either way: tick **High quality** before generating, or
-hit **Refine image** above a finished result. The button does the same work on the
-retained base render — no txt2img re-run — so both paths land on the same image.
+Quality is escalated *after* the fact, from the buttons above the result — so you only
+pay for it on images worth keeping. The server retains each result's intermediates, so
+no step ever recomputes the ones below it:
+
+- **Refine image** — img2img at base resolution (`refine_*`). Cheap; improves the image
+  inside SDXL's native range before the FSR upscale.
+- **Hi-res pass** — img2img at the *output* resolution (`hires_*`), with an upscale
+  factor from 1× to 4×. This is what adds detail the Lanczos+CAS upscale can't invent.
+  Past `hires_max_side` the pass diffuses as large as its budget allows and covers the
+  rest with a final FSR upscale, so a 4× request stays affordable.
+
+A button only appears when that pass is still available: refining is gone once the image
+has been refined or hi-res'd, and the hi-res pass is gone once the image is larger than
+`hires_max_side`.
 
 A different config file can be passed as the first argument:
 `cargo run --release -- /path/to/models.toml`.
@@ -126,21 +145,25 @@ A different config file can be passed as the first argument:
 - `GET /templates` — JSON list of configured profiles.
 - `POST /generate` — request:
   ```json
-  { "prompt": "…", "template": "sdxl-turbo", "negative": null, "seed": -1, "quality": false }
+  { "prompt": "…", "template": "sdxl-turbo", "negative": null, "seed": -1 }
   ```
   response:
   ```json
-  { "image_base64": "…", "width": 1024, "height": 1024, "seed": 12345,
-    "refined": false, "refine_id": 3,
-    "timings": { "gen_ms": 0, "fsr_ms": 0, "refine_ms": 0 } }
+  { "image_base64": "…", "width": 1536, "height": 1536, "seed": 12345,
+    "refined": false, "hires_passes": 0,
+    "image_id": 3, "can_refine": true, "can_hires": true,
+    "timings": { "gen_ms": 0, "fsr_ms": 0, "refine_ms": 0, "hires_ms": 0 } }
   ```
-  `refine_id` is non-null when the result can still be refined — the server kept
-  the base-resolution render for it.
-- `POST /refine` — `{ "refine_id": 3 }`. Runs the img2img refine pass on that
-  retained base image and re-upscales it: same result as `"quality": true`, without
-  re-running txt2img. Same response shape, with `refined: true`, `gen_ms: 0`, and
-  `refine_id: null` (an image refines once). `400` if the id has expired — only the
-  last 8 base renders are kept, and they're cleared on restart.
+  `image_id` addresses the retained intermediates; `can_refine` / `can_hires` say which
+  escalations that image can still take.
+- `POST /refine` — `{ "image_id": 3 }`. img2img at base resolution, then re-upscale.
+- `POST /hires` — `{ "image_id": 3, "upscale": 2 }`. FSR-upscale toward
+  `upscale ×` the current size (1–4), img2img at up to `hires_max_side`, then a final
+  FSR upscale if the target is beyond that budget.
+
+  Both return the same shape as `/generate` and can be chained (refine, then hi-res).
+  `400` if the id has expired — only the last 8 results are kept, and `work/` is cleared
+  on restart — or if that pass isn't available for the image.
 
 ## Architecture notes
 
