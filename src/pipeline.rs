@@ -2,23 +2,27 @@
 //! worker thread so generation is serialized (one job touches the GPU at a time).
 //!
 //! Generation is deliberately the cheap part — sd.cpp txt2img at base resolution
-//! plus an FSR upscale — and quality is escalated afterwards, on demand:
+//! plus an FSR upscale — and quality is escalated afterwards, on demand. Every
+//! rung reads the retained *unsharpened* output-resolution image, writes a new
+//! one, and RCAS runs once on the way to the browser:
 //!
 //! ```text
-//!   run()     txt2img (base res) ────────────────────▶ FSR upscale+sharpen
-//!   refine()  img2img @ base res (low denoise) ──────▶ FSR upscale+sharpen
-//!   hires()   FSR upscale ─▶ img2img @ output res ──▶ FSR upscale (if over budget)
+//!   run()     txt2img (base) ─▶ EASU upscale ──────────────▶ raw ─▶ RCAS ─▶ PNG
+//!   refine()  img2img @ current res, no rescale ──────────▶ raw ─▶ RCAS ─▶ PNG
+//!   hires()   EASU enlarge ─▶ img2img ─▶ EASU (if over budget) ─▶ raw ─▶ RCAS ─▶ PNG
 //! ```
 //!
-//! Each result keeps its intermediates on disk (see [`Pending`]) so the next
-//! step up the ladder doesn't re-run the ones below it.
+//! Two consequences worth stating, because both used to be otherwise. The
+//! ladder is free-form: `refine` runs on whatever is on screen, so it can follow
+//! a hi-res pass and can repeat. And sharpening never compounds — no pass ever
+//! diffuses over pixels another pass has already sharpened.
 
 use crate::config::{Config, Profile};
 use crate::fsr::Fsr;
 use crate::sd::SdRunner;
 use anyhow::{bail, Result};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -30,6 +34,11 @@ const MAX_PENDING: usize = 8;
 
 /// Hard limit on the hi-res upscale factor a request may ask for.
 const MAX_UPSCALE: f32 = 4.0;
+
+/// Above this longest side an img2img pass gets `--vae-tiling` (and flash
+/// attention), which is what keeps a large pass inside VRAM. Below it the
+/// tiling is pure cost — it has its own faint seam artifacts to pay for.
+const BIG_IMAGE_SIDE: u32 = 1024;
 
 #[derive(Debug, Clone)]
 pub struct GenRequest {
@@ -52,6 +61,10 @@ pub struct GenRequest {
     pub refine_strength: Option<f32>,
     pub hires_steps: Option<u32>,
     pub hires_strength: Option<f32>,
+    /// Display-time post-process, applied once to the finished image.
+    /// Cheap enough to tune freely.
+    pub sharpness: Option<f32>,
+    pub clarity: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -68,7 +81,7 @@ pub struct GenResult {
     pub height: u32,
     pub seed: i64,
     pub timings: Timings,
-    pub refined: bool,
+    pub refine_passes: u32,
     pub hires_passes: u32,
     /// Handle for [`Engine::refine`] / [`Engine::hires`].
     pub image_id: u64,
@@ -83,18 +96,20 @@ pub struct GenResult {
 /// whatever the UI happens to show now.
 #[derive(Clone)]
 struct Pending {
-    /// Base-resolution render. `None` once refined or hi-res'd — both supersede
-    /// it, and re-refining from the base would throw that work away.
-    base: Option<PathBuf>,
-    /// The image currently on screen, at output resolution.
-    full: PathBuf,
-    full_w: u32,
-    full_h: u32,
+    /// Output-resolution image with **no RCAS applied**. This is what every
+    /// escalation reads: sharpening is a display filter, so no pass ever
+    /// diffuses over pixels an earlier pass already sharpened.
+    raw: PathBuf,
+    raw_w: u32,
+    raw_h: u32,
+    /// The sharpened PNG that went to the browser — `raw` put through RCAS.
+    /// Retained so re-sharpening at a new setting needn't redo the diffusion.
+    display: PathBuf,
     profile: Profile,
     prompt: String,
     negative: Option<String>,
     seed: i64,
-    refined: bool,
+    refine_passes: u32,
     hires_passes: u32,
     /// How many escalations this result has been through. Only used to keep
     /// each step's filenames distinct from the ones it supersedes — otherwise a
@@ -103,22 +118,35 @@ struct Pending {
 }
 
 impl Pending {
+    /// Refine is deliberately *not* under `hires_max_side`. That ceiling exists
+    /// because the hi-res pass has somewhere to fall back to — it can diffuse
+    /// smaller and let FSR cover the rest. Refine has no such fallback: it runs
+    /// at the size the image already is, or not at all. Gating it on the budget
+    /// removed the button in exactly the state where it helps most, which is an
+    /// image FSR has stretched past its last diffusion.
+    ///
+    /// The cost of that is real — a pass at 3072² is not cheap, and on a tight
+    /// card it can run out of VRAM — but it's one click, the size is on screen
+    /// above the button, and a failed pass leaves the image intact to retry.
     fn can_refine(&self) -> bool {
-        self.base.is_some()
+        self.profile.refine_steps > 0
     }
 
     /// A hi-res pass needs room to diffuse: once the image is past the budget
     /// there's no affordable pass left to run on it.
     fn can_hires(&self) -> bool {
         self.profile.hires_steps > 0
-            && self.full_w.max(self.full_h) <= self.profile.hires_max_side
+            && self.raw_w.max(self.raw_h) <= self.profile.hires_max_side
+    }
+
+    /// Whether an img2img pass at this size needs the large-image memory flags.
+    fn big_image(&self) -> bool {
+        self.raw_w.max(self.raw_h) > BIG_IMAGE_SIDE
     }
 
     fn remove_files(&self) {
-        if let Some(base) = &self.base {
-            let _ = std::fs::remove_file(base);
-        }
-        let _ = std::fs::remove_file(&self.full);
+        let _ = std::fs::remove_file(&self.raw);
+        let _ = std::fs::remove_file(&self.display);
     }
 }
 
@@ -190,6 +218,12 @@ impl Engine {
         if let Some(v) = req.hires_strength {
             profile.hires_strength = v;
         }
+        if let Some(v) = req.sharpness {
+            profile.sharpness = v;
+        }
+        if let Some(v) = req.clarity {
+            profile.clarity = v;
+        }
         // The overrides can push the denoise strengths out of range even though
         // the profile was fine at load, and this profile is what the later
         // refine/hi-res passes run with.
@@ -210,7 +244,8 @@ impl Engine {
         let seed = if req.seed < 0 { random_seed() } else { req.seed };
         let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let lowres = self.work_dir.join(format!("{id}-0-base.png"));
-        let full = self.work_dir.join(format!("{id}-0-full.png"));
+        let raw = self.work_dir.join(format!("{id}-0-raw.png"));
+        let display = self.work_dir.join(format!("{id}-0-full.png"));
 
         let sd = SdRunner::new(&self.cfg);
         let neg = req.negative.as_deref();
@@ -220,34 +255,32 @@ impl Engine {
         sd.txt2img(tpl, &req.prompt, neg, seed, &lowres)?;
         let gen_ms = t.elapsed().as_millis();
 
-        // 2) FSR upscale + sharpen — cheap, and enough on its own for a draft.
-        //    Quality is escalated afterwards via `refine` and `hires`.
+        // 2) EASU upscale, unsharpened — cheap, and enough on its own for a
+        //    draft. Quality is escalated afterwards via `refine` and `hires`,
+        //    both of which read this image rather than the sharpened one.
         let t = Instant::now();
-        let (w, h) = self
-            .fsr
-            .process(&lowres, &full, tpl.upscale_factor, tpl.sharpness)?;
+        self.fsr
+            .process(&lowres, &raw, tpl.upscale_factor, 0.0, 0.0)?;
+        // Nothing reads the base render once it has been upscaled: every
+        // escalation works at output resolution now.
+        let _ = std::fs::remove_file(&lowres);
+
+        // 3) Sharpen for display.
+        let (png, w, h) = self.publish(&raw, &display, tpl.sharpness, tpl.clarity)?;
         let fsr_ms = t.elapsed().as_millis();
 
-        let png = std::fs::read(&full)?;
-
         // Retain the intermediates so the next step up the ladder doesn't have
-        // to re-run this one. The base render is only worth keeping if the
-        // profile can actually refine it.
+        // to re-run this one.
         let entry = Pending {
-            base: if tpl.refine_steps > 0 {
-                Some(lowres.clone())
-            } else {
-                let _ = std::fs::remove_file(&lowres);
-                None
-            },
-            full,
-            full_w: w,
-            full_h: h,
+            raw,
+            raw_w: w,
+            raw_h: h,
+            display,
             profile: profile.clone(),
             prompt: req.prompt.clone(),
             negative: req.negative.clone(),
             seed,
-            refined: false,
+            refine_passes: 0,
             hires_passes: 0,
             step: 0,
         };
@@ -256,18 +289,26 @@ impl Engine {
         Ok(result)
     }
 
-    /// Low-denoise img2img on the retained base render, then re-upscale.
-    /// Improves the image within SDXL's native resolution range, cheaply.
+    /// Low-denoise img2img on the current image, at its current resolution and
+    /// with no rescale of any kind. That makes it the finishing rung: it can
+    /// follow a hi-res pass, it can repeat, and unlike the hi-res pass it has no
+    /// size ceiling (see [`Pending::can_refine`]).
+    ///
+    /// It used to run on the retained base render and re-upscale afterwards,
+    /// which is why it read as soft. Every img2img round-trips through the VAE,
+    /// which costs fine detail no matter how low the strength; doing that at
+    /// base resolution and then stretching the result 2× means the loss lands on
+    /// detail while only the structural gain survives the upscale. At output
+    /// resolution there is nothing downstream to smear what the pass adds.
     pub fn refine(&mut self, id: u64) -> Result<GenResult> {
         let p = self.lookup(id, "refine")?;
-        let base = match &p.base {
-            Some(b) => b.clone(),
-            None => bail!("this image has already been refined"),
-        };
+        if !p.can_refine() {
+            bail!("'{}' has no refine pass configured (refine_steps = 0)", p.profile.name);
+        }
 
         let step = p.step + 1;
-        let refined = self.work_dir.join(format!("{id}-{step}-refined.png"));
-        let out = self.work_dir.join(format!("{id}-{step}-full.png"));
+        let raw = self.work_dir.join(format!("{id}-{step}-raw.png"));
+        let display = self.work_dir.join(format!("{id}-{step}-full.png"));
         let sd = SdRunner::new(&self.cfg);
 
         let t = Instant::now();
@@ -276,36 +317,31 @@ impl Engine {
             &p.prompt,
             p.negative.as_deref(),
             p.seed,
-            &base,
-            &refined,
+            &p.raw,
+            &raw,
             p.profile.refine_strength,
             p.profile.refine_steps,
-            false,
+            p.big_image(),
             "img2img refine",
         )?;
         let refine_ms = t.elapsed().as_millis();
 
         let t = Instant::now();
-        let (w, h) = self.fsr.process(
-            &refined,
-            &out,
-            p.profile.upscale_factor,
-            p.profile.sharpness,
-        )?;
+        // Dimensions come back from here rather than carrying over: sd.cpp
+        // rounds an init image to what the latent grid allows, so the pass can
+        // return a slightly different size than it was given.
+        let (png, w, h) = self.publish(&raw, &display, p.profile.sharpness, p.profile.clarity)?;
         let fsr_ms = t.elapsed().as_millis();
 
-        let png = std::fs::read(&out)?;
-        let _ = std::fs::remove_file(&refined);
-
         // Only now that it succeeded — a failure above leaves the entry intact
-        // so the user can retry. The base render is spent either way.
+        // so the user can retry.
         p.remove_files();
         let entry = Pending {
-            base: None,
-            full: out,
-            full_w: w,
-            full_h: h,
-            refined: true,
+            raw,
+            raw_w: w,
+            raw_h: h,
+            display,
+            refine_passes: p.refine_passes + 1,
             step,
             ..p
         };
@@ -332,43 +368,46 @@ impl Engine {
         if !p.can_hires() {
             bail!(
                 "{}×{} is already past the hi-res budget of {} px — there's no \
-                 affordable pass left to run on it",
-                p.full_w,
-                p.full_h,
+                 affordable enlarge left to run on it. Refine still works at this \
+                 size.",
+                p.raw_w,
+                p.raw_h,
                 p.profile.hires_max_side
             );
         }
 
-        let target_w = ((p.full_w as f32) * upscale).round() as u32;
-        let target_h = ((p.full_h as f32) * upscale).round() as u32;
+        let target_w = ((p.raw_w as f32) * upscale).round() as u32;
+        let target_h = ((p.raw_h as f32) * upscale).round() as u32;
         // Largest size the diffusion pass may run at, snapped to a multiple of
-        // 64 so the latent dimensions stay clean.
+        // 64 so the latent dimensions stay clean. Only the width is snapped:
+        // FSR scales both axes by one factor, so the height follows from it.
         let budget = p.profile.hires_max_side.min(target_w.max(target_h));
-        let diff_scale = budget as f32 / p.full_w.max(p.full_h) as f32;
-        let diff_w = snap64(((p.full_w as f32) * diff_scale).round() as u32);
-        let diff_h = snap64(((p.full_h as f32) * diff_scale).round() as u32);
+        let diff_scale = budget as f32 / p.raw_w.max(p.raw_h) as f32;
+        let diff_w = snap64(((p.raw_w as f32) * diff_scale).round() as u32);
 
         let step = p.step + 1;
         let upscaled = self.work_dir.join(format!("{id}-{step}-up.png"));
         let hires = self.work_dir.join(format!("{id}-{step}-hires.png"));
-        let out = self.work_dir.join(format!("{id}-{step}-full.png"));
+        let raw = self.work_dir.join(format!("{id}-{step}-raw.png"));
+        let display = self.work_dir.join(format!("{id}-{step}-full.png"));
         let sd = SdRunner::new(&self.cfg);
         let mut fsr_ms = 0u128;
 
         // 1) Enlarge to the diffusion size, if that's bigger than what we have.
-        //    No sharpening: CAS artifacts would be baked in by the diffusion.
-        let init = if diff_w > p.full_w {
+        //    Unsharpened, like everything that feeds a diffusion pass.
+        let init = if diff_w > p.raw_w {
             let t = Instant::now();
             self.fsr.process(
-                &p.full,
+                &p.raw,
                 &upscaled,
-                diff_w as f32 / p.full_w as f32,
+                diff_w as f32 / p.raw_w as f32,
+                0.0,
                 0.0,
             )?;
             fsr_ms += t.elapsed().as_millis();
             upscaled.clone()
         } else {
-            p.full.clone()
+            p.raw.clone()
         };
 
         // 2) The detail pass itself.
@@ -382,38 +421,37 @@ impl Engine {
             &hires,
             p.profile.hires_strength,
             p.profile.hires_steps,
-            true,
+            // `budget` is the longest side the diffusion actually runs at, which
+            // is what decides whether it needs the large-image flags — not the
+            // size we started from.
+            budget > BIG_IMAGE_SIDE,
             "img2img hi-res",
         )?;
         let hires_ms = t.elapsed().as_millis();
 
-        // 3) Cover any distance the budget wouldn't stretch to.
-        let (w, h) = if target_w > diff_w {
-            let t = Instant::now();
-            let dims = self.fsr.process(
-                &hires,
-                &out,
-                target_w as f32 / diff_w as f32,
-                p.profile.sharpness,
-            )?;
-            fsr_ms += t.elapsed().as_millis();
-            let _ = std::fs::remove_file(&hires);
-            dims
+        // 3) Cover any distance the budget wouldn't stretch to, still
+        //    unsharpened — this is the new retained image, and a later pass may
+        //    diffuse over it.
+        let t = Instant::now();
+        let scale = if target_w > diff_w {
+            target_w as f32 / diff_w as f32
         } else {
-            // Nothing left to upscale; the pass output *is* the result.
-            std::fs::rename(&hires, &out)?;
-            (diff_w, diff_h)
+            1.0
         };
-
-        let png = std::fs::read(&out)?;
+        self.fsr.process(&hires, &raw, scale, 0.0, 0.0)?;
+        let _ = std::fs::remove_file(&hires);
         let _ = std::fs::remove_file(&upscaled);
+
+        // 4) Sharpen for display.
+        let (png, w, h) = self.publish(&raw, &display, p.profile.sharpness, p.profile.clarity)?;
+        fsr_ms += t.elapsed().as_millis();
 
         p.remove_files();
         let entry = Pending {
-            base: None,
-            full: out,
-            full_w: w,
-            full_h: h,
+            raw,
+            raw_w: w,
+            raw_h: h,
+            display,
             hires_passes: p.hires_passes + 1,
             step,
             ..p
@@ -421,6 +459,27 @@ impl Engine {
         let result = self.result(id, &entry, png, Timings { fsr_ms, hires_ms, ..Default::default() });
         self.store(id, entry);
         Ok(result)
+    }
+
+    /// The one place RCAS is applied. Sharpens the retained raw image into
+    /// `display` and returns the PNG bytes for the response.
+    ///
+    /// Scale 1.0, so [`Fsr::process`] skips EASU and this is a sharpen-only
+    /// pass — two compute passes plus a PNG round-trip, microseconds against the
+    /// diffusion it follows. At `sharpness` 0.0 it is an exact identity.
+    ///
+    /// It also reports the true dimensions, which is how each pass learns what
+    /// sd.cpp actually produced rather than what it was asked for.
+    fn publish(
+        &self,
+        raw: &Path,
+        display: &Path,
+        sharpness: f32,
+        clarity: f32,
+    ) -> Result<(Vec<u8>, u32, u32)> {
+        let (w, h) = self.fsr.process(raw, display, 1.0, sharpness, clarity)?;
+        let png = std::fs::read(display)?;
+        Ok((png, w, h))
     }
 
     fn lookup(&self, id: u64, action: &str) -> Result<Pending> {
@@ -447,11 +506,11 @@ impl Engine {
     fn result(&self, id: u64, entry: &Pending, png: Vec<u8>, timings: Timings) -> GenResult {
         GenResult {
             png,
-            width: entry.full_w,
-            height: entry.full_h,
+            width: entry.raw_w,
+            height: entry.raw_h,
             seed: entry.seed,
             timings,
-            refined: entry.refined,
+            refine_passes: entry.refine_passes,
             hires_passes: entry.hires_passes,
             image_id: id,
             can_refine: entry.can_refine(),

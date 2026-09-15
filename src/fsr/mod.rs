@@ -1,6 +1,14 @@
-//! Native FSR post-process on the GPU via wgpu (Vulkan backend). Two compute
-//! passes: Lanczos upscale (EASU slot) then FidelityFX CAS sharpen. No model
-//! weights, no Python — just compute shaders on the same AMD GPU sd.cpp uses.
+//! Native FSR 1.0 post-process on the GPU via wgpu (Vulkan backend). The two
+//! passes FSR actually specifies: EASU (edge-adaptive upscale) then RCAS
+//! (sharpen). No model weights, no Python — just compute shaders on the same
+//! AMD GPU sd.cpp uses.
+//!
+//! Plus one pass FSR doesn't specify: a local-contrast ("clarity") unsharp
+//! between the two, for the mid-frequency depth a diffusion refine can't reach
+//! without re-composing the image. See `contrast.wgsl`.
+//!
+//! Every stage is skipped when it would be a no-op — EASU at scale 1.0, contrast
+//! at clarity 0.0 — so `process(.., 1.0, s, 0.0)` is an exact sharpen-only pass.
 
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
@@ -22,6 +30,17 @@ struct SharpenParams {
     _pad: f32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct ContrastParams {
+    size: [u32; 2],
+    low_size: [u32; 2],
+    amount: f32,
+    sigma_wide: f32,
+    sigma_narrow: f32,
+    _pad: f32,
+}
+
 pub struct Fsr {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -30,9 +49,32 @@ pub struct Fsr {
     upscale_bgl: wgpu::BindGroupLayout,
     sharpen_pipeline: wgpu::ComputePipeline,
     sharpen_bgl: wgpu::BindGroupLayout,
+    /// Shared by the three passes that write the 1/8 luma plane: downsample,
+    /// blur_h, blur_v. Same bind group shape, different entry points.
+    plane_bgl: wgpu::BindGroupLayout,
+    downsample_pipeline: wgpu::ComputePipeline,
+    blur_h_pipeline: wgpu::ComputePipeline,
+    blur_v_pipeline: wgpu::ComputePipeline,
+    combine_pipeline: wgpu::ComputePipeline,
+    combine_bgl: wgpu::BindGroupLayout,
 }
 
 const WG: u32 = 16;
+
+/// Resolution divisor for the clarity pass's luma plane. Must match `DOWN` in
+/// `contrast.wgsl`.
+const DOWNSCALE: u32 = 8;
+
+/// The two Gaussian sigmas for the clarity band-pass, in *low-res* pixels.
+///
+/// The wide lobe sets where depth begins — ~4% of the longest side, so
+/// subject-scale structure moves and overall tone doesn't. The narrow lobe sets
+/// where grain is excluded, an octave or so above it. Both are proportional to
+/// the image, so "clarity 0.5" means the same thing at 1536 and at 3072.
+fn clarity_sigmas(w: u32, h: u32) -> (f32, f32) {
+    let wide = (0.04 * w.max(h) as f32 / DOWNSCALE as f32).clamp(2.0, 16.0);
+    (wide, (wide / 8.0).max(0.75))
+}
 
 impl Fsr {
     pub fn new() -> Result<Self> {
@@ -69,11 +111,35 @@ impl Fsr {
             source: wgpu::ShaderSource::Wgsl(include_str!("sharpen.wgsl").into()),
         });
 
-        let upscale_bgl = Self::make_bgl(&device, "upscale-bgl");
-        let sharpen_bgl = Self::make_bgl(&device, "sharpen-bgl");
+        let contrast_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("contrast"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("contrast.wgsl").into()),
+        });
 
-        let upscale_pipeline = Self::make_pipeline(&device, "upscale", &upscale_bgl, &upscale_shader);
-        let sharpen_pipeline = Self::make_pipeline(&device, "sharpen", &sharpen_bgl, &sharpen_shader);
+        let upscale_bgl = Self::make_bgl(&device, "upscale-bgl", wgpu::TextureFormat::Rgba8Unorm);
+        let sharpen_bgl = Self::make_bgl(&device, "sharpen-bgl", wgpu::TextureFormat::Rgba8Unorm);
+        // The luma plane is 16-bit: an 8-bit low-pass bands visibly once the
+        // difference between two of them is amplified.
+        let plane_bgl = Self::make_bgl(&device, "plane-bgl", wgpu::TextureFormat::Rgba16Float);
+        let combine_bgl = Self::make_combine_bgl(&device);
+
+        let upscale_pipeline =
+            Self::make_pipeline(&device, "upscale", &upscale_bgl, &upscale_shader, "main");
+        let sharpen_pipeline =
+            Self::make_pipeline(&device, "sharpen", &sharpen_bgl, &sharpen_shader, "main");
+        let plane_pass = |name: &str, entry: &str| {
+            Self::make_pipeline(&device, name, &plane_bgl, &contrast_shader, entry)
+        };
+        let downsample_pipeline = plane_pass("clarity-downsample", "downsample");
+        let blur_h_pipeline = plane_pass("clarity-blur-h", "blur_h");
+        let blur_v_pipeline = plane_pass("clarity-blur-v", "blur_v");
+        let combine_pipeline = Self::make_pipeline(
+            &device,
+            "clarity-combine",
+            &combine_bgl,
+            &contrast_shader,
+            "combine",
+        );
 
         Ok(Fsr {
             device,
@@ -83,6 +149,12 @@ impl Fsr {
             upscale_bgl,
             sharpen_pipeline,
             sharpen_bgl,
+            plane_bgl,
+            downsample_pipeline,
+            blur_h_pipeline,
+            blur_v_pipeline,
+            combine_pipeline,
+            combine_bgl,
         })
     }
 
@@ -90,9 +162,14 @@ impl Fsr {
         &self.adapter_name
     }
 
-    /// Bind group layout shared by both passes: sampled texture in, storage
-    /// texture out, uniform params.
-    fn make_bgl(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
+    /// Bind group layout for a plain one-in one-out pass: sampled texture in,
+    /// storage texture out, uniform params. `format` is the storage format the
+    /// pass writes.
+    fn make_bgl(
+        device: &wgpu::Device,
+        label: &str,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some(label),
             entries: &[
@@ -111,7 +188,7 @@ impl Fsr {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        format,
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,
@@ -130,11 +207,60 @@ impl Fsr {
         })
     }
 
+    /// The combine pass reads two textures — the 1/8 luma plane and the
+    /// full-resolution source — so it needs its own layout. Binding numbers
+    /// match `contrast.wgsl`: 0 source, 2 params, 3 plane, 4 output.
+    fn make_combine_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let sampled = wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        };
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("clarity-combine-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: sampled,
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: sampled,
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+
     fn make_pipeline(
         device: &wgpu::Device,
         label: &str,
         bgl: &wgpu::BindGroupLayout,
         shader: &wgpu::ShaderModule,
+        entry_point: &str,
     ) -> wgpu::ComputePipeline {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(label),
@@ -145,13 +271,20 @@ impl Fsr {
             label: Some(label),
             layout: Some(&layout),
             module: shader,
-            entry_point: Some("main"),
+            entry_point: Some(entry_point),
             compilation_options: Default::default(),
             cache: None,
         })
     }
 
-    fn make_texture(&self, w: u32, h: u32, usage: wgpu::TextureUsages, label: &str) -> wgpu::Texture {
+    fn make_texture(
+        &self,
+        w: u32,
+        h: u32,
+        usage: wgpu::TextureUsages,
+        format: wgpu::TextureFormat,
+        label: &str,
+    ) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
@@ -162,20 +295,25 @@ impl Fsr {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format,
             usage,
             view_formats: &[],
         })
     }
 
-    /// Run upscale + sharpen on `in_png`, writing `out_png`. Returns the output
-    /// dimensions.
+    /// Run upscale, then local contrast, then sharpen on `in_png`, writing
+    /// `out_png`. Returns the output dimensions.
+    ///
+    /// Contrast sits between the two FSR passes, as in a photo pipeline: move
+    /// the mid frequencies first, then sharpen the result. Each stage is skipped
+    /// when it would be a no-op — EASU at scale 1.0, contrast at `clarity` 0.0.
     pub fn process(
         &self,
         in_png: &Path,
         out_png: &Path,
         upscale_factor: f32,
         sharpness: f32,
+        clarity: f32,
     ) -> Result<(u32, u32)> {
         let img = image::open(in_png)
             .with_context(|| format!("loading {}", in_png.display()))?
@@ -189,18 +327,21 @@ impl Fsr {
             in_w,
             in_h,
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            wgpu::TextureFormat::Rgba8Unorm,
             "src",
         );
         let mid = self.make_texture(
             out_w,
             out_h,
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            wgpu::TextureFormat::Rgba8Unorm,
             "mid",
         );
         let dst = self.make_texture(
             out_w,
             out_h,
             wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            wgpu::TextureFormat::Rgba8Unorm,
             "dst",
         );
 
@@ -272,13 +413,121 @@ impl Fsr {
                 },
             ],
         });
+        // At 1:1 there is nothing for EASU to reconstruct, and running it would
+        // be a lossy no-op, so the next stage reads the source directly.
+        let upscaling = out_w != in_w || out_h != in_h;
+        let easu_out = if upscaling { &mid_view } else { &src_view };
+
+        // Local contrast, between the two FSR passes. Allocated only when it
+        // will actually run: at clarity 0.0 the shader is an exact identity, so
+        // there's no reason to pay for two dispatches and two textures.
+        let contrasting = clarity > 0.0;
+        let (low_w, low_h) = (div_ceil(out_w, DOWNSCALE), div_ceil(out_h, DOWNSCALE));
+        let plane = |label| {
+            self.make_texture(
+                low_w,
+                low_h,
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+                wgpu::TextureFormat::Rgba16Float,
+                label,
+            )
+        };
+        // Two planes, ping-ponged: downsample writes a, blur_h a->b, blur_v
+        // b->a, and combine reads a.
+        let plane_a = contrasting.then(|| plane("clarity-plane-a"));
+        let plane_b = contrasting.then(|| plane("clarity-plane-b"));
+        let clarity_tex = contrasting.then(|| {
+            self.make_texture(
+                out_w,
+                out_h,
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+                wgpu::TextureFormat::Rgba8Unorm,
+                "clarity",
+            )
+        });
+        let view = |t: &Option<wgpu::Texture>| {
+            t.as_ref()
+                .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()))
+        };
+        let (a_view, b_view, clarity_view) = (view(&plane_a), view(&plane_b), view(&clarity_tex));
+
+        let (sigma_wide, sigma_narrow) = clarity_sigmas(out_w, out_h);
+        let contrast_params = ContrastParams {
+            size: [out_w, out_h],
+            low_size: [low_w, low_h],
+            amount: clarity,
+            sigma_wide,
+            sigma_narrow,
+            _pad: 0.0,
+        };
+        let contrast_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("contrast-params"),
+                contents: bytemuck::bytes_of(&contrast_params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        // The three plane passes share one layout; only the bound textures differ.
+        let plane_bg = |label, input: &wgpu::TextureView, output: &wgpu::TextureView| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &self.plane_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(input),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(output),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: contrast_buf.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+        let clarity_bgs = match (&a_view, &b_view, &clarity_view) {
+            (Some(a), Some(b), Some(out)) => Some((
+                plane_bg("clarity-downsample-bg", easu_out, a),
+                plane_bg("clarity-blur-h-bg", a, b),
+                plane_bg("clarity-blur-v-bg", b, a),
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("clarity-combine-bg"),
+                    layout: &self.combine_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(easu_out),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: contrast_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(a),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: wgpu::BindingResource::TextureView(out),
+                        },
+                    ],
+                }),
+            )),
+            _ => None,
+        };
+
+        let sharpen_in = clarity_view.as_ref().unwrap_or(easu_out);
+
         let sharpen_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sharpen-bg"),
             layout: &self.sharpen_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&mid_view),
+                    resource: wgpu::BindingResource::TextureView(sharpen_in),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -306,18 +555,43 @@ impl Fsr {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("fsr"),
             });
-        {
+        if upscaling {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("upscale-pass"),
+                label: Some("easu-pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.upscale_pipeline);
             pass.set_bind_group(0, &upscale_bg, &[]);
             pass.dispatch_workgroups(div_ceil(out_w, WG), div_ceil(out_h, WG), 1);
         }
+        if let Some((down_bg, h_bg, v_bg, combine_bg)) = &clarity_bgs {
+            // The three plane passes run at 1/8, so together they cost a small
+            // fraction of the full-resolution combine that follows.
+            for (label, pipeline, bg) in [
+                ("clarity-downsample-pass", &self.downsample_pipeline, down_bg),
+                ("clarity-blur-h-pass", &self.blur_h_pipeline, h_bg),
+                ("clarity-blur-v-pass", &self.blur_v_pipeline, v_bg),
+            ] {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some(label),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, bg, &[]);
+                pass.dispatch_workgroups(div_ceil(low_w, WG), div_ceil(low_h, WG), 1);
+            }
+
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("clarity-combine-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.combine_pipeline);
+            pass.set_bind_group(0, combine_bg, &[]);
+            pass.dispatch_workgroups(div_ceil(out_w, WG), div_ceil(out_h, WG), 1);
+        }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("sharpen-pass"),
+                label: Some("rcas-pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.sharpen_pipeline);
@@ -386,4 +660,27 @@ fn align_up(v: u32, align: u32) -> u32 {
 
 fn div_ceil(v: u32, d: u32) -> u32 {
     (v + d - 1) / d
+}
+
+#[cfg(test)]
+mod tests {
+    /// Parse and validate the WGSL the same way wgpu will at device creation,
+    /// so a shader mistake fails here instead of on the GPU worker at startup.
+    fn check(label: &str, source: &str) {
+        let module = naga::front::wgsl::parse_str(source)
+            .unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(source)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{label}: {e:?}"));
+    }
+
+    #[test]
+    fn shaders_compile() {
+        check("easu", include_str!("upscale.wgsl"));
+        check("rcas", include_str!("sharpen.wgsl"));
+        check("clarity", include_str!("contrast.wgsl"));
+    }
 }

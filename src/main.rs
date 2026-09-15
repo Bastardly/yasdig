@@ -8,9 +8,10 @@
 //!   POST /generate    -> {prompt, template, negative?, seed?, ...overrides}
 //!                        -> {image_base64, width, height, seed, image_id,
 //!                            can_refine, can_hires, timings}
-//!   POST /refine      -> {image_id}            img2img at base resolution
-//!   POST /hires       -> {image_id, upscale}   img2img at output resolution
-//!                        both return the same shape as /generate
+//!   POST /refine      -> {image_id}            img2img in place, no rescale
+//!   POST /hires       -> {image_id, upscale}   img2img with an enlarge first
+//!                        both return the same shape as /generate, and both can
+//!                        be run in either order and repeated
 
 mod config;
 mod fsr;
@@ -103,7 +104,9 @@ fn main() -> Result<()> {
     match ready_rx.recv().context("gpu worker died during startup")? {
         Ok(name) => {
             println!("[rustimage] GPU worker ready on adapter: {name}");
-            println!("[rustimage] FSR post-process: upscale=lanczos2, sharpen=cas (interim FSR path)");
+            println!(
+                "[rustimage] GPU post-process: upscale=easu, contrast=clarity, sharpen=rcas"
+            );
         }
         Err(e) => {
             eprintln!("[rustimage] startup failed:\n{e:#}");
@@ -190,6 +193,10 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         hires_steps: Option<u32>,
         #[serde(default)]
         hires_strength: Option<f32>,
+        #[serde(default)]
+        sharpness: Option<f32>,
+        #[serde(default)]
+        clarity: Option<f32>,
     }
 
     let dto: Dto = match parse_json::<Dto>(conn, body)? {
@@ -211,6 +218,8 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         refine_strength: dto.refine_strength,
         hires_steps: dto.hires_steps,
         hires_strength: dto.hires_strength,
+        sharpness: dto.sharpness,
+        clarity: dto.clarity,
     };
 
     submit(conn, job_tx, JobKind::Generate(req), 500)
@@ -315,14 +324,14 @@ fn submit(
 fn result_json(res: &GenResult) -> String {
     let b64 = base64::engine::general_purpose::STANDARD.encode(&res.png);
     format!(
-        "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refined\":{},\
+        "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
          \"hires_passes\":{},\"image_id\":{},\"can_refine\":{},\"can_hires\":{},\
          \"timings\":{{\"gen_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{}}}}}",
         b64,
         res.width,
         res.height,
         res.seed,
-        res.refined,
+        res.refine_passes,
         res.hires_passes,
         res.image_id,
         res.can_refine,
@@ -349,7 +358,7 @@ fn build_models_json(cfg: &Config) -> String {
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
                  \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\
                  \"refine_steps\":{},\"refine_strength\":{},\
-                 \"hires_steps\":{},\"hires_strength\":{}}}",
+                 \"hires_steps\":{},\"hires_strength\":{},\"sharpness\":{},\"clarity\":{}}}",
                 json_str(&p.name),
                 json_str(&p.description),
                 p.discovered,
@@ -365,6 +374,8 @@ fn build_models_json(cfg: &Config) -> String {
                 p.refine_strength,
                 p.hires_steps,
                 p.hires_strength,
+                p.sharpness,
+                p.clarity,
             )
         })
         .collect();
@@ -395,24 +406,28 @@ fn run_doctor(args: &[String]) -> Result<()> {
     }
 }
 
-/// `rustimage fsr <in.png> <out.png> [upscale_factor] [sharpness]`
-/// Runs only the FSR upscale+sharpen passes on an existing image.
+/// `rustimage fsr <in.png> <out.png> [upscale_factor] [sharpness] [clarity]`
+/// Runs only the GPU post-process passes on an existing image.
 fn run_fsr_cli(args: &[String]) -> Result<()> {
     if args.len() < 2 {
-        eprintln!("usage: rustimage fsr <in.png> <out.png> [upscale_factor=2.0] [sharpness=0.35]");
+        eprintln!(
+            "usage: rustimage fsr <in.png> <out.png> [upscale_factor=2.0] \
+             [sharpness=0.35] [clarity=0.0]"
+        );
         std::process::exit(2);
     }
     let in_png = PathBuf::from(&args[0]);
     let out_png = PathBuf::from(&args[1]);
     let factor: f32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(2.0);
     let sharp: f32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0.35);
+    let clarity: f32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0.0);
 
     let fsr = fsr::Fsr::new()?;
     println!("[fsr] adapter: {}", fsr.adapter_name());
     let start = std::time::Instant::now();
-    let (w, h) = fsr.process(&in_png, &out_png, factor, sharp)?;
+    let (w, h) = fsr.process(&in_png, &out_png, factor, sharp, clarity)?;
     println!(
-        "[fsr] {} -> {} : {}x{} (x{factor}, sharpness {sharp}) in {} ms",
+        "[fsr] {} -> {} : {}x{} (x{factor}, sharpness {sharp}, clarity {clarity}) in {} ms",
         in_png.display(),
         out_png.display(),
         w,
@@ -450,7 +465,7 @@ fn run_fsr_selftest(args: &[String]) -> Result<()> {
 
     let fsr = fsr::Fsr::new()?;
     println!("[fsr-selftest] adapter: {}", fsr.adapter_name());
-    let (w, h) = fsr.process(&in_png, &out_png, 2.0, 0.4)?;
+    let (w, h) = fsr.process(&in_png, &out_png, 2.0, 0.4, 0.5)?;
     let expected = (size * 2, size * 2);
     if (w, h) != expected {
         anyhow::bail!("expected {expected:?}, got {:?}", (w, h));

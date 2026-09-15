@@ -1,8 +1,20 @@
-// FSR post-process, stage 2 of 2: AMD FidelityFX CAS (Contrast Adaptive
-// Sharpening). Faithful port of the non-scaling CAS kernel: a 3x3 neighborhood,
-// soft min/max with the cross weighted fully and the diagonals folded in, an
-// amplitude term that backs off near signal limits (so it sharpens detail
-// without clipping), and the standard filter weight peak in [-1/8 .. -1/5].
+// FSR post-process, stage 2 of 2: AMD FidelityFX RCAS (Robust Contrast Adaptive
+// Sharpening). Port of FsrRcasF from ffx_fsr1.h.
+//
+// This is the sharpener FSR pairs with EASU, and it differs from plain CAS in
+// the two ways that matter after an upscale:
+//   * a 5-tap cross rather than a 3x3 box, so it sharpens without pulling in
+//     the diagonals EASU has already reconstructed;
+//   * a limiter derived from the ring's min/max, so the lobe can never drive a
+//     channel past its local neighbourhood — ringing and clipping are excluded
+//     by construction rather than by backing off globally.
+//
+// RCAS's noise-detection term (FSR_RCAS_DENOISE) is deliberately NOT applied.
+// It is opt-in in the reference, and for good reason here: it scales the lobe by
+// a factor that is smallest exactly where the Laplacian is large relative to the
+// local range — which on a diffusion render is fine detail, not noise. Enabling
+// it held the 0..1 knob to ~22/255 of range on mid-tone detail and ~4/255 on
+// fine texture, i.e. invisible. Don't put it back without measuring.
 
 struct Params {
     size: vec2<u32>,
@@ -13,6 +25,9 @@ struct Params {
 @group(0) @binding(0) var src: texture_2d<f32>;
 @group(0) @binding(1) var dst: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<uniform> p: Params;
+
+// Past this the filter would invert rather than sharpen.
+const LIMIT: f32 = 0.25 - (1.0 / 16.0);
 
 fn ld(x: i32, y: i32) -> vec3<f32> {
     let cx = clamp(x, 0, i32(p.size.x) - 1);
@@ -28,39 +43,33 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let x = i32(gid.x);
     let y = i32(gid.y);
 
-    //  a b c
+    //    b
     //  d e f
-    //  g h i
-    let a = ld(x - 1, y - 1);
+    //    h
     let b = ld(x, y - 1);
-    let c = ld(x + 1, y - 1);
     let d = ld(x - 1, y);
     let e = ld(x, y);
     let f = ld(x + 1, y);
-    let g = ld(x - 1, y + 1);
     let h = ld(x, y + 1);
-    let ii = ld(x + 1, y + 1);
 
-    // Soft min/max: cross ring first, then fold in the diagonal ring (each of
-    // mn/mx ends up as the sum of two rings, so the range is [0, 2]).
-    var mn = min(min(min(d, e), min(f, b)), h);
-    let mn2 = min(min(min(a, c), min(g, ii)), mn);
-    mn = mn + mn2;
-    var mx = max(max(max(d, e), max(f, b)), h);
-    let mx2 = max(max(max(a, c), max(g, ii)), mx);
-    mx = mx + mx2;
+    // Per-channel limiter: the strongest lobe that still keeps the result
+    // inside the ring's min/max. Both terms are <= 0, as is the lobe.
+    let mn4 = min(min(b, d), min(f, h));
+    let mx4 = max(max(b, d), max(f, h));
+    let hit_min = mn4 / max(4.0 * mx4, vec3<f32>(1e-5));
+    let hit_max = (vec3<f32>(1.0) - mx4) / min(4.0 * mn4 - 4.0, vec3<f32>(-1e-5));
+    let lobe_rgb = max(-hit_min, hit_max);
+    var lobe = max(-LIMIT, min(max(max(lobe_rgb.r, lobe_rgb.g), lobe_rgb.b), 0.0));
 
-    // Amplitude: how much headroom there is before hitting the local limits.
-    let rcp_mx = vec3<f32>(1.0) / max(mx, vec3<f32>(1e-5));
-    var amp = clamp(min(mn, vec3<f32>(2.0) - mx) * rcp_mx, vec3<f32>(0.0), vec3<f32>(1.0));
-    amp = sqrt(amp);
+    // Scale the limited lobe linearly by the knob. FSR itself parameterizes
+    // sharpness in stops, but stops never reach zero, and 0.0 needs to mean off:
+    // hires() hands this 0.0 for its pre-diffusion enlarge precisely so no
+    // sharpening is baked into the diffusion. At 0.0 the filter below collapses
+    // to e / 1.0 — an exact identity.
+    lobe = lobe * clamp(p.sharpness, 0.0, 1.0);
 
-    // Filter weight. sharpness 0 -> gentle (-1/8), 1 -> strong (-1/5).
-    let peak = -1.0 / mix(8.0, 5.0, clamp(p.sharpness, 0.0, 1.0));
-    let w = amp * peak;
-    let rcp_w = vec3<f32>(1.0) / (vec3<f32>(1.0) + 4.0 * w);
-    var outc = ((b + d + f + h) * w + e) * rcp_w;
-    outc = clamp(outc, vec3<f32>(0.0), vec3<f32>(1.0));
+    let outc = (b * lobe + d * lobe + f * lobe + h * lobe + e) / (4.0 * lobe + 1.0);
 
-    textureStore(dst, vec2<i32>(x, y), vec4<f32>(outc, 1.0));
+    textureStore(dst, vec2<i32>(x, y),
+                 vec4<f32>(clamp(outc, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0));
 }

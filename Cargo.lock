@@ -806,6 +806,7 @@ dependencies = [
  "base64",
  "bytemuck",
  "image",
+ "naga",
  "pollster",
  "serde",
  "serde_json",

@@ -76,7 +76,7 @@
   <div class="layout">
   <div class="card">
     <label for="prompt">Prompt</label>
-    <textarea id="prompt" placeholder="a lovely cat, cinematic lighting">a lovely cat, cinematic lighting</textarea>
+    <textarea id="prompt" placeholder="a lovely robot crab, cinematic lighting, sharp, in focus">a lovely robot crab, cinematic lighting, sharp, in focus</textarea>
 
     <label for="negative">Negative prompt (optional)</label>
     <input id="negative" placeholder="blurry, low quality" value="watermark, worst quality, low quality">
@@ -87,7 +87,7 @@
         <select id="template"></select>
       </div>
       <div>
-        <label for="seed">Seed (-1 = random)</label>
+        <label for="seed">Seed (-1 = random; fills in after each generate)</label>
         <input id="seed" type="number" value="-1">
       </div>
     </div>
@@ -133,7 +133,7 @@
         </div>
         <div>
           <label for="rstrength">Refine strength</label>
-          <input id="rstrength" type="number" step="0.05" min="0.05" max="1">
+          <input id="rstrength" type="number" step="0.05" min="0.05" max="0.95">
         </div>
       </div>
       <div class="row">
@@ -143,15 +143,46 @@
         </div>
         <div>
           <label for="hstrength">Hi-res strength</label>
-          <input id="hstrength" type="number" step="0.05" min="0.05" max="1">
+          <input id="hstrength" type="number" step="0.05" min="0.05" max="0.95">
         </div>
       </div>
-      <p class="sub" style="margin:8px 0 0">Refine and hi-res are img2img passes
-        over the image you already have, run from the buttons above the result.
-        <b>Steps</b> is how many denoising steps actually run — more steps resolve
-        more detail, which is what cures a soft upscale. <b>Strength</b> is how far
-        the pass may move from the source: 0.3 touches it up, 0.7 reinterprets it.
+      <p class="sub" id="stepnote" style="margin:6px 0 0"></p>
+      <div class="row">
+        <div>
+          <label for="clarity">Clarity</label>
+          <input id="clarity" type="number" step="0.05" min="0" max="1">
+        </div>
+        <div>
+          <label for="sharpness">Sharpness</label>
+          <input id="sharpness" type="number" step="0.05" min="0" max="1">
+        </div>
+      </div>
+      <p class="sub" style="margin:8px 0 0">Refine and hi-res are both img2img
+        passes over the image you already have, run from the buttons above the
+        result. <b>Hi-res</b> enlarges first, then diffuses — that's what invents
+        detail the upscale can't. <b>Refine</b> diffuses in place at whatever size
+        the image currently is, so it's the finishing pass: run it after a hi-res,
+        and run it more than once if it helps.
+        <b>Strength</b> is how far the pass may move from the source: 0.3 touches
+        it up, 0.7 reinterprets it. <b>Steps</b> is a floor, not an exact count —
+        strength decides how far up the noise schedule a pass starts, and starting
+        higher needs proportionally more steps to resolve, so the number above is
+        raised to match. Too few steps for the strength doesn't reinterpret less,
+        it just leaves noise behind, which is what reads as grit.
         <b>0 steps</b> disables a pass and hides its button.</p>
+      <p class="sub" style="margin:8px 0 0"><b>Clarity</b> and <b>Sharpness</b> are
+        GPU filters on the finished image — applied once, never baked into a
+        diffusion pass, so neither compounds and both are free to re-tune.
+        <b>Clarity</b> is a wide unsharp mask on brightness: it moves the mid
+        frequencies that read as contrast and depth, and leaves fine detail alone.
+        Reach for it when the image looks flat. Depth is the one thing refine
+        <i>can't</i> give you — a low-strength pass only ever touches fine texture,
+        and raising strength to reach the coarse structure re-composes the picture
+        instead.
+        <b>Sharpness</b> is FSR's RCAS, working on the fine band instead; its
+        limiter rules out ringing, so the top of the range is usable. If the image
+        looks gritty, this is amplifying it — try more clarity and less sharpness.
+        0.0 is off for both. Pin the seed to compare settings on the same image.</p>
 
 
     <button id="go">Generate</button>
@@ -188,6 +219,32 @@ function syncAdvanced() {
   $('rstrength').value = m.refine_strength;
   $('hsteps').value = m.hires_steps;
   $('hstrength').value = m.hires_strength;
+  $('sharpness').value = m.sharpness;
+  $('clarity').value = m.clarity;
+  syncStepNote();
+}
+
+// Mirror the step floor the server applies (see SdRunner::img2img): a pass that
+// starts further up the noise schedule needs proportionally more steps, so the
+// count in the box is a minimum. Showing the real number keeps the extra time a
+// higher strength costs from being a surprise.
+function effectiveSteps(steps, strength, base) {
+  if (!(steps > 0)) return 0;
+  return Math.max(steps, Math.ceil(base * strength));
+}
+
+function syncStepNote() {
+  const base = parseFloat($('steps').value) || 0;
+  const pass = (label, stepsId, strengthId) => {
+    const n = parseFloat($(stepsId).value) || 0;
+    const s = parseFloat($(strengthId).value) || 0;
+    if (!(n > 0)) return `${label} off`;
+    const eff = effectiveSteps(n, s, base);
+    return `${label} runs ${eff} step${eff === 1 ? '' : 's'} at strength ${s}`
+      + (eff > n ? ` (raised from ${n})` : '');
+  };
+  $('stepnote').textContent =
+    pass('Refine', 'rsteps', 'rstrength') + ' · ' + pass('Hi-res', 'hsteps', 'hstrength');
 }
 
 async function loadModels() {
@@ -232,19 +289,27 @@ function render(data) {
     .map(([name, ms]) => bar(name, ms, max)).join('');
 
   imageId = data.image_id;
+  // Pin the seed that was actually used, so the next Generate repeats this
+  // image. Without it a -1 box re-rolls every time and nothing that changes the
+  // image — sharpness especially — can be compared. Set the box back to -1 for
+  // a new one.
+  $('seed').value = data.seed;
+  // Hi-res first: it's the pass that enlarges, and refine is the finishing
+  // touch you run on whatever size you ended up at.
   let actions = '';
-  if (data.can_refine) {
-    actions += '<button id="refine" class="secondary">Refine image</button>';
-  }
   if (data.can_hires) {
     const opts = UPSCALES.map(([v, label]) =>
       `<option value="${v}"${v === 2 ? ' selected' : ''}>${label}</option>`).join('');
     actions += `<select id="upfactor" title="Upscale before the hi-res pass">${opts}</select>
       <button id="hires" class="secondary">Hi-res pass</button>`;
   }
+  if (data.can_refine) {
+    actions += '<button id="refine" class="secondary">Refine image</button>';
+  }
 
-  const tags = (data.refined ? ' · refined' : '')
-    + (data.hires_passes ? ` · hi-res ×${data.hires_passes}` : '');
+  const times = n => n > 1 ? ` ×${n}` : '';
+  const tags = (data.refine_passes ? ` · refined${times(data.refine_passes)}` : '')
+    + (data.hires_passes ? ` · hi-res${times(data.hires_passes)}` : '');
   const src = `data:image/png;base64,${data.image_base64}`;
 
   $('result').innerHTML = `
@@ -355,6 +420,8 @@ async function generate() {
       refine_strength: numOr('rstrength'),
       hires_steps: numOr('hsteps'),
       hires_strength: numOr('hstrength'),
+      sharpness: numOr('sharpness'),
+      clarity: numOr('clarity'),
     };
     render(await post('/generate', payload));
   } catch (e) {
@@ -367,6 +434,10 @@ async function generate() {
 $('go').addEventListener('click', generate);
 // Each model carries its own defaults, so re-fill the controls on switch.
 $('template').addEventListener('change', syncAdvanced);
+// Keep the effective-step line live as either pair is edited.
+for (const id of ['steps', 'rsteps', 'rstrength', 'hsteps', 'hstrength']) {
+  $(id).addEventListener('input', syncStepNote);
+}
 // Click anywhere in the viewer to dismiss it; <dialog> handles Escape itself.
 $('lightbox').addEventListener('click', () => $('lightbox').close());
 loadModels();

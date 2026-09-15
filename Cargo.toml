@@ -19,5 +19,11 @@ bytemuck = { version = "1", features = ["derive"] }
 base64 = "0.22"
 anyhow = "1"
 
+# Shader validation in tests. The WGSL is otherwise only compiled when a GPU
+# device is created, so a typo would surface as a startup failure on the worker
+# thread rather than at build time. Pinned to the naga wgpu 27 uses.
+[dev-dependencies]
+naga = { version = "27", features = ["wgsl-in"] }
+
 [profile.release]
 opt-level = 3

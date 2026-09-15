@@ -57,7 +57,9 @@ impl<'a> SdRunner<'a> {
     /// strength/steps and in needing the large-image memory flags.
     ///
     /// `steps` is how many denoising steps the pass should actually run. That is
-    /// deliberately not the number handed to `--steps` — see below.
+    /// deliberately not the number handed to `--steps` — see below. It is also a
+    /// floor, not an exact count: a pass that starts high up the sigma schedule
+    /// needs proportionally more steps to resolve, so `strength` can raise it.
     ///
     /// `big_image` adds `--vae-tiling` and (unless the profile disables it)
     /// `--diffusion-fa`. Both matter above ~1536²: measured on a 7900 XTX, a
@@ -79,6 +81,16 @@ impl<'a> SdRunner<'a> {
         // sd.cpp derives dimensions from the init image, so no -W/-H here.
         cmd.args(["-i", &path_str(init)]);
         cmd.args(["--strength", &format!("{strength}")]);
+        // Effective steps have to scale with strength, or the pass is simply
+        // under-resolved. `strength` decides how far up the sigma schedule the
+        // pass starts, so the range those steps must cover grows with it, while
+        // the caller's count does not. At 0.9 that means a near-full render in a
+        // handful of steps — under-stepped Euler hasn't converged, and what it
+        // leaves behind is un-removed noise, which reads as grit. Floor the
+        // count at the base render's own step density over the same range.
+        let requested_steps = steps;
+        let floor = ((p.steps as f32) * strength).ceil() as u32;
+        let steps = steps.max(floor).max(1);
         // sd.cpp *trims* an img2img schedule by strength instead of scaling it:
         // it keeps the last `t_enc = steps * strength` steps of a `steps`-long
         // schedule. So `--steps 2 --strength 0.3` gives t_enc = 0 and starts at
@@ -87,8 +99,17 @@ impl<'a> SdRunner<'a> {
         // this is the same compensation sd.cpp applies to its own hires-fix
         // (pipeline/request.cpp, "sd-webui behavior"). The trim keeps one extra
         // sigma, so the pass runs steps + 1 — near enough not to correct for.
-        let sched = ((steps.max(1) as f32) / strength.max(MIN_STRENGTH)).ceil() as u32;
+        let sched = ((steps as f32) / strength.max(MIN_STRENGTH)).ceil() as u32;
         cmd.args(["--steps", &sched.max(1).to_string()]);
+        eprintln!(
+            "[rustimage] {label}: {steps} effective steps at strength {strength} \
+             (schedule {sched}){}",
+            if floor > requested_steps {
+                format!(" — raised from {requested_steps}, floor is {floor} at this strength")
+            } else {
+                String::new()
+            }
+        );
         if big_image {
             cmd.arg("--vae-tiling");
             if p.hires_flash_attn {

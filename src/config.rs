@@ -95,6 +95,8 @@ pub struct Defaults {
     #[serde(default = "default_sharpness")]
     pub sharpness: f32,
     #[serde(default)]
+    pub clarity: f32,
+    #[serde(default)]
     pub refine_steps: u32,
     #[serde(default = "default_refine_strength")]
     pub refine_strength: f32,
@@ -122,6 +124,7 @@ impl Default for Defaults {
             sampler: default_sampler(),
             upscale_factor: default_upscale(),
             sharpness: default_sharpness(),
+            clarity: 0.0,
             refine_steps: 0,
             refine_strength: default_refine_strength(),
             hires_steps: 0,
@@ -149,6 +152,8 @@ pub struct Template {
     pub upscale_factor: f32,
     #[serde(default = "default_sharpness")]
     pub sharpness: f32,
+    #[serde(default)]
+    pub clarity: f32,
     #[serde(default)]
     pub refine_steps: u32,
     #[serde(default = "default_refine_strength")]
@@ -215,6 +220,12 @@ fn default_true() -> bool {
 /// strength of 0 would make the pass a silent no-op.
 pub const MIN_STRENGTH: f32 = 0.05;
 
+/// Highest img2img denoise strength we accept. sd.cpp only trims the schedule
+/// `if (strength < 1.f)` (`src/pipeline/image.cpp`), so at exactly 1.0 the trim
+/// is skipped and the init image is discarded — the pass degenerates into a
+/// plain txt2img, which is never what either escalation button wants.
+pub const MAX_STRENGTH: f32 = 0.95;
+
 /// A fully-resolved, ready-to-run model entry (from a template or discovery).
 #[derive(Debug, Clone)]
 pub struct Profile {
@@ -228,10 +239,16 @@ pub struct Profile {
     pub sampler: String,
     pub upscale_factor: f32,
     pub sharpness: f32,
+    /// Local-contrast ("clarity") amount, 0..1. 0.0 = off.
+    pub clarity: f32,
     pub refine_steps: u32,
     pub refine_strength: f32,
     pub hires_steps: u32,
     pub hires_strength: f32,
+    /// Longest side the hi-res pass may *enlarge* to before diffusing; past it
+    /// the pass diffuses as large as it can afford and FSR covers the rest.
+    /// Refine is not under this ceiling — it has no such fallback, so gating it
+    /// would just remove the option.
     pub hires_max_side: u32,
     pub hires_flash_attn: bool,
     pub weight_type: Option<String>,
@@ -251,11 +268,18 @@ impl Profile {
             ("refine_strength", self.refine_strength),
             ("hires_strength", self.hires_strength),
         ] {
-            if !(MIN_STRENGTH..=1.0).contains(&v) {
+            if !(MIN_STRENGTH..=MAX_STRENGTH).contains(&v) {
                 bail!(
-                    "'{}': {field} is {v}, must be between {MIN_STRENGTH} and 1.0",
+                    "'{}': {field} is {v}, must be between {MIN_STRENGTH} and {MAX_STRENGTH}",
                     self.name
                 );
+            }
+        }
+        // Both shaders clamp internally, but an out-of-range value here is a
+        // typo worth reporting rather than silently flooring.
+        for (field, v) in [("sharpness", self.sharpness), ("clarity", self.clarity)] {
+            if !(0.0..=1.0).contains(&v) {
+                bail!("'{}': {field} is {v}, must be between 0.0 and 1.0", self.name);
             }
         }
         Ok(())
@@ -344,6 +368,7 @@ impl Config {
                     sampler: t.sampler.clone(),
                     upscale_factor: t.upscale_factor,
                     sharpness: t.sharpness,
+                    clarity: t.clarity,
                     refine_steps: t.refine_steps,
                     refine_strength: t.refine_strength,
                     hires_steps: t.hires_steps,
@@ -388,6 +413,7 @@ impl Config {
                     sampler: d.sampler.clone(),
                     upscale_factor: d.upscale_factor,
                     sharpness: d.sharpness,
+                    clarity: d.clarity,
                     refine_steps: d.refine_steps,
                     refine_strength: d.refine_strength,
                     hires_steps: d.hires_steps,
