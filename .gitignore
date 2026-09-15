@@ -1,0 +1,6 @@
+/target
+/models/*
+!/models/.gitkeep
+/work/*
+!/work/.gitkeep
+*.png

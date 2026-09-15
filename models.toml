@@ -1,0 +1,57 @@
+# rustimage configuration.
+#
+# You usually don't need to touch [defaults] or [templates] — just drop model
+# files into the models dir and they're auto-detected. See below for tuning.
+
+[sd]
+# Path to the compiled stable-diffusion.cpp CLI. Newer builds name it `sd-cli`;
+# older ones `sd`. Point this at whatever your build produced (absolute or
+# relative to this project root).
+binary = "../stable-diffusion.cpp/build/bin/sd-cli"
+# Mode flag value. Newer sd.cpp uses "img_gen" for both txt2img and img2img
+# (img2img is triggered by an init image). Older builds used "txt2img".
+mode = "img_gen"
+# Folder scanned for checkpoints (.safetensors / .ckpt / .gguf). Every file here
+# is auto-listed in the UI. Point it elsewhere, or symlink models in, if you like.
+models_dir = "models"
+
+[server]
+host = "127.0.0.1"
+port = 8080
+
+# ---------------------------------------------------------------------------
+# [defaults] — settings applied to every auto-discovered checkpoint. Tuned for
+# standard (non-distilled) SDXL. You can override any of these per-generation
+# from the UI's Advanced panel (handy for Turbo/LCM models that want few steps
+# and cfg 1). FSR upscale/sharpen + the optional refine pass live here too.
+# ---------------------------------------------------------------------------
+[defaults]
+width          = 768
+height         = 768
+steps          = 20
+cfg_scale      = 5.0
+sampler        = "euler"
+upscale_factor = 2.0          # FSR: 768 -> 1536
+sharpness      = 0.35         # CAS sharpness, 0..1
+refine_steps    = 2           # "High quality" img2img refine (0 = disabled)
+refine_strength = 0.30
+# weight_type  = "q8_0"       # optional on-the-fly quantization
+# extra_args   = ["--diffusion-fa"]
+
+# ---------------------------------------------------------------------------
+# [templates.<name>] — OPTIONAL tuned presets that override the defaults for one
+# specific checkpoint (matched by `model` path). Use these for models that need
+# non-default settings, e.g. a Turbo checkpoint:
+# ---------------------------------------------------------------------------
+# [templates.sdxl-turbo]
+# description    = "SDXL-Turbo — fast draft (512 → 1024)"
+# model          = "models/sdxl-turbo.safetensors"
+# width          = 512
+# height         = 512
+# steps          = 4
+# cfg_scale      = 1.0          # Turbo models want CFG 1
+# sampler        = "euler"
+# upscale_factor = 2.0
+# sharpness      = 0.35
+# refine_steps    = 2
+# refine_strength = 0.30

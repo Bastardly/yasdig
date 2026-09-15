@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rustimage</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 15px/1.5 system-ui, sans-serif;
+    background: #0e1116; color: #e6edf3;
+    display: flex; justify-content: center; padding: 24px;
+  }
+  .app { width: 100%; max-width: 1240px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #8b949e; margin: 0 0 20px; font-size: 13px; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 16px; }
+  /* One column on narrow screens (controls, then result); side by side when
+     there's room, so a tall image doesn't push the controls off-screen. */
+  .layout { display: grid; gap: 20px; align-items: start; }
+  /* Without this a grid track's auto minimum is the image's intrinsic width,
+     which would blow the column out past the viewport. */
+  .layout > * { min-width: 0; }
+  @media (min-width: 900px) {
+    .layout { grid-template-columns: minmax(340px, 420px) 1fr; }
+  }
+  label { display: block; font-size: 13px; color: #8b949e; margin: 12px 0 4px; }
+  textarea, input, select {
+    width: 100%; background: #0d1117; color: #e6edf3;
+    border: 1px solid #30363d; border-radius: 8px; padding: 9px 10px; font: inherit;
+  }
+  textarea { resize: vertical; min-height: 64px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 160px; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+  .check input { width: auto; }
+  .check label { margin: 0; color: #e6edf3; }
+  button {
+    margin-top: 16px; width: 100%; padding: 11px; font: inherit; font-weight: 600;
+    background: #238636; color: #fff; border: 0; border-radius: 8px; cursor: pointer;
+  }
+  /* Declared before :disabled — same specificity, so source order decides. */
+  button.secondary { background: #1f6feb; margin-top: 12px; }
+  button:disabled { background: #30363d; color: #8b949e; cursor: default; }
+  .result img { max-width: 100%; border-radius: 10px; border: 1px solid #30363d; display: block; margin-top: 12px; }
+  .meta { font-size: 13px; color: #8b949e; }
+  .meta b { color: #e6edf3; font-weight: 600; }
+  .err { color: #ff7b72; white-space: pre-wrap; font-size: 13px; margin-top: 12px; }
+  .bars { margin-top: 12px; }
+  .bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
+  .bar .name { width: 60px; color: #8b949e; }
+  .bar .track { flex: 1; background: #0d1117; border-radius: 4px; height: 10px; overflow: hidden; }
+  .bar .fill { height: 100%; background: #388bfd; }
+  .bar .val { width: 72px; text-align: right; color: #e6edf3; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>rustimage</h1>
+  <p class="sub">Vulkan · stable-diffusion.cpp + native FSR upscale — no Python.</p>
+
+  <div class="layout">
+  <div class="card">
+    <label for="prompt">Prompt</label>
+    <textarea id="prompt" placeholder="a lovely cat, cinematic lighting">a lovely cat, cinematic lighting</textarea>
+
+    <label for="negative">Negative prompt (optional)</label>
+    <input id="negative" placeholder="blurry, low quality">
+
+    <div class="row">
+      <div>
+        <label for="template">Model</label>
+        <select id="template"></select>
+      </div>
+      <div>
+        <label for="seed">Seed (-1 = random)</label>
+        <input id="seed" type="number" value="-1">
+      </div>
+    </div>
+
+    <details id="adv">
+      <summary>Advanced (per-generation overrides)</summary>
+      <div class="row">
+        <div>
+          <label for="steps">Steps</label>
+          <input id="steps" type="number" min="1" max="100">
+        </div>
+        <div>
+          <label for="cfg">CFG scale</label>
+          <input id="cfg" type="number" step="0.1" min="0">
+        </div>
+        <div>
+          <label for="sampler">Sampler</label>
+          <select id="sampler">
+            <option value="euler">euler</option>
+            <option value="euler_a">euler_a</option>
+            <option value="dpm++2m">dpm++2m</option>
+            <option value="dpm++2mv2">dpm++2mv2</option>
+            <option value="lcm">lcm</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="w">Base width</label>
+          <input id="w" type="number" step="64" min="64">
+        </div>
+        <div>
+          <label for="h">Base height</label>
+          <input id="h" type="number" step="64" min="64">
+        </div>
+      </div>
+      <p class="sub" style="margin:8px 0 0">Turbo/LCM models: try steps 1–4, CFG 1.
+        Standard SDXL: steps ~20, CFG ~5.</p>
+    </details>
+
+    <div class="check">
+      <input id="quality" type="checkbox">
+      <label for="quality">High quality (img2img refine pass)</label>
+    </div>
+
+    <button id="go">Generate</button>
+    <div id="err" class="err"></div>
+  </div>
+
+  <div id="result" class="result"></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let models = [];
+// Handle for refining the image currently on screen; null when it can't be
+// refined (already refined, model has refine_steps = 0, or nothing generated).
+let refineId = null;
+
+function currentModel() {
+  return models.find((m) => m.name === $('template').value);
+}
+
+// Pre-fill the Advanced controls from the selected model's defaults.
+function syncAdvanced() {
+  const m = currentModel();
+  if (!m) return;
+  $('steps').value = m.steps;
+  $('cfg').value = m.cfg_scale;
+  $('sampler').value = m.sampler;
+  $('w').value = m.base_width;
+  $('h').value = m.base_height;
+}
+
+async function loadModels() {
+  try {
+    models = await (await fetch('/models')).json();
+    const sel = $('template');
+    sel.innerHTML = '';
+    for (const m of models) {
+      const opt = document.createElement('option');
+      opt.value = m.name;
+      const tag = m.discovered ? 'discovered' : 'preset';
+      opt.textContent = `${m.name} [${tag}] — ${m.out_width}×${m.out_height}`;
+      sel.appendChild(opt);
+    }
+    if (!models.length) {
+      $('err').textContent = 'No models found. Drop a .safetensors into the models/ folder.';
+    }
+    syncAdvanced();
+  } catch (e) {
+    $('err').textContent = 'Could not load models: ' + e;
+  }
+}
+
+function bar(name, ms, max) {
+  const pct = max > 0 ? Math.round((ms / max) * 100) : 0;
+  return `<div class="bar"><span class="name">${name}</span>
+    <span class="track"><span class="fill" style="width:${pct}%"></span></span>
+    <span class="val">${ms} ms</span></div>`;
+}
+
+// Info first, image last: on a narrow screen the metadata and the Refine
+// button stay visible without scrolling past a tall image.
+function render(data) {
+  const t = data.timings;
+  const total = t.gen_ms + t.fsr_ms + t.refine_ms;
+  const max = Math.max(t.gen_ms, t.fsr_ms, t.refine_ms, 1);
+  let bars = '';
+  if (t.gen_ms) bars += bar('generate', t.gen_ms, max);
+  bars += bar('fsr', t.fsr_ms, max);
+  if (data.refined) bars += bar('refine', t.refine_ms, max);
+
+  refineId = data.refine_id ?? null;
+  const refineBtn = refineId === null ? ''
+    : '<button id="refine" class="secondary">Refine image</button>';
+
+  $('result').innerHTML = `
+    <div class="meta"><b>${data.width}×${data.height}</b> · seed <b>${data.seed}</b>
+      · total <b>${total} ms</b>${data.refined ? ' · refined' : ''}</div>
+    <div class="bars">${bars}</div>
+    ${refineBtn}
+    <img src="data:image/png;base64,${data.image_base64}" alt="result">`;
+
+  const rb = $('refine');
+  if (rb) rb.addEventListener('click', refine);
+}
+
+// The GPU worker is serialized, so both actions lock out together.
+function setBusy(on, label) {
+  const go = $('go');
+  go.disabled = on;
+  go.textContent = on && label ? label : 'Generate';
+  const rb = $('refine');
+  if (rb) {
+    rb.disabled = on;
+    rb.textContent = on && label ? label : 'Refine image';
+  }
+}
+
+async function post(path, payload) {
+  const resp = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
+  if (!resp.ok || data.error) {
+    const err = new Error(data.error || ('HTTP ' + resp.status));
+    err.status = resp.status;
+    throw err;
+  }
+  return data;
+}
+
+// Refines the retained base image server-side — no txt2img re-run, and the
+// result matches what the "High quality" checkbox would have produced.
+async function refine() {
+  if (refineId === null) return;
+  setBusy(true, 'Refining…');
+  $('err').textContent = '';
+  try {
+    render(await post('/refine', { refine_id: refineId }));
+  } catch (e) {
+    $('err').textContent = String(e.message || e);
+    // 400 = the base image is gone (evicted, or the server restarted), so the
+    // button is dead; keep the image on screen. Any other failure is
+    // retryable — the server keeps the base image.
+    if (e.status === 400) {
+      refineId = null;
+      const rb = $('refine');
+      if (rb) rb.remove();
+    }
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function generate() {
+  setBusy(true, 'Generating…');
+  $('err').textContent = '';
+  try {
+    const numOr = (id) => {
+      const v = parseFloat($(id).value);
+      return Number.isFinite(v) ? v : null;
+    };
+    const payload = {
+      prompt: $('prompt').value,
+      template: $('template').value,
+      negative: $('negative').value || null,
+      seed: parseInt($('seed').value, 10),
+      quality: $('quality').checked,
+      steps: numOr('steps'),
+      cfg_scale: numOr('cfg'),
+      sampler: $('sampler').value || null,
+      width: numOr('w'),
+      height: numOr('h'),
+    };
+    render(await post('/generate', payload));
+  } catch (e) {
+    $('err').textContent = String(e.message || e);
+  } finally {
+    setBusy(false);
+  }
+}
+
+$('go').addEventListener('click', generate);
+$('template').addEventListener('change', syncAdvanced);
+loadModels();
+</script>
+</body>
+</html>
