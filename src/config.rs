@@ -88,6 +88,11 @@ pub struct Defaults {
     pub steps: u32,
     #[serde(default = "default_cfg")]
     pub cfg_scale: f32,
+    /// CFG scale for the refine and hi-res passes. `None` = use `cfg_scale`.
+    /// Lower is usually right: the base render's CFG over-guides at output
+    /// resolution, and over-guidance reads as high-frequency crunch.
+    #[serde(default)]
+    pub img2img_cfg_scale: Option<f32>,
     #[serde(default = "default_sampler")]
     pub sampler: String,
     #[serde(default = "default_upscale")]
@@ -121,6 +126,7 @@ impl Default for Defaults {
             height: default_height(),
             steps: default_steps(),
             cfg_scale: default_cfg(),
+            img2img_cfg_scale: None,
             sampler: default_sampler(),
             upscale_factor: default_upscale(),
             sharpness: default_sharpness(),
@@ -146,6 +152,10 @@ pub struct Template {
     pub height: u32,
     pub steps: u32,
     pub cfg_scale: f32,
+    /// See [`Defaults::img2img_cfg_scale`]. Optional here too, so a template can
+    /// tune the base CFG without being forced to name a second one.
+    #[serde(default)]
+    pub img2img_cfg_scale: Option<f32>,
     #[serde(default = "default_sampler")]
     pub sampler: String,
     #[serde(default = "default_upscale")]
@@ -182,10 +192,10 @@ fn default_height() -> u32 {
     768
 }
 fn default_steps() -> u32 {
-    20
+    4
 }
 fn default_cfg() -> f32 {
-    5.0
+    1.0
 }
 fn default_sampler() -> String {
     "euler".to_string()
@@ -240,6 +250,9 @@ pub struct Profile {
     pub height: u32,
     pub steps: u32,
     pub cfg_scale: f32,
+    /// CFG for the img2img passes only. `None` follows `cfg_scale` — read it
+    /// through [`Profile::img2img_cfg`] rather than unwrapping it by hand.
+    pub img2img_cfg_scale: Option<f32>,
     pub sampler: String,
     pub upscale_factor: f32,
     pub sharpness: f32,
@@ -264,6 +277,16 @@ pub struct Profile {
 }
 
 impl Profile {
+    /// The CFG the refine and hi-res passes run at.
+    ///
+    /// Unset follows `cfg_scale` rather than resolving to a number at load, so
+    /// raising the base CFG on a discovered model doesn't quietly leave the
+    /// escalations behind at whatever it used to be. The single place the
+    /// fallback lives — nothing else should unwrap the field itself.
+    pub fn img2img_cfg(&self) -> f32 {
+        self.img2img_cfg_scale.unwrap_or(self.cfg_scale)
+    }
+
     /// Reject denoise strengths that would make a pass a no-op (or blow up the
     /// compensated schedule). Called once per resolved profile at load, and
     /// again in the pipeline after per-request overrides are applied.
@@ -277,6 +300,18 @@ impl Profile {
                     "'{}': {field} is {v}, must be between {MIN_STRENGTH} and {MAX_STRENGTH}",
                     self.name
                 );
+            }
+        }
+        // 0.0 is meaningful here — it's guidance off — so the floor is 0 rather
+        // than a minimum. Only nonsense is rejected. `cfg_scale` goes through the
+        // same check: it was unvalidated, so a negative one from the UI reached
+        // sd.cpp untouched.
+        for (field, v) in [
+            ("cfg_scale", self.cfg_scale),
+            ("img2img_cfg_scale", self.img2img_cfg()),
+        ] {
+            if !v.is_finite() || v < 0.0 {
+                bail!("'{}': {field} is {v}, must be 0 or greater", self.name);
             }
         }
         validate_filters(&self.name, self.sharpness, self.clarity)
@@ -381,6 +416,7 @@ impl Config {
                     height: t.height,
                     steps: t.steps,
                     cfg_scale: t.cfg_scale,
+                    img2img_cfg_scale: t.img2img_cfg_scale,
                     sampler: t.sampler.clone(),
                     upscale_factor: t.upscale_factor,
                     sharpness: t.sharpness,
@@ -426,6 +462,7 @@ impl Config {
                     height: d.height,
                     steps: d.steps,
                     cfg_scale: d.cfg_scale,
+                    img2img_cfg_scale: d.img2img_cfg_scale,
                     sampler: d.sampler.clone(),
                     upscale_factor: d.upscale_factor,
                     sharpness: d.sharpness,

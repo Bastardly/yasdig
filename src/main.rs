@@ -195,6 +195,8 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         #[serde(default)]
         cfg_scale: Option<f32>,
         #[serde(default)]
+        img2img_cfg_scale: Option<f32>,
+        #[serde(default)]
         sampler: Option<String>,
         #[serde(default)]
         width: Option<u32>,
@@ -226,6 +228,7 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         seed: dto.seed.unwrap_or(-1),
         steps: dto.steps,
         cfg_scale: dto.cfg_scale,
+        img2img_cfg_scale: dto.img2img_cfg_scale,
         sampler: dto.sampler,
         width: dto.width,
         height: dto.height,
@@ -403,7 +406,7 @@ fn build_models_json(cfg: &Config) -> String {
             format!(
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
-                 \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\
+                 \"steps\":{},\"cfg_scale\":{},\"img2img_cfg_scale\":{},\"sampler\":{},\
                  \"refine_steps\":{},\"refine_strength\":{},\
                  \"hires_steps\":{},\"hires_strength\":{},\"sharpness\":{},\"clarity\":{}}}",
                 json_str(&p.name),
@@ -416,6 +419,12 @@ fn build_models_json(cfg: &Config) -> String {
                 out_h,
                 p.steps,
                 p.cfg_scale,
+                // `null`, not the resolved number: the UI has to tell "unset" from
+                // "set to exactly the base CFG", because they look the same and
+                // behave differently the moment the CFG box moves.
+                p.img2img_cfg_scale
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "null".to_string()),
                 json_str(&p.sampler),
                 p.refine_steps,
                 p.refine_strength,

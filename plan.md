@@ -7,45 +7,6 @@ strength-scaled step floor, the 0.95 strength cap, and the clarity band-pass.
 
 
 
-## 2. Recommended next build: a separate CFG scale for the img2img passes
-
-**Why.** This is the other half of the "dirty" problem and the last untouched
-lever on it. CFG 5 is right for a base render at 768²; at 2304² with few steps it
-over-guides, and over-guidance shows up as high-frequency artifacts — the same
-crunch the step floor attacks from the other side. Dropping to ~2–3 for the
-img2img passes is the conventional cure. It was deliberately deferred yesterday
-so the step floor could be judged on its own first.
-
-**Design.** One optional field rather than a per-pass pair, to avoid knob sprawl:
-
-```rust
-// src/config.rs, on Template/Defaults/Profile
-/// CFG scale for the refine and hi-res passes. `None` = use `cfg_scale`.
-/// Lower is usually right: the base render's CFG over-guides at output
-/// resolution, and over-guidance reads as high-frequency crunch.
-#[serde(default)]
-pub img2img_cfg_scale: Option<f32>,
-```
-
-`SdRunner::base_cmd` (`src/sd.rs`) currently reads `p.cfg_scale` directly. Give
-it a `cfg_scale: f32` parameter; `txt2img` passes `p.cfg_scale`, `img2img` passes
-`p.img2img_cfg_scale.unwrap_or(p.cfg_scale)`. Then the usual plumbing, following
-the `sharpness` pattern exactly: `GenRequest` override, the `/generate` DTO,
-`build_models_json`, a UI input beside CFG scale, and `models.toml` + `README.md`.
-
-**Validation.** Range-check in `Profile::validate()` like the others — reject
-negatives; `0.0` is meaningful (CFG off) so the floor is 0, not a minimum.
-
-**Verification.** Same seed, same everything, refine at `0.30` with CFG 5 vs 2.5.
-If the crunch drops without the image going flat or losing prompt adherence, it
-ships with a lower default.
-
-**Alternative considered:** separate `refine_cfg_scale` / `hires_cfg_scale`, for
-symmetry with the existing `*_steps` / `*_strength` pairs. Rejected for now —
-there's no reason yet to think the two passes want different values, and the
-panel is already dense. Easy to split later if verification says otherwise.
-
----
 
 ## 3. Smaller loose ends
 

@@ -141,6 +141,7 @@ Settings fields, shared between `[defaults]` and `[templates.*]` except where no
 | `description` | optional label shown in the UI (templates only) |
 | `width` / `height` | base generation size, default `768` each (small = fast) |
 | `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `20`, `5.0`, `euler` (Turbo → few steps, cfg 1) |
+| `img2img_cfg_scale` *(opt)* | CFG for the refine and hi-res passes only; unset (the default) follows `cfg_scale`. `0` is legal and means guidance off |
 | `upscale_factor` | FSR upscale, default `2.0` (768 → 1536) |
 | `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the slider under the image starts |
 | `clarity` | local contrast, -1..1, default `0.0` = off — positive adds mid-frequency depth, negative softens; likewise the slider's starting value |
@@ -203,6 +204,15 @@ Strength decides how far up the noise schedule a pass starts, so a higher streng
 more range to cover and the count is raised to at least `steps × strength`. Too few
 steps for the strength doesn't reinterpret less — it leaves un-removed noise behind,
 which is what reads as grit. The UI shows the number each pass will actually run.
+
+Guidance is the other half of that. **Refine/hi-res CFG** (`img2img_cfg_scale`) sets the
+CFG for those two passes alone. The value that suits a 768² base render over-guides at
+output resolution: a low-strength pass has little freedom to begin with, and pushing it
+hard against the prompt spends that freedom on high-frequency artifacts — the same crunch
+under-stepping produces, arriving from the other direction. If a pass looks harsh, try
+~2–3 here before reaching for more steps. Leave the box blank and it follows the CFG
+above, which is the default and matches how the passes have always run; the note under
+the controls always states the number that will actually be used.
 
 Order is free and both repeat. The hi-res button disappears once the image is past
 `hires_max_side`; refine is not under that ceiling, because it doesn't rescale and so
@@ -282,9 +292,12 @@ From a source checkout, put them after `--`: `cargo run --release -- doctor`.
   discovered checkpoints alike. Built fresh on every call, so a newly-dropped checkpoint
   appears without a restart. Each entry carries `name`, `description`, `discovered`,
   `exists`, `base_width` / `base_height`, `out_width` / `out_height`, and the profile's
-  `steps`, `cfg_scale`, `sampler`, `refine_steps`, `refine_strength`, `hires_steps`,
-  `hires_strength`, `sharpness`, `clarity` — which is what lets the UI pre-fill its
-  controls when you pick a model.
+  `steps`, `cfg_scale`, `img2img_cfg_scale`, `sampler`, `refine_steps`,
+  `refine_strength`, `hires_steps`, `hires_strength`, `sharpness`, `clarity` — which is
+  what lets the UI pre-fill its controls when you pick a model. `img2img_cfg_scale` is
+  `null` when the profile doesn't set one; that is deliberately distinguishable from the
+  same number as `cfg_scale`, because unset *follows* the base CFG rather than matching
+  it once.
 - `POST /generate` — only `prompt` and `template` are required:
   ```json
   { "prompt": "…", "template": "sdxl-turbo", "negative": null, "seed": -1 }
@@ -292,12 +305,15 @@ From a source checkout, put them after `--`: `cargo run --release -- doctor`.
   Every generation setting may also be overridden per-request; each is optional, and
   omitting one uses the model's profile value:
   ```json
-  { "steps": 20, "cfg_scale": 5.0, "sampler": "euler", "width": 768, "height": 768,
+  { "steps": 20, "cfg_scale": 5.0, "img2img_cfg_scale": 2.5, "sampler": "euler",
+    "width": 768, "height": 768,
     "refine_steps": 2, "refine_strength": 0.3, "hires_steps": 8, "hires_strength": 0.3,
     "sharpness": 0.35, "clarity": 0.0 }
   ```
   The overrides are applied to the profile *before* it is retained with the image, so a
-  later `/refine` or `/hires` runs with the settings that generated it. `sharpness` and
+  later `/refine` or `/hires` runs with the settings that generated it. Omitting
+  `img2img_cfg_scale` leaves it *unset* rather than pinning it, so the escalations keep
+  following whatever `cfg_scale` this request used. `sharpness` and
   `clarity` are the exception, because they aren't generation settings: they set the
   image's starting filters, `/adjust` moves them from there, and every later pass resets
   them. The web UI leaves both out for that reason. `seed` defaults to `-1` (pick one).

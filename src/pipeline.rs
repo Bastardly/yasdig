@@ -56,6 +56,9 @@ pub struct GenRequest {
     /// Turbo and standard checkpoints without editing config).
     pub steps: Option<u32>,
     pub cfg_scale: Option<f32>,
+    /// CFG for the refine and hi-res passes. `None` keeps the profile's setting,
+    /// which is itself usually unset and so follows `cfg_scale`.
+    pub img2img_cfg_scale: Option<f32>,
     pub sampler: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -213,6 +216,12 @@ impl Engine {
         }
         if let Some(v) = req.cfg_scale {
             profile.cfg_scale = v;
+        }
+        // Stays an `Option` on the profile: an absent override leaves it absent,
+        // so a request that only raises `cfg_scale` raises what the escalations
+        // run at too. Pinning it here would silently break that.
+        if let Some(v) = req.img2img_cfg_scale {
+            profile.img2img_cfg_scale = Some(v);
         }
         if let Some(v) = &req.sampler {
             if !v.is_empty() {

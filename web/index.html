@@ -157,21 +157,15 @@
           <input id="hstrength" type="number" step="0.05" min="0.05" max="0.95">
         </div>
       </div>
+      <div class="row">
+        <div>
+          <label for="icfg">Refine/hi-res CFG</label>
+          <!-- Blank = follow the CFG box above. The placeholder shows what that
+               currently resolves to, so an empty field still says what it does. -->
+          <input id="icfg" type="number" step="0.1" min="0">
+        </div>
+      </div>
       <p class="sub" id="stepnote" style="margin:6px 0 0"></p>
-      <p class="sub" style="margin:8px 0 0">Refine and hi-res are both img2img
-        passes over the image you already have, run from the buttons above the
-        result. <b>Hi-res</b> enlarges first, then diffuses — that's what invents
-        detail the upscale can't. <b>Refine</b> diffuses in place at whatever size
-        the image currently is, so it's the finishing pass: run it after a hi-res,
-        and run it more than once if it helps.
-        <b>Strength</b> is how far the pass may move from the source: 0.3 touches
-        it up, 0.7 reinterprets it. <b>Steps</b> is a floor, not an exact count —
-        strength decides how far up the noise schedule a pass starts, and starting
-        higher needs proportionally more steps to resolve, so the number above is
-        raised to match. Too few steps for the strength doesn't reinterpret less,
-        it just leaves noise behind, which is what reads as grit.
-        <b>0 steps</b> disables a pass and hides its button.</p>
-
     <button id="go">Generate</button>
     <div id="err" class="err"></div>
   </div>
@@ -223,6 +217,11 @@ function syncAdvanced() {
   if (!m) return;
   $('steps').value = m.steps;
   $('cfg').value = m.cfg_scale;
+  // Left empty when the model doesn't set one, rather than pre-filled with the
+  // number it resolves to. Pre-filling would look friendlier and would be a lie:
+  // it pins the value, so moving the CFG box afterwards would silently stop
+  // carrying over to the escalations.
+  $('icfg').value = m.img2img_cfg_scale ?? '';
   $('sampler').value = m.sampler;
   $('w').value = m.base_width;
   $('h').value = m.base_height;
@@ -269,7 +268,22 @@ function syncStepNote() {
       + (eff > n ? ` (raised from ${n})` : '');
   };
   $('stepnote').textContent =
-    pass('Refine', 'rsteps', 'rstrength') + ' · ' + pass('Hi-res', 'hsteps', 'hstrength');
+    pass('Refine', 'rsteps', 'rstrength') + ' · ' + pass('Hi-res', 'hsteps', 'hstrength')
+    + cfgNote();
+}
+
+// A blank Refine/hi-res CFG box means "whatever the CFG box says", which is a
+// thing the field has to admit to rather than decide quietly. So: the number it
+// resolves to goes in the placeholder, and the note under the boxes states it —
+// both live, because the base CFG it follows is one field away and editable.
+function cfgNote() {
+  const base = parseFloat($('cfg').value);
+  const own = parseFloat($('icfg').value);
+  $('icfg').placeholder = Number.isFinite(base) ? base : '';
+  const cfg = Number.isFinite(own) ? own : base;
+  if (!Number.isFinite(cfg)) return '';
+  const differs = Number.isFinite(base) && cfg !== base;
+  return ` · CFG ${cfg}` + (differs ? ` (base ${base})` : '');
 }
 
 async function loadModels() {
@@ -503,6 +517,9 @@ async function generate() {
       seed: parseInt($('seed').value, 10),
       steps: numOr('steps'),
       cfg_scale: numOr('cfg'),
+      // null for an empty box, which the server reads as "leave it unset" — so
+      // the passes keep following cfg_scale rather than getting pinned here.
+      img2img_cfg_scale: numOr('icfg'),
       sampler: $('sampler').value || null,
       width: numOr('w'),
       height: numOr('h'),
@@ -525,8 +542,9 @@ async function generate() {
 $('go').addEventListener('click', generate);
 // Each model carries its own defaults, so re-fill the controls on switch.
 $('template').addEventListener('change', syncAdvanced);
-// Keep the effective-step line live as either pair is edited.
-for (const id of ['steps', 'rsteps', 'rstrength', 'hsteps', 'hstrength']) {
+// Keep the effective-step line live as either pair is edited — and the CFG boxes
+// with them, since the note reports what the img2img passes resolve to.
+for (const id of ['steps', 'rsteps', 'rstrength', 'hsteps', 'hstrength', 'cfg', 'icfg']) {
   $(id).addEventListener('input', syncStepNote);
 }
 // 'input', not 'change': the point is to see the filter while dragging.

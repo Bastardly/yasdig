@@ -45,7 +45,7 @@ impl<'a> SdRunner<'a> {
         seed: i64,
         out: &Path,
     ) -> Result<()> {
-        let mut cmd = self.base_cmd(p, prompt, negative, seed, out);
+        let mut cmd = self.base_cmd(p, prompt, negative, seed, out, p.cfg_scale);
         cmd.args(["-W", &p.width.to_string()]);
         cmd.args(["-H", &p.height.to_string()]);
         cmd.args(["--steps", &p.steps.to_string()]);
@@ -77,7 +77,13 @@ impl<'a> SdRunner<'a> {
         big_image: bool,
         label: &str,
     ) -> Result<()> {
-        let mut cmd = self.base_cmd(p, prompt, negative, seed, out);
+        // The base render's CFG over-guides at output resolution: the pass has
+        // little freedom left to begin with, and pushing it hard against the
+        // prompt spends that freedom on high-frequency artifacts — the same
+        // crunch the step floor above attacks from the other side. `img2img_cfg`
+        // is the knob for that, and follows `cfg_scale` unless someone set it.
+        let cfg = p.img2img_cfg();
+        let mut cmd = self.base_cmd(p, prompt, negative, seed, out, cfg);
         // sd.cpp derives dimensions from the init image, so no -W/-H here.
         cmd.args(["-i", &path_str(init)]);
         cmd.args(["--strength", &format!("{strength}")]);
@@ -103,7 +109,14 @@ impl<'a> SdRunner<'a> {
         cmd.args(["--steps", &sched.max(1).to_string()]);
         eprintln!(
             "[rustimage] {label}: {steps} effective steps at strength {strength} \
-             (schedule {sched}){}",
+             (schedule {sched}{}){}",
+            // Only when it isn't the obvious thing — same rule as the step note
+            // below. A silent line means the pass ran at the base CFG.
+            if cfg != p.cfg_scale {
+                format!(", cfg {cfg} instead of {}", p.cfg_scale)
+            } else {
+                String::new()
+            },
             if floor > requested_steps {
                 format!(" — raised from {requested_steps}, floor is {floor} at this strength")
             } else {
@@ -120,6 +133,10 @@ impl<'a> SdRunner<'a> {
     }
 
     /// Flags common to both modes.
+    ///
+    /// `cfg_scale` is passed in rather than read off the profile, because the two
+    /// modes want different ones — see [`Profile::img2img_cfg`]. Passing the
+    /// value keeps this function from having to know which mode it's serving.
     fn base_cmd(
         &self,
         p: &Profile,
@@ -127,6 +144,7 @@ impl<'a> SdRunner<'a> {
         negative: Option<&str>,
         seed: i64,
         out: &Path,
+        cfg_scale: f32,
     ) -> Command {
         let mut cmd = Command::new(self.binary());
         cmd.args(["-M", &self.cfg.sd.mode]);
@@ -137,7 +155,7 @@ impl<'a> SdRunner<'a> {
                 cmd.args(["-n", neg]);
             }
         }
-        cmd.args(["--cfg-scale", &format!("{}", p.cfg_scale)]);
+        cmd.args(["--cfg-scale", &format!("{cfg_scale}")]);
         cmd.args(["--sampling-method", &p.sampler]);
         cmd.args(["-s", &seed.to_string()]);
         cmd.args(["-o", &path_str(out)]);

@@ -80,8 +80,9 @@ These break silently rather than loudly.
 
 ## Adding a per-model knob
 
-The most repeated change here. Follow `sharpness` or `clarity` end to end — both are
-complete worked examples.
+The most repeated change here. Follow `img2img_cfg_scale` end to end for a *generation*
+knob, or `sharpness`/`clarity` for a *display* one — the two are not interchangeable, see
+the note below the table.
 
 | # | file | what |
 |---|------|------|
@@ -96,6 +97,14 @@ complete worked examples.
 The trap: **`Defaults` and `Template` are two separate structs with the same field
 list**, and `registry()` builds each in its own arm. Adding to one and not the other
 compiles cleanly and silently ignores the knob for half the models.
+
+A knob that *defaults to another knob* stays `Option<T>` all the way onto `Profile` and
+resolves through a method — `img2img_cfg_scale` / `Profile::img2img_cfg()`. Resolving it
+to a number at load, or pinning it in `Engine::run` when the request omits it, both
+compile and both quietly sever the link: raising `cfg_scale` would leave the escalations
+at whatever the base CFG used to be. For the same reason `build_models_json` emits `null`
+rather than the resolved value — the UI has to be able to tell "unset" from "set to the
+same number", because they diverge the moment the other box moves.
 
 Per-request overrides are applied onto a *cloned* profile, which is then retained in
 `Pending` — so a later refine/hi-res uses the settings the image was generated with,
