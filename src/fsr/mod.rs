@@ -5,10 +5,15 @@
 //!
 //! Plus one pass FSR doesn't specify: a local-contrast ("clarity") unsharp
 //! between the two, for the mid-frequency depth a diffusion refine can't reach
-//! without re-composing the image. See `contrast.wgsl`.
+//! without re-composing the image. Its knob is signed: negative softens that
+//! band rather than boosting it. See `contrast.wgsl`.
 //!
 //! Every stage is skipped when it would be a no-op — EASU at scale 1.0, contrast
 //! at clarity 0.0 — so `process(.., 1.0, s, 0.0)` is an exact sharpen-only pass.
+//!
+//! Both filters scale their working band with the image rather than with the
+//! pixel grid ([`clarity_sigmas`], [`rcas_radius`]), so a setting means the same
+//! thing before and after a hi-res pass.
 
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
@@ -27,7 +32,7 @@ struct UpscaleParams {
 struct SharpenParams {
     size: [u32; 2],
     sharpness: f32,
-    _pad: f32,
+    radius: i32,
 }
 
 #[repr(C)]
@@ -74,6 +79,23 @@ const DOWNSCALE: u32 = 8;
 fn clarity_sigmas(w: u32, h: u32) -> (f32, f32) {
     let wide = (0.04 * w.max(h) as f32 / DOWNSCALE as f32).clamp(2.0, 16.0);
     (wide, (wide / 8.0).max(0.75))
+}
+
+/// Output size at which RCAS runs as the reference filter does, one pixel out.
+/// It is the default pipeline's output — 768 base at `upscale_factor` 2.0 — so
+/// the stock configuration sharpens exactly as it always has, and only images
+/// that have been pushed past it change.
+const RCAS_PIVOT: f32 = 1536.0;
+
+/// Tap distance for the RCAS cross. Like [`clarity_sigmas`], it is proportional
+/// to the image, for the same reason: a filter with a fixed pixel footprint
+/// works on a finer and finer band as the picture grows, until it is grading
+/// texture nobody is looking at. One pixel at 1536, two at 3072.
+///
+/// Capped at 3 — past that the cross is skipping enough pixels that it starts
+/// to read as a halo rather than as an edge.
+fn rcas_radius(w: u32, h: u32) -> i32 {
+    (w.max(h) as f32 / RCAS_PIVOT).round().clamp(1.0, 3.0) as i32
 }
 
 impl Fsr {
@@ -385,7 +407,7 @@ impl Fsr {
         let sharpen_params = SharpenParams {
             size: [out_w, out_h],
             sharpness,
-            _pad: 0.0,
+            radius: rcas_radius(out_w, out_h),
         };
         let sharpen_buf = self
             .device
@@ -420,8 +442,9 @@ impl Fsr {
 
         // Local contrast, between the two FSR passes. Allocated only when it
         // will actually run: at clarity 0.0 the shader is an exact identity, so
-        // there's no reason to pay for two dispatches and two textures.
-        let contrasting = clarity > 0.0;
+        // there's no reason to pay for two dispatches and two textures. Either
+        // sign is work — negative softens the band instead of boosting it.
+        let contrasting = clarity != 0.0;
         let (low_w, low_h) = (div_ceil(out_w, DOWNSCALE), div_ceil(out_h, DOWNSCALE));
         let plane = |label| {
             self.make_texture(

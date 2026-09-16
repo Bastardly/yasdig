@@ -35,8 +35,13 @@ comment in each `.wgsl` is thorough; open the file rather than guessing.
 - `src/fsr/sharpen.wgsl` — **FSR1 RCAS**, a port of `FsrRcasF`. Exact identity at
   sharpness 0.0. Its `FSR_RCAS_DENOISE` term is deliberately off; the header explains
   why and quotes the measurement. Don't re-enable it without measuring again.
+  **Sharpness 1.0 is the ceiling, not a soft cap** — it's the reference filter at
+  0 stops, and a lobe past the limiter inverts the filter rather than sharpening
+  harder (`4*lobe + 1` goes negative). More apparent sharpening has to come from the
+  tap distance (`rcas_radius`), not the lobe.
 - `src/fsr/contrast.wgsl` — **not FSR.** A difference-of-Gaussians band-pass on luma
-  ("clarity"), computed on a 1/8 plane. Exact identity at clarity 0.0.
+  ("clarity"), computed on a 1/8 plane. Exact identity at clarity 0.0. The knob is
+  **signed**, -1..1: negative subtracts the band and softens.
 
 ## Invariants
 
@@ -45,7 +50,10 @@ These break silently rather than loudly.
 1. **Nothing ever diffuses over sharpened pixels.** `Pending.raw` (`src/pipeline.rs`)
    is the unsharpened output-resolution image; every escalation reads it, and RCAS is
    applied exactly once, in `Engine::publish()`. A new pass that read `display`
-   instead would compound sharpening along the whole ladder.
+   instead would compound sharpening along the whole ladder. `Engine::adjust` — the
+   live sharpness/clarity sliders — rests on this directly: re-filtering `raw` is
+   lossless however many times a drag does it. Break the invariant and the sliders
+   silently become destructive.
 2. **sd.cpp *trims* an img2img schedule by strength, it doesn't scale it** — it keeps
    the last `steps × strength` of a `steps`-long schedule. So `SdRunner::img2img`
    (`src/sd.rs:102`) hands it `steps / strength`. Drop that and `--steps 2
@@ -60,7 +68,12 @@ These break silently rather than loudly.
 5. **Dimensions come back from `publish()`; they don't carry over.** sd.cpp rounds an
    init image to what the latent grid allows, so a pass can return a size it wasn't
    given. `snap64()` exists for the same reason.
-6. **`hires_max_side` gates the hi-res pass but deliberately *not* refine.** Hi-res
+6. **Both display filters size their band from the image, not the pixel grid.**
+   `clarity_sigmas` and `rcas_radius` (`src/fsr/mod.rs`) are both proportional to the
+   longest side, so a setting survives a hi-res pass. A fixed-footprint kernel silently
+   grades a finer and finer band as the image grows — which is a look-wrong bug, not a
+   crash, and it was only caught by someone saying sharpening "felt lost" at 3072.
+7. **`hires_max_side` gates the hi-res pass but deliberately *not* refine.** Hi-res
    can fall back to diffusing smaller and letting FSR cover the rest; refine has no
    such fallback, so gating it would just remove the button in the state where it
    helps most. `Pending::can_refine` documents this — it is not a bug to fix.
@@ -76,7 +89,7 @@ complete worked examples.
 | 2 | `src/config.rs` | range-check in `Profile::validate()` |
 | 3 | `src/sd.rs` | consume it in `base_cmd` / `txt2img` / `img2img` |
 | 4 | `src/pipeline.rs` | `Option<T>` on `GenRequest`, applied onto the profile in `Engine::run()` **before** `profile.validate()` |
-| 5 | `src/main.rs` | field on the `/generate` `Dto`, plus `build_models_json` so the UI can pre-fill it |
+| 5 | `src/main.rs` | field on the `/generate` `Dto`, plus `build_models_json` so the UI can pre-fill it — and, for a *display* knob, the `/adjust` `Dto` and `result_json` too |
 | 6 | `web/index.html` | input in the Advanced panel; `syncAdvanced()` pre-fills it, `generate()` reads it |
 | 7 | `models.toml` + `README.md` | commented default, and a row in the field table |
 
@@ -87,6 +100,13 @@ compiles cleanly and silently ignores the knob for half the models.
 Per-request overrides are applied onto a *cloned* profile, which is then retained in
 `Pending` — so a later refine/hi-res uses the settings the image was generated with,
 not whatever the UI shows now. Keep that property.
+
+The two **display** filters are the deliberate exception, and the distinction is easy
+to collapse by accident. `profile.sharpness`/`.clarity` are where the sliders *start*;
+`Pending.sharpness`/`.clarity` are where they are *now*. `adjust` writes the second
+pair only, and `run`/`refine`/`hires` all reset it from the first — so every new image
+arrives unfiltered. Putting the live value back on the profile would compile fine and
+silently restore the old inherit-forever behaviour.
 
 ## Conventions
 

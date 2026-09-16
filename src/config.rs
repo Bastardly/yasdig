@@ -193,8 +193,12 @@ fn default_sampler() -> String {
 fn default_upscale() -> f32 {
     2.0
 }
+/// Off. Sharpening is a live slider under the image now, not something a render
+/// arrives pre-seasoned with — so the first thing you see is what the model and
+/// the upscaler actually produced, and anything on top of it is a choice you
+/// made and can undo.
 fn default_sharpness() -> f32 {
-    0.35
+    0.0
 }
 fn default_refine_strength() -> f32 {
     0.30
@@ -239,7 +243,7 @@ pub struct Profile {
     pub sampler: String,
     pub upscale_factor: f32,
     pub sharpness: f32,
-    /// Local-contrast ("clarity") amount, 0..1. 0.0 = off.
+    /// Local-contrast ("clarity") amount, -1..1. 0.0 = off; negative softens.
     pub clarity: f32,
     pub refine_steps: u32,
     pub refine_strength: f32,
@@ -275,15 +279,27 @@ impl Profile {
                 );
             }
         }
-        // Both shaders clamp internally, but an out-of-range value here is a
-        // typo worth reporting rather than silently flooring.
-        for (field, v) in [("sharpness", self.sharpness), ("clarity", self.clarity)] {
-            if !(0.0..=1.0).contains(&v) {
-                bail!("'{}': {field} is {v}, must be between 0.0 and 1.0", self.name);
-            }
-        }
-        Ok(())
+        validate_filters(&self.name, self.sharpness, self.clarity)
     }
+}
+
+/// Range-check the two display filters.
+///
+/// Split out of [`Profile::validate`] because `Engine::adjust` checks values
+/// that aren't on a profile at all: the profile carries where the sliders
+/// *start*, and the live positions live on the result they apply to.
+///
+/// Both shaders clamp internally, but an out-of-range value is a typo worth
+/// reporting rather than silently flooring. Clarity is signed — negative
+/// subtracts the mid band instead of adding it, which softens. Sharpness isn't;
+/// RCAS has no meaningful direction to run backwards in.
+pub fn validate_filters(name: &str, sharpness: f32, clarity: f32) -> Result<()> {
+    for (field, v, lo) in [("sharpness", sharpness, 0.0), ("clarity", clarity, -1.0)] {
+        if !(lo..=1.0).contains(&v) {
+            bail!("'{name}': {field} is {v}, must be between {lo} and 1.0");
+        }
+    }
+    Ok(())
 }
 
 impl Config {

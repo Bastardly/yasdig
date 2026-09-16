@@ -10,12 +10,16 @@
 //!   run()     txt2img (base) ─▶ EASU upscale ──────────────▶ raw ─▶ RCAS ─▶ PNG
 //!   refine()  img2img @ current res, no rescale ──────────▶ raw ─▶ RCAS ─▶ PNG
 //!   hires()   EASU enlarge ─▶ img2img ─▶ EASU (if over budget) ─▶ raw ─▶ RCAS ─▶ PNG
+//!   adjust()  (no diffusion at all) ───────────────────────────▶ raw ─▶ RCAS ─▶ PNG
 //! ```
 //!
-//! Two consequences worth stating, because both used to be otherwise. The
+//! Three consequences worth stating, because all three used to be otherwise. The
 //! ladder is free-form: `refine` runs on whatever is on screen, so it can follow
-//! a hi-res pass and can repeat. And sharpening never compounds — no pass ever
-//! diffuses over pixels another pass has already sharpened.
+//! a hi-res pass and can repeat. Sharpening never compounds — no pass ever
+//! diffuses over pixels another pass has already sharpened. And because `raw` is
+//! still exactly what the last diffusion produced, the display filters can be
+//! re-run on it for free: that is `adjust`, and it is why they are a slider
+//! rather than a reason to regenerate.
 
 use crate::config::{Config, Profile};
 use crate::fsr::Fsr;
@@ -83,10 +87,14 @@ pub struct GenResult {
     pub timings: Timings,
     pub refine_passes: u32,
     pub hires_passes: u32,
-    /// Handle for [`Engine::refine`] / [`Engine::hires`].
+    /// Handle for [`Engine::refine`] / [`Engine::hires`] / [`Engine::adjust`].
     pub image_id: u64,
     pub can_refine: bool,
     pub can_hires: bool,
+    /// The display filters currently applied, so the UI reflects what the image
+    /// actually has rather than what its controls last said.
+    pub sharpness: f32,
+    pub clarity: f32,
 }
 
 /// The intermediates of one result, kept on disk so quality can be escalated
@@ -106,6 +114,17 @@ struct Pending {
     /// Retained so re-sharpening at a new setting needn't redo the diffusion.
     display: PathBuf,
     profile: Profile,
+    /// The display filters as they stand on *this* image. Deliberately not on
+    /// `profile`: the profile's values are where the sliders start, and every
+    /// new image — a fresh generate, a refine, a hi-res — starts there again.
+    /// `adjust` moves these two and touches nothing else.
+    ///
+    /// Carrying them forward instead was the obvious thing and the wrong one.
+    /// An escalation replaces the pixels, so the amount of sharpening that
+    /// looked right is stale by definition, and inheriting it hides what the
+    /// pass actually did underneath a filter chosen for the previous image.
+    sharpness: f32,
+    clarity: f32,
     prompt: String,
     negative: Option<String>,
     seed: i64,
@@ -276,6 +295,8 @@ impl Engine {
             raw_w: w,
             raw_h: h,
             display,
+            sharpness: profile.sharpness,
+            clarity: profile.clarity,
             profile: profile.clone(),
             prompt: req.prompt.clone(),
             negative: req.negative.clone(),
@@ -341,6 +362,9 @@ impl Engine {
             raw_w: w,
             raw_h: h,
             display,
+            // Back to the model's starting point — see `Pending::sharpness`.
+            sharpness: p.profile.sharpness,
+            clarity: p.profile.clarity,
             refine_passes: p.refine_passes + 1,
             step,
             ..p
@@ -452,11 +476,56 @@ impl Engine {
             raw_w: w,
             raw_h: h,
             display,
+            // Back to the model's starting point — see `Pending::sharpness`.
+            sharpness: p.profile.sharpness,
+            clarity: p.profile.clarity,
             hires_passes: p.hires_passes + 1,
             step,
             ..p
         };
         let result = self.result(id, &entry, png, Timings { fsr_ms, hires_ms, ..Default::default() });
+        self.store(id, entry);
+        Ok(result)
+    }
+
+    /// Re-run the display filters on an existing result. No diffusion: this is
+    /// [`Engine::publish`] again on the retained `raw`, which is what makes it a
+    /// millisecond operation and therefore something a slider can drive.
+    ///
+    /// The escalations are the expensive rungs of the ladder; this is the free
+    /// one. It is only possible because no pass ever diffuses over sharpened
+    /// pixels — `raw` is still exactly what the last diffusion produced, so
+    /// re-filtering it is lossless no matter how many times it is done.
+    ///
+    /// `None` keeps the current value, matching how overrides work everywhere
+    /// else here. The change applies to this image only, and only until the next
+    /// pass — see [`Pending::sharpness`].
+    pub fn adjust(
+        &mut self,
+        id: u64,
+        sharpness: Option<f32>,
+        clarity: Option<f32>,
+    ) -> Result<GenResult> {
+        let mut p = self.lookup(id, "adjust")?;
+        p.sharpness = sharpness.unwrap_or(p.sharpness);
+        p.clarity = clarity.unwrap_or(p.clarity);
+        // Same bounds the config goes through, from the same place.
+        crate::config::validate_filters(&p.profile.name, p.sharpness, p.clarity)?;
+
+        let t = Instant::now();
+        // Straight back over the same `display` path, and `step` doesn't move:
+        // `display` is only ever an output — no pass reads it — so there is no
+        // new file to make, and a drag can't churn the work dir or push older
+        // results out of the cache.
+        let (png, w, h) = self.publish(&p.raw, &p.display, p.sharpness, p.clarity)?;
+        let fsr_ms = t.elapsed().as_millis();
+
+        let entry = Pending {
+            raw_w: w,
+            raw_h: h,
+            ..p
+        };
+        let result = self.result(id, &entry, png, Timings { fsr_ms, ..Default::default() });
         self.store(id, entry);
         Ok(result)
     }
@@ -515,6 +584,8 @@ impl Engine {
             image_id: id,
             can_refine: entry.can_refine(),
             can_hires: entry.can_hires(),
+            sharpness: entry.sharpness,
+            clarity: entry.clarity,
         }
     }
 }

@@ -9,6 +9,25 @@
 //     channel past its local neighbourhood — ringing and clipping are excluded
 //     by construction rather than by backing off globally.
 //
+// One deviation from the reference: the cross is sampled at a distance that
+// grows with the image (`radius`, set by `rcas_radius` in mod.rs) instead of
+// always being the adjacent pixel. RCAS works on a fixed 3x3 footprint, so its
+// effect is tied to the pixel grid rather than to the picture — at 3072 the same
+// filter is working on a band three times finer, relative to the subject, than
+// it was at 1024, which is why sharpening a hi-res result felt like it did
+// almost nothing. Dilating the cross puts the band back where the eye expects
+// it. It is also the more correct band to sharpen after an EASU upscale, where
+// genuine detail lives at the pre-upscale pixel scale and what sits between
+// those pixels is interpolation.
+//
+// This is the only lever there is, because the lobe itself is already maxed:
+// the knob at 1.0 IS the reference filter at full strength (FSR parameterizes
+// sharpness as `exp2(-stops)`, and 1.0 is 0 stops). Scaling the lobe past the
+// limiter doesn't sharpen harder, it inverts the filter — the denominator
+// `4*lobe + 1` crosses zero at lobe = -0.25, which is exactly what LIMIT below
+// is holding it off. More lobe than the limiter allows is overshoot, i.e. the
+// ringing this filter exists to rule out.
+//
 // RCAS's noise-detection term (FSR_RCAS_DENOISE) is deliberately NOT applied.
 // It is opt-in in the reference, and for good reason here: it scales the lobe by
 // a factor that is smallest exactly where the Laplacian is large relative to the
@@ -19,7 +38,8 @@
 struct Params {
     size: vec2<u32>,
     sharpness: f32,
-    _pad: f32,
+    // Tap distance for the cross, in pixels. 1 is the reference filter.
+    radius: i32,
 };
 
 @group(0) @binding(0) var src: texture_2d<f32>;
@@ -44,16 +64,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let y = i32(gid.y);
 
     //    b
-    //  d e f
+    //  d e f      ... with d/f/b/h at `r` pixels out, not necessarily 1.
     //    h
-    let b = ld(x, y - 1);
-    let d = ld(x - 1, y);
+    let r = max(p.radius, 1);
+    let b = ld(x, y - r);
+    let d = ld(x - r, y);
     let e = ld(x, y);
-    let f = ld(x + 1, y);
-    let h = ld(x, y + 1);
+    let f = ld(x + r, y);
+    let h = ld(x, y + r);
 
     // Per-channel limiter: the strongest lobe that still keeps the result
-    // inside the ring's min/max. Both terms are <= 0, as is the lobe.
+    // inside the ring's min/max. Both terms are <= 0, as is the lobe. Dilating
+    // the cross doesn't weaken this — the guarantee is "stay inside the ring",
+    // and the ring is simply measured further out.
     let mn4 = min(min(b, d), min(f, h));
     let mx4 = max(max(b, d), max(f, h));
     let hit_min = mn4 / max(4.0 * mx4, vec3<f32>(1e-5));

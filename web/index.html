@@ -59,6 +59,7 @@
   #lightbox img { display: block; cursor: zoom-out; }
   .meta { font-size: 13px; color: #8b949e; }
   .meta b { color: #e6edf3; font-weight: 600; }
+  .meta b.pin { cursor: pointer; border-bottom: 1px dashed #8b949e; }
   .err { color: #ff7b72; white-space: pre-wrap; font-size: 13px; margin-top: 12px; }
   .bars { margin-top: 12px; }
   .bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
@@ -66,6 +67,16 @@
   .bar .track { flex: 1; background: #0d1117; border-radius: 4px; height: 10px; overflow: hidden; }
   .bar .fill { height: 100%; background: #388bfd; }
   .bar .val { width: 72px; text-align: right; color: #e6edf3; }
+  /* The post-process panel sits under the image and is laid out like the timing
+     bars above it: fixed-width name, the control taking the slack, value right. */
+  #post { margin-top: 16px; }
+  .posthead { display: flex; justify-content: space-between; align-items: baseline; }
+  .slider { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .slider label { margin: 0; width: 72px; flex: 0 0 auto; }
+  .slider input[type=range] { flex: 1; padding: 0; border: 0; background: none; accent-color: #388bfd; }
+  /* Wide enough for a minus sign: clarity runs -1..1. */
+  .slider .val { width: 48px; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .slider input:disabled { opacity: .5; }
 </style>
 </head>
 <body>
@@ -87,7 +98,7 @@
         <select id="template"></select>
       </div>
       <div>
-        <label for="seed">Seed (-1 = random; fills in after each generate)</label>
+        <label for="seed">Seed (-1 = random; click the seed under the image to reuse it)</label>
         <input id="seed" type="number" value="-1">
       </div>
     </div>
@@ -147,16 +158,6 @@
         </div>
       </div>
       <p class="sub" id="stepnote" style="margin:6px 0 0"></p>
-      <div class="row">
-        <div>
-          <label for="clarity">Clarity</label>
-          <input id="clarity" type="number" step="0.05" min="0" max="1">
-        </div>
-        <div>
-          <label for="sharpness">Sharpness</label>
-          <input id="sharpness" type="number" step="0.05" min="0" max="1">
-        </div>
-      </div>
       <p class="sub" style="margin:8px 0 0">Refine and hi-res are both img2img
         passes over the image you already have, run from the buttons above the
         result. <b>Hi-res</b> enlarges first, then diffuses — that's what invents
@@ -170,26 +171,33 @@
         raised to match. Too few steps for the strength doesn't reinterpret less,
         it just leaves noise behind, which is what reads as grit.
         <b>0 steps</b> disables a pass and hides its button.</p>
-      <p class="sub" style="margin:8px 0 0"><b>Clarity</b> and <b>Sharpness</b> are
-        GPU filters on the finished image — applied once, never baked into a
-        diffusion pass, so neither compounds and both are free to re-tune.
-        <b>Clarity</b> is a wide unsharp mask on brightness: it moves the mid
-        frequencies that read as contrast and depth, and leaves fine detail alone.
-        Reach for it when the image looks flat. Depth is the one thing refine
-        <i>can't</i> give you — a low-strength pass only ever touches fine texture,
-        and raising strength to reach the coarse structure re-composes the picture
-        instead.
-        <b>Sharpness</b> is FSR's RCAS, working on the fine band instead; its
-        limiter rules out ringing, so the top of the range is usable. If the image
-        looks gritty, this is amplifying it — try more clarity and less sharpness.
-        0.0 is off for both. Pin the seed to compare settings on the same image.</p>
-
 
     <button id="go">Generate</button>
     <div id="err" class="err"></div>
   </div>
 
-  <div id="result" class="result"></div>
+  <div>
+    <div id="result" class="result"></div>
+
+    <!-- Under the image, because that's what it acts on. These two never touch
+         the diffusion: they re-filter the result that's already on screen. -->
+    <div id="post" class="card" hidden>
+      <div class="posthead">
+        <b>Postprocessing</b><span id="postms" class="meta"></span>
+      </div>
+      <div class="slider">
+        <label for="clarity">Clarity</label>
+        <!-- Signed, like a photo editor's: left of centre softens. -->
+        <input id="clarity" type="range" min="-1" max="1" step="0.01">
+        <span class="val" id="clarityval"></span>
+      </div>
+      <div class="slider">
+        <label for="sharpness">Sharpness</label>
+        <input id="sharpness" type="range" min="0" max="1" step="0.01">
+        <span class="val" id="sharpnessval"></span>
+      </div>
+    </div>
+  </div>
   </div>
 </div>
 
@@ -201,6 +209,9 @@ let models = [];
 // Server-side handle for the image currently on screen, used to escalate its
 // quality; null before anything is generated, or once the handle goes stale.
 let imageId = null;
+// The data: URL on screen. Kept out of render()'s closure so the post-process
+// sliders can swap the image without rebuilding the result block.
+let currentSrc = null;
 
 function currentModel() {
   return models.find((m) => m.name === $('template').value);
@@ -219,9 +230,23 @@ function syncAdvanced() {
   $('rstrength').value = m.refine_strength;
   $('hsteps').value = m.hires_steps;
   $('hstrength').value = m.hires_strength;
-  $('sharpness').value = m.sharpness;
-  $('clarity').value = m.clarity;
+  setPost(m.sharpness, m.clarity);
   syncStepNote();
+}
+
+// The sliders are the only place these two live now, so they're also what
+// /generate reads. Pre-filled from the model, then re-set from the server's
+// reply — which is authoritative, since it says what the image actually has.
+function setPost(sharpness, clarity) {
+  $('sharpness').value = sharpness;
+  $('clarity').value = clarity;
+  syncPostLabels();
+}
+
+function syncPostLabels() {
+  for (const id of ['sharpness', 'clarity']) {
+    $(id + 'val').textContent = Number($(id).value).toFixed(2);
+  }
 }
 
 // Mirror the step floor the server applies (see SdRunner::img2img): a pass that
@@ -289,11 +314,11 @@ function render(data) {
     .map(([name, ms]) => bar(name, ms, max)).join('');
 
   imageId = data.image_id;
-  // Pin the seed that was actually used, so the next Generate repeats this
-  // image. Without it a -1 box re-rolls every time and nothing that changes the
-  // image — sharpness especially — can be compared. Set the box back to -1 for
-  // a new one.
-  $('seed').value = data.seed;
+  // The seed box is left exactly as typed. Writing the drawn seed back into it
+  // turns "-1" into a one-shot: you ask for random, get a number, and every
+  // generate after that silently repeats the same image until you notice and
+  // retype -1. The seed used is reported below and is one click from the box,
+  // which covers the reason it was ever written back.
   // Hi-res first: it's the pass that enlarges, and refine is the finishing
   // touch you run on whatever size you ended up at.
   let actions = '';
@@ -310,19 +335,29 @@ function render(data) {
   const times = n => n > 1 ? ` ×${n}` : '';
   const tags = (data.refine_passes ? ` · refined${times(data.refine_passes)}` : '')
     + (data.hires_passes ? ` · hi-res${times(data.hires_passes)}` : '');
-  const src = `data:image/png;base64,${data.image_base64}`;
+  currentSrc = `data:image/png;base64,${data.image_base64}`;
 
   $('result').innerHTML = `
-    <div class="meta"><b>${data.width}×${data.height}</b> · seed <b>${data.seed}</b>
+    <div class="meta"><b>${data.width}×${data.height}</b> · seed
+      <b id="seedval" class="pin" title="Put this seed in the box, to generate it again">${data.seed}</b>
       · total <b>${total} ms</b>${tags}</div>
     <div class="bars">${bars}</div>
     ${actions ? `<div class="actions">${actions}</div>` : ''}
     <div id="rerr" class="err"></div>
-    <img src="${src}" alt="result" title="Click to view at full size">`;
+    <img src="${currentSrc}" alt="result" title="Click to view at full size">`;
 
-  $('result').querySelector('img').addEventListener('click', () => showFullSize(src));
+  $('result').querySelector('img').addEventListener('click', () => showFullSize(currentSrc));
+  // Opt-in reproducibility: pinning the seed is a thing you choose, not
+  // something that happens to the box you just typed in.
+  $('seedval').addEventListener('click', () => { $('seed').value = data.seed; });
   if ($('refine')) $('refine').addEventListener('click', refine);
   if ($('hires')) $('hires').addEventListener('click', hires);
+
+  // What the server actually applied — which after a generate is the model's
+  // default, and after an escalation is whatever the sliders were left at.
+  setPost(data.sharpness, data.clarity);
+  $('postms').textContent = '';
+  $('post').hidden = false;
 }
 
 // The image is already a data: URL on the page, so this re-uses it rather than
@@ -348,6 +383,13 @@ function setBusy(active, label) {
     }
   }
   if ($('upfactor')) $('upfactor').disabled = !!active;
+  // The retained entry stays live during an escalation, so an adjust would
+  // succeed and then be silently overwritten by the escalation's render.
+  // Dropping a debounced one costs nothing: render() puts the sliders back to
+  // what the server applied, which is where they already are.
+  $('sharpness').disabled = !!active;
+  $('clarity').disabled = !!active;
+  if (active) clearTimeout(postTimer);
 }
 
 async function post(path, payload) {
@@ -394,6 +436,54 @@ async function escalate(which, path, payload, label) {
   }
 }
 
+// Post-process is the free rung of the ladder: no diffusion, just the display
+// filters re-run on the image the server already has. That's cheap enough to
+// drive from the slider itself rather than from a button.
+let postBusy = false;   // a request is in flight
+let postAgain = false;  // ...and the slider moved while it was
+let postTimer = null;
+
+// Debounce, then *coalesce*: while a request is out, later moves collapse into
+// one follow-up with the latest values. The GPU worker is serialized, so a
+// queue of drag positions would play back as a visible lag after letting go.
+function schedulePost() {
+  syncPostLabels();
+  if (imageId === null) return;
+  clearTimeout(postTimer);
+  postTimer = setTimeout(runPost, 120);
+}
+
+async function runPost() {
+  // `disabled` means an escalation is running; the follow-up from a coalesced
+  // drag can land after one has started.
+  if (imageId === null || $('sharpness').disabled) return;
+  if (postBusy) { postAgain = true; return; }
+  postBusy = true;
+  try {
+    const t0 = performance.now();
+    const data = await post('/adjust', {
+      image_id: imageId,
+      sharpness: parseFloat($('sharpness').value),
+      clarity: parseFloat($('clarity').value),
+    });
+    // Swap the pixels only. Rebuilding the result block would drop the image's
+    // layout height for a frame, so the page would jump under the cursor on
+    // every step of a drag.
+    currentSrc = `data:image/png;base64,${data.image_base64}`;
+    const img = $('result').querySelector('img');
+    if (img) img.src = currentSrc;
+    $('postms').textContent =
+      `${Math.round(performance.now() - t0)} ms · gpu ${data.timings.fsr_ms} ms`;
+    escErr('');
+  } catch (e) {
+    escErr(String(e.message || e));
+    if (e.status === 400) { imageId = null; $('post').hidden = true; }
+  } finally {
+    postBusy = false;
+    if (postAgain) { postAgain = false; runPost(); }
+  }
+}
+
 const refine = () => escalate('refine', '/refine', {}, 'Refining…');
 const hires = () => escalate('hires', '/hires',
   { upscale: parseFloat($('upfactor').value) }, 'Hi-res pass…');
@@ -420,8 +510,9 @@ async function generate() {
       refine_strength: numOr('rstrength'),
       hires_steps: numOr('hsteps'),
       hires_strength: numOr('hstrength'),
-      sharpness: numOr('sharpness'),
-      clarity: numOr('clarity'),
+      // Not sharpness/clarity: those are post-process, not generation settings,
+      // so a new image starts from the model's values rather than inheriting
+      // wherever the last one's sliders were left.
     };
     render(await post('/generate', payload));
   } catch (e) {
@@ -437,6 +528,10 @@ $('template').addEventListener('change', syncAdvanced);
 // Keep the effective-step line live as either pair is edited.
 for (const id of ['steps', 'rsteps', 'rstrength', 'hsteps', 'hstrength']) {
   $(id).addEventListener('input', syncStepNote);
+}
+// 'input', not 'change': the point is to see the filter while dragging.
+for (const id of ['sharpness', 'clarity']) {
+  $(id).addEventListener('input', schedulePost);
 }
 // Click anywhere in the viewer to dismiss it; <dialog> handles Escape itself.
 $('lightbox').addEventListener('click', () => $('lightbox').close());

@@ -1,5 +1,6 @@
 // Local contrast ("clarity"): a band-pass boost on luma, weighted toward the
-// midtones. Not part of FSR — this sits between EASU and RCAS.
+// midtones. Not part of FSR — this sits between EASU and RCAS. The knob runs
+// -1..1: positive adds the band (depth), negative subtracts it (softening).
 //
 // The point is the *band* it works in. A diffusion img2img pass enters the noise
 // schedule at a sigma set by its denoise strength, and sigma is effectively a
@@ -30,7 +31,9 @@
 struct Params {
     size: vec2<u32>,
     low_size: vec2<u32>,
-    // The 0..1 knob. 0.0 makes this an exact identity — see `combine`.
+    // The -1..1 knob. 0.0 makes this an exact identity — see `combine`.
+    // Negative subtracts the band instead of adding it, which softens the
+    // mid-scale structure the way a photo editor's negative Clarity does.
     amount: f32,
     // Gaussian sigmas, in *low-res* pixels. Wide sets where depth starts, narrow
     // sets where grain is excluded.
@@ -181,10 +184,19 @@ fn combine(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c = textureLoad(src, vec2<i32>(x, y), 0).rgb;
     let l = luma(c);
 
-    // Map the 0..1 knob to band gain. At 0.0 the gain is exactly 0 and the store
-    // below writes `c` unchanged, so the pass is a true no-op rather than a
-    // quiet tax on every image.
-    let gain = clamp(p.amount, 0.0, 1.0) * 3.0;
+    // Map the -1..1 knob to band gain. At 0.0 the gain is exactly 0 and the
+    // store below writes `c` unchanged, so the pass is a true no-op rather than
+    // a quiet tax on every image. Negative gain subtracts the band: the mid
+    // frequencies flatten and the image reads softer and dreamier, which is what
+    // negative Clarity does in a photo editor — useful on skin, and on a render
+    // whose depth came out overcooked.
+    //
+    // The multiplier was 3.0 and is 2.0 because the top of the range was harsh
+    // rather than merely strong: past roughly 2× on the depth band the boost
+    // stops reading as depth and starts reading as a halo. Every value on the
+    // slider is now two-thirds of what the same number used to do, so a setting
+    // carried over from before wants multiplying by ~1.5.
+    let gain = clamp(p.amount, -1.0, 1.0) * 2.0;
 
     // Full effect through the midtones, nothing at either extreme. Pushing depth
     // then can't crush shadows, blow highlights, or clip — the places an unsharp

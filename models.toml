@@ -33,15 +33,28 @@ cfg_scale      = 5.0
 sampler        = "euler"
 upscale_factor = 2.0          # FSR: 768 -> 1536
 # RCAS sharpness: 0.0 = off (the pass is an exact identity), 1.0 = RCAS at full
-# strength. RCAS's limiter rules out ringing, so the top of the range is usable —
-# unlike the CAS pass this replaced, where high values haloed. Applied once, to
-# the finished image — each pass keeps an unsharpened copy for the next one to
-# work from, so sharpening can't stack up over a long escalation chain.
-sharpness      = 0.35
-# Local contrast, 0.0 = off. A wide unsharp mask on brightness only: it moves the
-# mid frequencies that read as contrast and depth and leaves the fine band alone,
-# which is the opposite end of the spectrum from sharpness above. Reach for it
-# when an image looks flat. Worth knowing why it exists: a low-strength img2img
+# strength — literally, since FSR parameterizes sharpness as exp2(-stops) and 1.0
+# is 0 stops. There is nothing above it: a bigger lobe than the limiter allows
+# doesn't sharpen harder, it inverts the filter. What 1.0 *does* now scales with
+# the image (the cross is sampled further out on a large one), because a filter
+# with a fixed 3x3 footprint quietly loses its grip as the picture grows.
+# RCAS's limiter rules out ringing, so the top of the range is usable — unlike
+# the CAS pass this replaced, where high values haloed. Applied once, to the
+# finished image — each pass keeps an unsharpened copy for the next one to work
+# from, so sharpening can't stack up over a long escalation chain.
+#
+# Defaults to off. This and `clarity` below are only where the sliders under the
+# image *start*, and starting at zero means the first thing on screen is what the
+# model and the upscaler actually produced. Both are re-tunable live, since that
+# unsharpened copy makes re-filtering cost milliseconds and lose nothing.
+sharpness      = 0.0
+# Local contrast, -1.0 to 1.0, 0.0 = off. A wide unsharp mask on brightness only:
+# it moves the mid frequencies that read as contrast and depth and leaves the fine
+# band alone, which is the opposite end of the spectrum from sharpness above.
+# Reach for it when an image looks flat. Negative runs it backwards — the band is
+# subtracted rather than added, flattening mid-scale structure into something
+# softer and dreamier, the same trick as negative Clarity in a photo editor.
+# Worth knowing why it exists: a low-strength img2img
 # enters the schedule at low sigma and so only ever rebuilds fine texture — depth
 # is the one thing the refine pass structurally cannot give you, and raising
 # strength to reach it re-composes the picture instead. This is deterministic and
@@ -99,7 +112,8 @@ hires_flash_attn = true
 # cfg_scale      = 1.0          # Turbo models want CFG 1
 # sampler        = "euler"
 # upscale_factor = 2.0
-# sharpness      = 0.35
+# sharpness      = 0.35         # a template may start the slider somewhere else
+# clarity        = -0.2         # negative softens; positive adds depth
 # refine_steps    = 2
 # refine_strength = 0.30
 # hires_steps     = 6           # Turbo models need fewer steps here too

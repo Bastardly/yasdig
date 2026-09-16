@@ -12,6 +12,9 @@
 //!   POST /hires       -> {image_id, upscale}   img2img with an enlarge first
 //!                        both return the same shape as /generate, and both can
 //!                        be run in either order and repeated
+//!   POST /adjust      -> {image_id, sharpness?, clarity?}
+//!                        re-runs the display filters only — no diffusion, so
+//!                        it's cheap enough to drive from a slider
 
 mod config;
 mod fsr;
@@ -41,6 +44,12 @@ enum JobKind {
     Refine(u64),
     /// Re-diffuse an earlier result at output resolution, optionally enlarging.
     Hires { id: u64, upscale: f32 },
+    /// Re-filter an earlier result — display passes only, no diffusion.
+    Adjust {
+        id: u64,
+        sharpness: Option<f32>,
+        clarity: Option<f32>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -91,6 +100,11 @@ fn main() -> Result<()> {
                         JobKind::Generate(req) => engine.run(&req),
                         JobKind::Refine(id) => engine.refine(id),
                         JobKind::Hires { id, upscale } => engine.hires(id, upscale),
+                        JobKind::Adjust {
+                            id,
+                            sharpness,
+                            clarity,
+                        } => engine.adjust(id, sharpness, clarity),
                     };
                     let _ = job.reply.send(result);
                 }
@@ -162,6 +176,7 @@ fn handle_conn(
         ("POST", "/generate") => handle_generate(&mut conn, job_tx, &req.body),
         ("POST", "/refine") => handle_refine(&mut conn, job_tx, &req.body),
         ("POST", "/hires") => handle_hires(&mut conn, job_tx, &req.body),
+        ("POST", "/adjust") => handle_adjust(&mut conn, job_tx, &req.body),
         _ => conn.respond(404, "text/plain", b"not found"),
     }
 }
@@ -263,6 +278,35 @@ fn handle_hires(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) 
     }
 }
 
+/// Re-filter an earlier result. Same staleness contract as the escalations — an
+/// unknown id is 400 — but no diffusion runs, so this is the one handler that
+/// comes back in milliseconds and can be driven live from the UI's sliders.
+/// An omitted field keeps whatever the image currently has.
+fn handle_adjust(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+        #[serde(default)]
+        sharpness: Option<f32>,
+        #[serde(default)]
+        clarity: Option<f32>,
+    }
+
+    match parse_json::<Dto>(conn, body)? {
+        Some(dto) => submit(
+            conn,
+            job_tx,
+            JobKind::Adjust {
+                id: dto.image_id,
+                sharpness: dto.sharpness,
+                clarity: dto.clarity,
+            },
+            400,
+        ),
+        None => Ok(()),
+    }
+}
+
 /// Parse a JSON request body, writing a 400 and returning `None` if it's malformed.
 fn parse_json<T: serde::de::DeserializeOwned>(
     conn: &mut http::Connection,
@@ -326,6 +370,7 @@ fn result_json(res: &GenResult) -> String {
     format!(
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
          \"hires_passes\":{},\"image_id\":{},\"can_refine\":{},\"can_hires\":{},\
+         \"sharpness\":{},\"clarity\":{},\
          \"timings\":{{\"gen_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{}}}}}",
         b64,
         res.width,
@@ -336,6 +381,8 @@ fn result_json(res: &GenResult) -> String {
         res.image_id,
         res.can_refine,
         res.can_hires,
+        res.sharpness,
+        res.clarity,
         res.timings.gen_ms,
         res.timings.fsr_ms,
         res.timings.refine_ms,

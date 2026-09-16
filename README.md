@@ -38,8 +38,11 @@ post-process is implemented directly as Vulkan compute shaders through `wgpu`:
   `FsrRcasF`: the post-upscale variant, with the ring-derived limiter that rules out
   ringing by construction. RCAS's optional noise-detection term is deliberately not
   enabled — it scales the lobe down exactly where a diffusion render has fine detail.
+  One deviation from the reference: the cross is sampled further out on a large image,
+  so the filter tracks the picture rather than the pixel grid.
 - `src/fsr/contrast.wgsl` — not FSR: a local-contrast ("clarity") unsharp mask between
-  the two, on brightness only. It moves the mid frequencies that read as contrast and
+  the two, on brightness only, and signed — negative softens the band instead of
+  boosting it. It moves the mid frequencies that read as contrast and
   depth while leaving the fine band alone. It exists because a low-strength img2img
   enters the noise schedule at low sigma and so only ever rebuilds fine texture — depth
   is the one thing the refine pass structurally cannot add, and raising strength to
@@ -139,8 +142,8 @@ Settings fields, shared between `[defaults]` and `[templates.*]` except where no
 | `width` / `height` | base generation size, default `768` each (small = fast) |
 | `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `20`, `5.0`, `euler` (Turbo → few steps, cfg 1) |
 | `upscale_factor` | FSR upscale, default `2.0` (768 → 1536) |
-| `sharpness` | RCAS sharpness, 0..1, default `0.35` (0.0 = off, 1.0 = RCAS at full strength), applied once to the finished image |
-| `clarity` | local contrast, 0..1, default `0.0` = off — mid-frequency depth, applied once to the finished image |
+| `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the slider under the image starts |
+| `clarity` | local contrast, -1..1, default `0.0` = off — positive adds mid-frequency depth, negative softens; likewise the slider's starting value |
 | `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size (0 steps = disabled, and `refine_steps` defaults to 0) |
 | `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, after an enlarge (0 steps = disabled, and `hires_steps` defaults to 0) |
 | `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job. Does not limit refine |
@@ -172,9 +175,11 @@ mid-request — `doctor` below runs the same checks without starting the server.
 
 Open <http://127.0.0.1:8080>, pick a model, type a prompt, Generate. The result shows
 output resolution, seed, and per-stage timings (generate / fsr / refine / hi-res).
+`-1` in the seed box means "draw a new one each time" and stays that way; click the
+seed under the image to put it in the box when you want that image back.
 
 Every generation setting is editable per-request from the controls beside the prompt —
-steps, CFG, sampler, base size, both escalation pairs, sharpness and clarity. They
+steps, CFG, sampler, base size, and both escalation pairs. They
 pre-fill from the selected model and are sent with the request, so one discovered
 checkpoint works for both Turbo and standard settings without touching config. The
 settings a request was generated with are retained with the image, so a later refine or
@@ -212,6 +217,46 @@ through the VAE, which costs fine detail no matter how low the strength; paying 
 base resolution and then stretching the result 2× spends the loss on detail while only
 the structural gain survives the upscale. That is what made the old refine pass read as
 soft. At output resolution there is nothing downstream to smear what it adds.
+
+### Postprocessing
+
+**Clarity** and **Sharpness** are the two sliders under the image, and they work like a
+photo editor rather than a generation setting: drag one and the picture re-filters
+under the cursor. There is no diffusion involved — the server re-runs the GPU filters
+on the unfiltered image it already retained — so a re-tune costs milliseconds against
+the minutes a regenerate would, and it stays lossless however many times you do it.
+
+**Clarity** runs **-1 to 1**. Positive is a wide unsharp mask on brightness: it moves
+the mid frequencies that read as contrast and depth, and leaves fine detail alone.
+Reach for it when the image looks flat. Depth is the one thing refine *can't* give you
+— a low-strength pass only ever touches fine texture, and raising strength to reach the
+coarse structure re-composes the picture instead. Negative runs the same filter
+backwards, subtracting that band instead of adding it, which flattens mid-scale
+structure into something softer — the same move as negative Clarity in a photo editor,
+and the right one when a render came out overcooked.
+
+**Sharpness** is FSR's RCAS, working the fine band; its limiter rules out ringing, so
+the top of the range is usable. If the image looks gritty, sharpness is amplifying it —
+try more clarity and less sharpness. 1.0 is the reference filter at full strength and
+there is nothing above it: FSR parameterizes sharpness as `exp2(-stops)`, and a lobe
+bigger than the limiter permits doesn't sharpen harder, it inverts the filter.
+
+Both filters size their working band from the **image**, not from the pixel grid, so a
+setting means the same thing before and after a hi-res pass — clarity's radii are a
+fixed fraction of the longest side, and RCAS samples its cross further out on a large
+image (one pixel at 1536, two at 3072). Without that, a filter with a fixed footprint
+quietly loses its grip as the picture grows: at 3072 a 3×3 kernel is grading a band
+three times finer, relative to the subject, than the same kernel at 1024.
+
+0.0 is off for both, and off is exact: neither filter touches a pixel at zero. Both
+default to off, so the first image you see is what the model and the upscaler actually
+produced — everything on top of it is a choice you made and can take back.
+
+Both sliders reset to the model's values on every new image — a fresh generate, a
+refine, a hi-res. That is deliberate: an escalation replaces the pixels, so whatever
+sharpening looked right a moment ago is stale by definition, and inheriting it would
+hide what the pass actually did under a filter chosen for the previous image. Dialling
+it back in costs a drag, not a render.
 
 A different config file can be passed as the first argument:
 `cargo run --release -- /path/to/models.toml`.
@@ -252,16 +297,21 @@ From a source checkout, put them after `--`: `cargo run --release -- doctor`.
     "sharpness": 0.35, "clarity": 0.0 }
   ```
   The overrides are applied to the profile *before* it is retained with the image, so a
-  later `/refine` or `/hires` runs with the settings that generated it. `seed` defaults
-  to `-1` (pick one). Response:
+  later `/refine` or `/hires` runs with the settings that generated it. `sharpness` and
+  `clarity` are the exception, because they aren't generation settings: they set the
+  image's starting filters, `/adjust` moves them from there, and every later pass resets
+  them. The web UI leaves both out for that reason. `seed` defaults to `-1` (pick one).
+  Response:
   ```json
   { "image_base64": "…", "width": 1536, "height": 1536, "seed": 12345,
     "refine_passes": 0, "hires_passes": 0,
     "image_id": 3, "can_refine": true, "can_hires": true,
+    "sharpness": 0.35, "clarity": 0.0,
     "timings": { "gen_ms": 0, "fsr_ms": 0, "refine_ms": 0, "hires_ms": 0 } }
   ```
   `image_id` addresses the retained intermediates; `can_refine` / `can_hires` say which
-  escalations that image can still take.
+  escalations that image can still take; `sharpness` / `clarity` report the filters
+  actually applied, which is what the UI's sliders reflect.
 - `POST /refine` — `{ "image_id": 3 }`. img2img over the retained image at its current
   size, no rescale.
 - `POST /hires` — `{ "image_id": 3, "upscale": 2 }`. FSR-upscale toward
@@ -271,11 +321,19 @@ From a source checkout, put them after `--`: `cargo run --release -- doctor`.
   Both return the same shape as `/generate` and can be chained in either order, any
   number of times; `/hires` stops being available once the image is past
   `hires_max_side`, `/refine` does not.
+- `POST /adjust` — `{ "image_id": 3, "sharpness": 0.5, "clarity": 0.3 }`. Re-runs the
+  display filters on the retained image; both fields are optional, and an omitted one
+  keeps its current value. No diffusion runs, so this returns in milliseconds — it is
+  what the sliders under the image call, and it is safe to call repeatedly because the
+  image it filters is always the unfiltered one. The new values belong to that image
+  and last until the next pass over it — `/refine` and `/hires` both reset the filters
+  to the model's values. Same response shape as `/generate`, with the time reported in
+  `fsr_ms`.
 
-Errors are `{"error": "…"}`. A failed escalation is `400` — the id has expired (only the
-last 8 results are kept, and `work/` is cleared on restart), or that pass isn't available
-for the image; either way it's client-side staleness, and the image is left intact to
-retry. A failed `/generate` is `500`, malformed JSON is `400`, and `503` means the GPU
+Errors are `{"error": "…"}`. Anything addressed by `image_id` fails with `400` — the id
+has expired (only the last 8 results are kept, and `work/` is cleared on restart), or
+that pass isn't available for the image; either way it's client-side staleness, and the
+image is left intact to retry. A failed `/generate` is `500`, malformed JSON is `400`, and `503` means the GPU
 worker is gone.
 
 ## Architecture notes

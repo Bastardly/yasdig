@@ -55,10 +55,14 @@ panel is already dense. Easy to split later if verification says otherwise.
 - **The `hires_max_side` name.** It now means "the largest side the *hi-res* pass
   may enlarge to"; refine deliberately isn't under it. The name is fine, the
   confusion was mine — noted only so it doesn't get "fixed" later by mistake.
-- **Re-sharpen without re-diffusing.** `Pending` already retains the unfiltered
-  `raw`, so changing sharpness or clarity on an existing image could be a
-  millisecond GPU pass instead of a full regenerate. Not built — there's no
-  endpoint for it — but the hard part is already done.
+- ~~**Re-sharpen without re-diffusing.**~~ **Built 2026-09-16.** `POST /adjust`
+  (`Engine::adjust`) re-runs `publish()` on the retained `raw`, and the two
+  controls are now live sliders under the image rather than generation settings.
+  The new values are retained on the profile, so a later refine or hi-res keeps
+  them. If a drag feels sluggish at 3072², the two things to try, in order, are
+  caching the decoded `raw` pixels (one entry — 3072²×4 is 37 MB) and replacing
+  the base64 data URL with a binary `GET`; both target PNG/transfer cost, not GPU
+  cost, which is ~1 ms.
 
 ---
 
@@ -67,7 +71,15 @@ panel is already dense. Easy to split later if verification says otherwise.
 Kept here so it doesn't have to be re-derived.
 
 **Clarity band-pass**, 1536² synthetic image with four planted frequencies,
-amplitude relative to the input:
+amplitude relative to the input.
+
+> **Stale as of 2026-09-16, in a known way.** The gain multiplier went 3.0 → 2.0
+> (the top of the range read as halo, not depth), so every row below now needs
+> two-thirds of its boost: a number on the slider today does what `value / 1.5`
+> did when this was measured. The *shape* is unchanged — it is the same band-pass
+> with the same sigmas — so the point the table makes still stands. Re-measure
+> before quoting the figures themselves. The knob also runs to -1 now; the
+> negative half has not been measured at all.
 
 | band | clarity 0.3 | 0.6 | 1.0 |
 |---|---|---|---|
@@ -90,7 +102,17 @@ strength, so the pass matches the base render's step density — the same semant
 sd-webui uses.
 
 **RCAS sharpness**: 0.05 vs 0.95 at 2× differs by 128/255 at most. `0.0` is an
-exact identity.
+exact identity. Measured at tap radius 1, which is still what images up to ~2300
+px get; larger ones now sample the cross further out (`rcas_radius`), and that
+has not been measured.
+
+`1.0` is a hard ceiling, not a soft one — it is `FsrRcasF` at 0 stops. Anything
+that wants "more sharpening than maximum" has to either widen the tap distance
+(done) or let the lobe exceed the ring limiter, which means accepting overshoot.
+The second is a real option and the conventional one outside FSR — it is what
+makes an unsharp mask read as punchy — but it trades away the "ringing excluded
+by construction" property the shader header advertises, so it should be a
+separate, measured decision rather than a constant someone nudges.
 
 **Ground truth for the step arithmetic** is `src/pipeline/image.cpp:132-185` and
 `make_hires_sigma_schedule` in `src/pipeline/request.cpp:427` in the
