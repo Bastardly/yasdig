@@ -1,24 +1,26 @@
 # rustimage
 
-A Python-free image generator for AMD GPUs on Linux. It generates **small and
-distilled** with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)
-on the **Vulkan** backend (SDXL-Turbo, 1–4 steps, ~512px), then does the expensive-looking
-part cheaply: a **native AMD FidelityFX Super Resolution 1.0 upscale + sharpen** as GPU compute shaders
-via [`wgpu`](https://github.com/gfx-rs/wgpu) — no second diffusion pass, no ML upscaler,
-no Python anywhere in the build or runtime.
+A Python-free image generator for AMD GPUs on Linux. It generates **small and cheap**
+with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) on the
+**Vulkan** backend, then does the expensive-looking part on the GPU: a **native AMD
+FidelityFX Super Resolution 1.0 upscale + sharpen** as compute shaders via
+[`wgpu`](https://github.com/gfx-rs/wgpu) — no ML upscaler, and no Python anywhere in
+the build or runtime.
+
+The base render is one diffusion pass at 768² (the default; distilled checkpoints like
+SDXL-Turbo want a template with 1–4 steps and CFG 1). Anything better than that is
+**escalated on demand**, so you only pay for it on the images worth keeping.
 
 ```
-prompt ──▶ sd-cli (Vulkan, distilled, 512px) ──▶ EASU upscale ──▶ clarity + RCAS ──▶ PNG
-                                                      ▲
-      on demand, from the buttons above the result:   ├─▶ hi-res   enlarge, then img2img
-      (either order, repeatable)                      └─▶ refine   img2img in place, no rescale
+prompt ──▶ sd-cli (Vulkan, 768px default) ──▶ EASU upscale ──▶ clarity + RCAS ──▶ PNG
+                                                    ▲
+    on demand, from the buttons above the result:   ├─▶ hi-res   enlarge, then img2img
+    (either order, repeatable)                      └─▶ refine   img2img in place, no rescale
 ```
 
 Both escalations read the *unfiltered* image and write a new one; clarity and RCAS
 run once on the way out. So neither filter compounds, and no pass ever diffuses
 over pixels an earlier pass already sharpened.
-
-Generation stays cheap; quality is escalated afterwards, only on the images worth it.
 
 A tiny std-only HTTP server glues it together and serves a single static HTML page.
 
@@ -43,8 +45,9 @@ post-process is implemented directly as Vulkan compute shaders through `wgpu`:
   is the one thing the refine pass structurally cannot add, and raising strength to
   reach it re-composes the picture instead.
 
-Both run on the same AMD GPU sd.cpp uses, with no model weights. `cargo test` validates
-the WGSL through naga, since it would otherwise only compile at GPU device creation.
+All three run on the same AMD GPU sd.cpp uses, with no model weights. `cargo test`
+validates the WGSL through naga, since it would otherwise only compile at GPU device
+creation — a shader typo would surface as a startup failure on the worker thread.
 
 Each stage is skipped when it would be a no-op — EASU at scale 1.0, contrast at
 clarity 0.0 — so `rustimage fsr in.png out.png 1.0 0.5` is an exact sharpen-only pass,
@@ -87,10 +90,13 @@ This produces the CLI binary (`build/bin/sd-cli` on recent checkouts, `sd` on ol
 > Note: `rustimage` itself does **not** need `glslc` — its FSR shaders are WGSL, compiled
 > in-process by `wgpu`/naga. `glslc` is only needed to build sd.cpp.
 
-### 2. Get a distilled checkpoint
+### 2. Get a checkpoint
 
-Download a single-file `.safetensors` (no conversion needed) into `models/`, e.g.
-SDXL-Turbo. Then point `models.toml` at it (see below).
+Download a single-file `.safetensors` / `.ckpt` / `.gguf` (no conversion needed) into
+`models/`. That's the whole step — every checkpoint in that folder is **auto-discovered**
+and listed in the UI, so no config edit is needed to add a model. Distilled checkpoints
+(SDXL-Turbo, SD-Turbo, LCM) give the fastest results, but want a template to set their
+low step count and CFG 1 — see below.
 
 ### 3. Smoke-test sd.cpp on its own
 
@@ -103,42 +109,76 @@ Before involving Rust, confirm generation works:
 
 ## Configure
 
+There are two ways to get a selectable model, and the first needs no config at all:
+
+- **Discovery** — any checkpoint in the models dir is auto-listed and runs with the
+  `[defaults]` profile. Nothing to edit.
+- **Templates** — a `[templates.<name>]` block is a tuned preset that overrides the
+  defaults for one specific checkpoint (matched by its `model` path). Use it for models
+  that need non-default settings, e.g. a Turbo checkpoint at 4 steps and CFG 1.
+
+Either way, **adding a model never needs a code change.**
+
 Edit `models.toml`:
 
 - `[sd].binary` — path to your `sd-cli` (or `sd`) binary.
 - `[sd].mode` — `img_gen` for recent sd.cpp; `txt2img` for older builds.
-- `[templates.<name>]` — one **model profile** per entry. Each drives both the sd-cli
-  command line and the FSR post-process. **Adding a model = a new block + a checkpoint
-  file. No code changes.**
+- `[sd].models_dir` — folder scanned for checkpoints (default `models`).
+- `[server].host` / `[server].port` — default `127.0.0.1` and `8080`.
+- `[defaults]` — the generation + FSR settings applied to every **discovered**
+  checkpoint. Tuned for standard (non-distilled) SDXL.
+- `[templates.<name>]` — a tuned preset, as above. Takes the same fields as
+  `[defaults]`, plus `model` and an optional `description`.
 
-Key template fields:
+Settings fields, shared between `[defaults]` and `[templates.*]` except where noted:
 
 | field | meaning |
 |-------|---------|
-| `model` | path to the `.safetensors` (relative to project root) |
-| `width` / `height` | base generation size (small = fast) |
-| `steps`, `cfg_scale`, `sampler` | sd.cpp params (Turbo → few steps, cfg 1, `euler`) |
-| `upscale_factor` | FSR upscale (e.g. `2.0`: 512 → 1024) |
-| `sharpness` | RCAS sharpness, 0..1 (0.0 = off, 1.0 = RCAS at full strength), applied once to the finished image |
-| `clarity` | local contrast, 0..1 (0.0 = off) — mid-frequency depth, applied once to the finished image |
-| `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size (0 steps = disabled) |
-| `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, after an enlarge (0 steps = disabled) |
+| `model` | path to the checkpoint, relative to project root (**templates only**; a discovered model is its own file) |
+| `description` | optional label shown in the UI (templates only) |
+| `width` / `height` | base generation size, default `768` each (small = fast) |
+| `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `20`, `5.0`, `euler` (Turbo → few steps, cfg 1) |
+| `upscale_factor` | FSR upscale, default `2.0` (768 → 1536) |
+| `sharpness` | RCAS sharpness, 0..1, default `0.35` (0.0 = off, 1.0 = RCAS at full strength), applied once to the finished image |
+| `clarity` | local contrast, 0..1, default `0.0` = off — mid-frequency depth, applied once to the finished image |
+| `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size (0 steps = disabled, and `refine_steps` defaults to 0) |
+| `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, after an enlarge (0 steps = disabled, and `hires_steps` defaults to 0) |
 | `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job. Does not limit refine |
 | `hires_flash_attn` | `--diffusion-fa` for the img2img passes when they run large (default true; worth 6× at 2048²) |
 | `weight_type` *(opt)* | on-the-fly quantization, e.g. `q8_0`, via sd-cli `--type` |
 | `extra_args` *(opt)* | arbitrary flags passed verbatim to sd-cli |
 
+Both denoise strengths default to `0.30` and must be between **0.05 and 0.95** — a
+strength of 0 makes the pass a silent no-op, and at exactly 1.0 sd.cpp discards the
+init image and the pass degenerates into a plain txt2img. Out-of-range values are
+rejected at startup rather than at the first refine.
+
 ## Run
 
 ```sh
 cargo run --release
+# [rustimage] 2 model(s) available in /home/you/rustimage/models:
+# [rustimage]   • samExtTURBO_v10   [discovered, 6.5 GB]  768x768 → 1536x1536
+# [rustimage]   • sd_xl_base_1.0    [discovered, 6.5 GB]  768x768 → 1536x1536
 # [rustimage] GPU worker ready on adapter: AMD Radeon RX 7900 XTX (RADV NAVI31)
 # [rustimage] GPU post-process: upscale=easu, contrast=clarity, sharpen=rcas
 # [rustimage] listening on http://127.0.0.1:8080
 ```
 
+Startup runs a preflight first: it checks the sd.cpp binary, lists the checkpoints it
+found, and warns about templates pointing at files that aren't there. If something is
+missing it prints copy-pasteable fix instructions and exits rather than failing later,
+mid-request — `doctor` below runs the same checks without starting the server.
+
 Open <http://127.0.0.1:8080>, pick a model, type a prompt, Generate. The result shows
-output resolution, seed, and per-stage timings (generate / fsr / refine).
+output resolution, seed, and per-stage timings (generate / fsr / refine / hi-res).
+
+Every generation setting is editable per-request from the controls beside the prompt —
+steps, CFG, sampler, base size, both escalation pairs, sharpness and clarity. They
+pre-fill from the selected model and are sent with the request, so one discovered
+checkpoint works for both Turbo and standard settings without touching config. The
+settings a request was generated with are retained with the image, so a later refine or
+hi-res uses those rather than whatever the panel shows by then.
 
 Quality is escalated *after* the fact, from the buttons above the result — so you only
 pay for it on images worth keeping. The server retains each result's intermediates, so
@@ -149,9 +189,9 @@ no step ever recomputes the ones below it:
   diffuses as large as its budget allows and covers the rest with a final FSR upscale,
   so a 4× request stays affordable.
 - **Refine image** — img2img over the current image, at whatever size it currently is,
-  with no rescale (`refine_*`). Fewer steps and lower strength than hi-res, so it's the
-  cheaper rung and the finishing one: run it *after* a hi-res pass, and repeat it if it
-  helps.
+  with no rescale (`refine_*`). Usually tuned with fewer steps and a lower strength than
+  hi-res, which makes it the cheaper rung and the finishing one: run it *after* a hi-res
+  pass, and repeat it if it helps.
 
 For both, `*_steps` is a **floor** on the denoising steps that run, not an exact count.
 Strength decides how far up the noise schedule a pass starts, so a higher strength has
@@ -176,15 +216,44 @@ soft. At output resolution there is nothing downstream to smear what it adds.
 A different config file can be passed as the first argument:
 `cargo run --release -- /path/to/models.toml`.
 
+## Command-line tools
+
+Three subcommands, all of which skip the server. The last two touch only the GPU
+post-process — no sd.cpp, no checkpoint, no model weights — which makes them the quick
+way to check the Vulkan side in isolation.
+
+```sh
+rustimage doctor [models.toml]      # run the startup checks and report, without starting
+rustimage fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]
+rustimage fsr-selftest [out.png]    # synthesize a pattern, run FSR, verify dimensions
+```
+
+From a source checkout, put them after `--`: `cargo run --release -- doctor`.
+
 ## API
 
 - `GET /` — the web UI.
-- `GET /templates` — JSON list of configured profiles.
-- `POST /generate` — request:
+- `GET /templates` (alias: `GET /models`) — JSON list of the registry, templates and
+  discovered checkpoints alike. Built fresh on every call, so a newly-dropped checkpoint
+  appears without a restart. Each entry carries `name`, `description`, `discovered`,
+  `exists`, `base_width` / `base_height`, `out_width` / `out_height`, and the profile's
+  `steps`, `cfg_scale`, `sampler`, `refine_steps`, `refine_strength`, `hires_steps`,
+  `hires_strength`, `sharpness`, `clarity` — which is what lets the UI pre-fill its
+  controls when you pick a model.
+- `POST /generate` — only `prompt` and `template` are required:
   ```json
   { "prompt": "…", "template": "sdxl-turbo", "negative": null, "seed": -1 }
   ```
-  response:
+  Every generation setting may also be overridden per-request; each is optional, and
+  omitting one uses the model's profile value:
+  ```json
+  { "steps": 20, "cfg_scale": 5.0, "sampler": "euler", "width": 768, "height": 768,
+    "refine_steps": 2, "refine_strength": 0.3, "hires_steps": 8, "hires_strength": 0.3,
+    "sharpness": 0.35, "clarity": 0.0 }
+  ```
+  The overrides are applied to the profile *before* it is retained with the image, so a
+  later `/refine` or `/hires` runs with the settings that generated it. `seed` defaults
+  to `-1` (pick one). Response:
   ```json
   { "image_base64": "…", "width": 1536, "height": 1536, "seed": 12345,
     "refine_passes": 0, "hires_passes": 0,
@@ -196,14 +265,18 @@ A different config file can be passed as the first argument:
 - `POST /refine` — `{ "image_id": 3 }`. img2img over the retained image at its current
   size, no rescale.
 - `POST /hires` — `{ "image_id": 3, "upscale": 2 }`. FSR-upscale toward
-  `upscale ×` the current size (1–4), img2img at up to `hires_max_side`, then a final
-  FSR upscale if the target is beyond that budget.
+  `upscale ×` the current size (1–4, default 1), img2img at up to `hires_max_side`, then
+  a final FSR upscale if the target is beyond that budget.
 
   Both return the same shape as `/generate` and can be chained in either order, any
   number of times; `/hires` stops being available once the image is past
   `hires_max_side`, `/refine` does not.
-  `400` if the id has expired — only the last 8 results are kept, and `work/` is cleared
-  on restart — or if that pass isn't available for the image.
+
+Errors are `{"error": "…"}`. A failed escalation is `400` — the id has expired (only the
+last 8 results are kept, and `work/` is cleared on restart), or that pass isn't available
+for the image; either way it's client-side staleness, and the image is left intact to
+retry. A failed `/generate` is `500`, malformed JSON is `400`, and `503` means the GPU
+worker is gone.
 
 ## Architecture notes
 
@@ -214,9 +287,10 @@ A different config file can be passed as the first argument:
   isolation, easy debugging, and it keeps everything Python-free.
 - **Layout:**
   ```
-  src/main.rs      server + routing + single GPU worker
+  src/main.rs      server + routing + single GPU worker + CLI subcommands
   src/http.rs      minimal std-only HTTP/1.1
-  src/config.rs    models.toml -> typed profiles
+  src/config.rs    models.toml -> typed profiles (templates + discovery)
+  src/preflight.rs startup environment checks, shared with `doctor`
   src/sd.rs        sd-cli subprocess wrapper (txt2img + img2img)
   src/pipeline.rs  orchestrate sd -> fsr -> escalations, with timings + result cache
   src/fsr/         wgpu compute (upscale.wgsl = EASU, contrast.wgsl = clarity,
