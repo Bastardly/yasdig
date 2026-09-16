@@ -271,9 +271,10 @@ impl Engine {
 
         let seed = if req.seed < 0 { random_seed() } else { req.seed };
         let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let lowres = self.work_dir.join(format!("{id}-0-base.png"));
-        let raw = self.work_dir.join(format!("{id}-0-raw.png"));
-        let display = self.work_dir.join(format!("{id}-0-full.png"));
+        let mut scratch = Scratch::default();
+        let lowres = scratch.path(self.work_dir.join(format!("{id}-0-base.png")));
+        let raw = scratch.path(self.work_dir.join(format!("{id}-0-raw.png")));
+        let display = scratch.path(self.work_dir.join(format!("{id}-0-full.png")));
 
         let sd = SdRunner::new(&self.cfg);
         let neg = req.negative.as_deref();
@@ -289,13 +290,18 @@ impl Engine {
         let t = Instant::now();
         self.fsr
             .process(&lowres, &raw, tpl.upscale_factor, 0.0, 0.0)?;
-        // Nothing reads the base render once it has been upscaled: every
-        // escalation works at output resolution now.
-        let _ = std::fs::remove_file(&lowres);
+        // Nothing reads the base render once it has been upscaled — every
+        // escalation works at output resolution now — so it stays in `scratch`
+        // and goes when this returns, whichever way it returns.
 
         // 3) Sharpen for display.
         let (png, w, h) = self.publish(&raw, &display, tpl.sharpness, tpl.clarity)?;
         let fsr_ms = t.elapsed().as_millis();
+
+        // Past every `?`: these two are the result, and the `Pending` below owns
+        // them. Anything the guard still holds is an intermediate.
+        scratch.keep(&raw);
+        scratch.keep(&display);
 
         // Retain the intermediates so the next step up the ladder doesn't have
         // to re-run this one.
@@ -337,8 +343,9 @@ impl Engine {
         }
 
         let step = p.step + 1;
-        let raw = self.work_dir.join(format!("{id}-{step}-raw.png"));
-        let display = self.work_dir.join(format!("{id}-{step}-full.png"));
+        let mut scratch = Scratch::default();
+        let raw = scratch.path(self.work_dir.join(format!("{id}-{step}-raw.png")));
+        let display = scratch.path(self.work_dir.join(format!("{id}-{step}-full.png")));
         let sd = SdRunner::new(&self.cfg);
 
         let t = Instant::now();
@@ -363,8 +370,11 @@ impl Engine {
         let (png, w, h) = self.publish(&raw, &display, p.profile.sharpness, p.profile.clarity)?;
         let fsr_ms = t.elapsed().as_millis();
 
+        scratch.keep(&raw);
+        scratch.keep(&display);
         // Only now that it succeeded — a failure above leaves the entry intact
-        // so the user can retry.
+        // so the user can retry, and takes this pass's half-written files with
+        // it rather than stranding them beside the ones still in use.
         p.remove_files();
         let entry = Pending {
             raw,
@@ -419,10 +429,11 @@ impl Engine {
         let diff_w = snap64(((p.raw_w as f32) * diff_scale).round() as u32);
 
         let step = p.step + 1;
-        let upscaled = self.work_dir.join(format!("{id}-{step}-up.png"));
-        let hires = self.work_dir.join(format!("{id}-{step}-hires.png"));
-        let raw = self.work_dir.join(format!("{id}-{step}-raw.png"));
-        let display = self.work_dir.join(format!("{id}-{step}-full.png"));
+        let mut scratch = Scratch::default();
+        let upscaled = scratch.path(self.work_dir.join(format!("{id}-{step}-up.png")));
+        let hires = scratch.path(self.work_dir.join(format!("{id}-{step}-hires.png")));
+        let raw = scratch.path(self.work_dir.join(format!("{id}-{step}-raw.png")));
+        let display = scratch.path(self.work_dir.join(format!("{id}-{step}-full.png")));
         let sd = SdRunner::new(&self.cfg);
         let mut fsr_ms = 0u128;
 
@@ -472,13 +483,16 @@ impl Engine {
             1.0
         };
         self.fsr.process(&hires, &raw, scale, 0.0, 0.0)?;
-        let _ = std::fs::remove_file(&hires);
-        let _ = std::fs::remove_file(&upscaled);
+        // `hires` and `upscaled` have both been consumed; the guard drops them
+        // on the way out, and would have dropped them just the same had the
+        // pass died between here and the top of the function.
 
         // 4) Sharpen for display.
         let (png, w, h) = self.publish(&raw, &display, p.profile.sharpness, p.profile.clarity)?;
         fsr_ms += t.elapsed().as_millis();
 
+        scratch.keep(&raw);
+        scratch.keep(&display);
         p.remove_files();
         let entry = Pending {
             raw,
@@ -526,6 +540,10 @@ impl Engine {
         // `display` is only ever an output — no pass reads it — so there is no
         // new file to make, and a drag can't churn the work dir or push older
         // results out of the cache.
+        //
+        // Deliberately no `Scratch` here, unlike the three passes above. This
+        // writes over a file the retained `Pending` already owns, so putting it
+        // under the guard would mean a failed drag deleting a live image.
         let (png, w, h) = self.publish(&p.raw, &p.display, p.sharpness, p.clarity)?;
         let fsr_ms = t.elapsed().as_millis();
 
@@ -595,6 +613,43 @@ impl Engine {
             can_hires: entry.can_hires(),
             sharpness: entry.sharpness,
             clarity: entry.clarity,
+        }
+    }
+}
+
+/// Files a pass created that shouldn't outlive it. Anything still listed when
+/// this drops is deleted, so an early `?` cleans up after itself.
+///
+/// Every pass writes under fresh names and adopts them only once the whole
+/// thing has succeeded — until then nothing else references them. So an
+/// `sd-cli` that died partway (VRAM, most often) used to leave a half-written
+/// PNG behind that no `Pending` pointed at and only `purge_pngs` cleared, at
+/// the next restart.
+///
+/// The genuine intermediates go in here too, not just the failure cases.
+/// `lowres`, `upscaled` and `hires` are transient on the success path as well,
+/// so letting the guard remove them covers both paths with one rule instead of
+/// one `remove_file` for success and nothing at all for failure.
+#[derive(Default)]
+struct Scratch(Vec<PathBuf>);
+
+impl Scratch {
+    /// Register a path the pass is about to write, and hand it straight back.
+    fn path(&mut self, p: PathBuf) -> PathBuf {
+        self.0.push(p.clone());
+        p
+    }
+
+    /// Promote a file out of the set — a `Pending` owns it from here on.
+    fn keep(&mut self, p: &Path) {
+        self.0.retain(|q| q != p);
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            let _ = std::fs::remove_file(p);
         }
     }
 }

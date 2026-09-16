@@ -494,9 +494,16 @@ fn run_fsr_cli(args: &[String]) -> Result<()> {
 }
 
 /// `rustimage fsr-selftest [out.png]`
-/// Synthesizes a test pattern, runs FSR, and verifies the output dimensions.
-/// Exercises the full wgpu path (device init, both compute passes, readback)
-/// without needing sd.cpp or a checkpoint.
+/// Exercises the full wgpu path (device init, every compute pass, readback)
+/// without sd.cpp or a checkpoint, and checks what the shaders promise. This is
+/// what to run after touching a filter constant.
+///
+/// 1. **Dimensions** — a 2× pass on a 128² pattern comes back 256².
+/// 2. **Identity** — at scale 1.0 with both filters at 0 the output is
+///    byte-identical to the input. `sharpen.wgsl` and `contrast.wgsl` both
+///    claim this in their headers and `README.md` promises it to users; until
+///    now nothing checked it.
+/// 3. **Band response** — printed, not asserted. See [`report_bands`].
 fn run_fsr_selftest(args: &[String]) -> Result<()> {
     let out_png = PathBuf::from(args.get(0).map(String::as_str).unwrap_or("fsr-selftest.png"));
 
@@ -521,19 +528,311 @@ fn run_fsr_selftest(args: &[String]) -> Result<()> {
 
     let fsr = fsr::Fsr::new()?;
     println!("[fsr-selftest] adapter: {}", fsr.adapter_name());
+
+    // 1) Dimensions.
     let (w, h) = fsr.process(&in_png, &out_png, 2.0, 0.4, 0.5)?;
     let expected = (size * 2, size * 2);
     if (w, h) != expected {
         anyhow::bail!("expected {expected:?}, got {:?}", (w, h));
     }
     println!(
-        "[fsr-selftest] OK: {}x{} ({} -> {})",
+        "[fsr-selftest] dimensions OK: {}x{} ({} -> {})",
         w,
         h,
         in_png.display(),
         out_png.display()
     );
+
+    // 2) Identity. Run on the checkerboard rather than something smooth: hard
+    //    edges are where RCAS has the most to do, so a pass that is running
+    //    when it claims to be skipped shows up here first.
+    let ident_png = out_png.with_file_name("fsr-selftest-identity.png");
+    fsr.process(&in_png, &ident_png, 1.0, 0.0, 0.0)?;
+    check_identity(&img, &ident_png)?;
+    println!("[fsr-selftest] identity OK: scale 1.0, sharpness 0, clarity 0 is byte-exact");
+
+    // 3) Bands.
+    report_bands(&fsr, &out_png)?;
     Ok(())
+}
+
+/// Assert an output is byte-for-byte its input.
+///
+/// Reports *how* it differs rather than only that it does: a one-bit drift
+/// across every pixel and a whole pass running by mistake are different bugs
+/// and want different fixes.
+fn check_identity(src: &image::RgbaImage, out_png: &std::path::Path) -> Result<()> {
+    let got = image::open(out_png)
+        .with_context(|| format!("loading {}", out_png.display()))?
+        .to_rgba8();
+    if got.dimensions() != src.dimensions() {
+        anyhow::bail!(
+            "identity: {:?} in, {:?} out — a pass that should have been skipped resized it",
+            src.dimensions(),
+            got.dimensions()
+        );
+    }
+    let (mut max_diff, mut differing) = (0i32, 0usize);
+    for (a, b) in src.pixels().zip(got.pixels()) {
+        let d = (0..3)
+            .map(|c| (a.0[c] as i32 - b.0[c] as i32).abs())
+            .max()
+            .unwrap_or(0);
+        if d > 0 {
+            differing += 1;
+            max_diff = max_diff.max(d);
+        }
+    }
+    if differing > 0 {
+        anyhow::bail!(
+            "identity: {differing} of {} pixels differ, by up to {max_diff}/255. At scale \
+             1.0 with both filters at 0, EASU and the clarity passes are supposed to be \
+             skipped outright and RCAS to collapse to e / 1.0 — see the headers in \
+             sharpen.wgsl and contrast.wgsl, and the promise in README.md",
+            src.width() as usize * src.height() as usize
+        );
+    }
+    Ok(())
+}
+
+/// Measure how much each filter moves each spatial frequency, at two sizes.
+///
+/// The gratings' wavelengths are fractions of the width rather than fixed pixel
+/// counts, because that is exactly what `clarity_sigmas` and `rcas_radius`
+/// claim to hold constant (CLAUDE.md invariant 6): both size their band from
+/// the image, so one setting should move the same bands at 1536 and at 3072.
+/// Running both sizes is what puts a number on that — it was previously only
+/// ever caught by someone saying sharpening "felt lost" at 3072.
+///
+/// The table is printed in full and then handed to [`check_bands`], which
+/// asserts the properties behind it rather than the values in it. Reading the
+/// numbers is still the point — they are how you see a filter change do what
+/// you meant — but a regression that inverts a band or flattens the knob now
+/// fails the command instead of waiting to be noticed.
+fn report_bands(fsr: &fsr::Fsr, near: &std::path::Path) -> Result<()> {
+    let mut results: Vec<BandRow> = Vec::new();
+    // 2048 is here because 1536 and 3072 alone don't test RCAS at all: the size
+    // doubles and `rcas_radius` doubles with it, so the cross sees an identical
+    // `radius / wavelength` and returns identical numbers by arithmetic rather
+    // than by the invariant holding. 2048 sits inside the radius-1 plateau
+    // (which runs 768..2303), so 1536 → 2048 is the case where the image grows
+    // and the tap distance doesn't — the drift the step function can't remove.
+    // All three are multiples of 512, so every wavelength stays a whole number.
+    for size in [1536u32, 2048, 3072] {
+        // tone, depth, detail, grit — 1536/384/48/3 px at the smaller size.
+        let waves: Vec<u32> = [1u32, 4, 32, 512].iter().map(|d| size / d).collect();
+        let (img, protect_min) = grating(size, &waves);
+        let in_png = near.with_file_name(format!("fsr-selftest-grating-{size}.png"));
+        img.save(&in_png)?;
+        let out_png = near.with_file_name(format!("fsr-selftest-bands-{size}.png"));
+        let before = band_amplitudes(&img, &waves);
+
+        let (wide, narrow) = fsr::clarity_sigmas(size, size);
+        println!(
+            "\n[fsr-selftest] bands at {size}² — rcas radius {}, clarity sigma \
+             {wide:.2}/{narrow:.2} (low-res px), midtone protect ≥ {protect_min:.3}",
+            fsr::rcas_radius(size, size)
+        );
+        if wide >= 16.0 {
+            println!(
+                "  NOTE: the wide lobe is at its 16.0 clamp, which it reaches at 3200 px. \
+                 Past that\n        clarity stops scaling with the image and only RCAS \
+                 still holds invariant 6."
+            );
+        }
+        let head: String = waves
+            .iter()
+            .zip(BANDS)
+            .map(|(w, n)| format!("{:>12}", format!("{n} {w}px")))
+            .collect();
+        println!("  {:<15}{head}{:>7}", "", "ms");
+        for (label, sharpness, clarity) in [
+            ("clarity +0.6", 0.0, 0.6),
+            ("clarity -0.6", 0.0, -0.6),
+            ("sharpness 1.0", 1.0, 0.0),
+        ] {
+            let t = std::time::Instant::now();
+            fsr.process(&in_png, &out_png, 1.0, sharpness, clarity)?;
+            let ms = t.elapsed().as_millis();
+            let after = band_amplitudes(&image::open(&out_png)?.to_rgba8(), &waves);
+            let gains: Vec<f32> = before.iter().zip(&after).map(|(b, a)| a / b).collect();
+            let cells: String = gains
+                .iter()
+                .map(|g| format!("{:>12}", format!("{g:.3}×")))
+                .collect();
+            println!("  {label:<15}{cells}{ms:>7}");
+            results.push((size, label, gains));
+        }
+    }
+    check_bands(&results)?;
+    println!("\n[fsr-selftest] band shape OK: see check_bands for what that does and doesn't cover");
+    Ok(())
+}
+
+/// One row of the band table: image size, the filter setting that produced it,
+/// and the gain measured for each of [`BANDS`], in that order.
+type BandRow = (u32, &'static str, Vec<f32>);
+
+const BANDS: [&str; 4] = ["tone", "depth", "detail", "grit"];
+const TONE: usize = 0;
+const DEPTH: usize = 1;
+const DETAIL: usize = 2;
+const GRIT: usize = 3;
+
+/// The properties the numbers have to keep, as distinct from the numbers.
+///
+/// Each check guards a way a filter could silently stop being what it claims;
+/// none of them pins a value that is free to move. Tolerances are roughly 2×
+/// the spread measured on a 7900 XTX on 2026-09-16, so an edit has room to
+/// change the look without tripping them.
+///
+/// **RCAS is deliberately not checked for scale invariance**, though clarity is.
+/// `rcas_radius` is a whole number of pixels, so it tracks the image in steps:
+/// measured, the 3 px band at 1536² lifts 3.245×, and at 2048² — same radius,
+/// bigger picture — the 4 px band lifts 2.481×, a 24% drift, while 3072² returns
+/// to exactly 3.245× because the radius stepped up with the size. That sawtooth
+/// is the design, not a regression, and asserting it away would be asserting
+/// something false. Removing it means a fractional tap distance, which costs the
+/// limiter its "ringing excluded by construction" guarantee — a separate,
+/// measured decision, per `sharpen.wgsl`'s header.
+fn check_bands(results: &[BandRow]) -> Result<()> {
+    let mut bad: Vec<String> = Vec::new();
+    let spread = |label: &str, band: usize| -> (f32, f32) {
+        // Compared on `|gain - 1|` — the amount of band actually moved — so a
+        // negative-clarity row is measured like a positive one instead of
+        // showing a huge relative spread merely for landing near zero.
+        let moved = results
+            .iter()
+            .filter(|(_, l, _)| *l == label)
+            .map(|(_, _, g)| (g[band] - 1.0).abs());
+        moved.fold((f32::MAX, 0.0f32), |(lo, hi), v| (lo.min(v), hi.max(v)))
+    };
+
+    for (size, label, g) in results {
+        if label.starts_with("clarity") {
+            // The whole reason it is a difference of two Gaussians rather than
+            // `src - blur`: both ends of the spectrum come through untouched.
+            for band in [TONE, GRIT] {
+                if (g[band] - 1.0).abs() > 0.05 {
+                    bad.push(format!(
+                        "{size}² {label}: {} moved {:.3}×. Clarity passes the middle and \
+                         rejects both ends — a lifted grit band means it has turned back \
+                         into a high-pass, which is what contrast.wgsl's header warns about",
+                        BANDS[band], g[band]
+                    ));
+                }
+            }
+        } else {
+            // RCAS is the opposite shape: it may only reach the fine end.
+            for (band, tol) in [(TONE, 0.02), (DEPTH, 0.02), (DETAIL, 0.10)] {
+                if (g[band] - 1.0).abs() > tol {
+                    bad.push(format!(
+                        "{size}² {label}: {} moved {:.3}× (tolerance {tol}). RCAS is a \
+                         fine-band sharpener; reaching this far down means the cross is \
+                         sampling wider than intended",
+                        BANDS[band], g[band]
+                    ));
+                }
+            }
+            if g[GRIT] < 2.0 {
+                bad.push(format!(
+                    "{size}² {label}: grit only {:.3}×. At the top of the knob the \
+                     sharpening should be unmistakable — 1.0 is the reference filter at \
+                     0 stops, so anything this weak means the lobe or the limiter broke",
+                    g[GRIT]
+                ));
+            }
+        }
+    }
+
+    // Scale invariance, clarity only — `clarity_sigmas` is smoothly proportional
+    // to the image, so the same setting must move the same bands at every size.
+    // Only depth and detail: tone and grit sit near zero by design, where a
+    // ratio is noise and the absolute check above is the meaningful one.
+    for label in ["clarity +0.6", "clarity -0.6"] {
+        for band in [DEPTH, DETAIL] {
+            let (lo, hi) = spread(label, band);
+            if hi > lo * 1.30 {
+                bad.push(format!(
+                    "{label}: the {} band moves by {lo:.3} at one size and {hi:.3} at \
+                     another. clarity_sigmas is proportional to the longest side, so a \
+                     setting is supposed to mean the same thing at every size — see \
+                     CLAUDE.md invariant 6",
+                    BANDS[band]
+                ));
+            }
+        }
+    }
+
+    if bad.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!("band checks failed:\n  - {}", bad.join("\n  - "));
+}
+
+/// Mid-grey plus one sinusoid per wavelength, varying in x only — so a
+/// separable blur along y does nothing and each band reads straight off a
+/// column mean.
+///
+/// Amplitudes are deliberately small (0.03 each, 0.12 summed). `contrast.wgsl`
+/// fades its effect toward black and white, so a big swing would be measuring
+/// that fade as much as the filter; at this amplitude the protection term stays
+/// within a few percent of 1, and the returned minimum says exactly how far.
+fn grating(size: u32, waves: &[u32]) -> (image::RgbaImage, f32) {
+    const AMP: f32 = 0.03;
+    let mut protect_min = 1.0f32;
+    let row: Vec<u8> = (0..size)
+        .map(|x| {
+            let l = 0.5
+                + waves
+                    .iter()
+                    .map(|w| AMP * (std::f32::consts::TAU * x as f32 / *w as f32).sin())
+                    .sum::<f32>();
+            let t = (2.0 * l - 1.0).abs();
+            protect_min = protect_min.min(1.0 - t * t);
+            (l.clamp(0.0, 1.0) * 255.0).round() as u8
+        })
+        .collect();
+    let mut img = image::RgbaImage::new(size, size);
+    for y in 0..size {
+        for x in 0..size {
+            let v = row[x as usize];
+            img.put_pixel(x, y, image::Rgba([v, v, v, 255]));
+        }
+    }
+    (img, protect_min)
+}
+
+/// Single-bin DFT of the image's column means, one bin per wavelength.
+///
+/// Averaging down the rows first drops 8-bit quantisation noise by √height,
+/// which at 1536 rows puts it far below the 0.03 amplitude being measured.
+/// Every wavelength divides the width exactly, so each bin lands on a whole
+/// number of cycles and no band leaks into its neighbour — which the old
+/// hand-measured table's 400 px and 40 px, on a 1536 px image, did not.
+fn band_amplitudes(img: &image::RgbaImage, waves: &[u32]) -> Vec<f32> {
+    let (w, h) = img.dimensions();
+    let mut means = vec![0.0f64; w as usize];
+    for y in 0..h {
+        for x in 0..w {
+            means[x as usize] += img.get_pixel(x, y).0[1] as f64 / 255.0;
+        }
+    }
+    for m in &mut means {
+        *m /= h as f64;
+    }
+    waves
+        .iter()
+        .map(|lambda| {
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (x, v) in means.iter().enumerate() {
+                let phase = std::f64::consts::TAU * x as f64 / *lambda as f64;
+                re += v * phase.cos();
+                im += v * phase.sin();
+            }
+            (2.0 * re.hypot(im) / w as f64) as f32
+        })
+        .collect()
 }
 
 /// Minimal JSON string escaper.
@@ -553,4 +852,97 @@ fn json_str(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{band_amplitudes, check_bands, grating, BandRow, DEPTH, DETAIL, GRIT};
+
+    /// The measurement harness, measured against a signal whose answer is
+    /// known: every planted band must read back at the amplitude it was
+    /// planted at, and no band may pick up its neighbours.
+    ///
+    /// Worth a test precisely because `fsr-selftest` prints these numbers
+    /// without judging them. A DFT that is out by a factor of two, or that
+    /// leaks between bins, produces a table that looks entirely plausible and
+    /// says nothing true — and needs no GPU to catch, which is what this file's
+    /// other test is for.
+    /// `check_bands` against the real table `fsr-selftest` printed on a
+    /// 7900 XTX on 2026-09-16 — the run the tolerances were drawn from. It has
+    /// to pass, and each way a filter could break has to fail it, or the
+    /// tolerances are decoration.
+    ///
+    /// Pinned here rather than left to the GPU command so the thresholds can be
+    /// retuned on any machine: `cargo test` says whether a bound still admits
+    /// the known-good data and still rejects the known-bad shapes.
+    #[test]
+    fn band_checks_accept_measured_and_reject_regressions() {
+        // size, label, [tone, depth, detail, grit]
+        let measured: Vec<BandRow> = vec![
+            (1536, "clarity +0.6", vec![1.013, 1.402, 1.608, 0.997]),
+            (1536, "clarity -0.6", vec![0.987, 0.598, 0.392, 1.003]),
+            (1536, "sharpness 1.0", vec![1.000, 1.000, 1.017, 3.245]),
+            (2048, "clarity +0.6", vec![1.022, 1.412, 1.654, 0.996]),
+            (2048, "clarity -0.6", vec![0.978, 0.588, 0.346, 1.004]),
+            (2048, "sharpness 1.0", vec![0.999, 1.001, 1.009, 2.481]),
+            (3072, "clarity +0.6", vec![1.018, 1.406, 1.681, 0.996]),
+            (3072, "clarity -0.6", vec![0.982, 0.594, 0.319, 1.004]),
+            (3072, "sharpness 1.0", vec![1.000, 1.000, 1.017, 3.245]),
+        ];
+        check_bands(&measured).expect("the measured table must pass");
+
+        // The RCAS plateau drift is in that data (3.245 / 2.481 / 3.245) and
+        // must not trip anything — it is the design, and checking it would be
+        // checking something false.
+
+        let broken = |f: &dyn Fn(&mut Vec<BandRow>)| {
+            let mut m = measured.clone();
+            f(&mut m);
+            check_bands(&m).unwrap_err().to_string()
+        };
+
+        // Clarity turned back into a high-pass: it lifts the grit band.
+        let e = broken(&|m| m[0].2[GRIT] = 1.4);
+        assert!(e.contains("grit"), "{e}");
+
+        // Clarity stopped scaling with the image — invariant 6 gone.
+        let e = broken(&|m| m[6].2[DETAIL] = 3.0);
+        assert!(e.contains("invariant 6"), "{e}");
+
+        // RCAS reaching down into the structural bands.
+        let e = broken(&|m| m[2].2[DEPTH] = 1.5);
+        assert!(e.contains("fine-band sharpener"), "{e}");
+
+        // The knob gone limp — a limiter or lobe mistake.
+        let e = broken(&|m| m[2].2[GRIT] = 1.2);
+        assert!(e.contains("unmistakable"), "{e}");
+    }
+
+    #[test]
+    fn grating_amplitudes_round_trip() {
+        let size = 1536u32;
+        let waves: Vec<u32> = [1u32, 4, 32, 512].iter().map(|d| size / d).collect();
+        let (img, protect_min) = grating(size, &waves);
+
+        // 8-bit quantisation is the only error here, and averaging 1536 rows of
+        // an identical column leaves it as a plain rounding residue.
+        for (w, a) in waves.iter().zip(band_amplitudes(&img, &waves)) {
+            assert!(
+                (a - 0.03).abs() < 0.002,
+                "{w}px band planted at 0.030, measured {a:.4}"
+            );
+        }
+
+        // A band that isn't there must measure as absent, or the bins leak and
+        // every number in the table is a blend of its neighbours.
+        let absent = size / 128;
+        assert!(
+            band_amplitudes(&img, &[absent])[0] < 0.002,
+            "unplanted {absent}px band should read ~0"
+        );
+
+        // The amplitudes are chosen to keep contrast.wgsl's midtone protection
+        // near 1, so the printed gains are the filter and not the fade.
+        assert!(protect_min > 0.9, "protect floor {protect_min:.3} is too low");
+    }
 }

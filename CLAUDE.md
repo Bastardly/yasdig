@@ -13,7 +13,7 @@ part it doesn't cover.
 ## Commands
 
 ```sh
-cargo test                                  # naga-validates all 3 WGSL shaders — the only test
+cargo test                                  # no GPU: naga-validates the 3 WGSL shaders + the band-measurement math
 cargo run --release                         # server on 127.0.0.1:8080
 cargo run --release -- doctor               # preflight only: binary, checkpoints, web UI
 cargo run --release -- fsr-selftest         # full wgpu path; no sd.cpp or checkpoint needed
@@ -24,6 +24,19 @@ The shaders otherwise only compile at GPU device creation, so `cargo test` is wh
 turns a WGSL typo into a test failure instead of a startup failure on the worker
 thread. `fsr-selftest` and `fsr` exercise the GPU path with no model weights — the
 fast loop when touching `src/fsr/`.
+
+**`fsr-selftest` is what to run after changing a filter constant.** It asserts the
+dimensions and that scale 1.0 with both filters at 0 is byte-exact (claimed by two
+shader headers and by `README.md`, and unchecked until it wasn't), then plants four
+gratings at wavelengths proportional to the image and prints how much each filter moved
+each band, at 1536² and 3072². Those two sizes are invariant 6 below with a number on
+it — same setting, RCAS radius 1 vs 2 — and the band rows are how you catch a "clarity"
+edit that has quietly become a high-pass. They are printed rather than asserted because
+`rcas_radius` is a step function and nobody has yet seen the spread to bound it; turning
+them into an assertion once there are numbers is the obvious next move. The CPU half of
+the measurement — that the DFT reports a planted amplitude correctly and doesn't leak
+between bins — is in `cargo test`, since a plausible-looking table that says nothing
+true is the failure worth guarding against.
 
 ## The three GPU passes
 
@@ -73,6 +86,16 @@ These break silently rather than loudly.
    longest side, so a setting survives a hi-res pass. A fixed-footprint kernel silently
    grades a finer and finer band as the image grows — which is a look-wrong bug, not a
    crash, and it was only caught by someone saying sharpening "felt lost" at 3072.
+   `fsr-selftest` measures this now, and `check_bands` asserts it for clarity, which
+   holds to within a few percent across the range. **RCAS holds it in steps, not
+   smoothly**, and is deliberately excluded from that assertion: `rcas_radius` is a whole
+   number of pixels, so it is exact where a size ratio matches a step and drifts between
+   them — measured, the fine band lifts 3.245× at 1536², 2.481× at 2048² (same radius,
+   24% weaker) and 3.245× again at 3072². Don't read the equal numbers at 1536 and 3072
+   as proof: those sizes double the radius along with the image, so they agree by
+   arithmetic. Compare sizes *within* a plateau (768..2303, or 2304..3839) to see real
+   behaviour. Fixing the sawtooth means fractional taps, which trades away the limiter
+   guarantee — see `sharpen.wgsl`'s header before going there.
 7. **`hires_max_side` gates the hi-res pass but deliberately *not* refine.** Hi-res
    can fall back to diffusing smaller and letting FSR cover the rest; refine has no
    such fallback, so gating it would just remove the button in the state where it

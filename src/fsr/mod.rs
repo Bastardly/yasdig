@@ -73,10 +73,21 @@ const DOWNSCALE: u32 = 8;
 /// The two Gaussian sigmas for the clarity band-pass, in *low-res* pixels.
 ///
 /// The wide lobe sets where depth begins — ~4% of the longest side, so
-/// subject-scale structure moves and overall tone doesn't. The narrow lobe sets
-/// where grain is excluded, an octave or so above it. Both are proportional to
-/// the image, so "clarity 0.5" means the same thing at 1536 and at 3072.
-fn clarity_sigmas(w: u32, h: u32) -> (f32, f32) {
+/// subject-scale structure moves and overall tone doesn't. The narrow lobe is an
+/// eighth of that, and excludes grain.
+///
+/// Three octaves between the lobes makes this a deliberately *broad* pass, which
+/// peaks around 8% of the longest side — ~120 px at 1536², between the two bands
+/// `fsr-selftest` reports rather than at either. Measured there at clarity 0.6:
+/// 48 px lifts 1.61×, 384 px lifts 1.40×, 3 px stays at 1.00× and overall tone
+/// at 1.01×. So depth is the far shoulder of what this does and not its centre —
+/// worth knowing before retuning either sigma, and worth re-running that command
+/// afterwards.
+///
+/// Both lobes are proportional to the image, so "clarity 0.5" means the same
+/// thing at 1536 and at 3072 — measured, not assumed: those same two bands come
+/// back at 1.41× and 1.68× at 3072².
+pub(crate) fn clarity_sigmas(w: u32, h: u32) -> (f32, f32) {
     let wide = (0.04 * w.max(h) as f32 / DOWNSCALE as f32).clamp(2.0, 16.0);
     (wide, (wide / 8.0).max(0.75))
 }
@@ -94,7 +105,7 @@ const RCAS_PIVOT: f32 = 1536.0;
 ///
 /// Capped at 3 — past that the cross is skipping enough pixels that it starts
 /// to read as a halo rather than as an edge.
-fn rcas_radius(w: u32, h: u32) -> i32 {
+pub(crate) fn rcas_radius(w: u32, h: u32) -> i32 {
     (w.max(h) as f32 / RCAS_PIVOT).round().clamp(1.0, 3.0) as i32
 }
 

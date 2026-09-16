@@ -280,10 +280,16 @@ way to check the Vulkan side in isolation.
 ```sh
 rustimage doctor [models.toml]      # run the startup checks and report, without starting
 rustimage fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]
-rustimage fsr-selftest [out.png]    # synthesize a pattern, run FSR, verify dimensions
+rustimage fsr-selftest [out.png]    # synthesize patterns and check the filters
 ```
 
 From a source checkout, put them after `--`: `cargo run --release -- doctor`.
+
+`fsr-selftest` verifies the output dimensions, asserts that sharpness 0 and clarity 0
+really are a byte-exact copy (the promise made further up), and then measures how much
+each filter moves each spatial frequency — at two image sizes, because both filters size
+their band from the image rather than the pixel grid, and that is the claim worth
+checking. It needs a Vulkan device and nothing else.
 
 ## API
 
