@@ -238,8 +238,9 @@ there isn't room.
 
 Click one and it comes back **live** — the controls repopulate with that image's
 settings, the picture goes back on screen, and Refine, Hi-res and both sliders work on
-it again, using the settings it was generated with rather than whatever the panel says
-now. That is the point: render a batch, pick the one worth the money, and escalate that
+it again. Because the panel has been restored to what made the image, an escalation runs
+with those settings unless you change them first, in which case it runs with what the
+boxes say. That is the point: render a batch, pick the one worth the money, and escalate that
 one. The server keeps the last 8 results warm in memory, but an image that has fallen
 out of that window reopens from disk just the same.
 
@@ -346,7 +347,8 @@ checking. It needs a Vulkan device and nothing else.
     "sharpness": 0.35, "clarity": 0.0 }
   ```
   The overrides are applied to the profile *before* it is retained with the image, so a
-  later `/refine` or `/hires` runs with the settings that generated it. Omitting
+  later `/refine` or `/hires` starts from the settings that generated it — the four
+  escalation knobs can then be moved per pass, see below. Omitting
   `img2img_cfg_scale` leaves it *unset* rather than pinning it, so the escalations keep
   following whatever `cfg_scale` this request used. `sharpness` and
   `clarity` are the exception, because they aren't generation settings: they set the
@@ -375,6 +377,21 @@ checking. It needs a Vulkan device and nothing else.
   Both return the same shape as `/generate` and can be chained in either order, any
   number of times; `/hires` stops being available once the image is past
   `hires_max_side`, `/refine` does not.
+
+  Both also accept the knobs that describe the pass itself, which override what the
+  image was generated with — this is what lets you render once and then try the same
+  image at several refine strengths:
+  ```json
+  { "refine_steps": 4, "refine_strength": 0.35,
+    "hires_steps": 8, "hires_strength": 0.3, "img2img_cfg_scale": 2.5 }
+  ```
+  Each is optional and an omitted one keeps the retained value, so a bare
+  `{ "image_id": 3 }` behaves exactly as it always has. `img2img_cfg_scale` is the one
+  field where sending `null` differs from leaving it out: `null` *unsets* it, so the
+  pass goes back to following `cfg_scale`. The base settings — `steps`, `cfg_scale`,
+  `sampler`, `width`, `height` — are deliberately not accepted here: they describe a
+  txt2img that has already run, and nothing they could say would change the image in
+  hand. Change those and press **Generate**.
 - `POST /adjust` — `{ "image_id": 3, "sharpness": 0.5, "clarity": 0.3 }`. Re-runs the
   display filters on the retained image; both fields are optional, and an omitted one
   keeps its current value. No diffusion runs, so this returns in milliseconds — it is

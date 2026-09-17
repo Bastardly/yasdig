@@ -8,10 +8,12 @@
 //!   POST /generate    -> {prompt, template, negative?, seed?, ...overrides}
 //!                        -> {image_base64, width, height, seed, image_id,
 //!                            can_refine, can_hires, timings}
-//!   POST /refine      -> {image_id}            img2img in place, no rescale
-//!   POST /hires       -> {image_id, upscale}   img2img with an enlarge first
-//!                        both return the same shape as /generate, and both can
-//!                        be run in either order and repeated
+//!   POST /refine      -> {image_id, ...overrides}   img2img in place, no rescale
+//!   POST /hires       -> {image_id, upscale, ...overrides}
+//!                        img2img with an enlarge first. Both return the same
+//!                        shape as /generate, both can be run in either order and
+//!                        repeated, and both take the escalation knobs — omitted
+//!                        means "as the image was generated"
 //!   POST /adjust      -> {image_id, sharpness?, clarity?}
 //!                        re-runs the display filters only — no diffusion, so
 //!                        it's cheap enough to drive from a slider
@@ -36,7 +38,7 @@ mod workitems;
 use anyhow::{Context, Result};
 use base64::Engine as _;
 use config::Config;
-use pipeline::{Engine, GenRequest, GenResult};
+use pipeline::{Engine, EscalateRequest, GenRequest, GenResult};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
@@ -56,9 +58,13 @@ struct Job {
 enum JobKind {
     Generate(GenRequest),
     /// Refine the base image the engine retained from an earlier generation.
-    Refine(u64),
+    Refine { id: u64, over: EscalateRequest },
     /// Re-diffuse an earlier result at output resolution, optionally enlarging.
-    Hires { id: u64, upscale: f32 },
+    Hires {
+        id: u64,
+        upscale: f32,
+        over: EscalateRequest,
+    },
     /// Re-filter an earlier result — display passes only, no diffusion.
     Adjust {
         id: u64,
@@ -119,9 +125,11 @@ fn main() -> Result<()> {
                 for job in job_rx {
                     let result = match job.kind {
                         JobKind::Generate(req) => engine.run(&req).map(|r| result_json(&r)),
-                        JobKind::Refine(id) => engine.refine(id).map(|r| result_json(&r)),
-                        JobKind::Hires { id, upscale } => {
-                            engine.hires(id, upscale).map(|r| result_json(&r))
+                        JobKind::Refine { id, over } => {
+                            engine.refine(id, &over).map(|r| result_json(&r))
+                        }
+                        JobKind::Hires { id, upscale, over } => {
+                            engine.hires(id, upscale, &over).map(|r| result_json(&r))
                         }
                         JobKind::Adjust {
                             id,
@@ -382,37 +390,89 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
     submit(conn, job_tx, JobKind::Generate(req), 500)
 }
 
-/// Escalate the quality of an earlier result, identified by the `image_id` that
-/// generation returned. An unknown id means the intermediates are gone (evicted
-/// or the server restarted), which is a client-side staleness problem — 400, not
-/// 500. The same goes for asking for a pass the image can't take.
-fn handle_refine(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
-    #[derive(serde::Deserialize)]
-    struct Dto {
-        image_id: u64,
-    }
+/// The body `/refine` and `/hires` share: which earlier result to escalate, plus
+/// the knobs that pass runs with. An unknown `image_id` means the intermediates
+/// are gone (evicted, or the server restarted), which is a client-side staleness
+/// problem — 400, not 500. The same goes for asking for a pass the image can't
+/// take.
+///
+/// Every knob is optional and falls back to the settings the retained image was
+/// made with, so a bare `{image_id}` behaves exactly as it always did. Sending
+/// them is what keeps the Advanced panel honest after a generate: edit "Refine
+/// strength", press Refine, and the pass runs at what the box says.
+#[derive(serde::Deserialize)]
+struct EscalateDto {
+    image_id: u64,
+    #[serde(default)]
+    refine_steps: Option<u32>,
+    #[serde(default)]
+    refine_strength: Option<f32>,
+    #[serde(default)]
+    hires_steps: Option<u32>,
+    #[serde(default)]
+    hires_strength: Option<f32>,
+    /// `deserialize_with` rather than a plain `Option<Option<f32>>`: serde folds
+    /// an explicit `null` into `None` otherwise, and this is the one field where
+    /// "sent empty" and "not sent" have to mean different things — empty unsets
+    /// it so the pass follows `cfg_scale` again.
+    #[serde(default, deserialize_with = "double_option")]
+    img2img_cfg_scale: Option<Option<f32>>,
+}
 
-    match parse_json::<Dto>(conn, body)? {
-        Some(dto) => submit(conn, job_tx, JobKind::Refine(dto.image_id), 400),
+impl EscalateDto {
+    fn overrides(&self) -> EscalateRequest {
+        EscalateRequest {
+            refine_steps: self.refine_steps,
+            refine_strength: self.refine_strength,
+            hires_steps: self.hires_steps,
+            hires_strength: self.hires_strength,
+            img2img_cfg_scale: self.img2img_cfg_scale,
+        }
+    }
+}
+
+fn double_option<'de, D, T>(de: D) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    serde::Deserialize::deserialize(de).map(Some)
+}
+
+fn handle_refine(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
+    match parse_json::<EscalateDto>(conn, body)? {
+        Some(dto) => submit(
+            conn,
+            job_tx,
+            JobKind::Refine {
+                id: dto.image_id,
+                over: dto.overrides(),
+            },
+            400,
+        ),
         None => Ok(()),
     }
 }
 
-fn handle_hires(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
-    #[derive(serde::Deserialize)]
-    struct Dto {
-        image_id: u64,
-        #[serde(default)]
-        upscale: Option<f32>,
-    }
+/// `/hires` is `/refine` plus the enlarge factor. Flattened rather than a sixth
+/// field on `EscalateDto`, so refine can't be sent an upscale it would ignore.
+#[derive(serde::Deserialize)]
+struct HiresDto {
+    #[serde(flatten)]
+    esc: EscalateDto,
+    #[serde(default)]
+    upscale: Option<f32>,
+}
 
-    match parse_json::<Dto>(conn, body)? {
+fn handle_hires(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
+    match parse_json::<HiresDto>(conn, body)? {
         Some(dto) => submit(
             conn,
             job_tx,
             JobKind::Hires {
-                id: dto.image_id,
+                id: dto.esc.image_id,
                 upscale: dto.upscale.unwrap_or(1.0),
+                over: dto.esc.overrides(),
             },
             400,
         ),
@@ -1011,6 +1071,48 @@ fn json_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{band_amplitudes, check_bands, grating, BandRow, DEPTH, DETAIL, GRIT};
+    use super::{EscalateDto, HiresDto};
+
+    /// An escalation body has three states per knob, and two of them look the
+    /// same in JSON unless the deserializer is told otherwise: absent means
+    /// "keep what the image was made with", `null` on `img2img_cfg_scale` means
+    /// "unset it so the pass follows cfg_scale again", and a number pins it.
+    /// Serde folds `null` into `None` by default, which would make an emptied
+    /// box unclearable — and `/hires` routes the whole struct through
+    /// `#[serde(flatten)]`'s buffered content deserializer, which is where a
+    /// regression here would hide. No GPU needed to catch either.
+    #[test]
+    fn escalate_body_tells_an_empty_cfg_box_from_a_missing_one() {
+        let bare: EscalateDto = serde_json::from_str(r#"{"image_id":7}"#).unwrap();
+        assert_eq!(bare.image_id, 7);
+        assert_eq!(bare.overrides().img2img_cfg_scale, None);
+        assert_eq!(bare.overrides().refine_strength, None);
+
+        let cleared: EscalateDto =
+            serde_json::from_str(r#"{"image_id":7,"img2img_cfg_scale":null}"#).unwrap();
+        assert_eq!(cleared.overrides().img2img_cfg_scale, Some(None));
+
+        let set: EscalateDto = serde_json::from_str(
+            r#"{"image_id":7,"img2img_cfg_scale":8.5,"refine_steps":12,"refine_strength":0.35}"#,
+        )
+        .unwrap();
+        let o = set.overrides();
+        assert_eq!(o.img2img_cfg_scale, Some(Some(8.5)));
+        assert_eq!(o.refine_steps, Some(12));
+        assert_eq!(o.refine_strength, Some(0.35));
+
+        // The same three states, seen through the flatten.
+        let h: HiresDto = serde_json::from_str(
+            r#"{"image_id":7,"upscale":2.0,"img2img_cfg_scale":null,"hires_strength":0.5}"#,
+        )
+        .unwrap();
+        assert_eq!(h.upscale, Some(2.0));
+        assert_eq!(h.esc.overrides().img2img_cfg_scale, Some(None));
+        assert_eq!(h.esc.overrides().hires_strength, Some(0.5));
+
+        let h2: HiresDto = serde_json::from_str(r#"{"image_id":7,"upscale":2.0}"#).unwrap();
+        assert_eq!(h2.esc.overrides().img2img_cfg_scale, None);
+    }
 
     /// The measurement harness, measured against a signal whose answer is
     /// known: every planted band must read back at the amplitude it was

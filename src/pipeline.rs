@@ -68,8 +68,9 @@ pub struct GenRequest {
     pub sampler: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    /// Overrides for the escalation passes. Applied to the profile before it's
-    /// retained, so a later `refine`/`hires` uses what was set at generate time.
+    /// Where the escalation passes start. Applied to the profile before it's
+    /// retained, so a later `refine`/`hires` uses what was set at generate time
+    /// unless that pass is handed its own overrides — see [`EscalateRequest`].
     pub refine_steps: Option<u32>,
     pub refine_strength: Option<f32>,
     pub hires_steps: Option<u32>,
@@ -78,6 +79,55 @@ pub struct GenRequest {
     /// Cheap enough to tune freely.
     pub sharpness: Option<f32>,
     pub clarity: Option<f32>,
+}
+
+/// Per-pass overrides for `refine` / `hires`, read from the Advanced panel at
+/// the moment the button is pressed.
+///
+/// The retained profile is where an escalation *starts*, not where it is pinned:
+/// changing "Refine strength" and pressing Refine has to run at the new
+/// strength, or the panel is lying about what the button does. `None` keeps the
+/// retained value, so a client that sends none of this behaves exactly as before.
+///
+/// Only the escalation knobs are here. `steps`, `cfg_scale`, the sampler and the
+/// base size describe a diffusion that has already run — there is no way to
+/// retroactively apply them to the image in hand, so a stale-looking box is
+/// honest for those and a lie for these.
+#[derive(Debug, Clone, Default)]
+pub struct EscalateRequest {
+    pub refine_steps: Option<u32>,
+    pub refine_strength: Option<f32>,
+    pub hires_steps: Option<u32>,
+    pub hires_strength: Option<f32>,
+    /// Two levels deep on purpose. The outer `None` means the field wasn't sent;
+    /// `Some(None)` means it was sent empty, which *unsets* it so the pass
+    /// follows `cfg_scale` again. Collapsing the two would make the box
+    /// one-way — once a number had been typed there, clearing it could never
+    /// restore the link the whole `Option` on `Profile` exists to preserve.
+    pub img2img_cfg_scale: Option<Option<f32>>,
+}
+
+impl EscalateRequest {
+    /// Fold onto the retained profile, then re-check it: the panel can put a
+    /// strength or a step count out of range just as `/generate` can.
+    fn apply(&self, profile: &mut Profile) -> Result<()> {
+        if let Some(v) = self.refine_steps {
+            profile.refine_steps = v;
+        }
+        if let Some(v) = self.refine_strength {
+            profile.refine_strength = v;
+        }
+        if let Some(v) = self.hires_steps {
+            profile.hires_steps = v;
+        }
+        if let Some(v) = self.hires_strength {
+            profile.hires_strength = v;
+        }
+        if let Some(v) = self.img2img_cfg_scale {
+            profile.img2img_cfg_scale = v;
+        }
+        profile.validate()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -114,7 +164,9 @@ pub struct GenResult {
 /// without redoing the cheaper stages. Also holds everything the img2img passes
 /// need — notably the profile with the per-request overrides already applied, so
 /// a later pass matches the settings the image was generated with rather than
-/// whatever the UI happens to show now.
+/// whatever the UI happens to show now. The escalation knobs are the deliberate
+/// exception: those describe a pass that hasn't run yet, so `refine`/`hires`
+/// take them from the request when it carries them (see [`EscalateRequest`]).
 #[derive(Clone)]
 struct Pending {
     /// Output-resolution image with **no RCAS applied**. This is what every
@@ -398,8 +450,11 @@ impl Engine {
     /// base resolution and then stretching the result 2× means the loss lands on
     /// detail while only the structural gain survives the upscale. At output
     /// resolution there is nothing downstream to smear what the pass adds.
-    pub fn refine(&mut self, id: u64) -> Result<GenResult> {
-        let p = self.lookup(id, "refine")?;
+    pub fn refine(&mut self, id: u64, over: &EscalateRequest) -> Result<GenResult> {
+        let mut p = self.lookup(id, "refine")?;
+        // Before `can_refine`, so the check reads the settings this pass will
+        // actually run with rather than the ones it inherited.
+        over.apply(&mut p.profile)?;
         if !p.can_refine() {
             bail!("'{}' has no refine pass configured (refine_steps = 0)", p.profile.name);
         }
@@ -462,11 +517,12 @@ impl Engine {
     /// falls off past `hires_max_side`, while FSR is nearly free at any size —
     /// so an upscale beyond the budget diffuses as large as it can afford, then
     /// covers the remaining distance with a plain FSR pass.
-    pub fn hires(&mut self, id: u64, upscale: f32) -> Result<GenResult> {
+    pub fn hires(&mut self, id: u64, upscale: f32, over: &EscalateRequest) -> Result<GenResult> {
         if !(1.0..=MAX_UPSCALE).contains(&upscale) {
             bail!("upscale must be between 1 and {MAX_UPSCALE}");
         }
-        let p = self.lookup(id, "run a hi-res pass on")?;
+        let mut p = self.lookup(id, "run a hi-res pass on")?;
+        over.apply(&mut p.profile)?;
         if p.profile.hires_steps == 0 {
             bail!("'{}' has no hi-res pass configured (hires_steps = 0)", p.profile.name);
         }

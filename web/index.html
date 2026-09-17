@@ -596,18 +596,40 @@ async function runPost() {
   }
 }
 
-const refine = () => escalate('refine', '/refine', {}, 'Refining…');
+// A blank box means "unset", which the server reads as "leave the retained value
+// alone" — so an empty Advanced panel never overrides anything.
+const numOr = (id) => {
+  const v = parseFloat($(id).value);
+  return Number.isFinite(v) ? v : null;
+};
+
+// The escalation knobs go with every refine/hi-res, not just with the generate
+// that preceded them. The server starts from the profile the image was made with
+// and folds these on top, so editing "Refine strength" and pressing Refine runs
+// at the new number rather than silently re-using the old one.
+//
+// Only these five: steps, CFG, sampler and base size describe the txt2img that
+// has already run, and there is nothing a new value could do to the image in
+// hand. They stay as they are, and a later generate picks them up.
+const escalateSettings = () => ({
+  refine_steps: numOr('rsteps'),
+  refine_strength: numOr('rstrength'),
+  hires_steps: numOr('hsteps'),
+  hires_strength: numOr('hstrength'),
+  // Here null is a value, not an omission: clearing the box unsets the override
+  // so the passes follow the CFG box again. Sending nothing would pin whatever
+  // was last set, which is the one thing this field must never do.
+  img2img_cfg_scale: numOr('icfg'),
+});
+
+const refine = () => escalate('refine', '/refine', escalateSettings(), 'Refining…');
 const hires = () => escalate('hires', '/hires',
-  { upscale: parseFloat($('upfactor').value) }, 'Hi-res pass…');
+  { upscale: parseFloat($('upfactor').value), ...escalateSettings() }, 'Hi-res pass…');
 
 async function generate() {
   setBusy('go', 'Generating…');
   $('err').textContent = '';
   try {
-    const numOr = (id) => {
-      const v = parseFloat($(id).value);
-      return Number.isFinite(v) ? v : null;
-    };
     const payload = {
       prompt: $('prompt').value,
       template: $('template').value,
@@ -615,16 +637,15 @@ async function generate() {
       seed: parseInt($('seed').value, 10),
       steps: numOr('steps'),
       cfg_scale: numOr('cfg'),
-      // null for an empty box, which the server reads as "leave it unset" — so
-      // the passes keep following cfg_scale rather than getting pinned here.
-      img2img_cfg_scale: numOr('icfg'),
       sampler: $('sampler').value || null,
       width: numOr('w'),
       height: numOr('h'),
-      refine_steps: numOr('rsteps'),
-      refine_strength: numOr('rstrength'),
-      hires_steps: numOr('hsteps'),
-      hires_strength: numOr('hstrength'),
+      // The same five the escalations send, from the same place — they set where
+      // this image's passes start, and `/refine` and `/hires` can move them
+      // afterwards. `img2img_cfg_scale` is among them, and null for an empty box
+      // still means "leave it unset" here: the passes keep following cfg_scale
+      // rather than getting pinned to whatever it resolves to today.
+      ...escalateSettings(),
       // Not sharpness/clarity: those are post-process, not generation settings,
       // so a new image starts from the model's values rather than inheriting
       // wherever the last one's sliders were left.

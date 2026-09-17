@@ -131,9 +131,9 @@ the note below the table.
 | 1 | `src/config.rs` | field on **both** `Defaults` and `Template`, then on `Profile`, then wired in **both** arms of `Config::registry()` |
 | 2 | `src/config.rs` | range-check in `Profile::validate()` |
 | 3 | `src/sd.rs` | consume it in `base_cmd` / `txt2img` / `img2img` |
-| 4 | `src/pipeline.rs` | `Option<T>` on `GenRequest`, applied onto the profile in `Engine::run()` **before** `profile.validate()` |
-| 5 | `src/main.rs` | field on the `/generate` `Dto`, plus `build_models_json` so the UI can pre-fill it — and, for a *display* knob, the `/adjust` `Dto` and `result_json` too |
-| 6 | `web/index.html` | input in the Advanced panel; `syncAdvanced()` pre-fills it, `generate()` reads it |
+| 4 | `src/pipeline.rs` | `Option<T>` on `GenRequest`, applied onto the profile in `Engine::run()` **before** `profile.validate()` — and, for an *escalation* knob, on `EscalateRequest` + its `apply()` as well |
+| 5 | `src/main.rs` | field on the `/generate` `Dto`, plus `build_models_json` so the UI can pre-fill it — and, for a *display* knob, the `/adjust` `Dto` and `result_json` too; for an escalation knob, `EscalateDto` and `overrides()` |
+| 6 | `web/index.html` | input in the Advanced panel; `syncAdvanced()` and `applyWorkItem()` pre-fill it, `generate()` reads it — an escalation knob goes in `escalateSettings()`, which `generate()` spreads, so it is read once and sent by all three routes |
 | 7 | `models.toml` + `README.md` | commented default, and a row in the field table |
 
 The trap: **`Defaults` and `Template` are two separate structs with the same field
@@ -150,7 +150,27 @@ same number", because they diverge the moment the other box moves.
 
 Per-request overrides are applied onto a *cloned* profile, which is then retained in
 `Pending` — so a later refine/hi-res uses the settings the image was generated with,
-not whatever the UI shows now. Keep that property.
+not whatever the UI shows now. Keep that property. It is what makes a generation
+reproducible from its sidecar, and it is the only reason `open` can restore an image
+faithfully.
+
+The retained profile is the **starting point** for an escalation, though, not a pin:
+`/refine` and `/hires` take an `EscalateRequest` (`src/pipeline.rs`) and fold it on top
+before the pass runs. Only the knobs that describe a pass which *hasn't happened yet* —
+`refine_steps`, `refine_strength`, `hires_steps`, `hires_strength`,
+`img2img_cfg_scale`. `steps`, `cfg_scale`, `sampler` and the base size are settings of a
+txt2img that already ran, so there is nothing a new value could do to the image in hand;
+they stay retained, and the next *generate* picks them up. Get that boundary wrong in
+either direction and the Advanced panel starts lying: honour a base knob and the image
+claims settings it wasn't made with, ignore an escalation knob and pressing the button
+after editing the box quietly does the old thing.
+
+`EscalateRequest.img2img_cfg_scale` is `Option<Option<f32>>` for the reason two
+paragraphs up: absent = keep, `null` = unset it so the pass follows `cfg_scale` again, a
+number = pin. Serde collapses `null` into `None`, so the DTO needs
+`deserialize_with = "double_option"` — without it an emptied box can never be cleared,
+only overwritten. `escalate_body_tells_an_empty_cfg_box_from_a_missing_one` guards both
+that and the `#[serde(flatten)]` on the hi-res body, and needs no GPU.
 
 The two **display** filters are the deliberate exception, and the distinction is easy
 to collapse by accident. `profile.sharpness`/`.clarity` are where the sliders *start*;
