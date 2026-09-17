@@ -38,7 +38,7 @@
      a direct child too, and would take the controls' cap. */
   .col-controls { flex: 1 1 380px; max-width: 420px; }
   .col-result { flex: 3 1 560px; max-width: 1024px; }
-  .workitems { flex: 2 1 460px; max-width: 650px; }
+  .workitems { flex: 2 1 460px; max-width: 660px; }
   /* Below this the wrapping is already one-per-row, but the caps would leave a
      420px controls card stranded beside empty space. One column, full width. */
   @media (max-width: 899px) {
@@ -98,13 +98,20 @@
   .slider .val { width: 48px; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
   .slider input:disabled { opacity: .5; }
 
+  /* What pressing Generate will actually do — how many images, and what happens
+     to each one — as opposed to what any single image is made of. Hence the rule
+     above it: these are settings of a *run*. */
+  .run { border-top: 1px solid #30363d; margin-top: 16px; padding-top: 4px; }
+  .grouphead { display: block; font-size: 13px; color: #8b949e; margin: 12px 0 0; }
+  .checks { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; }
+
   /* Every generation, kept on disk. Sized by the .layout rule above. */
   .wihead { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   /* `label` is a block with margins by default here — that's for the form column,
-     not for a pair of radios sitting on one line. */
+     not for a pair of radios, or a row of checkboxes, sitting on one line. */
   .wimodes { display: flex; gap: 14px; }
-  .wimodes label { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
-  .wimodes input { width: auto; padding: 0; accent-color: #388bfd; }
+  .wimodes label, .checks label { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
+  .wimodes input, .checks input { width: auto; padding: 0; accent-color: #388bfd; }
   .wihead button { margin: 0; width: auto; padding: 7px 12px; font-size: 13px; }
   /* Flex-wrap rather than a grid: only the height is fixed, and each thumbnail's
      width follows its own aspect ratio. A narrow gap, per the brief. */
@@ -210,7 +217,43 @@
         </div>
       </div>
       <p class="sub" id="stepnote" style="margin:6px 0 0"></p>
+
+      <!-- What the button does, as opposed to what the image is made of. Every
+           image in a run is a separate request from this page, which is what
+           lets results appear as they land and Stop wait only for the one in
+           flight — see the comment over startRun(). -->
+      <div class="run">
+        <div class="row">
+          <div>
+            <label for="count">Images</label>
+            <input id="count" type="number" min="1" step="1" value="1">
+          </div>
+          <div>
+            <label for="runscale">Hi-res scale</label>
+            <!-- The same factor as the select above the image, which doesn't
+                 exist until something has been rendered — so a run that has
+                 never rendered anything still needs somewhere to set it. -->
+            <select id="runscale"></select>
+          </div>
+        </div>
+        <div class="checks">
+          <label><input type="checkbox" id="autorun"> Keep going until stopped</label>
+        </div>
+        <!-- Off by default, all three: a run that quietly refined and saved
+             everything would be spending GPU time nobody asked for. -->
+        <label class="grouphead">After each image</label>
+        <div class="checks">
+          <label><input type="checkbox" id="opthires"> Hi-res pass</label>
+          <label><input type="checkbox" id="optrefine"> Refine</label>
+          <label><input type="checkbox" id="optsave"> Save to output</label>
+        </div>
+        <p class="sub" id="runnote" style="margin:8px 0 0"></p>
+      </div>
     <button id="go">Generate</button>
+    <!-- Deliberately not in IDLE_LABELS, so setBusy never touches it: a stop
+         button that greys out for the length of the thing it stops is
+         furniture. It hides itself again when the run ends. -->
+    <button id="stop" class="danger" hidden>Stop</button>
     <div id="err" class="err"></div>
   </div>
 
@@ -279,6 +322,10 @@ let upFactor = 2;
 let workItems = [];
 const selected = new Set();
 let workId = null;
+// A run in flight — a batch, or the loop — else null. `total` is Infinity in
+// loop mode, `stop` is set by the Stop button and read between images. It is
+// also the flag everything else reads to know the GPU is spoken for.
+let run = null;
 
 // The grid renders user-supplied prompts into attributes, which nothing else on
 // this page does — every other interpolation is a number from the server.
@@ -394,6 +441,21 @@ function bar(name, ms, max) {
 
 const UPSCALES = [[1, '1× (same size)'], [1.5, '1.5×'], [2, '2×'], [3, '3×'], [4, '4×']];
 
+// One factor, two places to set it: the select above the image, and the one in
+// the run panel — which has to exist too, because the first is rebuilt by every
+// render and so isn't there before the first image. Both are views of
+// `upFactor`; this keeps them saying the same thing.
+const upOptions = () => UPSCALES.map(([v, label]) =>
+  `<option value="${v}"${v === upFactor ? ' selected' : ''}>${label}</option>`).join('');
+
+function setUpFactor(v) {
+  upFactor = v;
+  for (const id of ['upfactor', 'runscale']) {
+    if ($(id) && parseFloat($(id).value) !== v) $(id).value = v;
+  }
+  syncRunNote();
+}
+
 // Info first, image last: on a narrow screen the metadata and the action
 // buttons stay visible without scrolling past a tall image.
 function render(data) {
@@ -417,9 +479,7 @@ function render(data) {
   if (data.can_hires) {
     // From `upFactor`, not a hardcoded 2: this select is destroyed and rebuilt
     // on every render, so the choice has to live outside it to survive one.
-    const opts = UPSCALES.map(([v, label]) =>
-      `<option value="${v}"${v === upFactor ? ' selected' : ''}>${label}</option>`).join('');
-    actions += `<select id="upfactor" title="Upscale before the hi-res pass">${opts}</select>
+    actions += `<select id="upfactor" title="Upscale before the hi-res pass">${upOptions()}</select>
       <button id="hires" class="secondary">Hi-res pass</button>`;
   }
   if (data.can_refine) {
@@ -453,7 +513,7 @@ function render(data) {
   if ($('hires')) $('hires').addEventListener('click', hires);
   if ($('saveout')) $('saveout').addEventListener('click', saveOutput);
   if ($('upfactor')) {
-    $('upfactor').addEventListener('change', (e) => { upFactor = parseFloat(e.target.value); });
+    $('upfactor').addEventListener('change', (e) => setUpFactor(parseFloat(e.target.value)));
   }
 
   // Which archived generation this descends from, so the grid can show it.
@@ -494,7 +554,16 @@ function setBusy(active, label) {
       b.textContent = id === active ? label : idle;
     }
   }
-  if ($('upfactor')) $('upfactor').disabled = !!active;
+  // `IDLE_LABELS.go` is only a fallback: what the button says at rest depends on
+  // the run panel, which the map can't know. Restoring it here means every path
+  // back to idle goes through one place.
+  if (!active) syncGoLabel();
+  // Both views of the upscale factor, not just the one above the image: they
+  // are one value, so leaving the run panel's copy live during a pass would let
+  // the pair disagree about a number the next image is about to read.
+  for (const id of ['upfactor', 'runscale']) {
+    if ($(id)) $(id).disabled = !!active;
+  }
   // The retained entry stays live during an escalation, so an adjust would
   // succeed and then be silently overwritten by the escalation's render.
   // Dropping a debounced one costs nothing: render() puts the sliders back to
@@ -626,38 +695,153 @@ const refine = () => escalate('refine', '/refine', escalateSettings(), 'Refining
 const hires = () => escalate('hires', '/hires',
   { upscale: parseFloat($('upfactor').value), ...escalateSettings() }, 'Hi-res pass…');
 
-async function generate() {
-  setBusy('go', 'Generating…');
+// ---- Runs -------------------------------------------------------------------
+//
+// A run is one or more generations, plus whatever the "After each image" boxes
+// ask for. It is driven from this page rather than by a server-side batch job on
+// purpose. The GPU worker is a single blocking consumer, so one job that held it
+// for a whole run would leave /adjust, the grid and every other client dead for
+// the length of it, with nothing to cancel it by. Looping over the routes that
+// already exist costs one round trip per image — nothing against a diffusion —
+// and buys three things: each result on screen as it lands, a stop that only has
+// to wait for the image in flight, and no new server code at all.
+//
+// The price is that the loop lives in the page: close the tab and it ends after
+// the current image. For a local tool with the browser open that is a fair
+// trade, and it does mean a runaway loop is always one tab-close from stopping.
+
+const runTotal = () =>
+  $('autorun').checked ? Infinity : Math.max(1, parseInt($('count').value, 10) || 1);
+
+// The button does three different things, so it says three different things.
+function syncGoLabel() {
+  const n = runTotal();
+  $('go').textContent =
+    n === Infinity ? 'Start loop generation' : n > 1 ? `Generate ${n}` : 'Generate';
+}
+
+// State what the button will do, in a line, before it is pressed — the same job
+// #stepnote does for the passes. Four controls interact here, and working out
+// what they add up to isn't the user's job.
+function syncRunNote() {
+  const n = runTotal();
+  const after = [
+    $('opthires').checked ? `hi-res ${upFactor}×` : null,
+    $('optrefine').checked ? 'refine' : null,
+    $('optsave').checked ? 'save to output' : null,
+  ].filter(Boolean);
+  const seed = parseInt($('seed').value, 10);
+  const walks = Number.isFinite(seed) && seed >= 0 && n > 1;
+  $('runnote').textContent =
+    (n === Infinity ? 'Generates until you press Stop'
+      : `Generates ${n} image${n > 1 ? 's' : ''}`)
+    + (after.length ? ` · after each: ${after.join(' → ')}` : '')
+    + (walks ? ` · seeds ${seed}–${n === Infinity ? '…' : seed + n - 1}` : '');
+}
+
+// One image's request: exactly what a single Generate has always sent, plus the
+// seed walk. A pinned seed advances by one per image, because a batch at a fixed
+// seed is otherwise N copies of the same picture; image 0 is still precisely the
+// seed in the box, which is the reason to pin one. -1 stays -1 and the server
+// draws a fresh one each time.
+function genPayload(index) {
+  const seed = parseInt($('seed').value, 10);
+  return {
+    prompt: $('prompt').value,
+    template: $('template').value,
+    negative: $('negative').value || null,
+    seed: Number.isFinite(seed) && seed >= 0 ? seed + index : -1,
+    steps: numOr('steps'),
+    cfg_scale: numOr('cfg'),
+    sampler: $('sampler').value || null,
+    width: numOr('w'),
+    height: numOr('h'),
+    // The same five the escalations send, from the same place — they set where
+    // this image's passes start, and `/refine` and `/hires` can move them
+    // afterwards. `img2img_cfg_scale` is among them, and null for an empty box
+    // still means "leave it unset" here: the passes keep following cfg_scale
+    // rather than getting pinned to whatever it resolves to today.
+    ...escalateSettings(),
+    // Not sharpness/clarity: those are post-process, not generation settings,
+    // so a new image starts from the model's values rather than inheriting
+    // wherever the last one's sliders were left.
+  };
+}
+
+async function startRun() {
+  if (run) return;
+  run = { stop: false, done: 0, total: runTotal() };
   $('err').textContent = '';
+  syncStopButton();
   try {
-    const payload = {
-      prompt: $('prompt').value,
-      template: $('template').value,
-      negative: $('negative').value || null,
-      seed: parseInt($('seed').value, 10),
-      steps: numOr('steps'),
-      cfg_scale: numOr('cfg'),
-      sampler: $('sampler').value || null,
-      width: numOr('w'),
-      height: numOr('h'),
-      // The same five the escalations send, from the same place — they set where
-      // this image's passes start, and `/refine` and `/hires` can move them
-      // afterwards. `img2img_cfg_scale` is among them, and null for an empty box
-      // still means "leave it unset" here: the passes keep following cfg_scale
-      // rather than getting pinned to whatever it resolves to today.
-      ...escalateSettings(),
-      // Not sharpness/clarity: those are post-process, not generation settings,
-      // so a new image starts from the model's values rather than inheriting
-      // wherever the last one's sliders were left.
-    };
-    render(await post('/generate', payload));
-    // Only a generate creates a work item — refine and hi-res escalate the one
-    // that's already there, and adjust doesn't touch the disk at all.
-    loadWorkItems();
+    while (!run.stop && run.done < run.total) {
+      // Progress goes in the button that started it — the one control on the
+      // page that is certainly still where the user is looking.
+      const n = run.done + 1;
+      const at = (what) =>
+        `${what} ${n}${run.total === Infinity ? '' : '/' + run.total}…`;
+
+      setBusy('go', at('Generating'));
+      render(await post('/generate', genPayload(run.done)));
+      // Only a generate creates a work item — refine and hi-res escalate the one
+      // that's already there, and adjust doesn't touch the disk at all. Per
+      // image rather than once at the end, so the strip fills as the run goes.
+      loadWorkItems();
+
+      // Hi-res before refine, the order the buttons are in and for the reason
+      // they're in it: hi-res is the pass that enlarges, refine is the finishing
+      // touch you run at whatever size you ended up at. Both read the Advanced
+      // panel through the same escalateSettings() the buttons use, so an
+      // automated pass and a manual one run identically.
+      if ($('opthires').checked) {
+        setBusy('go', at('Hi-res'));
+        render(await post('/hires',
+          { image_id: imageId, upscale: upFactor, ...escalateSettings() }));
+      }
+      if ($('optrefine').checked) {
+        setBusy('go', at('Refining'));
+        render(await post('/refine', { image_id: imageId, ...escalateSettings() }));
+      }
+      if ($('optsave').checked) {
+        setBusy('go', at('Saving'));
+        const saved = await post('/save-output', { image_id: imageId });
+        $('saved').textContent = `saved → ${saved.path}`;
+      }
+      run.done += 1;
+    }
   } catch (e) {
+    // Deliberately not escalate()'s behaviour of reporting beside the image and
+    // carrying on: a failure here is the run's failure. Whatever killed image 3
+    // kills image 4 as well — VRAM, a missing checkpoint, a pass the model
+    // hasn't got — and a hundred repeats of it help nobody. Everything already
+    // generated is in the grid, and the message says what to change.
     $('err').textContent = String(e.message || e);
   } finally {
+    run = null;
     setBusy(null);
+    syncStopButton();
+  }
+}
+
+// Stop after the image in flight has finished its whole pipeline. The hi-res,
+// the refine and the save are that image, and dropping a refined one a single
+// call short of saving it is not what anybody means by "stop".
+function stopRun() {
+  if (!run) return;
+  run.stop = true;
+  $('stop').disabled = true;
+  $('stop').textContent = 'Stopping after this image…';
+}
+
+// Shown only while there is something to stop *between* — a single image is over
+// when it's over. setBusy never touches it, so it stays clickable for the whole
+// run, which is the entire point of it.
+function syncStopButton() {
+  const show = !!run && run.total > 1;
+  $('stop').hidden = !show;
+  if (show) {
+    $('stop').disabled = false;
+    $('stop').textContent = 'Stop';
   }
 }
 
@@ -710,11 +894,14 @@ function renderWorkItems() {
     return;
   }
   // width/height on every thumbnail so the strip reserves its space up front and
-  // doesn't reflow, row by row, as the images decode.
+  // doesn't reflow, row by row, as the images decode. `loading="lazy"` for the
+  // other end of the same problem: a loop left running overnight leaves hundreds
+  // of entries here, and there is no reason for the page to hold a decoded copy
+  // of each. With the dimensions already declared, deferring them costs nothing.
   grid.innerHTML = workItems.map((w) => `
     <button type="button" data-id="${esc(w.id)}"
       title="${esc(w.prompt)}&#10;${w.width}×${w.height} · seed ${w.seed} · ${esc(w.template)}">
-      <img src="/workitems/${esc(w.id)}/thumb.png" alt=""
+      <img src="/workitems/${esc(w.id)}/thumb.png" alt="" loading="lazy"
         width="${w.thumb_width}" height="${w.thumb_height}"></button>`).join('');
   for (const b of grid.querySelectorAll('button')) {
     b.addEventListener('click', () => clickWorkItem(b.dataset.id));
@@ -746,6 +933,11 @@ async function clickWorkItem(id) {
     markGrid();
     return;
   }
+  // Marking for deletion stays live during a run — it touches nothing the run
+  // uses — but opening does not. The buttons are disabled while a run is going;
+  // the thumbnails aren't, and an open would queue behind the generation in
+  // flight only to have its render replaced by the next image.
+  if (run) return;
   const item = workItems.find((w) => w.id === id);
   if (!item) return;
   setBusy('go', 'Opening…');
@@ -818,7 +1010,22 @@ for (const r of document.querySelectorAll('input[name=wimode]')) {
   });
 }
 
-$('go').addEventListener('click', generate);
+$('go').addEventListener('click', startRun);
+$('stop').addEventListener('click', stopRun);
+// The run panel's view of the shared upscale factor. Built here rather than in
+// the markup so there is one list of factors on the page.
+$('runscale').innerHTML = upOptions();
+$('runscale').addEventListener('change', (e) => setUpFactor(parseFloat(e.target.value)));
+// 'input' covers the checkboxes too, and keeps the count responsive per keystroke
+// rather than on blur — the button's own label is the feedback.
+for (const id of ['count', 'autorun']) {
+  $(id).addEventListener('input', () => { syncGoLabel(); syncRunNote(); });
+}
+// The seed is in here because a pinned one walks across a batch, and the note is
+// where that's stated.
+for (const id of ['opthires', 'optrefine', 'optsave', 'seed']) {
+  $(id).addEventListener('input', syncRunNote);
+}
 // Each model carries its own defaults, so re-fill the controls on switch.
 $('template').addEventListener('change', syncAdvanced);
 // Keep the effective-step line live as either pair is edited — and the CFG boxes
@@ -835,6 +1042,10 @@ $('lightbox').addEventListener('click', () => $('lightbox').close());
 loadModels();
 // Independent of the model list: the grid is what survived the last restart.
 loadWorkItems();
+// Both are labels for controls that start with a value, so neither can wait for
+// the first edit to say what it does.
+syncGoLabel();
+syncRunNote();
 </script>
 </body>
 </html>

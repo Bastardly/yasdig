@@ -204,4 +204,20 @@ silently restore the old inherit-forever behaviour.
   `build_models_json`) and `serde_json` for anything backed by a real struct (work item
   sidecars, `GET /workitems`). `serde_json` was already a dependency for parsing; don't
   hand-roll a 22-field round-trip, and don't churn the two that exist.
+- **Batch and loop generation are a client loop, not a job.** `startRun()` in
+  `web/index.html` calls `/generate`, then `/hires`, `/refine` and `/save-output` per
+  image; there is no batch route and there shouldn't be. The worker is a single blocking
+  consumer (`for job in job_rx`), so one job that owned it for a whole run would leave
+  `/adjust`, the grid and every other client dead for the length of it, and cancelling it
+  would need a second channel into that loop. Looping over the existing routes costs one
+  round trip per image against a multi-second diffusion, and is what makes each result
+  appear as it lands and Stop only have to wait for the image in flight. The stated cost
+  is in `README.md`: the loop lives in the page, so closing the tab ends it after the
+  current image.
+  - The automated passes go through the same `escalateSettings()` the buttons use, and
+    the boxes are read once per image rather than captured at the start. A run must not
+    grow its own copy of the knob list — that is how the panel starts lying again.
+  - `#stop` is deliberately **not** in `IDLE_LABELS`, which is why `setBusy` never
+    disables it. A stop button that greys out for the length of the thing it stops is
+    furniture.
 - No Python anywhere in build or runtime. That is the project's whole pitch.

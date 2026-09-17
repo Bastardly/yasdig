@@ -258,6 +258,41 @@ refines to keep every step.
 
 Everything else in `work/` is scratch and is still cleared at startup.
 
+### Batch and loop
+
+The panel above the Generate button is about the *run* rather than the image. Set
+**Images** to a number and the button says `Generate 4`; the images are produced one at
+a time and each appears as it lands, so you can watch the batch fill the work items
+strip rather than waiting for the lot. Tick **Keep going until stopped** and the button
+becomes `Start loop generation`: it ignores the count and keeps going until you press
+**Stop**, which finishes the image in flight and then ends the run. Stop stays clickable
+the whole time — it is the one control a busy run doesn't disable.
+
+A pinned seed **advances by one per image**, so a batch of eight isn't eight copies of
+the same picture; the first image is exactly the seed you pinned. `-1` keeps drawing a
+fresh seed per image, as always. The line under the panel states what the button will do
+before you press it, seed range included.
+
+**After each image** adds three optional steps, all off by default, run in this order:
+
+- **Hi-res pass** — at the factor in the panel's **Hi-res scale**, which is the same
+  value as the select above the image.
+- **Refine** — after the hi-res pass, for the reason the buttons are in that order.
+- **Save to output** — writes the finished image to `work/output/`, so a run can fill a
+  folder without a click per image.
+
+They apply to a run of one just as much as to a batch, which is how you queue a single
+generate-and-refine and walk away. Both passes read the same Advanced panel the buttons
+do, so a run uses whatever the boxes say when it starts.
+
+Any failure stops the run and reports it beside the controls — whatever killed image 3
+would kill image 4 as well. Everything generated up to that point is still in the grid.
+
+Two things worth knowing before leaving one unattended. **The loop runs in the page**:
+closing the tab stops it after the current image (which is also the quickest way to stop
+a runaway one). And every generation is archived, so an overnight loop writes a few MB
+per image into `work/workitems/` — delete what you don't want from the grid.
+
 ### Postprocessing
 
 **Clarity** and **Sharpness** are the two sliders under the image, and they work like a
