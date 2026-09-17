@@ -24,7 +24,8 @@
 use crate::config::{Config, Profile};
 use crate::fsr::Fsr;
 use crate::sd::SdRunner;
-use anyhow::{bail, Result};
+use crate::workitems::{self, WorkItem};
+use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -34,6 +35,11 @@ static JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// How many results stay escalatable. Older ones are evicted (files deleted)
 /// so `work/` can't grow without bound.
+///
+/// Eviction used to lose you the image. It doesn't any more: every generation is
+/// archived under `work/workitems/` (see [`crate::workitems`]) and can be
+/// reopened, which turns this from a hard limit on what exists into a limit on
+/// what is *already warm*. That's why it stays at 8 rather than growing.
 const MAX_PENDING: usize = 8;
 
 /// Hard limit on the hi-res upscale factor a request may ask for.
@@ -92,6 +98,10 @@ pub struct GenResult {
     pub hires_passes: u32,
     /// Handle for [`Engine::refine`] / [`Engine::hires`] / [`Engine::adjust`].
     pub image_id: u64,
+    /// The archived generation this descends from, so the UI can mark which
+    /// thumbnail is on screen. Unrelated to `image_id`: that one addresses the
+    /// in-memory cache and restarts at 0, this one outlives the process.
+    pub work_id: Option<String>,
     pub can_refine: bool,
     pub can_hires: bool,
     /// The display filters currently applied, so the UI reflects what the image
@@ -131,6 +141,15 @@ struct Pending {
     prompt: String,
     negative: Option<String>,
     seed: i64,
+    /// The archived generation this result descends from, if it has one — set by
+    /// `run` and by `open`, and carried through every escalation. Only used for
+    /// naming: it groups everything saved out of one generation, and lets the UI
+    /// highlight which thumbnail is on screen. `None` if the archive write
+    /// failed, which is not a reason to fail the image.
+    ///
+    /// It is an id, never a path. Nothing in `work/workitems/` is ever opened
+    /// through a `Pending` — see [`crate::workitems`].
+    work_id: Option<String>,
     refine_passes: u32,
     hires_passes: u32,
     /// How many escalations this result has been through. Only used to keep
@@ -176,6 +195,8 @@ pub struct Engine {
     cfg: Config,
     fsr: Fsr,
     work_dir: PathBuf,
+    /// The durable half of `work/`. Written here on a generate, read on an open.
+    items: workitems::Store,
     registry: BTreeMap<String, Profile>,
     /// Escalatable results, keyed by job id (ordered, so the oldest evicts first).
     pending: BTreeMap<u64, Pending>,
@@ -186,8 +207,12 @@ impl Engine {
         let work_dir = cfg.base_dir.join("work");
         std::fs::create_dir_all(&work_dir).ok();
         // Job ids restart at 0 each run, so clear any PNGs a previous run left
-        // behind rather than letting a new job collide with them.
+        // behind rather than letting a new job collide with them. Still exactly
+        // right with the archive in place: this is non-recursive and matches on
+        // a `.png` extension, so `work/workitems/` and `work/output/` are not
+        // reachable from it — only the scratch it was always meant to clear.
         purge_pngs(&work_dir);
+        let items = workitems::Store::new(&work_dir);
         let fsr = Fsr::new()?;
         // Fail fast with a friendly message if the sd binary is missing.
         SdRunner::new(&cfg).preflight()?;
@@ -196,6 +221,7 @@ impl Engine {
             cfg,
             fsr,
             work_dir,
+            items,
             registry,
             pending: BTreeMap::new(),
         })
@@ -303,6 +329,41 @@ impl Engine {
         scratch.keep(&raw);
         scratch.keep(&display);
 
+        // Archive the generation. A *copy* of `raw`, deliberately: the `Pending`
+        // below still owns the original, and the first refine will delete it.
+        // The unsharpened image is what gets stored, for the same reason every
+        // escalation reads it — it's what the diffusion actually produced, and
+        // the display filters are re-applied on the way out.
+        //
+        // Failing here does not fail the generation. The image on screen is worth
+        // more than its archive entry, and the alternative is throwing away a
+        // render that already cost minutes because a disk was full.
+        let mut item = WorkItem {
+            id: workitems::new_id(seed),
+            created_ms: now_ms(),
+            prompt: req.prompt.clone(),
+            negative: req.negative.clone(),
+            seed,
+            template: req.template.clone(),
+            width: w,
+            height: h,
+            thumb_width: 0,
+            thumb_height: 0,
+            refine_passes: 0,
+            hires_passes: 0,
+            step: 0,
+            sharpness: profile.sharpness,
+            clarity: profile.clarity,
+            profile: profile.clone(),
+        };
+        let work_id = match self.items.save(&raw, &mut item) {
+            Ok(()) => Some(item.id),
+            Err(e) => {
+                eprintln!("[rustimage] could not archive work item: {e:#}");
+                None
+            }
+        };
+
         // Retain the intermediates so the next step up the ladder doesn't have
         // to re-run this one.
         let entry = Pending {
@@ -316,6 +377,7 @@ impl Engine {
             prompt: req.prompt.clone(),
             negative: req.negative.clone(),
             seed,
+            work_id,
             refine_passes: 0,
             hires_passes: 0,
             step: 0,
@@ -557,6 +619,96 @@ impl Engine {
         Ok(result)
     }
 
+    /// Bring an archived generation back as a live result: a fresh `image_id`
+    /// with its own `Pending`, so refine, hi-res and the sliders all work on it
+    /// immediately. No diffusion runs — this is a file copy and a `publish`.
+    ///
+    /// The stored image is **copied** into the scratch dir rather than adopted in
+    /// place. A `Pending` pointing at `work/workitems/` would have its archive
+    /// entry deleted by `remove_files` the first time it was refined, which is
+    /// the one way this feature can quietly destroy the thing it exists to keep.
+    ///
+    /// The profile comes back verbatim from the sidecar, so the passes run with
+    /// the settings that made the image rather than whatever the UI shows now —
+    /// the same property a live `Pending` has, extended across a restart.
+    pub fn open(&mut self, work_id: &str) -> Result<GenResult> {
+        let item = self.items.load(work_id)?;
+        let stored = self.items.image_path(&item.id);
+
+        let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut scratch = Scratch::default();
+        let raw = scratch.path(self.work_dir.join(format!("{id}-0-raw.png")));
+        let display = scratch.path(self.work_dir.join(format!("{id}-0-full.png")));
+
+        let t = Instant::now();
+        std::fs::copy(&stored, &raw)
+            .with_context(|| format!("reopening {}", stored.display()))?;
+        // Filters start where the model says again, exactly as a fresh generate
+        // does — the archived image is unsharpened, so there is nothing to undo.
+        let (png, w, h) = self.publish(
+            &raw,
+            &display,
+            item.profile.sharpness,
+            item.profile.clarity,
+        )?;
+        let fsr_ms = t.elapsed().as_millis();
+
+        scratch.keep(&raw);
+        scratch.keep(&display);
+
+        let entry = Pending {
+            raw,
+            raw_w: w,
+            raw_h: h,
+            display,
+            sharpness: item.profile.sharpness,
+            clarity: item.profile.clarity,
+            profile: item.profile,
+            prompt: item.prompt,
+            negative: item.negative,
+            seed: item.seed,
+            work_id: Some(item.id),
+            refine_passes: item.refine_passes,
+            hires_passes: item.hires_passes,
+            step: 0,
+        };
+        let result = self.result(id, &entry, png, Timings { fsr_ms, ..Default::default() });
+        self.store(id, entry);
+        Ok(result)
+    }
+
+    /// Copy the image currently on screen into `work/output/`, and return where
+    /// it landed so the UI can say so.
+    ///
+    /// `display`, not `raw`: this is the keep-this-one button, and what the user
+    /// means by *this one* includes wherever the two sliders were left. The
+    /// unsharpened version is already archived for every generation, so nothing
+    /// is lost by saving the filtered one here.
+    pub fn save_output(&self, id: u64) -> Result<PathBuf> {
+        let p = self.lookup(id, "save")?;
+        let item = WorkItem {
+            // Named by origin, so every save out of one generation groups
+            // together; the job id only stands in when the archive write failed.
+            id: p.work_id.clone().unwrap_or_else(|| id.to_string()),
+            created_ms: now_ms(),
+            prompt: p.prompt.clone(),
+            negative: p.negative.clone(),
+            seed: p.seed,
+            template: p.profile.name.clone(),
+            width: p.raw_w,
+            height: p.raw_h,
+            thumb_width: 0,
+            thumb_height: 0,
+            refine_passes: p.refine_passes,
+            hires_passes: p.hires_passes,
+            step: p.step,
+            sharpness: p.sharpness,
+            clarity: p.clarity,
+            profile: p.profile.clone(),
+        };
+        self.items.save_output(&p.display, &item)
+    }
+
     /// The one place RCAS is applied. Sharpens the retained raw image into
     /// `display` and returns the PNG bytes for the response.
     ///
@@ -583,7 +735,8 @@ impl Engine {
             Some(p) => Ok(p.clone()),
             None => bail!(
                 "that image is no longer available to {action} — it was evicted or \
-                 the server restarted. Generate it again (seed is preserved) to retry."
+                 the server restarted. Click it in the work items below to reopen \
+                 it, settings and all."
             ),
         }
     }
@@ -609,6 +762,7 @@ impl Engine {
             refine_passes: entry.refine_passes,
             hires_passes: entry.hires_passes,
             image_id: id,
+            work_id: entry.work_id.clone(),
             can_refine: entry.can_refine(),
             can_hires: entry.can_hires(),
             sharpness: entry.sharpness,
@@ -675,6 +829,16 @@ fn purge_pngs(dir: &std::path::Path) {
             let _ = std::fs::remove_file(&path);
         }
     }
+}
+
+/// Wall-clock milliseconds, for work item ids and their `created_ms`. Only ever
+/// compared against other values from here, so a clock that steps backwards
+/// misorders the grid and nothing worse.
+fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }
 
 fn random_seed() -> i64 {

@@ -228,6 +228,35 @@ base resolution and then stretching the result 2× spends the loss on detail whi
 the structural gain survives the upscale. That is what made the old refine pass read as
 soft. At output resolution there is nothing downstream to smear what it adds.
 
+### Work items
+
+Every image you generate is kept, in `work/workitems/`: the unsharpened
+output-resolution PNG, a thumbnail, and a JSON sidecar with the settings that produced
+it. They survive a restart, and they show up as a panel of thumbnails — a third column
+beside the controls and the result on a wide screen, wrapping underneath them when
+there isn't room.
+
+Click one and it comes back **live** — the controls repopulate with that image's
+settings, the picture goes back on screen, and Refine, Hi-res and both sliders work on
+it again, using the settings it was generated with rather than whatever the panel says
+now. That is the point: render a batch, pick the one worth the money, and escalate that
+one. The server keeps the last 8 results warm in memory, but an image that has fallen
+out of that window reopens from disk just the same.
+
+Flip the toggle above the grid to **Click to delete** and a click *marks* a thumbnail
+instead — red frame, red cast — and a `Delete N selected` button appears. Nothing is
+removed until you press it, so culling twenty images from a batch is twenty clicks and
+one confirmation rather than twenty confirmations. Switching back to **Click to open**
+clears the marks.
+
+Refined and hi-res results are deliberately **not** archived: those are the expensive
+rungs and most of them are experiments. **Save to output**, above the image, writes the
+picture currently on screen — filters and all — to `work/output/`, with its own sidecar.
+It is available for a plain generate too, and you can press it after each of several
+refines to keep every step.
+
+Everything else in `work/` is scratch and is still cleared at startup.
+
 ### Postprocessing
 
 **Clarity** and **Sharpness** are the two sliders under the image, and they work like a
@@ -327,13 +356,16 @@ checking. It needs a Vulkan device and nothing else.
   ```json
   { "image_base64": "…", "width": 1536, "height": 1536, "seed": 12345,
     "refine_passes": 0, "hires_passes": 0,
-    "image_id": 3, "can_refine": true, "can_hires": true,
+    "image_id": 3, "work_id": "1758104523000-12345",
+    "can_refine": true, "can_hires": true,
     "sharpness": 0.35, "clarity": 0.0,
     "timings": { "gen_ms": 0, "fsr_ms": 0, "refine_ms": 0, "hires_ms": 0 } }
   ```
   `image_id` addresses the retained intermediates; `can_refine` / `can_hires` say which
   escalations that image can still take; `sharpness` / `clarity` report the filters
-  actually applied, which is what the UI's sliders reflect.
+  actually applied, which is what the UI's sliders reflect. `work_id` is the archived
+  generation this descends from — it outlives the process, unlike `image_id`, and is
+  `null` only if the archive write failed.
 - `POST /refine` — `{ "image_id": 3 }`. img2img over the retained image at its current
   size, no rescale.
 - `POST /hires` — `{ "image_id": 3, "upscale": 2 }`. FSR-upscale toward
@@ -351,12 +383,31 @@ checking. It needs a Vulkan device and nothing else.
   and last until the next pass over it — `/refine` and `/hires` both reset the filters
   to the model's values. Same response shape as `/generate`, with the time reported in
   `fsr_ms`.
+- `POST /save-output` — `{ "image_id": 3 }`. Copies the image on screen, filters and
+  all, into `work/output/`. Returns `{ "path": "work/output/…png" }`.
+- `GET /workitems` — every archived generation, newest first. Each carries `id`,
+  `created_ms`, `prompt`, `negative`, `seed`, `template`, `width` / `height`,
+  `thumb_width` / `thumb_height`, and a `profile` object holding the full resolved
+  settings the image was generated with — per-request overrides already applied, and
+  `img2img_cfg_scale` still `null` if it was left unset. That is what lets the UI
+  restore an item's controls without a second request.
+- `GET /workitems/{id}/thumb.png` — the thumbnail. An id is digits and `-` only;
+  anything else is `404`.
+- `POST /workitems/open` — `{ "id": "1758104523000-12345" }`. Copies the archived image
+  back into the working set and returns the `/generate` shape with a fresh `image_id`,
+  so the escalations and the sliders work on it immediately. No diffusion runs.
+- `POST /workitems/delete` — `{ "ids": ["…", "…"] }`. Returns `{ "deleted": 2 }`.
+
+The last three above and the listing never touch the GPU, so they answer immediately
+even while a render is in flight.
 
 Errors are `{"error": "…"}`. Anything addressed by `image_id` fails with `400` — the id
-has expired (only the last 8 results are kept, and `work/` is cleared on restart), or
-that pass isn't available for the image; either way it's client-side staleness, and the
-image is left intact to retry. A failed `/generate` is `500`, malformed JSON is `400`, and `503` means the GPU
-worker is gone.
+has expired (only the last 8 results stay warm, and the scratch half of `work/` is
+cleared on restart), or that pass isn't available for the image; either way it's
+client-side staleness, and the image is left intact to retry. Since every generation is
+archived, an expired id is now recovered by reopening the work item rather than by
+regenerating. A failed `/generate` is `500`, malformed JSON is `400`, and `503` means
+the GPU worker is gone.
 
 ## Architecture notes
 
@@ -373,11 +424,19 @@ worker is gone.
   src/preflight.rs startup environment checks, shared with `doctor`
   src/sd.rs        sd-cli subprocess wrapper (txt2img + img2img)
   src/pipeline.rs  orchestrate sd -> fsr -> escalations, with timings + result cache
+  src/workitems.rs durable storage: work/workitems/ + work/output/
   src/fsr/         wgpu compute (upscale.wgsl = EASU, contrast.wgsl = clarity,
                    sharpen.wgsl = RCAS)
   web/index.html   frontend
   models.toml      config + model profiles
+  work/            scratch, cleared at startup
+  work/workitems/  every generation + its settings — kept
+  work/output/     what you pressed "Save to output" on — kept
   ```
+- **The archive is copy-in, copy-out.** Nothing in `work/workitems/` is ever opened in
+  place: a generation is copied in, and reopening one copies it back out to a scratch
+  name. An escalation deletes the files of the step it supersedes, so an archive entry
+  used directly would be destroyed by the first refine run on it.
 
 ## Roadmap
 

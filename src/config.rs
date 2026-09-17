@@ -241,7 +241,15 @@ pub const MIN_STRENGTH: f32 = 0.05;
 pub const MAX_STRENGTH: f32 = 0.95;
 
 /// A fully-resolved, ready-to-run model entry (from a template or discovery).
-#[derive(Debug, Clone)]
+///
+/// Serializable because a work item stores its profile verbatim (see
+/// `src/workitems.rs`): the per-request overrides are already applied by the
+/// time `Engine::run` retains it, so the stored copy *is* the record of what
+/// generated that image. Every field is `#[serde(default)]` so a sidecar written
+/// before a knob was added still loads — a work item that fails to parse is one
+/// the user can no longer reopen, which is a worse outcome than a defaulted knob.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Profile {
     pub name: String,
     pub description: String,
@@ -274,6 +282,40 @@ pub struct Profile {
     pub discovered: bool,
     /// True if the checkpoint file actually exists on disk.
     pub exists: bool,
+}
+
+/// Only reachable through `#[serde(default)]` on the struct above — nothing
+/// builds a `Profile` from nothing, since a real one always comes from
+/// `Config::registry()`. It exists so a work item's sidecar survives a knob being
+/// added, and it mirrors [`Defaults`] field for field for that reason.
+impl Default for Profile {
+    fn default() -> Self {
+        let d = Defaults::default();
+        Profile {
+            name: String::new(),
+            description: String::new(),
+            model: PathBuf::new(),
+            width: d.width,
+            height: d.height,
+            steps: d.steps,
+            cfg_scale: d.cfg_scale,
+            img2img_cfg_scale: d.img2img_cfg_scale,
+            sampler: d.sampler,
+            upscale_factor: d.upscale_factor,
+            sharpness: d.sharpness,
+            clarity: d.clarity,
+            refine_steps: d.refine_steps,
+            refine_strength: d.refine_strength,
+            hires_steps: d.hires_steps,
+            hires_strength: d.hires_strength,
+            hires_max_side: d.hires_max_side,
+            hires_flash_attn: d.hires_flash_attn,
+            weight_type: d.weight_type,
+            extra_args: d.extra_args,
+            discovered: false,
+            exists: false,
+        }
+    }
 }
 
 impl Profile {

@@ -15,6 +15,15 @@
 //!   POST /adjust      -> {image_id, sharpness?, clarity?}
 //!                        re-runs the display filters only — no diffusion, so
 //!                        it's cheap enough to drive from a slider
+//!   GET  /workitems   -> every archived generation, newest first, settings and all
+//!   GET  /workitems/{id}/thumb.png
+//!   POST /workitems/open   -> {id}       reopen one as a live image_id
+//!   POST /workitems/delete -> {ids:[..]} remove them from disk
+//!   POST /save-output      -> {image_id} keep the image on screen
+//!
+//! The first two and the delete are answered on the connection thread rather
+//! than the GPU worker: they only touch the filesystem, and queueing a thumbnail
+//! behind a multi-minute diffusion would freeze the grid for the whole render.
 
 mod config;
 mod fsr;
@@ -22,6 +31,7 @@ mod http;
 mod pipeline;
 mod preflight;
 mod sd;
+mod workitems;
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
@@ -33,9 +43,14 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 
 /// A unit of GPU work plus a channel to send the result back to the HTTP thread.
+///
+/// The reply is the finished JSON body rather than a `GenResult`, because not
+/// every job produces an image — `SaveOutput` answers with a path. Rendering on
+/// the worker costs nothing (it is already holding the only copy of the data) and
+/// keeps `submit` indifferent to what the job was.
 struct Job {
     kind: JobKind,
-    reply: Sender<Result<GenResult>>,
+    reply: Sender<Result<String>>,
 }
 
 enum JobKind {
@@ -50,6 +65,12 @@ enum JobKind {
         sharpness: Option<f32>,
         clarity: Option<f32>,
     },
+    /// Reopen an archived generation as a live result. Needs the worker because
+    /// it ends in a `publish`, and because the new `Pending` lives there.
+    Open(String),
+    /// Copy the image on screen into `work/output/`. No GPU, but the only copy
+    /// of which file that is lives in the engine's `pending` map.
+    SaveOutput(u64),
 }
 
 fn main() -> Result<()> {
@@ -97,14 +118,20 @@ fn main() -> Result<()> {
                 let _ = ready_tx.send(Ok(engine.adapter_name().to_string()));
                 for job in job_rx {
                     let result = match job.kind {
-                        JobKind::Generate(req) => engine.run(&req),
-                        JobKind::Refine(id) => engine.refine(id),
-                        JobKind::Hires { id, upscale } => engine.hires(id, upscale),
+                        JobKind::Generate(req) => engine.run(&req).map(|r| result_json(&r)),
+                        JobKind::Refine(id) => engine.refine(id).map(|r| result_json(&r)),
+                        JobKind::Hires { id, upscale } => {
+                            engine.hires(id, upscale).map(|r| result_json(&r))
+                        }
                         JobKind::Adjust {
                             id,
                             sharpness,
                             clarity,
-                        } => engine.adjust(id, sharpness, clarity),
+                        } => engine
+                            .adjust(id, sharpness, clarity)
+                            .map(|r| result_json(&r)),
+                        JobKind::Open(work_id) => engine.open(&work_id).map(|r| result_json(&r)),
+                        JobKind::SaveOutput(id) => engine.save_output(id).map(|p| saved_json(&p)),
                     };
                     let _ = job.reply.send(result);
                 }
@@ -177,7 +204,119 @@ fn handle_conn(
         ("POST", "/refine") => handle_refine(&mut conn, job_tx, &req.body),
         ("POST", "/hires") => handle_hires(&mut conn, job_tx, &req.body),
         ("POST", "/adjust") => handle_adjust(&mut conn, job_tx, &req.body),
+        ("POST", "/save-output") => handle_save_output(&mut conn, job_tx, &req.body),
+
+        // The archive. List, thumbnail and delete are answered right here rather
+        // than through `submit` — they never touch the GPU, and the worker is
+        // serialized, so going through it would leave the grid dead for the
+        // length of whatever render is in flight.
+        ("GET", "/workitems") => handle_list_workitems(&mut conn, cfg),
+        // `http.rs` strips the query string before routing, so the id has to be
+        // a path segment — hence a guard arm rather than a literal.
+        ("GET", p) if p.starts_with("/workitems/") && p.ends_with("/thumb.png") => {
+            let id = p
+                .trim_start_matches("/workitems/")
+                .trim_end_matches("/thumb.png");
+            handle_thumb(&mut conn, cfg, id)
+        }
+        ("POST", "/workitems/open") => handle_open_workitem(&mut conn, job_tx, &req.body),
+        ("POST", "/workitems/delete") => handle_delete_workitems(&mut conn, cfg, &req.body),
+
         _ => conn.respond(404, "text/plain", b"not found"),
+    }
+}
+
+/// The archive, for a connection thread. Cheap to build — it is two `PathBuf`s
+/// and a `create_dir_all` — so each request makes its own rather than sharing
+/// the engine's behind a lock.
+fn store(cfg: &Config) -> workitems::Store {
+    workitems::Store::new(&cfg.base_dir.join("work"))
+}
+
+fn handle_list_workitems(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
+    let items = store(cfg).list();
+    match serde_json::to_vec(&items) {
+        Ok(body) => conn.respond(200, "application/json", &body),
+        Err(e) => conn.respond(
+            500,
+            "application/json",
+            error_json(&format!("listing work items: {e}")).as_bytes(),
+        ),
+    }
+}
+
+/// A 404 covers both "not a work item id" and "no such work item", because from
+/// the browser's side they are the same thing: a thumbnail that isn't there.
+/// [`workitems::valid_id`] is the traversal guard — it is a whitelist of digits
+/// and `-`, so nothing that reaches `read` can name a path outside the archive.
+fn handle_thumb(conn: &mut http::Connection, cfg: &Config, id: &str) -> Result<()> {
+    if !workitems::valid_id(id) {
+        return conn.respond(404, "text/plain", b"not found");
+    }
+    match std::fs::read(store(cfg).thumb_path(id)) {
+        Ok(body) => conn.respond(200, "image/png", &body),
+        Err(_) => conn.respond(404, "text/plain", b"not found"),
+    }
+}
+
+fn handle_open_workitem(
+    conn: &mut http::Connection,
+    job_tx: &Sender<Job>,
+    body: &[u8],
+) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        id: String,
+    }
+
+    match parse_json::<Dto>(conn, body)? {
+        // 400, same staleness contract as the escalations: an id that isn't
+        // there means the UI's copy of the grid is stale, not that we broke.
+        Some(dto) => submit(conn, job_tx, JobKind::Open(dto.id), 400),
+        None => Ok(()),
+    }
+}
+
+/// Delete is a list, not a single id: the UI selects a set and then deletes it in
+/// one go, which is what keeps culling a batch render from being a click per
+/// image with a confirmation on each.
+fn handle_delete_workitems(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        ids: Vec<String>,
+    }
+
+    let Some(dto) = parse_json::<Dto>(conn, body)? else {
+        return Ok(());
+    };
+    let store = store(cfg);
+    let mut deleted = 0usize;
+    for id in &dto.ids {
+        match store.delete(id) {
+            Ok(()) => deleted += 1,
+            Err(e) => eprintln!("[rustimage] {e:#}"),
+        }
+    }
+    conn.respond(
+        200,
+        "application/json",
+        format!("{{\"deleted\":{deleted}}}").as_bytes(),
+    )
+}
+
+fn handle_save_output(
+    conn: &mut http::Connection,
+    job_tx: &Sender<Job>,
+    body: &[u8],
+) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+    }
+
+    match parse_json::<Dto>(conn, body)? {
+        Some(dto) => submit(conn, job_tx, JobKind::SaveOutput(dto.image_id), 400),
+        None => Ok(()),
     }
 }
 
@@ -356,7 +495,7 @@ fn submit(
         .context("gpu worker dropped the reply channel")?;
 
     match result {
-        Ok(res) => conn.respond(200, "application/json", result_json(&res).as_bytes()),
+        Ok(json) => conn.respond(200, "application/json", json.as_bytes()),
         Err(e) => conn.respond(
             err_status,
             "application/json",
@@ -372,7 +511,7 @@ fn result_json(res: &GenResult) -> String {
     let b64 = base64::engine::general_purpose::STANDARD.encode(&res.png);
     format!(
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
-         \"hires_passes\":{},\"image_id\":{},\"can_refine\":{},\"can_hires\":{},\
+         \"hires_passes\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\
          \"sharpness\":{},\"clarity\":{},\
          \"timings\":{{\"gen_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{}}}}}",
         b64,
@@ -382,6 +521,12 @@ fn result_json(res: &GenResult) -> String {
         res.refine_passes,
         res.hires_passes,
         res.image_id,
+        // `null` when the archive write failed, which is the only case there
+        // isn't one. The UI uses it to mark which thumbnail is on screen.
+        res.work_id
+            .as_deref()
+            .map(json_str)
+            .unwrap_or_else(|| "null".to_string()),
         res.can_refine,
         res.can_hires,
         res.sharpness,
@@ -391,6 +536,15 @@ fn result_json(res: &GenResult) -> String {
         res.timings.refine_ms,
         res.timings.hires_ms,
     )
+}
+
+/// Where a "Save to output" landed. Reported relative to the project root when
+/// it can be, since that's how the user refers to `work/output/` themselves.
+fn saved_json(path: &std::path::Path) -> String {
+    let shown = path
+        .strip_prefix(std::env::current_dir().unwrap_or_default())
+        .unwrap_or(path);
+    format!("{{\"path\":{}}}", json_str(&shown.display().to_string()))
 }
 
 /// The registry (templates + discovered checkpoints) as JSON for the UI. The

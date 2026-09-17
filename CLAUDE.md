@@ -100,6 +100,25 @@ These break silently rather than loudly.
    can fall back to diffusing smaller and letting FSR cover the rest; refine has no
    such fallback, so gating it would just remove the button in the state where it
    helps most. `Pending::can_refine` documents this — it is not a bug to fix.
+8. **`work/workitems/` is never referenced by a live `Pending`.** Every generation is
+   archived there (`src/workitems.rs`); `Engine::run` *copies* `raw` in and
+   `Engine::open` *copies* it back out into the usual `{id}-0-raw.png` scratch name. A
+   `Pending` pointing straight at the archive would have its entry deleted by
+   `Pending::remove_files` the first time it was refined, or by `Scratch::drop` if a
+   pass failed — the feature quietly destroying the thing it exists to keep. One extra
+   PNG write per generate (~15 ms at 1536²) is the price of the whole existing scratch
+   lifecycle staying untouched.
+
+   Which is why `purge_pngs` and `MAX_PENDING` are **unchanged**, despite reading like
+   the cleanup to remove. Both only reach `work/` itself — `purge_pngs` is a
+   non-recursive `read_dir` filtered on a `.png` extension, so it skips directories —
+   and both still bound the scratch dir. What changed is that eviction is now harmless:
+   an evicted image is reopenable rather than lost, so the 8-entry cache is a limit on
+   what is already warm, not on what exists. `Engine::lookup`'s error says so.
+
+   `Pending.work_id` is an id, never a path, for the same reason. It exists only to
+   name saves (`work/output/{work_id}-s{step}.png`) and to let the UI mark which
+   thumbnail is on screen.
 
 ## Adding a per-model knob
 
@@ -148,4 +167,21 @@ silently restore the old inherit-forever behaviour.
 - `anyhow` throughout. Errors are user-facing strings with the fix in them; see
   `SdRunner::preflight` and `Engine::lookup`.
 - std-only HTTP by design (`src/http.rs`). Don't reach for a web framework.
+  - `http.rs` **strips the query string before routing**, so an id has to be a path
+    segment (`GET /workitems/{id}/thumb.png`, a guard arm in `handle_conn`) or a POST
+    body. `workitems::valid_id` is the traversal guard and is a *whitelist* — digits and
+    `-`, so `.` and `/` aren't in the alphabet at all. Widen it rather than replacing it
+    with `canonicalize`.
+  - `Job.reply` carries the **finished JSON body**, not a `GenResult` — not every job
+    produces an image (`SaveOutput` answers with a path). The worker renders it; that's
+    why `result_json` is called in the worker match rather than in `submit`.
+  - Routes that only touch the filesystem (`/workitems` list, the thumbnail,
+    `/workitems/delete`) are answered **on the connection thread**, not through the job
+    queue. The worker is serialized, so queueing a thumbnail behind a diffusion would
+    freeze the grid for the length of the render. The worker only ever *writes* to that
+    directory, so a listing that races a write just misses the newest item.
+- JSON out is hand-rolled `format!` for the two long-standing shapes (`result_json`,
+  `build_models_json`) and `serde_json` for anything backed by a real struct (work item
+  sidecars, `GET /workitems`). `serde_json` was already a dependency for parsing; don't
+  hand-roll a 22-field round-trip, and don't churn the two that exist.
 - No Python anywhere in build or runtime. That is the project's whole pitch.
