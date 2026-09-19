@@ -56,6 +56,7 @@ mod pipeline;
 mod preflight;
 mod sd;
 mod videos;
+mod web;
 mod workitems;
 
 use anyhow::{Context, Result};
@@ -262,14 +263,19 @@ fn handle_conn(
         None => return Ok(()),
     };
 
-    match (req.method.as_str(), req.path.as_str()) {
-        ("GET", "/") | ("GET", "/index.html") => {
-            let path = web_dir.join("index.html");
-            match std::fs::read(&path) {
-                Ok(body) => conn.respond(200, "text/html; charset=utf-8", &body),
-                Err(_) => conn.respond(500, "text/plain", b"web/index.html not found"),
-            }
+    // The page and everything it loads, resolved through one whitelist —
+    // `web::WEB_FILES`. Ahead of the routes rather than an arm among them
+    // because there are sixteen names and one answer for all of them. The client
+    // never names a file that isn't in that table, which is the same rule as
+    // `workitems::valid_id` and the reason there is no generic static handler to
+    // traverse out of.
+    if req.method == "GET" {
+        if let Some((name, content_type)) = web::lookup(&req.path) {
+            return web::serve(&mut conn, web_dir, name, content_type);
         }
+    }
+
+    match (req.method.as_str(), req.path.as_str()) {
         // Built live so newly-dropped checkpoints appear without a restart.
         ("GET", "/templates") | ("GET", "/models") => {
             conn.respond(200, "application/json", build_models_json(cfg).as_bytes())

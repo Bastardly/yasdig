@@ -212,11 +212,21 @@ pub fn check(cfg: &Config) -> Report {
     }
 
     // 4) Web UI (API still works without it, so this is only a warning).
-    let index = cfg.base_dir.join("web").join("index.html");
-    if !index.exists() {
+    // Every file the page is made of, read off the same table the route serves
+    // from — a missing stylesheet or module doesn't read as a missing UI, it
+    // reads as a broken one, and one absent module blanks the whole page.
+    let web = cfg.base_dir.join("web");
+    let missing: Vec<_> = crate::web::WEB_FILES
+        .iter()
+        .map(|(name, _)| web.join(name))
+        .filter(|path| !path.exists())
+        .collect();
+    if !missing.is_empty() {
+        let list: Vec<String> = missing.iter().map(|p| format!("  {}", p.display())).collect();
         warnings.push(format!(
-            "web UI not found:\n  {}\nThe JSON API still works, but the browser UI won't load.",
-            index.display()
+            "web UI file{} not found:\n{}\nThe JSON API still works; the browser UI won't load, or will load broken.",
+            if missing.len() == 1 { "" } else { "s" },
+            list.join("\n"),
         ));
     }
 

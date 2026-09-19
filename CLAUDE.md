@@ -119,9 +119,119 @@ of bailing, which used to close the socket with no response at all. **PNG only i
 Rust, on purpose**: the page re-encodes through a `<canvas>` first, so JPEG/WebP/AVIF
 all work and `image` stays compiled `features = ["png"]`.
 
+## The stylesheet
+
+`web/style.css`, served through `web::WEB_FILES` like everything else the page
+loads. Everything about how the app looks is in that one file; the markup carries
+classes and nothing else. (The `<link>` is relative, but the page no longer opens
+from `file://` at all — module scripts are blocked there by CORS. Run the server.)
+
+**A rule names a role, never a value.** Colour, type, space, radius and the column
+caps are all tokens on `:root`, so a hex anywhere else means the token you wanted is
+missing — add it rather than the hex. The measurements keep the names the `.layout`
+comment argues about (`--col-result-max`, `--panel-w`, `--thumb-h`), and they are at
+the values that comment was written for.
+
+**The ink ramp is neutral on purpose.** The controls sit beside a 1024 px render
+that the user is grading with eight colour knobs, and a blue-black page — which is
+what `#0e1116` was — casts on it. The same argument decides the *state* colour:
+active tab, active thumbnail, every `accent-color`, the progress fill and the focus
+ring are bone rather than a hue, because every one of those marks lands on or beside
+an image. A photo tool's selection border is light grey for this reason.
+
+**The action colour carries information: amber means this button spends GPU time.**
+Neutral means the click is free; red means it stops or destroys something. `Enlarge
+frames` and `Close` used to be the same blue, and a click here can cost minutes — so
+the colour says which kind it is. That is `.btn-run`, `.btn` and `.btn-danger`, plus
+`.btn-choice` for a set where the highlighted one is where you are.
+
+Three things in it break silently:
+
+- **A bare `<button>` is unstyled, and a class carries the look.** The element used
+  to be painted as a full-width green action button, which meant nine rules whose
+  only job was to undo it — every tab, thumbnail, zoom control and icon on the page.
+  The cost of the reset is that a button which *forgets* its class is invisible
+  chrome, so the rule is: every `<button>` carries `.btn` or `.hint`, except the
+  thumbnail grids (where the 2 px border *is* the chrome) and `#lbclose`.
+- **`:disabled` is declared after every `:hover`.** Same specificity, so source order
+  is the only thing deciding what a greyed-out button under the pointer looks like.
+- **`--col-*` cannot be used in the media query.** Custom properties aren't allowed
+  there, so the 899 px breakpoint is a literal that has to be kept in step by hand.
+
+`.tab` carries no style at all — it is how `showTab` finds the four tab buttons, and
+a rule with no declarations would be worse than none. Don't delete it for looking
+unused. And `doctor` checks for both files under `web/`, because an unstyled page
+reads as a broken one rather than as a missing one.
+
+## The script
+
+`web/js/`, one ES module per area, no build step and no framework — the browser
+resolves the imports itself. `index.html` loads exactly one of them:
+`<script type="module" src="js/app.js">`.
+
+| file | holds |
+|------|-------|
+| `dom.js` | `$`, `esc`, `post`, `numOr`, `bar`. No state, no imports |
+| `state.js` | `S`, `PANES`, `P`, `clearPane`, `escErr` |
+| `busy.js` | `IDLE_LABELS`, `setBusy`, `onIdle`, the progress poll, `cancelRun` |
+| `hints.js` | `HELP`, `HINTS`, `wireHints`, the tooltip bubble |
+| `viewer.js` | `FILTERS`, the sliders, `/adjust`, fit/1:1, panning |
+| `image.js` | the Image tab: models, Advanced, `render`, escalations, runs, Save |
+| `workitems.js` | the work-item grid and reopening one |
+| `img2img.js` | the Image-to-image tab, including the upload |
+| `video.js` | the Video tab: models, generate, the clip grid, the first-frame picker |
+| `player.js` | the canvas frame player and `renderClip` |
+| `convert.js` | the Convert tab |
+| `prompt-box.js` | the one custom element |
+| `app.js` | `showTab`, and the boot order |
+
+Four things in it break silently:
+
+- **A module's top level declares and nothing else.** Every `addEventListener`,
+  every `innerHTML =` and every first fetch is inside that module's exported
+  `init*()`, and `app.js` calls them in order. That is what makes the cycles in
+  the graph harmless — `video.js` and `player.js` import each other, and so do
+  `image.js`, `workitems.js` and `img2img.js`, because the tabs genuinely do call
+  into each other. A cycle only bites when a module *reads* a cyclic import while
+  the other is still evaluating, and nothing here does. Put a `$(...)` at file
+  scope and that stops being true.
+- **The six shared values live on one object, `S`.** Not six exported `let`s: an
+  imported binding is read-only at the importer, so `imageId = null` in another
+  file is a `TypeError` rather than an assignment. The single-state rule under
+  *The two image panes* is unchanged; this is only how it is spelled now. Anything
+  only one module writes stays a plain `let` in that module and is exported if
+  others read it (`models`, `clip`).
+- **`setBusy` reaches every tab, and gets there through `onIdle`.** It disables
+  `#go`, `#i2go`, `#vgo`, `#cgo`, all ten sliders and three upscale selects at
+  once, because there is one GPU queue. What a button says at rest is the owning
+  tab's to decide, so `image.js` and `img2img.js` register a callback rather than
+  `busy.js` importing them back — which is also what keeps that module importable
+  from everywhere.
+- **`web::WEB_FILES` is both the route table and the `doctor` list**, and the
+  content type in it is load-bearing: a browser refuses to execute a
+  `type="module"` script served as anything but a JavaScript MIME type, and the
+  failure is a console error behind a blank page. Adding a module means adding a
+  row. It is still a whitelist — the name is matched whole, the same rule as
+  `workitems::valid_id` — which is why there is no generic static handler.
+
+`<prompt-box>` (`web/js/prompt-box.js`) is the only custom element, and it
+**wraps** its `<textarea>`/`<input>` rather than replacing it: the control inside
+keeps the id, so `$('prompt').value`, `<label for>` and `wireHints` need nothing
+forwarded. It is where the features around a prompt go, and there are six of them
+on the page, so writing one three times is what it exists to prevent. Light DOM on
+purpose.
+
+**The tabs are deliberately *not* components.** Shadow DOM is the only thing a
+custom element offers that a module doesn't, and `setBusy` above is why this page
+can't have it — four shadow roots would turn one function into a broadcast plus a
+registry, and `style.css` would need re-plumbing into each root. Without a shadow
+root a custom element is an `init()` with ceremony. `showTab` clearing the pane it
+leaves is the same argument from the other end: these tabs are one app with four
+faces, not four independent things.
+
 ## The two image panes
 
-`web/index.html` has two tabs that put an image on screen, and everything around the
+The page has two tabs that put an image on screen, and everything around the
 image — the action row, Save, the viewer — is one set of functions pointed at whichever
 is showing. That is `PANES` and `P(k)`.
 
@@ -166,9 +276,10 @@ Three things in it break silently:
   renders above everything outside it, and `.lbside` is `overflow-y: auto`, which clips
   anything inside it. An ordinary positioned `div` works everywhere except exactly where
   the sliders are.
-- **`.hint` undoes the global `button` rule**, the same way `.tabs button` and
-  `.wigrid button` do. The default here is a full-width green action button, which is
-  not what a label should sprout.
+- **The icon is a `<button>` carrying `.hint` and *not* `.btn`**, which is the one
+  place that combination is right: this is a 15 px circle inside a label, not a
+  control in a row. See the stylesheet section for why a bare button has no look of
+  its own to undo.
 
 What the text is for: the panel asks a beginner for a sampler, a CFG scale and a flow
 shift, and the right answer for the first two *belongs to the checkpoint* — 4 steps and
@@ -203,12 +314,11 @@ Four more decisions in it are load-bearing:
   click, which is right for something you only look at and hostile for something you
   edit in: one stray click on the picture and the picture is gone. Don't put the
   click-to-close listener back.
-- **Fit, 1:1 and Reset are styled as `.tabs button`, not as buttons.** They share that
-  rule rather than copying it, because they are the same kind of control: a set of
-  choices where blue means "this is the one you are in". Green is reserved for the
-  buttons that *do* something, so there is one blue button in the row and no green one
-  that isn't an action — which is why `setFit` toggles `active` rather than a class of
-  its own.
+- **Fit, 1:1 and Reset are `.btn-choice`, the class the tab row wears.** They share
+  that rule rather than copying it, because they are the same kind of control: a set
+  where the highlighted one is where you are. Amber is reserved for the buttons that
+  spend GPU time, so nothing in this row can be mistaken for an action — which is why
+  `setFit` toggles `active` rather than a class of its own.
 - **Fit and 1:1 are both needed**, because the two filters ask different questions — a
   look across the whole frame, and a pixel. 1:1 centres its scroll (`centreView`)
   rather than landing in a corner, and the centring runs twice: once inline and once on
@@ -354,7 +464,7 @@ the note below the table.
 | 3 | `src/sd.rs` | consume it in `base_cmd` / `txt2img` / `img2img` |
 | 4 | `src/pipeline.rs` | `Option<T>` on `GenRequest`, applied onto the profile in `Engine::run()` **before** `profile.validate()` — and, for an *escalation* knob, on `EscalateRequest` + its `apply()` as well |
 | 5 | `src/main.rs` | field on the `/generate` `Dto`, plus `build_models_json` so the UI can pre-fill it — and, for a *display* knob, the `/adjust` `Dto` and `result_json` too; for an escalation knob, `EscalateDto` and `overrides()` |
-| 6 | `web/index.html` | input in the Advanced panel; `syncAdvanced()` and `applyWorkItem()` pre-fill it, `generate()` reads it — an escalation knob goes in `escalateSettings()`, which `generate()` spreads, so it is read once and sent by all three routes |
+| 6 | `web/index.html` + `web/js/image.js` (or `img2img.js`, `video.js`) | input in the Advanced panel; `syncAdvanced()` and `applyWorkItem()` pre-fill it, `generate()` reads it — an escalation knob goes in `escalateSettings()`, which `generate()` spreads, so it is read once and sent by all three routes |
 | 7 | `models.toml` + `README.md` | commented default, and a row in the field table |
 
 The trap: **`Defaults` and `Template` are two separate structs with the same field
@@ -515,7 +625,7 @@ again.
   is deliberately single-shot and has no run panel: the run panel's value is drawing
   N *different* pictures from one prompt, and with a fixed source image the only
   variation left is the seed. `startRun()` in
-  `web/index.html` calls `/generate`, then `/hires`, `/refine` and `/save-output` per
+  `web/js/image.js` calls `/generate`, then `/hires`, `/refine` and `/save-output` per
   image; there is no batch route and there shouldn't be. The worker is a single blocking
   consumer (`for job in job_rx`), so one job that owned it for a whole run would leave
   `/adjust`, the grid and every other client dead for the length of it, and cancelling it

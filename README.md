@@ -340,6 +340,16 @@ turbo model is trained to land in 1–4 steps at CFG 1, where a standard SDXL wa
 around 20 at 5–7. The same icons are on the image-to-image, video and convert tabs and
 on the viewer's ten sliders.
 
+The interface is static files — `web/index.html`, `web/style.css` and a folder of ES
+modules under `web/js/` — with no build step, no framework and nothing fetched from
+the network, so editing one and reloading is the whole development loop. The modules
+are plain `import`/`export` that the browser resolves itself; `web/js/app.js` is the
+entry point and `src/web.rs` holds the list of files the server will serve, which is
+also the list `doctor` checks for. Colour in it means something: a button is **amber**
+when pressing it spends GPU time, neutral when the click is free, and red when it stops or
+deletes something. Everything else is a neutral grey, because the panel sits beside a
+picture you are judging and chrome with a hue in it biases that judgement.
+
 Quality is escalated *after* the fact, from the buttons above the result — so you only
 pay for it on images worth keeping. The server retains each result's intermediates, so
 no step ever recomputes the ones below it:
@@ -948,7 +958,10 @@ the GPU worker is gone.
   src/videos.rs    durable storage for clips: work/videos/
   src/fsr/         wgpu compute (upscale.wgsl = EASU, grade.wgsl = colour,
                    contrast.wgsl = clarity, sharpen.wgsl = RCAS)
-  web/index.html   frontend
+  web/index.html   frontend: the markup, and one <script type="module">
+  web/style.css    the design tokens and every rule built on them
+  web/js/          the frontend, one ES module per area — app.js is the entry
+  src/web.rs       the whitelist of files the page is made of, and the route
   models.toml      config + model profiles + the [[video]] overrides
   models/video/    video components, scanned recursively and identified by header
   work/            scratch, cleared at startup

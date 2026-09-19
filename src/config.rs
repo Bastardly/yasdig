@@ -224,16 +224,16 @@ fn default_height() -> u32 {
     768
 }
 fn default_steps() -> u32 {
-    4
+    30
 }
 fn default_cfg() -> f32 {
-    1.0
+    6.0
 }
 fn default_sampler() -> String {
     "euler".to_string()
 }
 fn default_upscale() -> f32 {
-    2.0
+    1.5
 }
 /// Off. Sharpening is a live slider under the image now, not something a render
 /// arrives pre-seasoned with — so the first thing you see is what the model and
@@ -1290,9 +1290,9 @@ impl Config {
         let explicit: Vec<VideoModel> = self.video.iter().map(|m| self.resolve_model(m)).collect();
         let mut out = explicit.clone();
         for m in self.discover_video().models {
-            let shadowed = explicit.iter().any(|e| {
-                e.name == m.name || same_file(&e.diffusion_model, &m.diffusion_model)
-            });
+            let shadowed = explicit
+                .iter()
+                .any(|e| e.name == m.name || same_file(&e.diffusion_model, &m.diffusion_model));
             if !shadowed {
                 out.push(self.resolve_model(&m));
             }
@@ -1515,11 +1515,17 @@ t5xxl = "v/umt5.gguf"
         );
         fake_model(
             &video.join("vae").join("wan2.2_vae.safetensors"),
-            &[("decoder.conv1.weight", "[160]"), ("conv2.weight", "[48,48,1,1,1]")],
+            &[
+                ("decoder.conv1.weight", "[160]"),
+                ("conv2.weight", "[48,48,1,1,1]"),
+            ],
         );
         fake_model(
             &video.join("text_encoders").join("umt5.safetensors"),
-            &[("encoder.block.0.layer.0.SelfAttention.q.weight", "[4096,4096]")],
+            &[(
+                "encoder.block.0.layer.0.SelfAttention.q.weight",
+                "[4096,4096]",
+            )],
         );
 
         // No [[video]] table whatsoever.
@@ -1542,7 +1548,10 @@ t5xxl = "v/umt5.gguf"
              diffusion_model = \"{}\"\nvae = \"{}\"\nt5xxl = \"{}\"\nsteps = 4\n",
             dit.display(),
             video.join("vae").join("wan2.2_vae.safetensors").display(),
-            video.join("text_encoders").join("umt5.safetensors").display(),
+            video
+                .join("text_encoders")
+                .join("umt5.safetensors")
+                .display(),
         );
         std::fs::write(root.join("models.toml"), with_entry).unwrap();
         let cfg = Config::load(&root.join("models.toml")).unwrap();
@@ -1718,9 +1727,17 @@ t5xxl = "v/umt5.gguf"
                     f
                 );
                 if g.round_up {
-                    assert!(got >= want.max(g.min), "{:?}: {want} -> {got} rounded down", f);
+                    assert!(
+                        got >= want.max(g.min),
+                        "{:?}: {want} -> {got} rounded down",
+                        f
+                    );
                     // And it is the *nearest* legal count in that direction.
-                    assert!(got < want.max(g.min) + g.multiple, "{:?}: {want} -> {got}", f);
+                    assert!(
+                        got < want.max(g.min) + g.multiple,
+                        "{:?}: {want} -> {got}",
+                        f
+                    );
                 } else if want > g.min {
                     assert!(got <= want, "{:?}: {want} -> {got} rounded up", f);
                     assert!(got + g.multiple > want, "{:?}: {want} -> {got}", f);
@@ -1789,7 +1806,10 @@ t5xxl = "v/umt5.gguf"
     fn every_filter_is_range_checked() {
         assert!(Filters::NONE.validate("m").is_ok());
         for (name, set) in [
-            ("sharpness", (|f: &mut Filters, v| f.sharpness = v) as fn(&mut Filters, f32)),
+            (
+                "sharpness",
+                (|f: &mut Filters, v| f.sharpness = v) as fn(&mut Filters, f32),
+            ),
             ("clarity", |f, v| f.clarity = v),
             ("lightness", |f, v| f.lightness = v),
             ("contrast", |f, v| f.contrast = v),
@@ -1821,8 +1841,15 @@ t5xxl = "v/umt5.gguf"
     #[test]
     fn a_neutral_grade_is_no_work_at_all() {
         assert!(!Filters::NONE.grades());
-        assert!(!Filters::starting_at(1.0, -1.0).grades(), "detail is not a grade");
-        assert!(Filters { tint: -0.01, ..Filters::NONE }.grades());
+        assert!(
+            !Filters::starting_at(1.0, -1.0).grades(),
+            "detail is not a grade"
+        );
+        assert!(Filters {
+            tint: -0.01,
+            ..Filters::NONE
+        }
+        .grades());
     }
 
     /// Detail resets, colour carries. Both halves, because the rule is an

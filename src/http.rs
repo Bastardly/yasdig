@@ -117,6 +117,19 @@ impl Connection {
     }
 
     pub fn respond(&mut self, status: u16, content_type: &str, body: &[u8]) -> Result<()> {
+        self.respond_with(status, content_type, "", body)
+    }
+
+    /// `extra` is zero or more complete header lines, each ending in CRLF. It
+    /// exists for the two static files, which are the only responses that want
+    /// a caching header; everything else is generated per request.
+    pub fn respond_with(
+        &mut self,
+        status: u16,
+        content_type: &str,
+        extra: &str,
+        body: &[u8],
+    ) -> Result<()> {
         let reason = match status {
             200 => "OK",
             400 => "Bad Request",
@@ -131,7 +144,7 @@ impl Connection {
              Content-Type: {content_type}\r\n\
              Content-Length: {}\r\n\
              Connection: close\r\n\
-             \r\n",
+             {extra}\r\n",
             body.len()
         );
         let stream = self.reader.get_mut();
@@ -144,7 +157,7 @@ impl Connection {
 
 #[cfg(test)]
 mod tests {
-    use super::{body_limit, MAX_BODY, MAX_UPLOAD};
+    use super::{body_limit, Connection, MAX_BODY, MAX_UPLOAD};
 
     /// The upload cap is 512× the JSON one, so which paths get it is worth
     /// stating. A prefix test would have handed it to anything beginning with
@@ -166,5 +179,42 @@ mod tests {
         ] {
             assert_eq!(body_limit(small), MAX_BODY, "{small} should be capped small");
         }
+    }
+
+    /// `respond_with` splices caller-supplied header lines in ahead of the blank
+    /// line that ends the header, which is a thing to get exactly right once: a
+    /// missing CRLF there makes every response on that path unparseable, and the
+    /// only route using it is the one that serves the page itself.
+    #[test]
+    fn extra_headers_land_before_the_blank_line() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut conn = Connection::new(stream).unwrap();
+            // Read it before answering: closing a socket with unread bytes still
+            // in it is an RST, which takes the response with it.
+            conn.read_request().unwrap();
+            conn.respond_with(200, "text/css; charset=utf-8", "Cache-Control: no-cache\r\n", b"a{}")
+                .unwrap();
+        });
+
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        client.write_all(b"GET /style.css HTTP/1.1\r\n\r\n").unwrap();
+        let mut got = String::new();
+        client.read_to_string(&mut got).unwrap();
+        server.join().unwrap();
+
+        assert_eq!(
+            got,
+            "HTTP/1.1 200 OK\r\n\
+             Content-Type: text/css; charset=utf-8\r\n\
+             Content-Length: 3\r\n\
+             Connection: close\r\n\
+             Cache-Control: no-cache\r\n\
+             \r\na{}"
+        );
     }
 }
