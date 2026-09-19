@@ -250,7 +250,7 @@ width = 832
 height = 480
 frames = 33
 fps = 24
-steps = 20
+steps = 30
 cfg_scale = 6.0
 flow_shift = 3.0
 ```
