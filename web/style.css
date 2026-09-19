@@ -1,0 +1,447 @@
+/* rustimage — the whole look of the page, and the tokens it is built from.
+ *
+ * The brief this answers: the interface sits beside a 1024 px render that the
+ * user is grading with eight colour knobs. Chrome that carries hue biases that
+ * judgement, which is why a photo editor is grey — so the ink ramp below has no
+ * hue in it, and the one saturated colour is spent on a single job.
+ *
+ * A rule here names a *role*, never a value. If you find yourself writing a hex
+ * outside :root, the token you want is missing; add it rather than the hex. */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- Ink. Neutral, not blue-black: a blue page casts on the picture. ---- */
+  --ink-900: #0a0a0b;   /* the page. The darkest surface in the app, because the
+                           result column is not a card — the image sits on this */
+  --ink-800: #121213;   /* inset: fields, tracks, the canvas bed */
+  --ink-700: #17181a;   /* surface: cards, the viewer's panel, dialogs */
+  --ink-600: #1f2022;   /* raised: neutral buttons */
+  --ink-500: #2c2d30;   /* hairline */
+  --ink-400: #3c3d41;   /* strong border, disabled fill */
+
+  --text:       #ebeae7;
+  --text-dim:   #9b9a96;  /* labels, .sub, .meta */
+  --text-faint: #6c6b68;  /* group headings, placeholders, disabled text */
+
+  /* ---- The two role colours, and which one goes where.
+     Amber is the *action* colour: action buttons live in the controls column,
+     away from the picture. Bone is the *state* colour — active tab, active
+     thumbnail, every range's accent, the progress fill, the focus ring — and
+     those all land on or beside an image, so that is the one that has to be
+     achromatic. It is also the selection mark every photo tool uses.
+
+     Amber carries one piece of information and it is worth keeping: **it means
+     this button spends GPU time.** Neutral means the click is free, red means it
+     stops or destroys something. In an app where a click can cost minutes, the
+     colour is telling you what you are about to spend. ---- */
+  --accent:      #e0912b;
+  --accent-hi:   #f0a643;
+  --on-accent:   #100c05;
+  --state:       #ddd9d2;
+  --on-state:    #101011;
+  --danger:      #b8413a;
+  --danger-hi:   #cc4c44;
+  --danger-text: #ff9c8f;
+
+  /* ---- Type. No webfont: the server is localhost and the project's pitch is
+     that it fetches nothing, so a stylesheet that phones out for a face would be
+     the one part of the app that needs the internet. Pick the best installed. --- */
+  --font-ui:  Inter, "SF Pro Text", "Segoe UI Variable Text", Cantarell, "Noto Sans", system-ui, sans-serif;
+  --font-num: "JetBrains Mono", "IBM Plex Mono", "DejaVu Sans Mono", ui-monospace, monospace;
+
+  --fs-micro:   11px;
+  --fs-sm:      13px;
+  --fs-body:    15px;
+  --fs-title:   20px;
+  --fs-display: 26px;
+  --lh-body: 1.5;
+
+  /* ---- Space, radius, line ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --gap-thumbs: 3px;               /* deliberately off the scale: a strip of
+                                      thumbnails wants to read as one strip */
+  --r-sm: 4px;                     /* inside something: a fill, a thumbnail */
+  --r-md: 8px;                     /* controls: buttons, fields */
+  --r-lg: 12px;                    /* containers: cards, dialogs, the image */
+  --line: 1px solid var(--ink-500);
+  --shadow-pop: 0 6px 20px rgba(0, 0, 0, .8);
+  --scrim: rgba(0, 0, 0, .85);     /* the viewer's backdrop */
+  --scrim-soft: rgba(0, 0, 0, .7); /* the picker's, and the close button's bed */
+
+  /* ---- Measurements. All at the values the layout was tuned to; see the
+     .layout comment for why the caps are the part that matters. ---- */
+  --col-controls: 380px;
+  --col-controls-max: 420px;
+  --col-result: 560px;
+  --col-result-max: 1024px;
+  --col-items: 460px;
+  --col-items-max: 660px;
+  --panel-w: 300px;      /* the viewer's slider column */
+  --thumb-h: 200px;      /* work items, clips, and the img2img sources — one
+                            size, because they are the same strip of pictures
+                            doing the same job on two tabs */
+  --thumb-h-pick: 140px; /* the first-frame picker */
+  --thumb-h-tiny: 56px;  /* the one chosen image, beside its button */
+  --bar-name: 60px;
+  --bar-val: 72px;
+}
+
+/* ============================ Base ============================ */
+
+* { box-sizing: border-box; }
+
+/* Full-bleed: the page starts at the left edge and runs to the right one, so
+   a wide screen gets a third column rather than a wider margin. The columns
+   cap themselves — see .layout. */
+body {
+  margin: 0;
+  font: var(--fs-body)/var(--lh-body) var(--font-ui);
+  background: var(--ink-900); color: var(--text);
+  display: flex; padding: var(--sp-4);
+  flex-direction: column;
+}
+
+/* `hidden` is only `display: none` from the UA stylesheet, and *any* author
+   rule that sets `display` beats it — author styles win over UA styles whatever
+   the specificity. `.layout` sets `display: flex`, so `showTab` hid the video
+   panel by setting an attribute that the rule above silently ignored and both
+   tabs rendered stacked. The `!important` is the fix the HTML spec itself
+   recommends for author sheets; it applies to every `hidden` toggle on the
+   page, all of which mean the same thing. */
+[hidden] { display: none !important; }
+
+/* The page is entirely keyboard-operable and had no focus style but the one on
+   the (i) icons. Bone, because it is the state colour. */
+:focus-visible { outline: 2px solid var(--state); outline-offset: 2px; }
+
+.app { width: 100%; }
+
+/* The wordmark, and the one typographic moment on the page: this is the name of
+   a binary, so it is set in the face a binary prints in. */
+h1 {
+  margin: 0 var(--sp-2) 0 0;
+  font: var(--fs-display) var(--font-num);
+  letter-spacing: -.02em;
+}
+
+/* A note under something, which is what every use of it is. */
+.sub { color: var(--text-dim); font-size: var(--fs-sm); margin: var(--sp-2) 0 0; }
+.err { color: var(--danger-text); white-space: pre-wrap; font-size: var(--fs-sm); margin-top: var(--sp-3); }
+/* Facts about the image in hand — dimensions, seed, timings — where the values
+   are the part you read, so they get the numeral face. */
+.meta { font-size: var(--fs-sm); color: var(--text-dim); }
+.meta b { color: var(--text); font-weight: 600; font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+.meta b.pin { cursor: pointer; border-bottom: 1px dashed var(--text-dim); }
+.spaced { margin-top: var(--sp-3); }
+
+.card {
+  background: var(--ink-700); border: var(--line);
+  border-radius: var(--r-lg); padding: var(--sp-4);
+}
+
+/* ============================ Buttons ============================
+
+   A bare <button> is *unstyled* here, and a class carries the look. The
+   element used to be styled as a full-width green action button, which meant
+   nine rules whose job was to undo it — every tab, thumbnail, zoom control and
+   icon on the page. A button that wants no chrome should have to say nothing.
+
+   .btn-run is the amber one: it spends GPU time. See the token block. */
+
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md);
+  font-size: var(--fs-sm); font-weight: 600;
+  background: var(--ink-600); color: var(--text); border: var(--line);
+}
+.btn:hover { background: var(--ink-500); }
+.btn-run { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.btn-run:hover { background: var(--accent-hi); }
+.btn-danger { background: var(--danger); color: #fff; border-color: transparent; }
+.btn-danger:hover { background: var(--danger-hi); }
+/* `.tab` on the four tab buttons is a JS hook — it is how `showTab` finds them —
+   and deliberately has no rule here. Don't delete it for looking unused.
+
+   A choice, not an action: the tab row and the viewer's Fit / 1:1 / Reset are
+   the same kind of control, a set where the highlighted one is where you are.
+   They share this rule rather than copying it. */
+.btn-choice { background: var(--ink-700); color: var(--text-dim); padding: var(--sp-2) var(--sp-5); }
+.btn-choice:hover { color: var(--text); }
+.btn-choice.active { background: var(--state); color: var(--on-state); border-color: var(--state); }
+/* The one button per panel that starts the work, under the controls that
+   describe it. */
+.btn-block { display: flex; width: 100%; margin-top: var(--sp-4); padding: var(--sp-3); font-size: var(--fs-body); }
+/* Last, and deliberately: :disabled and :hover are the same specificity, so
+   source order is what decides which a greyed-out button under the pointer
+   gets. */
+.btn:disabled, .btn:disabled:hover {
+  background: var(--ink-400); color: var(--text-faint);
+  border-color: transparent; cursor: default;
+}
+.btn-choice:disabled, .btn-choice:disabled:hover { background: var(--ink-700); opacity: .55; }
+
+/* ============================ Layout ============================ */
+
+/* Image | Image to image | Video | Convert. Workflows that share one GPU and
+   almost no controls — a clip has frames, fps and a flow shift and no upscale
+   ladder at all — so they are separate panels rather than one panel with half
+   its fields hidden. */
+.tabs {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1);
+  margin: 0 0 var(--sp-4); border-bottom: var(--line); padding-bottom: var(--sp-2);
+}
+
+/* Three columns that flow: controls, result, work items. Flex rather than a
+   grid with a breakpoint, because each column has a different *useful* width
+   and they should wrap independently — the work items drop under the other two
+   long before the controls and the result have to stack.
+
+   The caps are what matters. Left to itself the result column takes every
+   pixel the page has, and a 1536² render displayed at 1800px wide is not more
+   legible, it's just further from the controls. The flex bases below add up
+   (with gaps) to ~1400px, which is the width at which all three fit on one
+   row; under that the work items wrap, and under ~960 the result does too. */
+.layout { display: flex; flex-wrap: wrap; gap: var(--sp-5); align-items: flex-start; }
+/* Without this a flex item's automatic minimum size is its content's intrinsic
+   width — the image's own pixel width — which would blow the column out past
+   the viewport instead of scaling the picture down. */
+.layout > * { min-width: 0; }
+/* Its own class, not `.layout > .card`: the work items panel is a `.card` and
+   a direct child too, and would take the controls' cap. */
+.col-controls { flex: 1 1 var(--col-controls); max-width: var(--col-controls-max); }
+.col-result { flex: 3 1 var(--col-result); max-width: var(--col-result-max); }
+.workitems { flex: 2 1 var(--col-items); max-width: var(--col-items-max); }
+
+/* ============================ Forms ============================ */
+
+label { display: block; font-size: var(--fs-sm); color: var(--text-dim); margin: var(--sp-3) 0 var(--sp-1); }
+textarea, input, select {
+  width: 100%; background: var(--ink-800); color: var(--text);
+  border: var(--line); border-radius: var(--r-md); padding: var(--sp-2) var(--sp-3); font: inherit;
+}
+textarea { resize: vertical; min-height: 64px; }
+textarea.short { min-height: 48px; }
+::placeholder { color: var(--text-faint); }
+/* The prompt fields are wrapped in <prompt-box>, which is where the features
+   around a prompt will live (web/js/prompt-box.js). An unknown element is
+   `inline` by default, which would lift the field out of the column's flow; the
+   control inside keeps the `width: 100%` above and needs nothing of its own. */
+prompt-box { display: block; }
+/* This panel is steps, CFG, strength, seeds and dimensions. Digits that are
+   read as quantities get the numeral face; labels are words and don't. */
+input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+.row { display: flex; gap: var(--sp-3); flex-wrap: wrap; }
+.row > div { flex: 1 1 160px; }
+/* Two buttons under a field, on their own line. */
+.btnrow { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
+
+/* What pressing Generate will actually do — how many images, and what happens
+   to each one — as opposed to what any single image is made of. Hence the rule
+   above it: these are settings of a *run*. */
+.run { border-top: var(--line); margin-top: var(--sp-4); padding-top: var(--sp-1); }
+.grouphead { display: block; font-size: var(--fs-sm); color: var(--text-dim); margin: var(--sp-3) 0 0; }
+.checks { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-top: var(--sp-2); }
+/* `label` is a block with margins by default here — that's for the form column,
+   not for a pair of radios, or a row of checkboxes, sitting on one line. */
+.wimodes { display: flex; gap: var(--sp-3); }
+.wimodes label, .checks label { display: inline-flex; align-items: center; gap: var(--sp-1); margin: 0; }
+.wimodes input, .checks input { width: auto; padding: 0; accent-color: var(--state); }
+
+/* ============================ The result column ============================ */
+
+/* The escalation controls sit above the image; they share a row when the
+   column is wide enough and stack when it isn't. */
+.actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: 1px; }
+.actions .btn { flex: 1 1 140px; }
+.actions select { width: auto; flex: 0 0 auto; }
+.result img {
+  max-width: 100%; border-radius: var(--r-lg); border: var(--line);
+  display: block; margin-top: var(--sp-3); cursor: zoom-in;
+}
+
+/* Where the time went, per pass. */
+.bars { margin-top: var(--sp-3); }
+.bar { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-1) 0; font-size: var(--fs-micro); }
+.bar .name { width: var(--bar-name); color: var(--text-dim); }
+.bar .track { flex: 1; background: var(--ink-800); border-radius: var(--r-sm); height: 10px; overflow: hidden; }
+.bar .fill { height: 100%; background: var(--state); }
+.bar .val { width: var(--bar-val); text-align: right; color: var(--text); font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+
+/* ============================ Work items, clips, pickers ============================ */
+
+/* Every generation, kept on disk. Sized by the .layout rule above. */
+.wihead { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }
+/* Flex-wrap rather than a grid: only the height is fixed, and each thumbnail's
+   width follows its own aspect ratio. A narrow gap, per the brief. */
+.wigrid { display: flex; flex-wrap: wrap; gap: var(--gap-thumbs); margin-top: var(--sp-3); }
+/* A frame around a picture, and nothing else — which is why these carry no
+   .btn: the chrome *is* the border. */
+.wigrid button { line-height: 0; border: 2px solid transparent; border-radius: 6px; }
+.wigrid img { height: var(--thumb-h); width: auto; display: block; border-radius: var(--r-sm); }
+/* The image currently on screen. Bone rather than a hue, so a mark that sits on
+   a photograph doesn't tint the judgement of it. */
+.wigrid button.active { border-color: var(--state); }
+/* Marked for deletion: red frame + a red cast, so a selection is obvious at a
+   glance across a wide strip. Nothing is deleted until the button is pressed. */
+.wigrid button.sel { border-color: var(--danger); }
+.wigrid button.sel img { filter: sepia(1) saturate(3) hue-rotate(-40deg) brightness(.85); }
+.wigrid.deleting button:hover { border-color: var(--danger); }
+
+/* The outputs picker. Same grid as the work items, in a dialog. */
+#picker {
+  max-width: min(1100px, 92vw); max-height: 86vh; background: var(--ink-700);
+  color: var(--text); border: var(--line); border-radius: var(--r-lg); padding: var(--sp-4);
+}
+#picker::backdrop { background: var(--scrim-soft); }
+#picker .wigrid img { height: var(--thumb-h-pick); }
+
+/* ============================ The viewer ============================ */
+
+/* Also where post-processing happens: a control panel on the left and a
+   viewport you drag the image around in. The two filters are judged at the
+   pixel level, and the result column shows a fitted preview a few hundred
+   pixels wide — so this is the only place the sliders can honestly live.
+   Nothing here scrolls but the two panes themselves. */
+#lightbox {
+  width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh;
+  margin: 0; padding: 0; border: 0; overflow: hidden;
+  background: var(--ink-900); color: var(--text);
+}
+/* The `display` belongs on [open] and nowhere else. A closed <dialog> is hidden
+   by the UA rule `dialog:not([open]) { display: none }`, which an id selector
+   outranks — so declaring `display: flex` on #lightbox alone shows the viewer
+   from page load, permanently, with close() having no attribute to remove. */
+#lightbox[open] { display: flex; }
+#lightbox::backdrop { background: var(--scrim); }
+/* Fixed width, not a fraction: the controls are the same size whatever the
+   image is, and this column is where later sliders go. It scrolls on its own,
+   so adding them never squeezes the viewport. */
+.lbside {
+  flex: 0 0 var(--panel-w); overflow-y: auto; padding: var(--sp-4);
+  background: var(--ink-700); border-right: var(--line);
+}
+.lbzoom { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); }
+.lbzoom .btn { flex: 1; padding-left: 0; padding-right: 0; }
+/* min-width:0 because a flex item's default min-width is its content: a 3072 px
+   image would otherwise refuse to let its pane shrink and shove the panel off
+   the left edge of the screen. */
+.lbview {
+  flex: 1; min-width: 0; overflow: auto; display: flex;
+  cursor: grab; overscroll-behavior: contain;
+}
+.lbview.drag { cursor: grabbing; }
+.lbview.fit { cursor: default; }
+/* margin:auto is the overflow-safe way to centre. Centring the flex *container*
+   instead clips the overflowing left edge and makes it unreachable by
+   scrolling — which is exactly the half of a 1:1 image you want to pan to. */
+.lbview img { margin: auto; display: block; user-select: none; -webkit-user-drag: none; }
+.lbview.fit img { max-width: 100%; max-height: 100%; }
+/* Positioned against the dialog, which is fixed while modal — not against the
+   viewport pane, which scrolls and would carry the button away with it. */
+#lbclose {
+  position: absolute; top: 10px; right: 14px;
+  padding: 2px var(--sp-3); font-size: var(--fs-display); line-height: 1.1;
+  border-radius: var(--r-md); background: var(--scrim-soft); color: var(--text);
+}
+#lberr { margin-top: var(--sp-4); }
+
+/* The post-process panel. The label sits *above* its track rather than beside
+   it: beside was right when these two controls were under a full-width image,
+   and in a 300 px column a 72 px label was a quarter of the travel — with ten
+   of them, the travel is the whole point. Name and value share the top line,
+   so a slider is two lines and the track is the full width of the panel. */
+.posthead { display: flex; justify-content: space-between; align-items: baseline; }
+.slider { margin-top: var(--sp-3); }
+.slider .head { display: flex; justify-content: space-between; align-items: baseline; }
+.slider label { margin: 0; font-size: var(--fs-sm); color: var(--text-dim); }
+.slider .val { font-size: var(--fs-sm); color: var(--text); font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+.slider input[type=range] {
+  display: block; width: 100%; margin-top: 2px;
+  padding: 0; border: 0; background: none; accent-color: var(--state);
+}
+.slider input:disabled { opacity: .5; }
+/* A heading every few sliders, so ten controls read as three short lists
+   rather than one column to scroll. A rule and a quiet line — the information
+   is "a new group starts here", and that is all it has to say. */
+.lbgroup {
+  margin-top: var(--sp-5); padding-top: var(--sp-2);
+  border-top: var(--line); font-size: var(--fs-micro); color: var(--text-faint);
+}
+.lbgroup:first-child { margin-top: var(--sp-3); border-top: 0; padding-top: 0; }
+
+/* ============================ The frame player ============================ */
+
+/* A clip is a PNG sequence — see SdRunner::video — so playback is a canvas and
+   a timer rather than a <video>. Which also gives frame-exact scrubbing for
+   free, and that is what you want from two seconds of footage you are judging
+   rather than watching. */
+#vcanvas {
+  max-width: 100%; border-radius: var(--r-lg); border: var(--line);
+  display: block; margin-top: var(--sp-3); background: var(--ink-800);
+}
+.player { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.player .btn { flex: 0 0 auto; }
+.player input[type=range] { flex: 1; padding: 0; border: 0; background: none; accent-color: var(--state); }
+.player .val { flex: 0 0 auto; font-size: var(--fs-sm); color: var(--text-dim); font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+
+/* ============================ The img2img source ============================ */
+
+/* A dashed box because the whole area takes a drop, not just the button inside
+   it — dragging a file onto a 90x30 target is a game of skill. */
+.drop {
+  border: 1px dashed var(--ink-500); border-radius: var(--r-lg); padding: 10px var(--sp-3);
+  margin-bottom: 14px; background: var(--ink-800);
+}
+.drop.over { border-color: var(--state); background: var(--ink-600); }
+.drop .picked { margin-top: 0; }
+/* The chosen first frame, beside the button that chose it. */
+.picked { display: flex; align-items: center; gap: 10px; margin-top: var(--sp-2); }
+.picked img { height: var(--thumb-h-tiny); width: auto; border-radius: 6px; border: var(--line); }
+
+/* ============================ Hints ============================ */
+
+/* The (i) after a label, and the bubble it opens. */
+.hint {
+  margin: 0 0 0 5px; width: 15px; height: 15px; flex: none;
+  font-size: 10px; line-height: 15px; text-align: center; vertical-align: 1px;
+  background: var(--ink-500); color: var(--text-dim); border-radius: 50%; cursor: help;
+}
+.hint:hover, .hint:focus-visible { background: var(--state); color: var(--on-state); }
+/* Those labels are inline-flex with a gap of their own, which the icon would
+   otherwise be added to. */
+.checks .hint, .wimodes .hint { margin-left: 0; }
+/* A `popover`, so it lives in the top layer: the viewer is a modal <dialog>,
+   which renders above anything outside it, and the slider panel is
+   `overflow-y: auto`, which clips anything inside it. The UA sheet centres a
+   popover in the viewport, hence `inset: auto` — the position comes from
+   `showTip`. */
+#tip {
+  position: fixed; inset: auto; margin: 0; max-width: var(--panel-w);
+  padding: 9px 11px; font-size: var(--fs-sm); line-height: 1.45;
+  background: var(--ink-600); color: var(--text);
+  border: var(--line); border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+}
+
+/* ============================ Narrow ============================ */
+
+/* Below this the wrapping is already one-per-row, but the caps would leave a
+   420px controls card stranded beside empty space. One column, full width.
+   The number is a literal because it has to be: custom properties are not
+   allowed in a media query, so --col-* can't be used here. */
+@media (max-width: 899px) {
+  .col-controls, .col-result, .workitems { flex-basis: 100%; max-width: none; }
+}
+
+/* Nothing here animates today. This is for whatever is added next. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
