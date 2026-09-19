@@ -156,7 +156,7 @@ Settings fields, shared between `[defaults]` and `[templates.*]` except where no
 | `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `20`, `5.0`, `euler` (Turbo → few steps, cfg 1) |
 | `img2img_cfg_scale` *(opt)* | CFG for the refine and hi-res passes only; unset (the default) follows `cfg_scale`. `0` is legal and means guidance off |
 | `upscale_factor` | FSR upscale, default `2.0` (768 → 1536) |
-| `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the slider under the image starts |
+| `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the viewer's slider starts |
 | `clarity` | local contrast, -1..1, default `0.0` = off — positive adds mid-frequency depth, negative softens; likewise the slider's starting value |
 | `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size (0 steps = disabled, and `refine_steps` defaults to 0) |
 | `source_steps` / `source_strength` | the **Image to image** tab's one pass over a source image you supply. Defaults `12` and `0.55` — far higher than the two escalations, because this one is asked to make a picture *out of* one rather than to finish one it made |
@@ -377,7 +377,7 @@ beside the controls and the result on a wide screen, wrapping underneath them wh
 there isn't room.
 
 Click one and it comes back **live** — the controls repopulate with that image's
-settings, the picture goes back on screen, and Refine, Hi-res and both sliders work on
+settings, the picture goes back on screen, and Refine, Hi-res and the viewer's sliders work on
 it again. Because the panel has been restored to what made the image, an escalation runs
 with those settings unless you change them first, in which case it runs with what the
 boxes say. That is the point: render a batch, pick the one worth the money, and escalate that
@@ -419,8 +419,8 @@ scaled down first. It starts at the model's `hires_max_side` because that is the
 same question already answered for this card: a 4000 px phone photo diffused at
 full size is an out-of-memory, not a better picture.
 
-The result then joins the ordinary ladder. Refine, Hi-res, both sliders and Save
-to output all work on it exactly as they do on a generation, and it is archived
+The result then joins the ordinary ladder. Refine, Hi-res, the viewer's sliders
+and Save to output all work on it exactly as they do on a generation, and it is archived
 as a work item like one — so it comes back from the grid on the Image tab, source
 image and all.
 
@@ -583,11 +583,20 @@ is measured: 254 MB of VAE takes 2.07 s serialized against 0.53 s at four thread
 
 ### Postprocessing
 
-**Clarity** and **Sharpness** are the two sliders under the image, and they work like a
-photo editor rather than a generation setting: drag one and the picture re-filters
-under the cursor. There is no diffusion involved — the server re-runs the GPU filters
-on the unfiltered image it already retained — so a re-tune costs milliseconds against
-the minutes a regenerate would, and it stays lossless however many times you do it.
+**Clarity** and **Sharpness** live in the **viewer** — press **View & adjust**, or
+click the picture. They work like a photo editor rather than a generation setting: drag
+one and the image re-filters under the cursor. There is no diffusion involved — the
+server re-runs the GPU filters on the unfiltered image it already retained — so a
+re-tune costs milliseconds against the minutes a regenerate would, and it stays lossless
+however many times you do it.
+
+They are in the viewer because that is the only place you can see what they do. Both
+filters work at or near the pixel level, and the result column shows a fitted preview a
+few hundred pixels across; a sharpness setting chosen there is a guess. The viewer opens
+with the whole frame fitted, which is the right view for clarity, and **1:1** switches
+to true pixels, which is the right view for sharpness — drag the image to move around
+it. Only the **×** and Escape close it, so a stray click while you are working can't
+dismiss the thing you are working on.
 
 **Clarity** runs **-1 to 1**. Positive is a wide unsharp mask on brightness: it moves
 the mid frequencies that read as contrast and depth, and leaves fine detail alone.
@@ -756,7 +765,7 @@ checking. It needs a Vulkan device and nothing else.
 - `POST /adjust` — `{ "image_id": 3, "sharpness": 0.5, "clarity": 0.3 }`. Re-runs the
   display filters on the retained image; both fields are optional, and an omitted one
   keeps its current value. No diffusion runs, so this returns in milliseconds — it is
-  what the sliders under the image call, and it is safe to call repeatedly because the
+  what the viewer's sliders call, and it is safe to call repeatedly because the
   image it filters is always the unfiltered one. The new values belong to that image
   and last until the next pass over it — `/refine` and `/hires` both reset the filters
   to the model's values. Same response shape as `/generate`, with the time reported in

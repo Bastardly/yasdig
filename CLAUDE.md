@@ -99,9 +99,9 @@ all work and `image` stays compiled `features = ["png"]`.
 
 ## The two image panes
 
-`web/index.html` has two tabs that put an image on screen, and everything below the
-image — the action row, both sliders, Save, the lightbox — is one set of functions
-pointed at whichever is showing. That is `PANES` and `P(k)`.
+`web/index.html` has two tabs that put an image on screen, and everything around the
+image — the action row, Save, the viewer — is one set of functions pointed at whichever
+is showing. That is `PANES` and `P(k)`.
 
 The module state (`imageId`, `currentSrc`, `workId`) stays **single**, because only one
 tab is visible and the worker is serialized, so there is only ever one live result to
@@ -109,8 +109,50 @@ have; two copies would be two ways to be stale. The price is that `showTab` must
 `clearPane` the tab it leaves — otherwise a picture sits there looking live beside
 Refine and Hi-res buttons that now address a different image, which would work and
 would be wrong. It also means the ids `render()` writes (`refine`, `hires`, `saveout`,
-`upfactor`) exist in at most one pane at a time, which is why `IDLE_LABELS` and
-`setUpFactor` need no second set of them.
+`upfactor`, `viewadjust`) exist in at most one pane at a time, which is why
+`IDLE_LABELS` and `setUpFactor` need no second set of them.
+
+A pane is down to three keys — `result`, `err`, `escmodel` — and the two it lost say
+what the viewer bought. The sliders and their timing readout used to be duplicated per
+pane; there is one dialog, so there is now one pair, addressed by plain id. `setPost`,
+`syncPostLabels`, `runPost` and `setBusy` reach them with `$()` rather than `P()`, and
+adding a third slider is a change in one place rather than two.
+
+## The viewer
+
+`<dialog id="lightbox">` is where post-processing happens, and that is a correction
+rather than a move. Sharpness is RCAS — a filter over single pixels — and clarity is a
+band whose width is proportional to the image (invariant 6). Both were being judged on
+the result column's fitted preview, a few hundred pixels wide, which is why the feature
+read as broken while `/adjust` was doing exactly what it claimed.
+
+Three decisions in it are load-bearing:
+
+- **Closing is the `×` and Escape, nothing else.** The old viewer dismissed on any
+  click, which is right for something you only look at and hostile for something you
+  edit in: one stray click on the picture and the picture is gone. Don't put the
+  click-to-close listener back.
+- **Fit and 1:1 are both needed**, because the two filters ask different questions — a
+  look across the whole frame, and a pixel. 1:1 centres its scroll (`centreView`)
+  rather than landing in a corner, and the centring runs twice: once inline and once on
+  the image's `load`. A fresh `data:` URL has no dimensions to measure when
+  `showFullSize` returns, and re-opening on the src already loaded fires no `load` at
+  all, so neither half alone is enough. `lbCentre` is the flag that keeps a *re-filter*
+  from re-centring — the whole point of panning to a detail is that dragging Sharpness
+  leaves it under the cursor.
+- **`setResultImage` writes both copies.** The image is on screen twice while the
+  dialog is open, and `render()` keeps the big one in step too: a modal dialog stops
+  clicks, not a batch run that was already in flight.
+
+Panning is scroll offsets, not a transform, so the wheel, a trackpad and the scrollbars
+keep working with no code. `.lbview` needs `min-width: 0` — a flex item's default
+minimum is its content, so a 3072 px image would otherwise refuse to shrink its pane
+and shove the panel off the left edge — and the image centres with `margin: auto`
+rather than by centring the container, which clips the overflowing left edge and makes
+it unreachable by scrolling.
+
+The panel is a fixed 300 px and scrolls on its own because it is a stack that is
+expected to grow; new sliders go in it, not under the image.
 
 ## Invariants
 
