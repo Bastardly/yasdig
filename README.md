@@ -333,6 +333,13 @@ checkpoint works for both Turbo and standard settings without touching config. T
 settings a request was generated with are retained with the image, so a later refine or
 hi-res uses those rather than whatever the panel shows by then.
 
+Every control has a small **(i)** beside its label, with a sentence or two on what the
+setting does and how to choose a value — and, where that is the honest answer, on the
+fact that the value belongs to the *checkpoint* rather than to image generation: a
+turbo model is trained to land in 1–4 steps at CFG 1, where a standard SDXL wants
+around 20 at 5–7. The same icons are on the image-to-image, video and convert tabs and
+on the viewer's ten sliders.
+
 Quality is escalated *after* the fact, from the buttons above the result — so you only
 pay for it on images worth keeping. The server retains each result's intermediates, so
 no step ever recomputes the ones below it:

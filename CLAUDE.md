@@ -140,6 +140,42 @@ pane; there is one dialog, so there is now one set, addressed by plain id. `setP
 `syncPostLabels`, `runPost` and `setBusy` reach them with `$()` rather than `P()`, and
 adding a slider is a change in one place rather than two.
 
+## The tooltips
+
+Every control's label carries an `(i)`, and the text behind it is in **`HELP`** — one
+table, keyed by what a control *is* rather than by where it lives, because Steps is
+Steps on three tabs and three copies of the sentence are two chances to go stale. The
+viewer's sliders are the exception and carry their own `help:` on the `FILTERS` row,
+which is the same rule seen from the other side: a slider is declared in one place, and
+number eleven should be one line in one list. `HINTS` is the id → text index both end up
+in.
+
+`wireHints()` injects the icons rather than the markup containing fifty-odd of them; the
+key is the control's id, from `for` or from the input a checkbox label wraps, with
+`data-help` for the three headings that label a group instead of a field. It is
+idempotent and runs twice — once at load, and once at the end of `renderClip`, whose two
+boxes are the only labelled controls built after load.
+
+Three things in it break silently:
+
+- **The icon is inside its `<label>`, so its click handler must `preventDefault()`.** A
+  click anywhere in a label activates the labelled control — without that line, asking
+  what "Keep going until stopped" means switches it on.
+- **The bubble is a `popover`.** Not decoration: the top layer is the only place it can
+  be drawn in the two places it has to work. The viewer is a modal `<dialog>`, which
+  renders above everything outside it, and `.lbside` is `overflow-y: auto`, which clips
+  anything inside it. An ordinary positioned `div` works everywhere except exactly where
+  the sliders are.
+- **`.hint` undoes the global `button` rule**, the same way `.tabs button` and
+  `.wigrid button` do. The default here is a full-width green action button, which is
+  not what a label should sprout.
+
+What the text is for: the panel asks a beginner for a sampler, a CFG scale and a flow
+shift, and the right answer for the first two *belongs to the checkpoint* — 4 steps and
+CFG 1 on a turbo model, 20 and 5 on a standard SDXL. Where that is true the sentence
+says so. Keep them to a few sentences and keep them about how to *choose*; this is a
+tooltip, not the README.
+
 ## The viewer
 
 `<dialog id="lightbox">` is where post-processing happens, and that is a correction
