@@ -13,14 +13,27 @@ SDXL-Turbo want a template with 1–4 steps and CFG 1). Anything better than tha
 
 ```
 prompt ──▶ sd-cli (Vulkan, 768px default) ──▶ EASU upscale ──▶ clarity + RCAS ──▶ PNG
-                                                    ▲
-    on demand, from the buttons above the result:   ├─▶ hi-res   enlarge, then img2img
-    (either order, repeatable)                      └─▶ refine   img2img in place, no rescale
+your image ──▶ fit to budget ──▶ img2img ─────────▶ ▲
+                                                    ├─▶ hi-res   enlarge, then img2img
+    on demand, from the buttons above the result:   └─▶ refine   img2img in place, no rescale
+    (either order, repeatable, and each may name its own checkpoint)
 ```
 
 Both escalations read the *unfiltered* image and write a new one; clarity and RCAS
 run once on the way out. So neither filter compounds, and no pass ever diffuses
 over pixels an earlier pass already sharpened.
+
+The **Image to image** tab is the second way in: drop, paste or pick a picture and
+run one diffusion pass over it, after which it climbs the same ladder. And because
+a checkpoint describes the pass *about to* run rather than the one that already
+did, each rung can name its own — draft on a Turbo model, finish on a detailed one.
+See [Image to image](#image-to-image).
+
+There is a **Video** tab too, over the same subprocess and the same GPU queue: Wan 2.2
+through sd.cpp's `vid_gen` mode, animating either a prompt or one of your finished
+images. A clip comes back as a PNG sequence, which is what lets the same FSR passes
+enlarge it frame by frame — a fixed kernel can't flicker, so that stays stable where
+per-frame diffusion boils. See [Video](#video).
 
 A tiny std-only HTTP server glues it together and serves a single static HTML page.
 
@@ -146,16 +159,143 @@ Settings fields, shared between `[defaults]` and `[templates.*]` except where no
 | `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the slider under the image starts |
 | `clarity` | local contrast, -1..1, default `0.0` = off — positive adds mid-frequency depth, negative softens; likewise the slider's starting value |
 | `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size (0 steps = disabled, and `refine_steps` defaults to 0) |
+| `source_steps` / `source_strength` | the **Image to image** tab's one pass over a source image you supply. Defaults `12` and `0.55` — far higher than the two escalations, because this one is asked to make a picture *out of* one rather than to finish one it made |
 | `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, after an enlarge (0 steps = disabled, and `hires_steps` defaults to 0) |
 | `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job. Does not limit refine |
 | `hires_flash_attn` | `--diffusion-fa` for the img2img passes when they run large (default true; worth 6× at 2048²) |
 | `weight_type` *(opt)* | on-the-fly quantization, e.g. `q8_0`, via sd-cli `--type` |
 | `extra_args` *(opt)* | arbitrary flags passed verbatim to sd-cli |
 
-Both denoise strengths default to `0.30` and must be between **0.05 and 0.95** — a
+All three denoise strengths must be between **0.05 and 0.95** — a
 strength of 0 makes the pass a silent no-op, and at exactly 1.0 sd.cpp discards the
 init image and the pass degenerates into a plain txt2img. Out-of-range values are
 rejected at startup rather than at the first refine.
+
+### Video models
+
+**Drop the files in `models/video/` and they are identified by what is inside them.** A
+video model is three to five files — transformer, VAE, text encoder, sometimes a *second*
+transformer — whose roles are not in their names, so rustimage doesn't read the names. It
+reads the header: both safetensors and GGUF carry a tensor index at the front of the
+file, and the tensor names in it identify the architecture outright. That is one seek and
+a few hundred KB against files of 8 to 20 GB — identifying 37 GB across three files takes
+7 ms — so the folder is rescanned on every listing and a download that just finished
+shows up without a restart.
+
+It sorts out which of the two Wan VAEs a file is (they differ by latent width, and using
+the wrong one produces garbage rather than an error), which text encoder is which, and
+which family a transformer belongs to. The discriminators are lifted from
+stable-diffusion.cpp's own detection code, so the answer agrees with the binary that will
+load it.
+
+Why it isn't filename matching, with a real example: a file downloaded as
+`minimax_h3Comfy.safetensors` is a **Qwen3-VL-32B text encoder**, not a MiniMax H3
+transformer. The name is wrong; the tensors aren't.
+
+Suggested layout — ComfyUI's, which is what every download instruction assumes. The scan
+is **recursive**, so this is for your benefit, not the program's; a flat folder discovers
+exactly the same models:
+
+```
+models/video/diffusion_models/   the transformers
+models/video/vae/                wan_2.1_vae / wan2.2_vae
+models/video/text_encoders/      umt5-xxl — shared by every Wan family
+models/video/loras/              e.g. the lightx2v 4-step pair
+models/video/clip_vision/        Wan 2.1 I2V/FLF2V only
+```
+
+One folder per *role* rather than one per model, because the encoder is shared: a single
+7 GB umt5 serves every Wan you own, and a folder per model would mean copying it or
+maintaining a tree of symlinks.
+
+`doctor` prints what it found, what each model is still missing, and any file it could
+not place.
+
+#### When you still want a `[[video]]` entry
+
+Three cases, and settings you have measured is only one of them:
+
+- **Naming files you haven't downloaded yet.** A model with missing components is
+  *listed and greyed out*, not hidden, and both `doctor` and the model select name the
+  file they're waiting for — so the table doubles as a download checklist. The two
+  entries shipped in `models.toml` do exactly this.
+- **Pinning settings** once you have timed a model on your own card.
+- **Saying which half of a mixture-of-experts pair a file is.** This is the one thing no
+  header can answer: the high- and low-noise experts of an A14B have identical tensor
+  names and identical shapes and differ only in their weights. If the filename says
+  `LowNoise`/`HighNoise` the two are paired automatically; if it says nothing, the file
+  is listed as a `wan_dense` model that runs on its own, which is a thing sd.cpp does
+  quite happily. Pairing it is then a decision you make, with information the program
+  doesn't have.
+
+An entry **replaces** a discovered model rather than patching it, matching by `name` or
+by naming the same `diffusion_model` file. So an entry is complete in itself, and what it
+leaves out comes from the family's built-in recipe rather than from the discovered copy.
+
+```toml
+[[video]]
+name        = "wan2.2-ti2v-5b"
+family      = "wan22_ti2v_5b"
+diffusion_model = "models/video/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors"
+vae             = "models/video/vae/wan2.2_vae.safetensors"   # NOT wan_2.1_vae
+t5xxl           = "models/video/text_encoders/umt5-xxl-encoder-Q8_0.gguf"
+width = 832
+height = 480
+frames = 33
+fps = 24
+steps = 20
+cfg_scale = 6.0
+flow_shift = 3.0
+```
+
+| field | meaning |
+|-------|---------|
+| `name` | required; what the UI shows and what `POST /video` takes |
+| `family` | required; see the table below — it decides the flags, the grids and whether fps is yours |
+| `diffusion_model` | required; the transformer (the *low-noise* one, for a MoE pair) |
+| `high_noise_diffusion_model` | the second expert. Required for `wan22_a14b`, meaningless elsewhere |
+| `vae` | required. `wan2.2_vae` for the TI2V-5B, `wan_2.1_vae` for everything else Wan |
+| `t5xxl` | the umt5 text encoder; required for every Wan family |
+| `llm` / `audio_vae` | H3's Qwen3-VL encoder and separate audio VAE |
+| `clip_vision` | CLIP-Vision tower — Wan 2.1 I2V/FLF2V wants it, Wan 2.2 doesn't |
+| `width` / `height` | default `832`×`480`; rounded **up** to the family's multiple |
+| `frames` | default `33`; rounded to the family's grid (Wan **down**, H3 **up**) |
+| `fps` | default `16`; ignored by any family with a forced rate |
+| `steps`, `cfg_scale`, `sampler` | defaults `20`, `6.0`, `euler` |
+| `flow_shift` *(opt)* | timestep shift. Unset lets sd.cpp choose, but every documented Wan run passes `3.0` |
+| `high_noise_steps` *(opt)* | steps for the high-noise expert. Unset hands sd.cpp `-1`, which splits the schedule itself at `moe_boundary` |
+| `high_noise_cfg_scale` *(opt)* | unset follows `cfg_scale`, the same live link `img2img_cfg_scale` has |
+| `moe_boundary` *(opt)* | handover timestep, default `0.875`. **Only honoured while `high_noise_steps` is unset** — sd.cpp's own flag help says so |
+| `vace_strength` *(opt)* | VACE conditioning strength, for the frames-in/frames-out family |
+| `negative_prompt` | defaults to Wan's own published negative prompt, so you never retype 400 characters of Chinese |
+| `loras` *(opt)* | sd.cpp's inline names without the brackets: `"name:1"`, or `"\|high_noise\|name:1"` to target an expert |
+| `lora_dir` *(opt)* | `--lora-model-dir` |
+| `offload_to_cpu` | default **true**; it is what makes the A14B pair possible at all |
+| `vae_tiling` | default false. The *first* thing to turn on if a clip dies in the decode — Wan's VAE is the memory-hungry end |
+| `flash_attn` | `--diffusion-fa`, default true |
+| `weight_type` / `extra_args` | as on the image side. `["--auto-fit", "off"]` and `["--rng", "cpu"]` live here |
+
+| `family` | shape | size grid | frame grid | native fps |
+|----------|-------|-----------|------------|------------|
+| `wan22_ti2v_5b` | one dense checkpoint; the only Wan taking `wan2.2_vae` | 32 | `4k+1`, rounds down | 24 |
+| `wan22_a14b` | mixture-of-experts *pair*, high-noise early and low-noise late | 16 | `4k+1`, rounds down | 16 |
+| `wan_dense` | any single dense Wan on the 2.1 VAE — a 2.1 T2V, or one A14B expert run alone | 16 | `4k+1`, rounds down | 16 |
+| `wan21_vace` | frames in, frames out — the pass that refines a finished clip | 16 | `4k+1`, rounds down | 16 |
+| `minimax_h3` | present so it's a config edit later, not runnable on 24 GB / 30 GB | 32 | `17k+5`, rounds **up**, floor 5 | forced 24 |
+
+The rounding is sd.cpp's, not ours, and it *warns and carries on* rather than failing —
+so rustimage rounds first and shows you the result, and the line under the boxes says
+what will actually run and how long it will be. Sizes are `vae_scale_factor × 2`. Frame
+counts go through the latent frame count and back, and because that division truncates,
+**34 Wan frames run as 33**: asking for more can give you fewer.
+
+Two notes on memory, against a 24 GB card and 30 GB of RAM. Only one A14B expert is
+resident per step, so the *card* is not the limit. `offload_to_cpu` holds **both**, so
+system RAM is: 14B at Q4_K_M is roughly 8 GB an expert, which puts the pair plus a ~7 GB
+encoder at around 23 GB — it fits 30 GB, but not by much. Q8_0 (~15 GB an expert) does
+not fit at all. Those are arithmetic, not measurements; peak RSS during a run is the
+number that settles it, and if 23 GB crowds the machine the levers are Q3_K_M on the
+experts and a smaller encoder, in that order.
 
 ## Run
 
@@ -258,6 +398,52 @@ refines to keep every step.
 
 Everything else in `work/` is scratch and is still cleared at startup.
 
+### Image to image
+
+The second tab starts from a picture instead of a prompt. Drop a file on the zone
+at the top, paste one, or click a tile in **Source images** — which is everything
+in `work/output/`: what you have saved from the Image tab, and what you have
+dropped in. An import is listed beside the rest because at the moment you are
+choosing something to diffuse, the difference isn't interesting.
+
+Anything the browser can open works — JPEG, WebP, AVIF — because the page
+re-encodes it to PNG in a canvas before uploading. Nothing in the binary decodes
+anything but PNG, and that stays true.
+
+**Strength** is the knob that matters. It decides whether this is a retouch or a
+re-render: 0.3 barely moves the picture, the default 0.55 keeps the composition,
+the pose and the palette while redrawing the surface in the model's own idiom, and
+0.7 and up treats your image as a rough sketch. **Working size** is a ceiling, not
+a target — a source already smaller than it is left alone, and a bigger one is
+scaled down first. It starts at the model's `hires_max_side` because that is the
+same question already answered for this card: a 4000 px phone photo diffused at
+full size is an out-of-memory, not a better picture.
+
+The result then joins the ordinary ladder. Refine, Hi-res, both sliders and Save
+to output all work on it exactly as they do on a generation, and it is archived
+as a work item like one — so it comes back from the grid on the Image tab, source
+image and all.
+
+### Escalating with a different model
+
+**Refine/hi-res model**, in the Advanced panel of both tabs, runs that one pass on
+a checkpoint other than the one the image was made with. Leave it on *same as
+generated* and nothing changes.
+
+It is there because a checkpoint is a setting of the pass *about to run*, not of
+the one that already ran — which is the same test `steps` and `cfg_scale` fail,
+and why those stay retained. Draft fast on a Turbo checkpoint and finish on a
+detailed one; or take something the Image-to-image tab produced and hi-res it
+through the model that suits the subject.
+
+The swap is **wholesale**: the chosen model brings its own refine and hi-res
+steps, strengths, img2img CFG, hi-res budget and slider starting points, and the
+boxes in the panel are then applied on top — which is what you'd expect, since
+those boxes already refill themselves from whichever model is selected. It also
+means the buttons re-derive from the new model, so picking one with
+`hires_steps = 0` removes the Hi-res button for that image, and one with a
+smaller `hires_max_side` may say the image is already past its budget.
+
 ### Batch and loop
 
 The panel above the Generate button is about the *run* rather than the image. Set
@@ -267,6 +453,11 @@ strip rather than waiting for the lot. Tick **Keep going until stopped** and the
 becomes `Start loop generation`: it ignores the count and keeps going until you press
 **Stop**, which finishes the image in flight and then ends the run. Stop stays clickable
 the whole time — it is the one control a busy run doesn't disable.
+
+While anything is rendering, the line under the buttons counts the steps as sd-cli
+reports them — `Step 7/20 · 1.23s/it`, or `Loading weights 18/50 · 412.00MB/s` before
+the denoising starts. It is polled from `GET /progress`, which is answered off the job
+queue, so it keeps moving during a render rather than arriving once the render is done.
 
 A pinned seed **advances by one per image**, so a batch of eight isn't eight copies of
 the same picture; the first image is exactly the seed you pinned. `-1` keeps drawing a
@@ -292,6 +483,103 @@ Two things worth knowing before leaving one unattended. **The loop runs in the p
 closing the tab stops it after the current image (which is also the quickest way to stop
 a runaway one). And every generation is archived, so an overnight loop writes a few MB
 per image into `work/workitems/` — delete what you don't want from the grid.
+
+### Video
+
+The **Video** tab is a second workflow over the same GPU — and it really is the same
+GPU: starting a clip greys out the Image tab's buttons too, because the worker is
+serialized and there is one queue.
+
+Pick a model, write a prompt, and press **Generate clip**. The negative prompt box comes
+pre-filled with Wan's own published negative prompt; emptying it means *no* negative
+rather than "use the default". The line under the size, frame and fps boxes states what
+will actually run once those numbers are rounded to the model's grids, and how many
+seconds that is — so `36` frames at 24 fps reads back as `33 frames @ 24 fps = 1.38 s`
+before anything has started.
+
+**First frame** is how you animate a still. It picks from `work/output/` — the images you
+pressed *Save to output* on, i.e. the finished work rather than the raw archive. Clear it
+and the same model runs as plain text-to-video. (Outputs saved before this existed get a
+thumbnail generated on the first request for it, so an old folder fills in as you scroll.)
+
+While it runs, the same `Step 7/20 · 1.23s/it` readout as the image tab counts along —
+which matters much more here, because a clip is minutes rather than seconds. **Stop**
+kills it, unlike the Image tab's Stop, which finishes the image in flight first: there is
+only ever one clip in flight, so stopping it can only mean killing it. Nothing is kept;
+the partial frames are swept.
+
+A finished clip plays in a canvas with a scrubber, frame by frame. That is because a
+clip **is** a PNG sequence on disk — `work/videos/{id}/frame_000.png` and friends — not a
+video file. sd-cli's `-o` can write either a frame sequence or one muxed container, and
+frames win: both of the things you'd want to do to a clip afterwards consume frames, and
+rustimage has no video decoder to get them back out of a container. Frames are also
+lossless, and they're what an editor wants. The cost is disk — about 700 KB a frame at
+832×480, so ~23 MB for a 33-frame clip. Delete what you don't want from the Clips grid.
+
+**Enlarge frames** runs every frame through the same FSR passes the image side uses and
+writes the result to `work/output/{id}-x{factor}/`. A subdirectory, so 33 near-identical
+tiles don't bury the picker. Two things make this work on video where per-frame "AI
+upscaling" doesn't:
+
+- **A fixed kernel cannot flicker.** EASU, RCAS and clarity are deterministic functions
+  of the pixels, so two near-identical frames produce two near-identical outputs.
+  Stability is by construction, not by luck.
+- The filters **size their band from the image**, so a sharpness setting means the same
+  thing after the enlargement as before it.
+
+What rustimage deliberately does *not* do is re-diffuse frames. Running the refine pass
+per frame would work on any single frame and boil in motion: each frame draws its own
+noise and invents its own detail with no knowledge of its neighbours. Refining a clip
+properly is video-native — a second pass with a VACE checkpoint and `--control-video`,
+which takes a directory of frames, exactly what the first pass wrote. The plumbing for
+that is a `family` entry away; it isn't wired to a button yet.
+
+Not in this version: audio (Wan S2V is a separate checkpoint), clips longer than one
+chunk window (sd.cpp implements one), and a downloadable single-file video.
+
+### Convert
+
+The third tab requantizes a model file you already have, instead of downloading a
+different copy of it. Pick a file, pick a weight type, press Convert; the result is
+written **beside the original** as a `.gguf`, so it is discovered on the next start with
+no config edit. Nothing is deleted.
+
+This exists because **a file's type on disk is not what it costs to run**. sd.cpp asks
+the backend whether it can multiply the stored type and, when it can't, inserts a cast
+into the compute graph for every linear layer in the model
+(`src/model/common/ggml_block.hpp:211`). Every Vulkan device today reports no fp8 — so a
+15 GB fp8 Wan checkpoint executes as BF16 and behaves like a file twice its size. On a
+24 GB card that is the difference between running and `ErrorDeviceLost`. Converting it
+to `q4_K` is not a downgrade from fp8; it is the first entry in that list the backend
+can actually multiply.
+
+The list of files comes from the same header scan the video tab uses, which matters for
+more than convenience: `-M convert` takes **a separate flag per component** and prefixes
+every tensor name according to which one you used — `--diffusion-model` prepends
+`model.diffusion_model.`, `--vae` prepends `vae.`. Convert a VAE through the diffusion
+slot and you get a perfectly valid file whose every tensor is misnamed, which fails
+minutes into a later run rather than at conversion time. The page never picks that flag;
+the server derives it from what the file turned out to be. Components with no `-M
+convert` flag at all — an H3 LLM, a CLIP-Vision tower — are left off the list rather than
+offered with a footnote, and LoRAs are excluded because quantizing a low-rank delta is
+how you lose the effect you downloaded it for.
+
+The size shown before you press the button is an estimate, computed by transcribing
+sd.cpp's own rule for which tensors get quantized (`ModelLoader::tensor_should_be_converted`)
+over the tensor index in the file's header. A surprising amount of a transformer is left
+alone — every bias, every norm scale, every embedding — so an estimate that assumed
+otherwise would under-predict by enough to matter. Measured against real conversions it
+lands within 0.01%.
+
+**It runs single-threaded on purpose.** sd.cpp's streaming converter starts one worker
+per physical core and has them all call `ModelLoader::load_tensor` on a single shared
+loader, which re-enters `load_tensors` → `process_model_files` and mutates that loader's
+own state with no lock. At its default thread count it aborts inside glibc — `double
+free or corruption (out)` — on roughly one run in three. A crash would be survivable, but
+the corruption is in the loader's bookkeeping while other threads read through the
+mappings it is remaking, so the same race can put wrong bytes in the output instead of
+aborting, and a silently-wrong 8 GB model is the worst thing this could ship. The price
+is measured: 254 MB of VAE takes 2.07 s serialized against 0.53 s at four threads.
 
 ### Postprocessing
 
@@ -364,8 +652,12 @@ checking. It needs a Vulkan device and nothing else.
   appears without a restart. Each entry carries `name`, `description`, `discovered`,
   `exists`, `base_width` / `base_height`, `out_width` / `out_height`, and the profile's
   `steps`, `cfg_scale`, `img2img_cfg_scale`, `sampler`, `refine_steps`,
-  `refine_strength`, `hires_steps`, `hires_strength`, `sharpness`, `clarity` — which is
-  what lets the UI pre-fill its controls when you pick a model. `img2img_cfg_scale` is
+  `refine_strength`, `hires_steps`, `hires_strength`, `source_steps`,
+  `source_strength`, `hires_max_side`, `sharpness`, `clarity` — which is
+  what lets the UI pre-fill its controls when you pick a model. `hires_max_side` is
+  published because the Image-to-image tab's working-size control starts there, and a
+  second answer to "how large can this card afford to diffuse" computed in JavaScript
+  would be a second answer free to disagree. `img2img_cfg_scale` is
   `null` when the profile doesn't set one; that is deliberately distinguishable from the
   same number as `cfg_scale`, because unset *follows* the base CFG rather than matching
   it once.
@@ -403,6 +695,31 @@ checking. It needs a Vulkan device and nothing else.
   actually applied, which is what the UI's sliders reflect. `work_id` is the archived
   generation this descends from — it outlives the process, unlike `image_id`, and is
   `null` only if the archive write failed.
+- `POST /upload` — the one route with a **binary body**: a PNG, sent as-is with
+  `Content-Type: image/png`. No multipart, no base64 — `Request.body` is bytes
+  already, and skipping the envelope is a third off the wire. It lands in
+  `work/output/` under a minted stem and answers
+  `{ "stem": "…", "width": 1024, "height": 768 }`. The stem is minted rather than
+  taken from the filename because `valid_id` — the traversal guard for every
+  `/outputs/{stem}` route — is a whitelist of alphanumerics and `-`, which almost
+  no real filename satisfies. PNG only: the page re-encodes whatever you gave it in
+  a canvas first, so the format support tracks your browser's rather than a Rust
+  crate's feature list. Answered on the connection thread, and it is the one path
+  `http.rs` gives a large body limit (32 MiB; anything over is a `413`).
+- `POST /img2img` — one img2img pass over an image already in `work/output/`.
+  `prompt`, `template` and `source` are required; the rest are the same per-request
+  overrides `/generate` takes, minus `width`/`height` (sd.cpp derives the size from
+  the init image), plus:
+  ```json
+  { "prompt": "…", "template": "sdxl-turbo", "source": "1758104523000-0-import",
+    "source_steps": 12, "source_strength": 0.55, "max_side": 2048 }
+  ```
+  `max_side` is a ceiling — a source already inside it is used untouched, and a
+  larger one is scaled down (Lanczos3) first; omitted, it is the model's
+  `hires_max_side`. The source is validated on the connection thread, so a stale
+  pick is an immediate `400` rather than one that arrives after the render in
+  flight. Answers in `/generate`'s shape, so the escalations follow it unchanged,
+  and the result is archived as a work item with the source stem recorded on it.
 - `POST /refine` — `{ "image_id": 3 }`. img2img over the retained image at its current
   size, no rescale.
 - `POST /hires` — `{ "image_id": 3, "upscale": 2 }`. FSR-upscale toward
@@ -417,9 +734,18 @@ checking. It needs a Vulkan device and nothing else.
   image was generated with — this is what lets you render once and then try the same
   image at several refine strengths:
   ```json
-  { "refine_steps": 4, "refine_strength": 0.35,
+  { "model": "sd_xl_base_1.0", "refine_steps": 4, "refine_strength": 0.35,
     "hires_steps": 8, "hires_strength": 0.3, "img2img_cfg_scale": 2.5 }
   ```
+  `model` runs the pass on a *different* checkpoint — a registry name from
+  `/models`, or absent/empty for the one the image was made with. It belongs here
+  for the same reason the others do: it describes a pass that hasn't happened yet.
+  The swap is wholesale, so the named model's refine/hi-res steps, strengths,
+  img2img CFG, `hires_max_side`, `weight_type` and `extra_args` all come with it,
+  and the explicit fields in this body are then applied on top. The profile the
+  pass actually ran with is what is retained, so `can_refine`, `can_hires` and the
+  filter starting points in the reply describe the model that ran.
+
   Each is optional and an omitted one keeps the retained value, so a bare
   `{ "image_id": 3 }` behaves exactly as it always has. `img2img_cfg_scale` is the one
   field where sending `null` differs from leaving it out: `null` *unsets* it, so the
@@ -439,7 +765,9 @@ checking. It needs a Vulkan device and nothing else.
   all, into `work/output/`. Returns `{ "path": "work/output/…png" }`.
 - `GET /workitems` — every archived generation, newest first. Each carries `id`,
   `created_ms`, `prompt`, `negative`, `seed`, `template`, `width` / `height`,
-  `thumb_width` / `thumb_height`, and a `profile` object holding the full resolved
+  `thumb_width` / `thumb_height`, `source` (the `work/output/` stem an
+  image-to-image generation was diffused from, `null` for a txt2img), and a
+  `profile` object holding the full resolved
   settings the image was generated with — per-request overrides already applied, and
   `img2img_cfg_scale` still `null` if it was left unset. That is what lets the UI
   restore an item's controls without a second request.
@@ -449,9 +777,94 @@ checking. It needs a Vulkan device and nothing else.
   back into the working set and returns the `/generate` shape with a fresh `image_id`,
   so the escalations and the sliders work on it immediately. No diffusion runs.
 - `POST /workitems/delete` — `{ "ids": ["…", "…"] }`. Returns `{ "deleted": 2 }`.
+- `GET /progress` — what the worker is doing right now:
+  `{ "busy": true, "label": "hi-res", "phase": "sampling", "step": 7, "steps": 20,
+  "rate": "1.23s/it" }`, or `{ "busy": false }` when nothing is running. `phase` is
+  `loading` while sd-cli reads weights and `sampling` once it is denoising — worth
+  distinguishing, because a model that streams from RAM can spend minutes on the first
+  and "step 0 of 20" is the wrong thing to show for all of them. `rate` is sd-cli's own
+  text, unit and all.
+- `POST /cancel` — stops the run in flight, returning `{ "cancelled": true }` if there
+  was one. This kills the `sd-cli` process, which is the only cancellation it offers;
+  the pass was writing to a scratch file that is cleaned up on failure either way, so
+  the image on screen is never a half-written one. The cancelled request itself comes
+  back as an error whose message ends in `cancelled by request`.
+- `GET /outputs` — every image in `work/output/`, newest first: `stem`, `created_ms`,
+  `width` / `height`, `prompt`, `seed`, `template`. Uploads are in here too, with an
+  empty prompt and `template: "(imported)"` — one pool, because at the moment you are
+  choosing a source image the difference is not interesting. Keyed by filename **stem**, not by
+  work item id — several saves come out of one generation (`{id}-s{step}`, plus a `-2`
+  suffix when that name is taken), so only the filename is unique. A PNG whose sidecar
+  has gone missing is still listed with zeroed dimensions and an empty prompt: the file
+  on disk is the thing you saved, and a picker that hid it would be lying.
+- `GET /outputs/{stem}/thumb.png` — generated on the first request and cached, because
+  output PNGs are full resolution and everything saved before thumbnails existed has to
+  appear too.
+- `GET /video-models` — every video model: the ones found by scanning `models/video/`
+  plus the `[[video]]` table, built fresh per call so a finished download shows up
+  without a restart. Each entry is the config verbatim plus what the
+  page would otherwise have to re-derive from `family`: `size_multiple`, `frame_grid`
+  (`{multiple, offset, min, round_up}`), `forced_fps`, `is_moe`, `missing` (the component
+  files not on disk) and `duration`. Served rather than reimplemented in the page on
+  purpose — the page rounds the frame count to show a duration and the command builder
+  rounds it to run the model, and two implementations of `4k+1` are how those start
+  disagreeing.
+- `GET /convert-models` — `{types, files}` for the Convert tab. `types` is the weight
+  types `--type` accepts, each with its real bits-per-weight (`q4_K` is 4.5, `q6_K` is
+  6.5625 — not the round numbers the names suggest); `files` is every model file either
+  models dir holds that `-M convert` can be pointed at, each with the role read from its
+  header, the `sd-cli` flag that role implies, its dominant stored type, and a predicted
+  output size **per type**. Served rather than computed in the page for the same reason
+  `frame_grid` is: the rule for what gets quantized is sd.cpp's, and a second copy of it
+  in JavaScript would be a second copy free to disagree.
+- `POST /convert` — `{source, type}`. `source` must be one of the ids `/convert-models`
+  published; that is the traversal guard, and it is a whitelist in the same spirit as
+  `workitems::valid_id` — the client chooses from what the server offered, it never names
+  a path. Validation happens on the connection thread so a bad type or an existing output
+  comes back as a 400 immediately rather than after waiting out whatever render is in
+  flight. The conversion itself queues on the worker: no GPU is involved, but it
+  saturates the cores and the disk for minutes and must not do that underneath a render.
+  Going through the worker is also what gives it `/progress` and `/cancel` for free.
+- `POST /video` — `prompt` and `model` are required; everything else optional:
+  ```json
+  { "prompt": "…", "model": "wan2.2-ti2v-5b", "negative": null, "seed": -1,
+    "source": "1758104523000-12345-s3",
+    "width": 832, "height": 480, "frames": 33, "fps": 24,
+    "steps": 20, "cfg_scale": 6.0, "high_noise_steps": 8, "high_noise_cfg_scale": 3.5,
+    "flow_shift": 3.0, "sampler": "euler", "vae_tiling": false }
+  ```
+  `source` is a `work/output/` stem to use as the first frame; absent or empty runs plain
+  text-to-video. `negative` absent inherits the model's (Wan's own published one);
+  `negative: ""` means no negative at all. The overrides land on a *clone* of the config
+  entry, which is then stored in the clip's sidecar, so a clip is reproducible from its
+  own record. Takes **minutes** — poll `/progress`. Response:
+  ```json
+  { "clip": { "id": "…", "frames": 33, "fps": 24, "width": 832, "height": 480, … },
+    "gen_ms": 214000 }
+  ```
+  `clip.width`, `height` and `frames` are measured from the frames on disk rather than
+  echoed from the request, because sd.cpp aligns a size up and a frame count down and
+  only warns about it.
+- `GET /videos` — every archived clip, newest first; each carries its full sidecar
+  including the resolved model under `video`.
+- `GET /videos/{id}/thumb.png` — the first frame, `THUMB_HEIGHT` tall.
+- `GET /videos/{id}/frames/{n}.png` — one frame, numbered from 0. The page fetches all of
+  them and plays the sequence on a canvas. A non-numeric `{n}` is `404`, not the
+  thumbnail.
+- `POST /videos/enlarge` — `{ "id": "…", "upscale": 2.0, "sharpness": 0.0, "clarity": 0.0 }`.
+  FSR over every frame into `work/output/{id}-x{factor}/`. Returns
+  `{ "dir": "…", "frames": 33, "width": 1664, "height": 960, "ms": 1820 }`. Filters only
+  — it never re-diffuses, for the reason under "Video" above.
+- `POST /videos/delete` — `{ "ids": ["…"] }`. Removes each clip's whole directory.
 
-The last three above and the listing never touch the GPU, so they answer immediately
-even while a render is in flight.
+The archive listing, the thumbnail and the delete never touch the GPU, so they answer
+immediately even while a render is in flight. `/progress` and `/cancel` do the same for
+a sharper reason: they are *about* the render in flight, so answering them through the
+job queue would mean progress that arrives only once the render has finished, and a Stop
+that becomes possible only when there is nothing left to stop. The whole video family
+splits the same way: `/video` and `/videos/enlarge` are GPU work and queue, and
+everything else about a clip is filesystem-only and doesn't — which matters most here,
+since a clip holds the worker for minutes and the frame player is fetching 33 PNGs.
 
 Errors are `{"error": "…"}`. Anything addressed by `image_id` fails with `400` — the id
 has expired (only the last 8 results stay warm, and the scratch half of `work/` is
@@ -473,24 +886,48 @@ the GPU worker is gone.
   src/main.rs      server + routing + single GPU worker + CLI subcommands
   src/http.rs      minimal std-only HTTP/1.1
   src/config.rs    models.toml -> typed profiles (templates + discovery)
+  src/discover.rs  identify video model files by their tensor headers
+  src/convert.rs   requantize a model file (-M convert) — types, size estimate, slots
   src/preflight.rs startup environment checks, shared with `doctor`
-  src/sd.rs        sd-cli subprocess wrapper (txt2img + img2img)
+  src/sd.rs        sd-cli subprocess wrapper (txt2img + img2img + vid_gen)
   src/pipeline.rs  orchestrate sd -> fsr -> escalations, with timings + result cache
   src/workitems.rs durable storage: work/workitems/ + work/output/
+  src/videos.rs    durable storage for clips: work/videos/
   src/fsr/         wgpu compute (upscale.wgsl = EASU, contrast.wgsl = clarity,
                    sharpen.wgsl = RCAS)
   web/index.html   frontend
-  models.toml      config + model profiles
+  models.toml      config + model profiles + the [[video]] overrides
+  models/video/    video components, scanned recursively and identified by header
   work/            scratch, cleared at startup
   work/workitems/  every generation + its settings — kept
   work/output/     what you pressed "Save to output" on — kept
+  work/videos/     one directory per clip: its frames, a thumbnail, its settings
   ```
 - **The archive is copy-in, copy-out.** Nothing in `work/workitems/` is ever opened in
   place: a generation is copied in, and reopening one copies it back out to a scratch
   name. An escalation deletes the files of the step it supersedes, so an archive entry
   used directly would be destroyed by the first refine run on it.
+- **`work/videos/` is the exception, and for a reason that doesn't undermine the rule.**
+  A clip is written straight into the archive because it has no scratch stage: one pass
+  writes it and nothing afterwards does anything but read it, so there is no escalation
+  to delete it out from under itself — and copying 23 MB of frames would buy nothing.
+  What it does need is the *failure* half, and that is a guard which sweeps a
+  half-written directory unless the pass reaches the end. Cancelling mid-clip is the
+  common path here, not the rare one.
 
 ## Roadmap
 
 - Keep the model resident via the sd.cpp C API (FFI) instead of per-request subprocess,
   if warm-start latency matters.
+- **Refine a clip with a VACE pass.** `--control-video` takes a directory of frames,
+  which is exactly what a generation already writes, so this is a `family` entry and a
+  second `SdRunner::video` call — no decode, no ffmpeg, and the only honest way to add
+  detail to a finished clip.
+- **A downloadable single-file clip.** The cheapest route that keeps an encoder out of
+  Rust is the browser's own `VideoEncoder` (WebCodecs): Chrome and Firefox ship VP9/AV1
+  encoders, and hand-rolled WebM is a few hundred lines of JavaScript. sd-cli can mux one
+  itself, but not in the same run that writes the frames, and the frames are what the
+  escalations need.
+- **Ken Burns from a still.** EASU samples with sub-pixel accuracy, so a pan and zoom
+  across any `work/output/` image is a scale and an offset in a shader that is already
+  written and already tested — motion at zero diffusion cost and with no model at all.

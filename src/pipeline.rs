@@ -8,6 +8,7 @@
 //!
 //! ```text
 //!   run()     txt2img (base) ─▶ EASU upscale ──────────────▶ raw ─▶ RCAS ─▶ PNG
+//!   img2img() fit a source image ─▶ img2img ───────────────▶ raw ─▶ RCAS ─▶ PNG
 //!   refine()  img2img @ current res, no rescale ──────────▶ raw ─▶ RCAS ─▶ PNG
 //!   hires()   EASU enlarge ─▶ img2img ─▶ EASU (if over budget) ─▶ raw ─▶ RCAS ─▶ PNG
 //!   adjust()  (no diffusion at all) ───────────────────────────▶ raw ─▶ RCAS ─▶ PNG
@@ -23,7 +24,8 @@
 
 use crate::config::{Config, Profile};
 use crate::fsr::Fsr;
-use crate::sd::SdRunner;
+use crate::sd::{Monitor, SdRunner, VideoIo};
+use crate::videos::{Clip, VideoStore};
 use crate::workitems::{self, WorkItem};
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
@@ -81,6 +83,112 @@ pub struct GenRequest {
     pub clarity: Option<f32>,
 }
 
+/// One image-to-image generation: a source image the user supplied instead of a
+/// txt2img, put through one diffusion pass.
+///
+/// The same shape as [`GenRequest`] minus the two things a txt2img owns and this
+/// doesn't. There is no `width`/`height`, because `SdRunner::img2img` sends no
+/// `-W`/`-H` at all — sd.cpp takes the size from the init image, so the size of
+/// this pass is decided by `max_side` below and by nothing else. And the pass's
+/// own steps and strength are `source_steps`/`source_strength` rather than the
+/// base `steps`, which survives only as the step *floor* in `SdRunner::img2img`.
+#[derive(Debug, Clone)]
+pub struct Img2ImgRequest {
+    pub prompt: String,
+    /// Name of a registry entry (template or discovered model).
+    pub template: String,
+    /// A `work/output/` stem — a saved image or an upload. Required: this pass
+    /// has nothing to diffuse without one.
+    pub source: String,
+    pub negative: Option<String>,
+    /// Negative = pick one; otherwise use as-is.
+    pub seed: i64,
+    /// Longest side the pass may run at. `None` uses the profile's
+    /// `hires_max_side`, which is the same budget question asked of the same
+    /// hardware — see [`fit_to`] for what it does to a source bigger than that.
+    pub max_side: Option<u32>,
+    pub source_steps: Option<u32>,
+    pub source_strength: Option<f32>,
+    pub steps: Option<u32>,
+    pub cfg_scale: Option<f32>,
+    pub img2img_cfg_scale: Option<f32>,
+    pub sampler: Option<String>,
+    pub refine_steps: Option<u32>,
+    pub refine_strength: Option<f32>,
+    pub hires_steps: Option<u32>,
+    pub hires_strength: Option<f32>,
+    pub sharpness: Option<f32>,
+    pub clarity: Option<f32>,
+}
+
+/// One clip to generate.
+///
+/// Flat `Option`s over the `[[video]]` entry, the same shape as [`GenRequest`]
+/// over a `Profile` and for the same reason: the config entry is where the
+/// settings *start*, and the panel is allowed to move them for one run without
+/// editing `models.toml`.
+///
+/// There is no escalation request to go with it. The two things that improve a
+/// clip both read its frame sequence, so they act on a finished clip rather than
+/// on a live one — see [`Engine::video`].
+#[derive(Debug, Clone, Default)]
+pub struct VideoRequest {
+    pub prompt: String,
+    /// Name of a `[[video]]` entry.
+    pub model: String,
+    /// `None` inherits the model's negative prompt, which for Wan is its own
+    /// published one. `Some("")` deliberately means *no* negative.
+    pub negative: Option<String>,
+    /// Negative = pick one; otherwise use as-is.
+    pub seed: i64,
+    /// A `work/output/` stem to use as the first frame. `None` is text-to-video.
+    pub source: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub frames: Option<u32>,
+    pub fps: Option<u32>,
+    pub steps: Option<u32>,
+    pub cfg_scale: Option<f32>,
+    pub high_noise_steps: Option<u32>,
+    pub high_noise_cfg_scale: Option<f32>,
+    pub flow_shift: Option<f32>,
+    pub sampler: Option<String>,
+    pub vae_tiling: Option<bool>,
+}
+
+/// A finished clip, plus how long it took. The timing is the point on this
+/// hardware — it's what tells you whether the next clip is worth starting.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VideoResult {
+    pub clip: Clip,
+    pub gen_ms: u128,
+}
+
+/// What [`Engine::convert`] produced, and how well the estimate held.
+///
+/// `estimated_bytes` is carried through from the plan so the page can show the
+/// prediction next to the outcome. It is the only feedback the estimate ever
+/// gets, and it is the reason the number is reported rather than just used.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConvertResult {
+    pub out: PathBuf,
+    pub source_bytes: u64,
+    pub estimated_bytes: u64,
+    pub bytes: u64,
+    pub ty: String,
+    pub ms: u128,
+}
+
+/// Where [`Engine::enlarge_clip`] put the frames it wrote.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EnlargeResult {
+    pub dir: PathBuf,
+    pub frames: u32,
+    pub width: u32,
+    pub height: u32,
+    pub ms: u128,
+}
+
 /// Per-pass overrides for `refine` / `hires`, read from the Advanced panel at
 /// the moment the button is pressed.
 ///
@@ -93,8 +201,18 @@ pub struct GenRequest {
 /// base size describe a diffusion that has already run — there is no way to
 /// retroactively apply them to the image in hand, so a stale-looking box is
 /// honest for those and a lie for these.
+///
+/// `template` passes that test too, which is less obvious than it looks: a
+/// checkpoint is not a setting of the render that produced the image, it is a
+/// setting of the render about to happen. Draft on a Turbo checkpoint, finish on
+/// a detailed one.
 #[derive(Debug, Clone, Default)]
 pub struct EscalateRequest {
+    /// A registry entry to run *this pass* with, instead of the one the image
+    /// was made with. `None` — and an empty string, which is what an unchosen
+    /// select sends — keeps it. Applied by [`Engine::swap_model`] rather than by
+    /// `apply` below, because resolving a name needs the registry.
+    pub template: Option<String>,
     pub refine_steps: Option<u32>,
     pub refine_strength: Option<f32>,
     pub hires_steps: Option<u32>,
@@ -202,6 +320,14 @@ struct Pending {
     /// It is an id, never a path. Nothing in `work/workitems/` is ever opened
     /// through a `Pending` — see [`crate::workitems`].
     work_id: Option<String>,
+    /// The `work/output/` stem this image was diffused from, if it came in
+    /// through [`Engine::img2img`]. Carried through every escalation so the
+    /// record of where an image started survives the ladder, and so a reopened
+    /// work item can put the source thumbnail back.
+    ///
+    /// A stem, never a path — for the same reason `work_id` is an id. The file
+    /// it names belongs to the user, and `remove_files` would delete it.
+    source: Option<String>,
     refine_passes: u32,
     hires_passes: u32,
     /// How many escalations this result has been through. Only used to keep
@@ -249,13 +375,18 @@ pub struct Engine {
     work_dir: PathBuf,
     /// The durable half of `work/`. Written here on a generate, read on an open.
     items: workitems::Store,
+    /// The clip archive. Unlike `items` this is written *through* rather than
+    /// copied into — a clip has no scratch stage; see [`crate::videos`].
+    videos: VideoStore,
     registry: BTreeMap<String, Profile>,
+    /// Shared with the connection threads: progress out, cancel in.
+    monitor: Monitor,
     /// Escalatable results, keyed by job id (ordered, so the oldest evicts first).
     pending: BTreeMap<u64, Pending>,
 }
 
 impl Engine {
-    pub fn new(cfg: Config) -> Result<Engine> {
+    pub fn new(cfg: Config, monitor: Monitor) -> Result<Engine> {
         let work_dir = cfg.base_dir.join("work");
         std::fs::create_dir_all(&work_dir).ok();
         // Job ids restart at 0 each run, so clear any PNGs a previous run left
@@ -265,6 +396,7 @@ impl Engine {
         // reachable from it — only the scratch it was always meant to clear.
         purge_pngs(&work_dir);
         let items = workitems::Store::new(&work_dir);
+        let videos = VideoStore::new(&work_dir);
         let fsr = Fsr::new()?;
         // Fail fast with a friendly message if the sd binary is missing.
         SdRunner::new(&cfg).preflight()?;
@@ -274,9 +406,116 @@ impl Engine {
             fsr,
             work_dir,
             items,
+            videos,
+            monitor,
             registry,
             pending: BTreeMap::new(),
         })
+    }
+
+    /// A runner wired to this engine's monitor. Every pass goes through here, so
+    /// there is one place that decides a render is observable and cancellable
+    /// rather than three that have to remember to be.
+    /// Requantize a model file. No GPU, no `Pending`, no scratch — see
+    /// [`crate::sd::SdRunner::convert`] for why it holds the worker anyway.
+    ///
+    /// The output is checked for size afterwards rather than trusted: a
+    /// conversion that ran out of disk halfway leaves a short file and exits
+    /// non-zero, but a *cancelled* one leaves a short file and is reported as a
+    /// stop, and either way what is on disk now is a partial model that
+    /// discovery would happily list. So a failure removes it.
+    pub fn convert(&mut self, plan: &crate::convert::Plan) -> Result<ConvertResult> {
+        let t = Instant::now();
+        if let Err(e) = self.sd().convert(plan) {
+            let _ = std::fs::remove_file(&plan.out);
+            return Err(e);
+        }
+        let bytes = std::fs::metadata(&plan.out)
+            .with_context(|| {
+                format!(
+                    "sd-cli reported success but wrote nothing to {}",
+                    plan.out.display()
+                )
+            })?
+            .len();
+        Ok(ConvertResult {
+            out: plan.out.clone(),
+            source_bytes: plan.source_bytes,
+            estimated_bytes: plan.estimated_bytes,
+            bytes,
+            ty: plan.ty.clone(),
+            ms: t.elapsed().as_millis(),
+        })
+    }
+
+    fn sd(&self) -> SdRunner<'_> {
+        SdRunner::watched(&self.cfg, &self.monitor)
+    }
+
+    /// Resolve a `work/output/` stem to the file it names.
+    ///
+    /// The client never sends a path — it picks a stem the server published
+    /// through `GET /outputs`, and `valid_id` is the whitelist that makes that
+    /// safe (digits, letters and `-`, so `.` and `/` aren't in the alphabet).
+    /// Shared by [`Engine::video`] and [`Engine::img2img`]: both start from a
+    /// finished image, and a second copy of this check is a second place for it
+    /// to be gotten wrong.
+    fn output_source(&self, stem: &str) -> Result<PathBuf> {
+        if !workitems::valid_id(stem) {
+            bail!("'{stem}' is not an output name");
+        }
+        let path = self.items.output_path(stem);
+        if !path.is_file() {
+            bail!("no saved image '{stem}' in work/output/");
+        }
+        Ok(path)
+    }
+
+    /// Point a pending result at a different checkpoint before an escalation
+    /// runs on it.
+    ///
+    /// The swap is **wholesale**: the named entry's profile replaces the
+    /// retained one entirely, bringing its own `refine_*`, `hires_*`,
+    /// `img2img_cfg_scale`, `hires_max_side`, `weight_type`, `extra_args` and
+    /// slider starting points with it. `EscalateRequest::apply` then folds the
+    /// panel's explicit boxes on top, which is the right order — the page
+    /// refills those boxes from the selected model, so what it sends is already
+    /// that model's numbers unless the user typed over them.
+    ///
+    /// A field-wise merge was the other option and is the trap from the top of
+    /// CLAUDE.md wearing a different hat: every knob would have to become an
+    /// `Option` so "unset" could be told from "set to the default", and half of
+    /// them would silently keep the old model's value.
+    ///
+    /// The replaced profile is what gets retained in the new `Pending`, so
+    /// `can_refine`, `can_hires` and where the sliders reset all describe the
+    /// model that actually ran. That is the honest answer and it is what keeps a
+    /// saved sidecar true.
+    fn swap_model(&self, p: &mut Pending, over: &EscalateRequest) -> Result<()> {
+        // An empty string is what an unchosen `<select>` sends, and it means the
+        // same as not sending the field at all.
+        let Some(name) = over.template.as_deref().filter(|s| !s.is_empty()) else {
+            return Ok(());
+        };
+        if name == p.profile.name {
+            return Ok(());
+        }
+        let Some(next) = self.registry.get(name) else {
+            bail!("unknown model '{name}'");
+        };
+        if !next.exists {
+            bail!(
+                "checkpoint for '{}' not found: {}",
+                next.name,
+                next.model.display()
+            );
+        }
+        eprintln!(
+            "[rustimage] escalating with '{}' instead of '{}'",
+            next.name, p.profile.name
+        );
+        p.profile = next.clone();
+        Ok(())
     }
 
     pub fn adapter_name(&self) -> &str {
@@ -354,7 +593,7 @@ impl Engine {
         let raw = scratch.path(self.work_dir.join(format!("{id}-0-raw.png")));
         let display = scratch.path(self.work_dir.join(format!("{id}-0-full.png")));
 
-        let sd = SdRunner::new(&self.cfg);
+        let sd = self.sd();
         let neg = req.negative.as_deref();
 
         // 1) Distilled generation at base resolution.
@@ -406,6 +645,8 @@ impl Engine {
             step: 0,
             sharpness: profile.sharpness,
             clarity: profile.clarity,
+            // A txt2img has no source image by definition.
+            source: None,
             profile: profile.clone(),
         };
         let work_id = match self.items.save(&raw, &mut item) {
@@ -430,6 +671,7 @@ impl Engine {
             negative: req.negative.clone(),
             seed,
             work_id,
+            source: None,
             refine_passes: 0,
             hires_passes: 0,
             step: 0,
@@ -437,6 +679,389 @@ impl Engine {
         let result = self.result(id, &entry, png, Timings { gen_ms, fsr_ms, ..Default::default() });
         self.store(id, entry);
         Ok(result)
+    }
+
+    /// One img2img pass over an image the user supplied, producing a result that
+    /// joins the ordinary ladder: refine, hi-res, the sliders and Save all work
+    /// on it afterwards exactly as they do on a generation.
+    ///
+    /// Structurally this is `run` with the txt2img swapped for a source image,
+    /// and `open`'s copy-in rule bolted to the front. Both halves matter:
+    ///
+    /// * The source lives in `work/output/` and belongs to the user. It is
+    ///   **copied** into scratch, never adopted — a `Pending` pointing at it
+    ///   would have `remove_files` delete the user's own image on the first
+    ///   refine, which is invariant 8's failure in a new place.
+    /// * There is no EASU stage. `run` generates small and upscales because that
+    ///   is cheap; here the pixels already exist at whatever size they exist at,
+    ///   and the only sizing question is whether that size is affordable — see
+    ///   [`fit_to`].
+    pub fn img2img(&mut self, req: &Img2ImgRequest) -> Result<GenResult> {
+        let mut profile = match self.registry.get(&req.template) {
+            Some(p) => p.clone(),
+            None => bail!("unknown model '{}'", req.template),
+        };
+        // The same fold as `run`, minus width/height: this pass sends no -W/-H,
+        // so a base size would be a box that does nothing.
+        if let Some(v) = req.steps {
+            profile.steps = v;
+        }
+        if let Some(v) = req.cfg_scale {
+            profile.cfg_scale = v;
+        }
+        if let Some(v) = req.img2img_cfg_scale {
+            profile.img2img_cfg_scale = Some(v);
+        }
+        if let Some(v) = &req.sampler {
+            if !v.is_empty() {
+                profile.sampler = v.clone();
+            }
+        }
+        if let Some(v) = req.source_steps {
+            profile.source_steps = v;
+        }
+        if let Some(v) = req.source_strength {
+            profile.source_strength = v;
+        }
+        if let Some(v) = req.refine_steps {
+            profile.refine_steps = v;
+        }
+        if let Some(v) = req.refine_strength {
+            profile.refine_strength = v;
+        }
+        if let Some(v) = req.hires_steps {
+            profile.hires_steps = v;
+        }
+        if let Some(v) = req.hires_strength {
+            profile.hires_strength = v;
+        }
+        if let Some(v) = req.sharpness {
+            profile.sharpness = v;
+        }
+        if let Some(v) = req.clarity {
+            profile.clarity = v;
+        }
+        profile.validate()?;
+
+        if !profile.exists {
+            bail!(
+                "checkpoint for '{}' not found: {}",
+                profile.name,
+                profile.model.display()
+            );
+        }
+        if req.prompt.trim().is_empty() {
+            bail!("prompt is empty");
+        }
+
+        let stored = self.output_source(&req.source)?;
+        let seed = if req.seed < 0 { random_seed() } else { req.seed };
+        let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut scratch = Scratch::default();
+        let src = scratch.path(self.work_dir.join(format!("{id}-0-src.png")));
+        let raw = scratch.path(self.work_dir.join(format!("{id}-0-raw.png")));
+        let display = scratch.path(self.work_dir.join(format!("{id}-0-full.png")));
+
+        // 1) Bring the source in at a size this card can diffuse at. A phone
+        //    photo is 4032x3024 and a pass at that size is an out-of-memory on a
+        //    24 GB card, so this is not optional politeness — a tab with no
+        //    ceiling here is unusable on its most obvious input.
+        let t = Instant::now();
+        let budget = req.max_side.unwrap_or(profile.hires_max_side);
+        let (sw, sh) = image::image_dimensions(&stored)
+            .with_context(|| format!("reading {}", stored.display()))?;
+        let (fw, fh) = fit_to((sw, sh), budget);
+        if (fw, fh) == (sw, sh) {
+            // Byte-for-byte, and no re-encode: whatever is fed to a diffusion
+            // pass should not already be a generation of loss.
+            std::fs::copy(&stored, &src)
+                .with_context(|| format!("copying {}", stored.display()))?;
+        } else if fw < sw {
+            // Minification. Deliberately not EASU: it is a magnifier, and run
+            // backwards it aliases. Lanczos3 is the standard answer and this
+            // runs once per generation, against a diffusion measured in seconds.
+            let img = image::open(&stored)
+                .with_context(|| format!("loading {}", stored.display()))?;
+            image::imageops::resize(&img, fw, fh, image::imageops::FilterType::Lanczos3)
+                .save(&src)
+                .with_context(|| format!("writing {}", src.display()))?;
+        } else {
+            // Magnification, which is EASU's whole job — and unsharpened, like
+            // everything that feeds a diffusion pass.
+            self.fsr
+                .process(&stored, &src, fw as f32 / sw as f32, 0.0, 0.0)?;
+        }
+        let fsr_ms_in = t.elapsed().as_millis();
+
+        // 2) The pass itself. `big_image` is asked of the size it will actually
+        //    run at, which after step 1 is the source's size and not the
+        //    original's.
+        let t = Instant::now();
+        self.sd().img2img(
+            &profile,
+            &req.prompt,
+            req.negative.as_deref(),
+            seed,
+            &src,
+            &raw,
+            profile.source_strength,
+            profile.source_steps,
+            fw.max(fh) > BIG_IMAGE_SIDE,
+            "img2img source",
+        )?;
+        let gen_ms = t.elapsed().as_millis();
+
+        // 3) Sharpen for display. Dimensions come from here, not from `fit_to`:
+        //    sd.cpp rounds an init image to the latent grid and only warns.
+        let t = Instant::now();
+        let (png, w, h) = self.publish(&raw, &display, profile.sharpness, profile.clarity)?;
+        let fsr_ms = fsr_ms_in + t.elapsed().as_millis();
+
+        scratch.keep(&raw);
+        scratch.keep(&display);
+        // `src` is not kept: nothing reads it again, and the image it was copied
+        // from is still sitting in `work/output/` where the user put it.
+
+        let mut item = WorkItem {
+            id: workitems::new_id(seed),
+            created_ms: now_ms(),
+            prompt: req.prompt.clone(),
+            negative: req.negative.clone(),
+            seed,
+            template: req.template.clone(),
+            width: w,
+            height: h,
+            thumb_width: 0,
+            thumb_height: 0,
+            refine_passes: 0,
+            hires_passes: 0,
+            step: 0,
+            sharpness: profile.sharpness,
+            clarity: profile.clarity,
+            source: Some(req.source.clone()),
+            profile: profile.clone(),
+        };
+        let work_id = match self.items.save(&raw, &mut item) {
+            Ok(()) => Some(item.id),
+            Err(e) => {
+                eprintln!("[rustimage] could not archive work item: {e:#}");
+                None
+            }
+        };
+
+        let entry = Pending {
+            raw,
+            raw_w: w,
+            raw_h: h,
+            display,
+            sharpness: profile.sharpness,
+            clarity: profile.clarity,
+            profile,
+            prompt: req.prompt.clone(),
+            negative: req.negative.clone(),
+            seed,
+            work_id,
+            source: Some(req.source.clone()),
+            refine_passes: 0,
+            hires_passes: 0,
+            step: 0,
+        };
+        let result = self.result(id, &entry, png, Timings { gen_ms, fsr_ms, ..Default::default() });
+        self.store(id, entry);
+        Ok(result)
+    }
+
+    /// Generate a clip.
+    ///
+    /// Deliberately not an escalation ladder. A still is cheap to make and
+    /// expensive to perfect, so the image side generates small and climbs; a
+    /// clip is expensive to make at all, and the two things that would improve
+    /// one — FSR over the frames, a VACE pass over the frames — both read the
+    /// frame sequence this writes, so they are separate actions on a finished
+    /// clip rather than rungs held in memory. That is why there is no
+    /// `VideoPending` and no eviction: the archive *is* the state.
+    ///
+    /// `req.source` names an image in `work/output/`, which becomes the first
+    /// frame. Leaving it out runs the same checkpoint as plain text-to-video.
+    pub fn video(&mut self, req: &VideoRequest) -> Result<VideoResult> {
+        let mut m = self.cfg.video_model(&req.model)?;
+        // Per-request overrides onto a *clone*, which is then stored in the
+        // clip's sidecar — the same property `Engine::run` gives a still, and
+        // the reason a clip can be reproduced from its own record.
+        if let Some(v) = req.width {
+            m.width = v;
+        }
+        if let Some(v) = req.height {
+            m.height = v;
+        }
+        if let Some(v) = req.frames {
+            m.frames = v;
+        }
+        if let Some(v) = req.fps {
+            m.fps = v;
+        }
+        if let Some(v) = req.steps {
+            m.steps = v;
+        }
+        if let Some(v) = req.cfg_scale {
+            m.cfg_scale = v;
+        }
+        // Stays an `Option`, like `img2img_cfg_scale`: unset means the expert
+        // follows `cfg_scale`, and pinning it here would sever that.
+        if let Some(v) = req.high_noise_cfg_scale {
+            m.high_noise_cfg_scale = Some(v);
+        }
+        if let Some(v) = req.high_noise_steps {
+            m.high_noise_steps = Some(v);
+        }
+        if let Some(v) = req.flow_shift {
+            m.flow_shift = Some(v);
+        }
+        if let Some(v) = &req.sampler {
+            if !v.is_empty() {
+                m.sampler = v.clone();
+            }
+        }
+        if let Some(v) = req.vae_tiling {
+            m.vae_tiling = v;
+        }
+        m.validate()?;
+
+        if !m.exists {
+            let missing: Vec<String> =
+                m.missing().iter().map(|p| p.display().to_string()).collect();
+            bail!(
+                "video model '{}' is missing {} of its files:\n  {}",
+                m.name,
+                missing.len(),
+                missing.join("\n  ")
+            );
+        }
+        if req.prompt.trim().is_empty() {
+            bail!("prompt is empty");
+        }
+
+        // The first frame, if there is one. Taken from `work/output/` rather
+        // than the work item archive because that is the finished work — the
+        // images that were worth keeping are the ones worth animating.
+        let init = match &req.source {
+            Some(stem) => Some(self.output_source(stem)?),
+            None => None,
+        };
+        // An explicit negative wins, including an explicitly empty one; absent
+        // inherits the model's, which for Wan is its own published prompt.
+        let negative = req
+            .negative
+            .clone()
+            .unwrap_or_else(|| m.negative_prompt.clone());
+
+        let seed = if req.seed < 0 { random_seed() } else { req.seed };
+        let id = workitems::new_id(seed);
+        let (pattern, mut dir) = self.videos.prepare(&id)?;
+
+        let t = Instant::now();
+        self.sd().video(
+            &m,
+            &req.prompt,
+            &negative,
+            seed,
+            &VideoIo {
+                init: init.as_deref(),
+                control: None,
+                out: &pattern,
+            },
+        )?;
+        let gen_ms = t.elapsed().as_millis();
+
+        let (_, _, frames) = m.aligned();
+        let mut clip = Clip {
+            id,
+            created_ms: now_ms(),
+            prompt: req.prompt.clone(),
+            negative,
+            seed,
+            model: req.model.clone(),
+            // Placeholders: `finish` replaces all three from the frames on disk,
+            // because sd.cpp aligns a size up and a frame count down and only
+            // warns about it.
+            width: 0,
+            height: 0,
+            frames,
+            fps: m.effective_fps(),
+            thumb_width: 0,
+            thumb_height: 0,
+            source: req.source.clone(),
+            video: m,
+        };
+        self.videos.finish(&mut clip)?;
+        // Past every `?`, so the guard stops being a sweeper. Everything before
+        // this point leaves no half-written clip behind — which is the ordinary
+        // path, not the rare one, because that is what Stop does.
+        dir.keep();
+        Ok(VideoResult { clip, gen_ms })
+    }
+
+    /// Run every frame of a finished clip through the FSR passes and write the
+    /// result into `work/output/{id}-x{factor}/`.
+    ///
+    /// This is the clip's analogue of the hi-res button, and it is the reason
+    /// the generator writes frames rather than a container. Two properties make
+    /// it work on video, and they are worth stating because "AI upscaling" is
+    /// assumed to shimmer:
+    ///
+    /// * **A fixed kernel cannot flicker.** EASU, RCAS and clarity are
+    ///   deterministic functions of the pixels, so two near-identical frames
+    ///   produce two near-identical outputs. Stability is by construction.
+    /// * **Invariant 6 covers the size change**: both display filters size their
+    ///   band from the image, so a sharpness setting means the same thing after
+    ///   the enlargement as before it.
+    ///
+    /// What must *not* happen here is re-diffusion. A per-frame img2img draws
+    /// its own noise and invents its own detail with no knowledge of its
+    /// neighbours; adjacent frames then diverge structurally and the eye reads
+    /// that as boiling. Refining a clip properly is a video-native pass —
+    /// `--control-video` over this same frame directory — not this function
+    /// with a sampler bolted on.
+    ///
+    /// Output goes to a *subdirectory* rather than flat into `work/output/`,
+    /// which the picker lists: 33 near-identical tiles would bury the images
+    /// someone actually wants to animate, and a folder of frames is what an
+    /// editor wants anyway.
+    pub fn enlarge_clip(
+        &mut self,
+        id: &str,
+        factor: f32,
+        sharpness: f32,
+        clarity: f32,
+    ) -> Result<EnlargeResult> {
+        let clip = self.videos.load(id)?;
+        if !(1.0..=MAX_UPSCALE).contains(&factor) {
+            bail!("upscale factor must be between 1.0 and {MAX_UPSCALE}");
+        }
+        crate::config::validate_filters(&clip.id, sharpness, clarity)?;
+        let frames = self.videos.frames(id);
+        if frames.is_empty() {
+            bail!("clip '{id}' has no frames on disk");
+        }
+
+        let name = format!("{id}-x{}", (factor * 100.0).round() as u32);
+        let out_dir = self.items.output_dir().join(&name);
+        std::fs::create_dir_all(&out_dir)
+            .with_context(|| format!("creating {}", out_dir.display()))?;
+
+        let t = Instant::now();
+        let mut size = (0, 0);
+        for (i, frame) in frames.iter().enumerate() {
+            let dest = out_dir.join(format!("frame_{i:03}.png"));
+            size = self.fsr.process(frame, &dest, factor, sharpness, clarity)?;
+        }
+        Ok(EnlargeResult {
+            dir: out_dir,
+            frames: frames.len() as u32,
+            width: size.0,
+            height: size.1,
+            ms: t.elapsed().as_millis(),
+        })
     }
 
     /// Low-denoise img2img on the current image, at its current resolution and
@@ -452,8 +1077,11 @@ impl Engine {
     /// resolution there is nothing downstream to smear what the pass adds.
     pub fn refine(&mut self, id: u64, over: &EscalateRequest) -> Result<GenResult> {
         let mut p = self.lookup(id, "refine")?;
-        // Before `can_refine`, so the check reads the settings this pass will
-        // actually run with rather than the ones it inherited.
+        // Model first, then the boxes on top of it: a swap replaces the whole
+        // profile, so applying the overrides the other way round would throw
+        // them away. Both before `can_refine`, so the check reads the settings
+        // this pass will actually run with rather than the ones it inherited.
+        self.swap_model(&mut p, over)?;
         over.apply(&mut p.profile)?;
         if !p.can_refine() {
             bail!("'{}' has no refine pass configured (refine_steps = 0)", p.profile.name);
@@ -463,7 +1091,7 @@ impl Engine {
         let mut scratch = Scratch::default();
         let raw = scratch.path(self.work_dir.join(format!("{id}-{step}-raw.png")));
         let display = scratch.path(self.work_dir.join(format!("{id}-{step}-full.png")));
-        let sd = SdRunner::new(&self.cfg);
+        let sd = self.sd();
 
         let t = Instant::now();
         sd.img2img(
@@ -522,6 +1150,11 @@ impl Engine {
             bail!("upscale must be between 1 and {MAX_UPSCALE}");
         }
         let mut p = self.lookup(id, "run a hi-res pass on")?;
+        // See `refine`: the swap replaces the profile, so it has to come first.
+        // Note this can also move `hires_max_side`, and therefore whether the
+        // pass is affordable at all — `can_hires` below is asked of the model
+        // that will run it.
+        self.swap_model(&mut p, over)?;
         over.apply(&mut p.profile)?;
         if p.profile.hires_steps == 0 {
             bail!("'{}' has no hi-res pass configured (hires_steps = 0)", p.profile.name);
@@ -552,7 +1185,7 @@ impl Engine {
         let hires = scratch.path(self.work_dir.join(format!("{id}-{step}-hires.png")));
         let raw = scratch.path(self.work_dir.join(format!("{id}-{step}-raw.png")));
         let display = scratch.path(self.work_dir.join(format!("{id}-{step}-full.png")));
-        let sd = SdRunner::new(&self.cfg);
+        let sd = self.sd();
         let mut fsr_ms = 0u128;
 
         // 1) Enlarge to the diffusion size, if that's bigger than what we have.
@@ -724,6 +1357,10 @@ impl Engine {
             negative: item.negative,
             seed: item.seed,
             work_id: Some(item.id),
+            // Restored from the sidecar, so reopening an image-to-image
+            // generation puts its source back rather than quietly forgetting
+            // where the picture came from.
+            source: item.source,
             refine_passes: item.refine_passes,
             hires_passes: item.hires_passes,
             step: 0,
@@ -760,6 +1397,7 @@ impl Engine {
             step: p.step,
             sharpness: p.sharpness,
             clarity: p.clarity,
+            source: p.source.clone(),
             profile: p.profile.clone(),
         };
         self.items.save_output(&p.display, &item)
@@ -864,6 +1502,41 @@ impl Drop for Scratch {
     }
 }
 
+/// The size an img2img pass should run a source image at, given the longest side
+/// it can afford.
+///
+/// Only ever *shrinks*, and only when the source is over budget. A source
+/// already inside it comes back untouched, which is what lets the caller skip
+/// the resize entirely and copy the bytes — a re-encode of an image that needed
+/// no resizing is a generation of loss for nothing.
+///
+/// **Only the width is snapped to 64**, and the height follows from it — the
+/// same asymmetry `hires` has, where one scale factor drives both axes. Snapping
+/// both was the obvious thing and is wrong: 5000×2000 into a 1536 budget snaps
+/// to 1536×576 instead of 1536×614, a 6.7% change of aspect that reads as a
+/// subtly squashed picture and that nothing downstream would report. The height
+/// is left to sd.cpp, which aligns an init image to the latent grid regardless
+/// and only warns — which is why `publish` is where the true size comes from
+/// (invariant 5).
+///
+/// Enlarging is deliberately not done here even when the source is small — a
+/// budget is a ceiling, not a target, and stretching a 512² thumbnail to 2048²
+/// before diffusing it is a decision for the caller to ask for, not one to
+/// inherit from a limit.
+fn fit_to(src: (u32, u32), max_side: u32) -> (u32, u32) {
+    let (w, h) = src;
+    let long = w.max(h);
+    if long == 0 || max_side == 0 || long <= max_side {
+        return (w, h);
+    }
+    let scale = max_side as f32 / long as f32;
+    let fw = snap64(((w as f32) * scale).round() as u32);
+    // From the *snapped* width, not from the scale, so the two axes can't
+    // disagree about which rounding they followed.
+    let fh = ((h as f32) * (fw as f32 / w.max(1) as f32)).round() as u32;
+    (fw, fh.max(1))
+}
+
 /// Round down to a multiple of 64 (never below 64) — SDXL wants clean latent
 /// dimensions, and FSR's float scaling would otherwise hand it odd sizes.
 fn snap64(v: u32) -> u32 {
@@ -904,4 +1577,67 @@ fn random_seed() -> i64 {
         .unwrap_or(0);
     let ctr = JOB_COUNTER.load(Ordering::Relaxed);
     ((nanos ^ (ctr.wrapping_mul(2654435761))) & 0x7fff_ffff) as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit_to;
+
+    /// The Image-to-image tab's one piece of arithmetic, and the only part of
+    /// that pass decidable without a GPU or a checkpoint.
+    ///
+    /// It matters because the failure is quiet in both directions: fit a source
+    /// too large and a phone photo takes the card out of memory minutes in, fit
+    /// one that was already fine and every import is silently re-encoded and
+    /// re-sampled for nothing.
+    #[test]
+    fn a_source_image_is_only_shrunk_and_only_when_it_has_to_be() {
+        // Inside the budget: returned unchanged, which is what lets the caller
+        // copy the bytes instead of resampling them. Includes sizes that are
+        // nowhere near a multiple of 64 — being over the budget is the only
+        // reason to touch an image, not being untidy.
+        for src in [(768, 768), (2048, 1024), (1000, 1373), (2048, 2048), (1, 1)] {
+            assert_eq!(fit_to(src, 2048), src, "{src:?} is already affordable");
+        }
+
+        // Over it: the long side lands on the budget, snapped down to a clean
+        // latent width, and the short side follows the aspect.
+        let (w, h) = fit_to((4032, 3024), 2048);
+        assert_eq!((w, h), (2048, 1536));
+        assert_eq!(w % 64, 0);
+        assert!(w.max(h) <= 2048);
+
+        // Portrait: the *long* side is the one that meets the budget, not the
+        // width. Getting this backwards fits a tall image to 2048 wide and
+        // diffuses 2730 px of height on a budget that said 2048.
+        let (w, h) = fit_to((3024, 4032), 2048);
+        assert!(w.max(h) <= 2048, "{w}x{h}");
+        assert_eq!(h, 2048);
+
+        // Aspect survives to within the snap, which is up to 64 px on the short
+        // side of an extreme ratio and much less than that on anything real.
+        for (sw, sh) in [(6000u32, 4000u32), (5000, 2000), (3000, 5200), (4096, 4096)] {
+            let (w, h) = fit_to((sw, sh), 1536);
+            assert!(w.max(h) <= 1536, "{sw}x{sh} -> {w}x{h}");
+            assert_eq!(w % 64, 0, "{sw}x{sh} -> {w}x{h}");
+            // Tight, because only one axis is snapped. This is the assertion
+            // that fails if anyone ever "tidies up" the height as well.
+            let want = (sw as f32) / (sh as f32);
+            let got = (w as f32) / (h as f32);
+            assert!(
+                (want - got).abs() / want < 0.002,
+                "{sw}x{sh} -> {w}x{h}: aspect moved from {want} to {got}"
+            );
+        }
+
+        // Never enlarges. A budget is a ceiling, and a 512² thumbnail stretched
+        // to 2048² before diffusing is a decision, not something to inherit
+        // from a limit.
+        assert_eq!(fit_to((512, 512), 3072), (512, 512));
+
+        // Degenerate inputs come back untouched rather than panicking or
+        // dividing by zero — `max_side` of 0 is what an empty box would send.
+        assert_eq!(fit_to((0, 0), 2048), (0, 0));
+        assert_eq!(fit_to((4032, 3024), 0), (4032, 3024));
+    }
 }

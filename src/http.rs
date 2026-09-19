@@ -1,13 +1,34 @@
 //! A tiny, dependency-free HTTP/1.1 server for a localhost single-user UI.
 //! Not a general-purpose server: one request per connection (Connection: close),
-//! bodies bounded by Content-Length. Enough to serve a static page and a JSON
-//! API, with zero external crates.
+//! bodies bounded by Content-Length against a per-route limit. Enough to serve a
+//! static page, a JSON API and one binary upload, with zero external crates.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 
 const MAX_BODY: usize = 64 * 1024; // request bodies are small JSON payloads
+
+/// The one exception, and the reason the limit is per-route rather than global.
+/// `POST /upload` carries a whole PNG as its body, which is megabytes — a 2048²
+/// photo re-encoded by the browser lands around 6 MB and a 4096² one around 25.
+/// Keeping every other route at 64 KB means a malformed `Content-Length` still
+/// can't make the server allocate a gigabyte, since the vec below is sized
+/// straight from the header.
+const MAX_UPLOAD: usize = 32 * 1024 * 1024;
+
+/// How large a body this path is allowed to send.
+///
+/// A free function, and an exact match rather than a prefix: `/uploads-of-mine`
+/// must not inherit the large cap just for starting with the same letters. It is
+/// separated out because it is the only decidable part of `read_request` — the
+/// rest needs a socket — and a limit nobody can test is a limit that drifts.
+fn body_limit(path: &str) -> usize {
+    match path {
+        "/upload" => MAX_UPLOAD,
+        _ => MAX_BODY,
+    }
+}
 
 pub struct Request {
     pub method: String,
@@ -67,8 +88,22 @@ impl Connection {
             }
         }
 
-        if content_length > MAX_BODY {
-            bail!("request body too large ({content_length} bytes)");
+        // Answered rather than bailed. An `Err` out of here closes the socket
+        // without writing anything at all (see `handle_conn`), so an oversized
+        // upload used to surface in the browser as a dropped connection — which
+        // is indistinguishable from the server having died. The body is not read
+        // afterwards, but every response here is `Connection: close` anyway.
+        if content_length > body_limit(&path) {
+            self.respond(
+                413,
+                "application/json",
+                format!(
+                    "{{\"error\":\"request body too large ({content_length} bytes, limit {})\"}}",
+                    body_limit(&path)
+                )
+                .as_bytes(),
+            )?;
+            return Ok(None);
         }
 
         let mut body = vec![0u8; content_length];
@@ -86,6 +121,7 @@ impl Connection {
             200 => "OK",
             400 => "Bad Request",
             404 => "Not Found",
+            413 => "Payload Too Large",
             500 => "Internal Server Error",
             503 => "Service Unavailable",
             _ => "OK",
@@ -103,5 +139,32 @@ impl Connection {
         stream.write_all(body)?;
         stream.flush()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{body_limit, MAX_BODY, MAX_UPLOAD};
+
+    /// The upload cap is 512× the JSON one, so which paths get it is worth
+    /// stating. A prefix test would have handed it to anything beginning with
+    /// the same eight characters, and this is the only place in the server where
+    /// a client-supplied number decides an allocation.
+    #[test]
+    fn only_the_upload_route_may_send_a_large_body() {
+        assert_eq!(body_limit("/upload"), MAX_UPLOAD);
+
+        for small in [
+            "/",
+            "/generate",
+            "/refine",
+            "/img2img",
+            "/uploads",
+            "/upload/anything",
+            "/x/upload",
+            "",
+        ] {
+            assert_eq!(body_limit(small), MAX_BODY, "{small} should be capped small");
+        }
     }
 }

@@ -8,12 +8,18 @@
 //!   POST /generate    -> {prompt, template, negative?, seed?, ...overrides}
 //!                        -> {image_base64, width, height, seed, image_id,
 //!                            can_refine, can_hires, timings}
+//!   POST /upload      -> a PNG as the raw body (the one binary route)
+//!                        -> {stem, width, height}, landing in work/output/
+//!   POST /img2img     -> {prompt, template, source, ...overrides}
+//!                        one img2img pass over a work/output/ image, answering
+//!                        in /generate's shape so the same ladder follows it
 //!   POST /refine      -> {image_id, ...overrides}   img2img in place, no rescale
 //!   POST /hires       -> {image_id, upscale, ...overrides}
 //!                        img2img with an enlarge first. Both return the same
 //!                        shape as /generate, both can be run in either order and
 //!                        repeated, and both take the escalation knobs — omitted
-//!                        means "as the image was generated"
+//!                        means "as the image was generated". `model` names a
+//!                        different checkpoint for that one pass
 //!   POST /adjust      -> {image_id, sharpness?, clarity?}
 //!                        re-runs the display filters only — no diffusion, so
 //!                        it's cheap enough to drive from a slider
@@ -21,24 +27,42 @@
 //!   GET  /workitems/{id}/thumb.png
 //!   POST /workitems/open   -> {id}       reopen one as a live image_id
 //!   POST /workitems/delete -> {ids:[..]} remove them from disk
+//!   GET  /outputs     -> every image in work/output/, newest first
+//!   GET  /video-models -> the [[video]] table, with each family's grid rules
+//!   POST /video       -> generate a clip (minutes; watch GET /progress)
+//!   GET  /videos      -> every archived clip, newest first
+//!   GET  /videos/{id}/thumb.png
+//!   GET  /videos/{id}/frames/{n}.png   one frame; the page plays the sequence
+//!   POST /videos/enlarge -> {id, upscale} FSR over every frame
+//!   POST /videos/delete  -> {ids:[..]}
+//!   GET  /outputs/{stem}/thumb.png   generated on first request
 //!   POST /save-output      -> {image_id} keep the image on screen
+//!   GET  /progress    -> what the worker is rendering right now, step by step
+//!   POST /cancel      -> kill the run in flight (the only stop sd-cli offers)
 //!
-//! The first two and the delete are answered on the connection thread rather
-//! than the GPU worker: they only touch the filesystem, and queueing a thumbnail
-//! behind a multi-minute diffusion would freeze the grid for the whole render.
+//! The archive listing, the thumbnail, the delete, and both of the last two are
+//! answered on the connection thread rather than the GPU worker. The first
+//! three only touch the filesystem, and queueing a thumbnail behind a
+//! multi-minute diffusion would freeze the grid for the whole render; the last
+//! two are *about* the render in flight, so going through the queue would make
+//! them arrive only once there was nothing left to report or to stop.
 
 mod config;
+mod convert;
+mod discover;
 mod fsr;
 mod http;
 mod pipeline;
 mod preflight;
 mod sd;
+mod videos;
 mod workitems;
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
 use config::Config;
-use pipeline::{Engine, EscalateRequest, GenRequest, GenResult};
+use pipeline::{Engine, EscalateRequest, GenRequest, GenResult, Img2ImgRequest, VideoRequest};
+use sd::Monitor;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
@@ -57,6 +81,10 @@ struct Job {
 
 enum JobKind {
     Generate(GenRequest),
+    /// One img2img pass over an image the user supplied. A generation like
+    /// `Generate` is — it mints a fresh result the escalations then work on —
+    /// and it queues for exactly the same reason.
+    Img2Img(Img2ImgRequest),
     /// Refine the base image the engine retained from an earlier generation.
     Refine { id: u64, over: EscalateRequest },
     /// Re-diffuse an earlier result at output resolution, optionally enlarging.
@@ -77,6 +105,24 @@ enum JobKind {
     /// Copy the image on screen into `work/output/`. No GPU, but the only copy
     /// of which file that is lives in the engine's `pending` map.
     SaveOutput(u64),
+    /// Generate a clip. Minutes long rather than seconds, which is what made
+    /// `SdRunner::run` stream its output — `GET /progress` is the only thing
+    /// that makes this bearable, and it answers on the connection thread while
+    /// this job holds the worker.
+    Video(VideoRequest),
+    /// Requantize a model file. The odd one out: no GPU at all, and the reason
+    /// it queues is that it saturates the cores and the disk for minutes and
+    /// must not do that underneath a render. Going through the worker is also
+    /// what gives it `/progress` and `/cancel` for free.
+    Convert(convert::Plan),
+    /// FSR over every frame of a finished clip. GPU work, so it belongs to the
+    /// worker even though there is no diffusion in it.
+    EnlargeClip {
+        id: String,
+        upscale: f32,
+        sharpness: Option<f32>,
+        clarity: Option<f32>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -112,19 +158,25 @@ fn main() -> Result<()> {
     let bind = format!("{}:{}", cfg.server.host, cfg.server.port);
     let web_dir = cfg.base_dir.join("web");
 
+    // Shared with every connection thread: the worker publishes progress into
+    // it, and a Stop reaches the running child through it.
+    let monitor = Monitor::default();
+
     // Spawn the single GPU worker. It initializes wgpu + sd, reports readiness,
     // then serves jobs one at a time.
     let engine_cfg = (*cfg).clone();
+    let engine_monitor = monitor.clone();
     let (job_tx, job_rx) = mpsc::channel::<Job>();
     let (ready_tx, ready_rx) = mpsc::channel::<Result<String>>();
     std::thread::Builder::new()
         .name("gpu-worker".into())
-        .spawn(move || match Engine::new(engine_cfg) {
+        .spawn(move || match Engine::new(engine_cfg, engine_monitor) {
             Ok(mut engine) => {
                 let _ = ready_tx.send(Ok(engine.adapter_name().to_string()));
                 for job in job_rx {
                     let result = match job.kind {
                         JobKind::Generate(req) => engine.run(&req).map(|r| result_json(&r)),
+                        JobKind::Img2Img(req) => engine.img2img(&req).map(|r| result_json(&r)),
                         JobKind::Refine { id, over } => {
                             engine.refine(id, &over).map(|r| result_json(&r))
                         }
@@ -140,6 +192,23 @@ fn main() -> Result<()> {
                             .map(|r| result_json(&r)),
                         JobKind::Open(work_id) => engine.open(&work_id).map(|r| result_json(&r)),
                         JobKind::SaveOutput(id) => engine.save_output(id).map(|p| saved_json(&p)),
+                        JobKind::Video(req) => engine.video(&req).and_then(|r| json_body(&r)),
+                        JobKind::Convert(plan) => {
+                            engine.convert(&plan).and_then(|r| json_body(&r))
+                        }
+                        JobKind::EnlargeClip {
+                            id,
+                            upscale,
+                            sharpness,
+                            clarity,
+                        } => engine
+                            .enlarge_clip(
+                                &id,
+                                upscale,
+                                sharpness.unwrap_or(0.0),
+                                clarity.unwrap_or(0.0),
+                            )
+                            .and_then(|r| json_body(&r)),
                     };
                     let _ = job.reply.send(result);
                 }
@@ -174,8 +243,9 @@ fn main() -> Result<()> {
         let job_tx = job_tx.clone();
         let cfg = cfg.clone();
         let web_dir = web_dir.clone();
+        let monitor = monitor.clone();
         std::thread::spawn(move || {
-            if let Err(e) = handle_conn(stream, &job_tx, &cfg, &web_dir) {
+            if let Err(e) = handle_conn(stream, &job_tx, &cfg, &web_dir, &monitor) {
                 eprintln!("[rustimage] connection error: {e:#}");
             }
         });
@@ -189,6 +259,7 @@ fn handle_conn(
     job_tx: &Sender<Job>,
     cfg: &Config,
     web_dir: &std::path::Path,
+    monitor: &Monitor,
 ) -> Result<()> {
     let mut conn = http::Connection::new(stream)?;
     let req = match conn.read_request()? {
@@ -209,10 +280,31 @@ fn handle_conn(
             conn.respond(200, "application/json", build_models_json(cfg).as_bytes())
         }
         ("POST", "/generate") => handle_generate(&mut conn, job_tx, &req.body),
+        ("POST", "/img2img") => handle_img2img(&mut conn, cfg, job_tx, &req.body),
+        // The one route with a binary body, and the one `http.rs` gives a large
+        // limit to. Filesystem-only, so it stays off the queue — an upload must
+        // not wait out the render it is meant to replace.
+        ("POST", "/upload") => handle_upload(&mut conn, cfg, &req.body),
         ("POST", "/refine") => handle_refine(&mut conn, job_tx, &req.body),
         ("POST", "/hires") => handle_hires(&mut conn, job_tx, &req.body),
         ("POST", "/adjust") => handle_adjust(&mut conn, job_tx, &req.body),
         ("POST", "/save-output") => handle_save_output(&mut conn, job_tx, &req.body),
+
+        // Progress and Stop, both on the connection thread and both for the
+        // same reason: they are *about* the job the worker is running, so
+        // queueing them behind it would mean a progress bar that only updates
+        // once the render it reports on has finished, and a Stop button that
+        // can't be pressed until there is nothing left to stop.
+        ("GET", "/progress") => conn.respond(
+            200,
+            "application/json",
+            progress_json(monitor.snapshot().as_ref()).as_bytes(),
+        ),
+        ("POST", "/cancel") => conn.respond(
+            200,
+            "application/json",
+            format!("{{\"cancelled\":{}}}", monitor.cancel()).as_bytes(),
+        ),
 
         // The archive. List, thumbnail and delete are answered right here rather
         // than through `submit` — they never touch the GPU, and the worker is
@@ -229,6 +321,41 @@ fn handle_conn(
         }
         ("POST", "/workitems/open") => handle_open_workitem(&mut conn, job_tx, &req.body),
         ("POST", "/workitems/delete") => handle_delete_workitems(&mut conn, cfg, &req.body),
+
+        // `work/output/` — the finished images, which is what the video tab
+        // animates from. Same connection-thread family as the archive above, and
+        // the same guard-arm shape for the same reason.
+        // Built live, like `/models`: a video model is tens of gigabytes across
+        // several files, so "it finished downloading" is something to notice
+        // without a restart.
+        ("GET", "/convert-models") => handle_convert_models(&mut conn, cfg),
+        ("POST", "/convert") => handle_convert(&mut conn, cfg, job_tx, &req.body),
+        ("GET", "/video-models") => handle_video_models(&mut conn, cfg),
+        ("POST", "/video") => handle_video(&mut conn, job_tx, &req.body),
+        ("POST", "/videos/enlarge") => handle_enlarge_clip(&mut conn, job_tx, &req.body),
+        ("GET", "/videos") => handle_list_clips(&mut conn, cfg),
+        // Two guard arms rather than one, because a clip serves both a
+        // thumbnail and its frames and only the frame route has a number in it.
+        ("GET", p) if p.starts_with("/videos/") && p.ends_with("/thumb.png") => {
+            let id = p
+                .trim_start_matches("/videos/")
+                .trim_end_matches("/thumb.png");
+            handle_clip_file(&mut conn, cfg, id, None)
+        }
+        ("GET", p) if p.starts_with("/videos/") && p.contains("/frames/") => {
+            match clip_frame(p) {
+                Some((id, n)) => handle_clip_file(&mut conn, cfg, id, Some(n)),
+                None => conn.respond(404, "text/plain", b"not found"),
+            }
+        }
+        ("POST", "/videos/delete") => handle_delete_clips(&mut conn, cfg, &req.body),
+        ("GET", "/outputs") => handle_list_outputs(&mut conn, cfg),
+        ("GET", p) if p.starts_with("/outputs/") && p.ends_with("/thumb.png") => {
+            let stem = p
+                .trim_start_matches("/outputs/")
+                .trim_end_matches("/thumb.png");
+            handle_output_thumb(&mut conn, cfg, stem)
+        }
 
         _ => conn.respond(404, "text/plain", b"not found"),
     }
@@ -262,6 +389,322 @@ fn handle_thumb(conn: &mut http::Connection, cfg: &Config, id: &str) -> Result<(
         return conn.respond(404, "text/plain", b"not found");
     }
     match std::fs::read(store(cfg).thumb_path(id)) {
+        Ok(body) => conn.respond(200, "image/png", &body),
+        Err(_) => conn.respond(404, "text/plain", b"not found"),
+    }
+}
+
+/// Split `/videos/{id}/frames/{n}.png` into its two parts.
+///
+/// Its own function so it can be tested, because the interesting case is the one
+/// that must *not* happen: a frame number that doesn't parse has to be `None`
+/// all the way out. Returning a `None` frame index instead would fall into
+/// [`handle_clip_file`]'s thumbnail branch, and `/frames/nonsense.png` would
+/// quietly answer 200 with the poster frame.
+///
+/// The id is not validated here — [`handle_clip_file`] does that with
+/// [`workitems::valid_id`], which is the traversal guard and should stay the
+/// single place that decision is made.
+fn clip_frame(path: &str) -> Option<(&str, u32)> {
+    let (id, frame) = path.trim_start_matches("/videos/").split_once("/frames/")?;
+    let n = frame.strip_suffix(".png")?.parse::<u32>().ok()?;
+    Some((id, n))
+}
+
+/// The clip archive, for a connection thread. Same reasoning as [`store`].
+fn video_store(cfg: &Config) -> videos::VideoStore {
+    videos::VideoStore::new(&cfg.base_dir.join("work"))
+}
+
+/// A `[[video]]` entry as the page needs it: the entry itself, plus the things
+/// the page would otherwise have to re-derive from `family`.
+///
+/// The grid rules are served rather than reimplemented in JavaScript because
+/// the page rounds the frame count to show a duration, and `video_cmd` rounds it
+/// to run the model. Two implementations of the same arithmetic is how those
+/// start disagreeing.
+#[derive(serde::Serialize)]
+struct VideoModelDto {
+    #[serde(flatten)]
+    model: config::VideoModel,
+    family: &'static str,
+    size_multiple: u32,
+    frame_grid: config::FrameGrid,
+    /// `Some(n)` when the model overrides fps whatever it is asked for, so the
+    /// page can show the box as fixed rather than let it lie.
+    forced_fps: Option<u32>,
+    /// True for the mixture-of-experts pair: the page shows the second set of
+    /// step/CFG boxes only when they mean something.
+    is_moe: bool,
+    /// Which component files aren't on disk. A greyed-out entry that says *what*
+    /// is missing is the download list the config comments promise.
+    missing: Vec<String>,
+    /// Seconds, from the rounded frame count and the fps that will really be
+    /// used — the number the page shows before anything has run.
+    duration: f32,
+}
+
+fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
+    let models: Vec<VideoModelDto> = cfg
+        .video_models()
+        .into_iter()
+        .map(|m| VideoModelDto {
+            family: m.family.as_str(),
+            size_multiple: m.family.size_multiple(),
+            frame_grid: m.family.frame_grid(),
+            forced_fps: m.family.forced_fps(),
+            is_moe: m.family.is_moe(),
+            missing: m.missing().iter().map(|p| p.display().to_string()).collect(),
+            duration: m.duration(),
+            model: m,
+        })
+        .collect();
+    match serde_json::to_vec(&models) {
+        Ok(body) => conn.respond(200, "application/json", &body),
+        Err(e) => conn.respond(
+            500,
+            "application/json",
+            error_json(&format!("listing video models: {e}")).as_bytes(),
+        ),
+    }
+}
+
+fn handle_video(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        prompt: String,
+        model: String,
+        #[serde(default)]
+        negative: Option<String>,
+        #[serde(default)]
+        seed: Option<i64>,
+        /// A `work/output/` stem. Absent or empty runs the same model as plain
+        /// text-to-video, which is what clearing the picker means.
+        #[serde(default)]
+        source: Option<String>,
+        #[serde(default)]
+        width: Option<u32>,
+        #[serde(default)]
+        height: Option<u32>,
+        #[serde(default)]
+        frames: Option<u32>,
+        #[serde(default)]
+        fps: Option<u32>,
+        #[serde(default)]
+        steps: Option<u32>,
+        #[serde(default)]
+        cfg_scale: Option<f32>,
+        #[serde(default)]
+        high_noise_steps: Option<u32>,
+        #[serde(default)]
+        high_noise_cfg_scale: Option<f32>,
+        #[serde(default)]
+        flow_shift: Option<f32>,
+        #[serde(default)]
+        sampler: Option<String>,
+        #[serde(default)]
+        vae_tiling: Option<bool>,
+    }
+
+    let dto: Dto = match parse_json::<Dto>(conn, body)? {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+
+    let req = VideoRequest {
+        prompt: dto.prompt,
+        model: dto.model,
+        negative: dto.negative,
+        seed: dto.seed.unwrap_or(-1),
+        source: dto.source.filter(|s| !s.is_empty()),
+        width: dto.width,
+        height: dto.height,
+        frames: dto.frames,
+        fps: dto.fps,
+        steps: dto.steps,
+        cfg_scale: dto.cfg_scale,
+        high_noise_steps: dto.high_noise_steps,
+        high_noise_cfg_scale: dto.high_noise_cfg_scale,
+        flow_shift: dto.flow_shift,
+        sampler: dto.sampler,
+        vae_tiling: dto.vae_tiling,
+    };
+
+    submit(conn, job_tx, JobKind::Video(req), 500)
+}
+
+fn handle_enlarge_clip(
+    conn: &mut http::Connection,
+    job_tx: &Sender<Job>,
+    body: &[u8],
+) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        id: String,
+        #[serde(default)]
+        upscale: Option<f32>,
+        #[serde(default)]
+        sharpness: Option<f32>,
+        #[serde(default)]
+        clarity: Option<f32>,
+    }
+
+    match parse_json::<Dto>(conn, body)? {
+        Some(dto) => submit(
+            conn,
+            job_tx,
+            JobKind::EnlargeClip {
+                id: dto.id,
+                upscale: dto.upscale.unwrap_or(2.0),
+                sharpness: dto.sharpness,
+                clarity: dto.clarity,
+            },
+            400,
+        ),
+        None => Ok(()),
+    }
+}
+
+/// The convert tab's candidate list. Filesystem-only — it reads a header per
+/// file, which is a seek and a few hundred KB — so it answers on the connection
+/// thread like the other listings. Queueing it would mean the tab couldn't
+/// populate while a conversion was running, which is precisely when someone
+/// looks at it.
+fn handle_convert_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
+    let list = convert::listing(cfg);
+    match serde_json::to_vec(&list) {
+        Ok(body) => conn.respond(200, "application/json", &body),
+        Err(e) => conn.respond(
+            500,
+            "application/json",
+            error_json(&format!("listing convertible models: {e}")).as_bytes(),
+        ),
+    }
+}
+
+/// Start a conversion.
+///
+/// The plan is built **here**, on the connection thread, not in the worker: it
+/// is the validation step, and a bad type or an output that already exists
+/// should come back as a 400 immediately rather than after waiting out whatever
+/// render is in flight. It is also where the client's `source` is checked
+/// against the published candidate list — the client chooses from what the
+/// server offered, it never names a path.
+fn handle_convert(
+    conn: &mut http::Connection,
+    cfg: &Config,
+    job_tx: &Sender<Job>,
+    body: &[u8],
+) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        source: String,
+        #[serde(rename = "type")]
+        ty: String,
+    }
+
+    let Some(dto) = parse_json::<Dto>(conn, body)? else {
+        return Ok(());
+    };
+    match convert::plan(cfg, &dto.source, &dto.ty) {
+        Ok(plan) => submit(conn, job_tx, JobKind::Convert(plan), 400),
+        Err(e) => conn.respond(
+            400,
+            "application/json",
+            error_json(&format!("{e:#}")).as_bytes(),
+        ),
+    }
+}
+
+fn handle_list_clips(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
+    let clips = video_store(cfg).list();
+    match serde_json::to_vec(&clips) {
+        Ok(body) => conn.respond(200, "application/json", &body),
+        Err(e) => conn.respond(
+            500,
+            "application/json",
+            error_json(&format!("listing clips: {e}")).as_bytes(),
+        ),
+    }
+}
+
+/// A clip's thumbnail (`frame` = `None`) or one of its frames.
+///
+/// One function for both because the guard is the same and it is the only thing
+/// that matters: [`workitems::valid_id`] on the id, and a parsed `u32` for the
+/// frame, so neither path segment can name anything outside the clip directory.
+/// A 404 covers "bad id", "no such clip" and "no such frame" alike — from the
+/// browser's side they are one thing, an image that isn't there.
+fn handle_clip_file(
+    conn: &mut http::Connection,
+    cfg: &Config,
+    id: &str,
+    frame: Option<u32>,
+) -> Result<()> {
+    if !workitems::valid_id(id) {
+        return conn.respond(404, "text/plain", b"not found");
+    }
+    let store = video_store(cfg);
+    let path = match frame {
+        Some(n) => store.frame_path(id, n),
+        None => store.thumb_path(id),
+    };
+    match std::fs::read(path) {
+        Ok(body) => conn.respond(200, "image/png", &body),
+        Err(_) => conn.respond(404, "text/plain", b"not found"),
+    }
+}
+
+fn handle_delete_clips(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        ids: Vec<String>,
+    }
+
+    let dto: Dto = match parse_json::<Dto>(conn, body)? {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+    let store = video_store(cfg);
+    let mut failed = Vec::new();
+    for id in &dto.ids {
+        if let Err(e) = store.delete(id) {
+            failed.push(format!("{id}: {e:#}"));
+        }
+    }
+    if failed.is_empty() {
+        conn.respond(200, "application/json", br#"{"deleted":true}"#)
+    } else {
+        conn.respond(
+            500,
+            "application/json",
+            error_json(&failed.join("; ")).as_bytes(),
+        )
+    }
+}
+
+fn handle_list_outputs(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
+    let items = store(cfg).list_outputs();
+    match serde_json::to_vec(&items) {
+        Ok(body) => conn.respond(200, "application/json", &body),
+        Err(e) => conn.respond(
+            500,
+            "application/json",
+            error_json(&format!("listing outputs: {e}")).as_bytes(),
+        ),
+    }
+}
+
+/// Like [`handle_thumb`], except the file may not exist yet: everything saved
+/// before thumbnails existed gets one on its first request. That makes this the
+/// one thumbnail route that can take ~100 ms — an output PNG is full resolution.
+/// It is still on the connection thread, since it's a decode and a resize rather
+/// than GPU work, and the grid asks for its tiles in parallel.
+fn handle_output_thumb(conn: &mut http::Connection, cfg: &Config, stem: &str) -> Result<()> {
+    let body = store(cfg)
+        .ensure_output_thumb(stem)
+        .and_then(|p| Ok(std::fs::read(p)?));
+    match body {
         Ok(body) => conn.respond(200, "image/png", &body),
         Err(_) => conn.respond(404, "text/plain", b"not found"),
     }
@@ -390,6 +833,146 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
     submit(conn, job_tx, JobKind::Generate(req), 500)
 }
 
+/// One img2img pass over an image already in `work/output/` — a saved result or
+/// something the user uploaded.
+///
+/// The source is validated **here**, on the connection thread, rather than in
+/// the worker: a stale pick is a client mistake and deserves an immediate 400
+/// rather than one that arrives after whatever render is in flight has finished.
+/// Same split as `/convert`. The pass itself queues, and a failure in it is a
+/// 500 like `/generate`'s, because by then the request was well-formed.
+fn handle_img2img(
+    conn: &mut http::Connection,
+    cfg: &Config,
+    job_tx: &Sender<Job>,
+    body: &[u8],
+) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        prompt: String,
+        template: String,
+        source: String,
+        #[serde(default)]
+        negative: Option<String>,
+        #[serde(default)]
+        seed: Option<i64>,
+        #[serde(default)]
+        max_side: Option<u32>,
+        #[serde(default)]
+        source_steps: Option<u32>,
+        #[serde(default)]
+        source_strength: Option<f32>,
+        #[serde(default)]
+        steps: Option<u32>,
+        #[serde(default)]
+        cfg_scale: Option<f32>,
+        #[serde(default)]
+        img2img_cfg_scale: Option<f32>,
+        #[serde(default)]
+        sampler: Option<String>,
+        #[serde(default)]
+        refine_steps: Option<u32>,
+        #[serde(default)]
+        refine_strength: Option<f32>,
+        #[serde(default)]
+        hires_steps: Option<u32>,
+        #[serde(default)]
+        hires_strength: Option<f32>,
+        #[serde(default)]
+        sharpness: Option<f32>,
+        #[serde(default)]
+        clarity: Option<f32>,
+    }
+
+    let dto: Dto = match parse_json::<Dto>(conn, body)? {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+
+    if !workitems::valid_id(&dto.source) || !store(cfg).output_path(&dto.source).is_file() {
+        return conn.respond(
+            400,
+            "application/json",
+            error_json(&format!(
+                "no saved image '{}' to start from — pick one from the grid or \
+                 upload a new one",
+                dto.source
+            ))
+            .as_bytes(),
+        );
+    }
+
+    let req = Img2ImgRequest {
+        prompt: dto.prompt,
+        template: dto.template,
+        source: dto.source,
+        negative: dto.negative,
+        seed: dto.seed.unwrap_or(-1),
+        max_side: dto.max_side,
+        source_steps: dto.source_steps,
+        source_strength: dto.source_strength,
+        steps: dto.steps,
+        cfg_scale: dto.cfg_scale,
+        img2img_cfg_scale: dto.img2img_cfg_scale,
+        sampler: dto.sampler,
+        refine_steps: dto.refine_steps,
+        refine_strength: dto.refine_strength,
+        hires_steps: dto.hires_steps,
+        hires_strength: dto.hires_strength,
+        sharpness: dto.sharpness,
+        clarity: dto.clarity,
+    };
+
+    submit(conn, job_tx, JobKind::Img2Img(req), 500)
+}
+
+/// Take a PNG from the browser and put it in `work/output/`.
+///
+/// The one route with a binary body. `Request.body` is already a `Vec<u8>` and is
+/// never UTF-8 validated, so the PNG arrives as-is — no multipart parser, no
+/// base64, and a third fewer bytes on the wire than a JSON envelope. `http.rs`
+/// gives this path, and only this path, a large body limit.
+///
+/// **PNG only, and the page is what makes that reasonable.** `image` is compiled
+/// with the `png` feature alone, which is a deliberate line — this binary has no
+/// business growing a JPEG decoder. The page runs whatever the user picked
+/// through a `<canvas>` first, so JPEG, WebP, AVIF and anything else the browser
+/// can decode all arrive here as PNG, and the format support tracks the browser's
+/// rather than a crate's feature list.
+///
+/// Answered on the connection thread: a decode and two file writes, which must
+/// not queue behind a render the user is uploading an image in order to replace.
+fn handle_upload(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    // Decoded rather than trusted, for two reasons: the dimensions go in the
+    // sidecar, and a body that isn't a PNG should fail now rather than minutes
+    // into a diffusion that can't read its own init image.
+    let img = match image::load_from_memory_with_format(body, image::ImageFormat::Png) {
+        Ok(img) => img,
+        Err(e) => {
+            return conn.respond(
+                400,
+                "application/json",
+                error_json(&format!("that isn't a PNG this build can read: {e}")).as_bytes(),
+            )
+        }
+    };
+    let (w, h) = (img.width(), img.height());
+    drop(img);
+
+    match store(cfg).import(body, w, h) {
+        Ok(stem) => conn.respond(
+            200,
+            "application/json",
+            format!("{{\"stem\":{},\"width\":{w},\"height\":{h}}}", json_str(&stem)).as_bytes(),
+        ),
+        Err(e) => conn.respond(
+            500,
+            "application/json",
+            error_json(&format!("{e:#}")).as_bytes(),
+        ),
+    }
+}
+
 /// The body `/refine` and `/hires` share: which earlier result to escalate, plus
 /// the knobs that pass runs with. An unknown `image_id` means the intermediates
 /// are gone (evicted, or the server restarted), which is a client-side staleness
@@ -403,6 +986,12 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
 #[derive(serde::Deserialize)]
 struct EscalateDto {
     image_id: u64,
+    /// Which checkpoint runs *this* pass. Named `model` rather than `template`
+    /// on purpose: the page spreads this same object into the `/generate` body,
+    /// where `template` already means the model doing the txt2img, and a second
+    /// field by that name would silently clobber it.
+    #[serde(default)]
+    model: Option<String>,
     #[serde(default)]
     refine_steps: Option<u32>,
     #[serde(default)]
@@ -422,6 +1011,7 @@ struct EscalateDto {
 impl EscalateDto {
     fn overrides(&self) -> EscalateRequest {
         EscalateRequest {
+            template: self.model.clone(),
             refine_steps: self.refine_steps,
             refine_strength: self.refine_strength,
             hires_steps: self.hires_steps,
@@ -600,6 +1190,13 @@ fn result_json(res: &GenResult) -> String {
 
 /// Where a "Save to output" landed. Reported relative to the project root when
 /// it can be, since that's how the user refers to `work/output/` themselves.
+/// `serde_json` for a real struct, per the convention: the two hand-rolled
+/// shapes are the long-standing ones, and a clip's sidecar is a 15-field
+/// round-trip that has no business being assembled with `format!`.
+fn json_body<T: serde::Serialize>(value: &T) -> Result<String> {
+    serde_json::to_string(value).context("serializing the response")
+}
+
 fn saved_json(path: &std::path::Path) -> String {
     let shown = path
         .strip_prefix(std::env::current_dir().unwrap_or_default())
@@ -607,6 +1204,24 @@ fn saved_json(path: &std::path::Path) -> String {
     format!("{{\"path\":{}}}", json_str(&shown.display().to_string()))
 }
 
+/// What the worker is doing, or `{"busy":false}` when it is idle.
+///
+/// Hand-rolled like the other two long-standing shapes. Neither string needs
+/// escaping and both are ours: `label` is one of a handful of literals this file
+/// passes to `SdRunner`, and `rate` is sd.cpp's own `%.2f` plus a unit.
+fn progress_json(p: Option<&sd::Progress>) -> String {
+    match p {
+        Some(p) => format!(
+            "{{\"busy\":true,\"label\":{},\"phase\":\"{}\",\"step\":{},\"steps\":{},\"rate\":{}}}",
+            json_str(&p.label),
+            p.phase.as_str(),
+            p.step,
+            p.steps,
+            json_str(&p.rate)
+        ),
+        None => "{\"busy\":false}".to_string(),
+    }
+}
 /// The registry (templates + discovered checkpoints) as JSON for the UI. The
 /// per-model defaults (steps/cfg/sampler/size) are included so the UI can
 /// pre-fill the advanced controls when a model is selected.
@@ -622,7 +1237,9 @@ fn build_models_json(cfg: &Config) -> String {
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
                  \"steps\":{},\"cfg_scale\":{},\"img2img_cfg_scale\":{},\"sampler\":{},\
                  \"refine_steps\":{},\"refine_strength\":{},\
-                 \"hires_steps\":{},\"hires_strength\":{},\"sharpness\":{},\"clarity\":{}}}",
+                 \"hires_steps\":{},\"hires_strength\":{},\
+                 \"source_steps\":{},\"source_strength\":{},\"hires_max_side\":{},\
+                 \"sharpness\":{},\"clarity\":{}}}",
                 json_str(&p.name),
                 json_str(&p.description),
                 p.discovered,
@@ -644,6 +1261,13 @@ fn build_models_json(cfg: &Config) -> String {
                 p.refine_strength,
                 p.hires_steps,
                 p.hires_strength,
+                p.source_steps,
+                p.source_strength,
+                // Published because the Image-to-image tab's working-size control
+                // starts there: it is the same budget question — how large can
+                // this card afford to diffuse — asked of the same hardware, so
+                // the page has no business inventing a second answer to it.
+                p.hires_max_side,
                 p.sharpness,
                 p.clarity,
             )
@@ -1071,7 +1695,39 @@ fn json_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{band_amplitudes, check_bands, grating, BandRow, DEPTH, DETAIL, GRIT};
-    use super::{EscalateDto, HiresDto};
+    use super::{clip_frame, workitems, EscalateDto, HiresDto};
+
+    /// The frame route's guard. The case worth pinning is the rejection: a
+    /// segment that isn't a number must not come back as "no frame", because
+    /// that is how `/frames/nonsense.png` would end up answering 200 with the
+    /// clip's poster frame.
+    #[test]
+    fn a_frame_path_needs_a_number_or_nothing() {
+        assert_eq!(clip_frame("/videos/100-7/frames/0.png"), Some(("100-7", 0)));
+        assert_eq!(clip_frame("/videos/100-7/frames/32.png"), Some(("100-7", 32)));
+
+        for bad in [
+            "/videos/100-7/frames/nonsense.png",
+            "/videos/100-7/frames/.png",
+            "/videos/100-7/frames/-1.png",
+            "/videos/100-7/frames/1.5.png",
+            "/videos/100-7/frames/0.png.png",
+            "/videos/100-7/frames/0",
+            "/videos/100-7/frames/../../../etc/passwd.png",
+            "/videos/100-7/thumb.png",
+        ] {
+            assert_eq!(clip_frame(bad), None, "{bad} must not resolve to a frame");
+        }
+
+        // A traversal attempt in the *id* is not this function's job — it parses
+        // the shape and `handle_clip_file` applies `valid_id`. Stated as a test
+        // so the division of labour is on the record rather than assumed.
+        assert_eq!(
+            clip_frame("/videos/../../secrets/frames/0.png"),
+            Some(("../../secrets", 0))
+        );
+        assert!(!workitems::valid_id("../../secrets"));
+    }
 
     /// An escalation body has three states per knob, and two of them look the
     /// same in JSON unless the deserializer is told otherwise: absent means
@@ -1112,6 +1768,40 @@ mod tests {
 
         let h2: HiresDto = serde_json::from_str(r#"{"image_id":7,"upscale":2.0}"#).unwrap();
         assert_eq!(h2.esc.overrides().img2img_cfg_scale, None);
+    }
+
+    /// The per-pass model swap has the same three states as the CFG box above,
+    /// and the middle one is the one a `<select>` actually sends: an unchosen
+    /// option is the empty string, not an absent field. `Engine::swap_model`
+    /// treats that as "keep the model the image was made with", so the two have
+    /// to survive the trip as themselves rather than being folded together here.
+    ///
+    /// Through `HiresDto`'s flatten as well, for the reason the test above
+    /// states: that is where a serde regression hides.
+    #[test]
+    fn an_escalation_may_name_a_different_checkpoint() {
+        let bare: EscalateDto = serde_json::from_str(r#"{"image_id":7}"#).unwrap();
+        assert_eq!(bare.overrides().template, None);
+
+        let empty: EscalateDto = serde_json::from_str(r#"{"image_id":7,"model":""}"#).unwrap();
+        assert_eq!(empty.overrides().template.as_deref(), Some(""));
+
+        let named: EscalateDto =
+            serde_json::from_str(r#"{"image_id":7,"model":"sd_xl_base_1.0"}"#).unwrap();
+        assert_eq!(named.overrides().template.as_deref(), Some("sd_xl_base_1.0"));
+
+        let h: HiresDto =
+            serde_json::from_str(r#"{"image_id":7,"upscale":2.0,"model":"hebe_v10"}"#).unwrap();
+        assert_eq!(h.esc.overrides().template.as_deref(), Some("hebe_v10"));
+        assert_eq!(h.upscale, Some(2.0));
+
+        // `template` is *not* the name on the wire, and this is why: the page
+        // spreads the escalation knobs into the `/generate` body, where
+        // `template` is the model doing the txt2img. A field by that name here
+        // would be read by neither struct as the other one expects.
+        let wrong: EscalateDto =
+            serde_json::from_str(r#"{"image_id":7,"template":"sd_xl_base_1.0"}"#).unwrap();
+        assert_eq!(wrong.overrides().template, None);
     }
 
     /// The measurement harness, measured against a signal whose answer is

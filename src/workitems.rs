@@ -6,7 +6,13 @@
 //!   work/workitems/{id}.json        the settings that produced it
 //!   work/output/{id}-s{step}.png    "Save to output": the filtered image on screen
 //!   work/output/{id}-s{step}.json   the same sidecar, with the pass counts filled in
+//!   work/output/{id}-s{step}-thumb.png   for the picker; see `ensure_output_thumb`
 //! ```
+//!
+//! The output directory is the finished work, so it is also what the video tab
+//! animates from — hence the thumbnails. It is keyed by *filename stem* rather
+//! than by work item id, because one generation can produce several saves and
+//! they all share an id.
 //!
 //! **Nothing here is ever referenced by a live `Pending`.** A work item is copied
 //! *in* when it is generated and copied *out* when it is opened — see the
@@ -27,7 +33,12 @@ use crate::config::Profile;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Makes each in-flight thumbnail write its own temp file. See
+/// [`Store::ensure_output_thumb`].
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Stored thumbnail height. Twice the 200 px the grid displays, so the strip is
 /// sharp on a HiDPI screen; ~25 KB each, against ~3 MB for the image itself.
@@ -70,20 +81,33 @@ pub struct WorkItem {
     pub sharpness: f32,
     #[serde(default)]
     pub clarity: f32,
+    /// The `work/output/` stem this image was diffused *from*, for an
+    /// image-to-image generation. `None` for a txt2img and for an import, which
+    /// has no source of its own. Mirrors `Clip.source`, and is what lets the UI
+    /// put the source thumbnail back when a work item is reopened.
+    #[serde(default)]
+    pub source: Option<String>,
     pub profile: Profile,
 }
 
-/// A work item id: ASCII digits and `-` only, non-empty, bounded length.
+/// A work item id or output stem: ASCII alphanumerics and `-` only, non-empty,
+/// bounded length.
 ///
-/// This is the whole path-traversal guard for `GET /workitems/<id>/thumb.png`,
-/// and it is a whitelist rather than a blacklist on purpose — `.`, `/`, `\` and
-/// every percent-decoded form of them are simply not in the alphabet, so no
-/// amount of `..` cleverness produces a valid id. Keep it that way; if ids ever
-/// need letters, widen this rather than reaching for `canonicalize`.
+/// This is the whole path-traversal guard for `GET /workitems/<id>/thumb.png`
+/// and `GET /outputs/<stem>/thumb.png`, and it is a whitelist rather than a
+/// blacklist on purpose — `.`, `/`, `\` and every percent-decoded form of them
+/// are simply not in the alphabet, so no amount of `..` cleverness produces a
+/// valid id. Keep it that way: widen the alphabet rather than reaching for
+/// `canonicalize`.
+///
+/// Letters are in it because an output stem is `{id}-s{step}`, which has an `s`
+/// in the middle. That is the only reason, and it costs nothing — a letter is no
+/// more dangerous than a digit when the two characters that matter are still
+/// outside the set.
 pub fn valid_id(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= MAX_ID_LEN
-        && s.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 /// Mint an id for a new work item. Millisecond-resolution timestamps sort
@@ -233,20 +257,229 @@ impl Store {
     pub fn save_output(&self, display: &Path, item: &WorkItem) -> Result<PathBuf> {
         std::fs::create_dir_all(&self.output)
             .with_context(|| format!("creating {}", self.output.display()))?;
-        let base = format!("{}-s{}", item.id, item.step);
-        let mut stem = base.clone();
+        let stem = self.free_stem(&format!("{}-s{}", item.id, item.step));
+        let png = self.output.join(format!("{stem}.png"));
+        std::fs::copy(display, &png)
+            .with_context(|| format!("saving to {}", png.display()))?;
+        write_sidecar(&self.output.join(format!("{stem}.json")), item)?;
+        // Best-effort: a save that produced the PNG the user asked for has done
+        // its job, and a missing thumbnail is something `ensure_output_thumb`
+        // fixes on the first request for it anyway. Failing the save over the
+        // grid's convenience would be the wrong trade.
+        if let Err(e) = self.ensure_output_thumb(&stem) {
+            eprintln!("[rustimage] thumbnail for {stem} deferred: {e:#}");
+        }
+        Ok(png)
+    }
+
+    /// The first `{base}`, `{base}-2`, `{base}-3`… whose PNG doesn't exist yet.
+    ///
+    /// Shared by `save_output` and `import` because both mint a name that is
+    /// *almost* unique and must never overwrite: step counts restart at 0 when a
+    /// work item is reopened, and two imports can land in the same millisecond.
+    fn free_stem(&self, base: &str) -> String {
+        let mut stem = base.to_string();
         for n in 2.. {
             if !self.output.join(format!("{stem}.png")).exists() {
                 break;
             }
             stem = format!("{base}-{n}");
         }
-        let png = self.output.join(format!("{stem}.png"));
-        std::fs::copy(display, &png)
-            .with_context(|| format!("saving to {}", png.display()))?;
-        write_sidecar(&self.output.join(format!("{stem}.json")), item)?;
-        Ok(png)
+        stem
     }
+
+    /// Take a PNG the user supplied and put it in `work/output/`, returning its
+    /// stem.
+    ///
+    /// `work/output/` rather than a directory of its own, because it is already
+    /// *the* pool of images you can start from — it is what the video tab's
+    /// first-frame picker reads. Landing an import there means the listing, the
+    /// thumbnail route and every existing picker work on it with no new plumbing,
+    /// and an imported photo can be animated as readily as diffused.
+    ///
+    /// The uploaded file's own name is never used: `valid_id` is alphanumerics
+    /// and `-`, so almost no real filename is even expressible, and minting the
+    /// stem is what keeps the traversal guard a whitelist. `width`/`height` are
+    /// the caller's, already read from the decoded image — this writes the
+    /// original bytes rather than a re-encode, so nothing is lost on the way in.
+    pub fn import(&self, png: &[u8], width: u32, height: u32) -> Result<String> {
+        std::fs::create_dir_all(&self.output)
+            .with_context(|| format!("creating {}", self.output.display()))?;
+        let stem = self.free_stem(&format!("{}-import", new_id(0)));
+        let path = self.output.join(format!("{stem}.png"));
+        std::fs::write(&path, png).with_context(|| format!("writing {}", path.display()))?;
+
+        let item = WorkItem {
+            id: stem.clone(),
+            created_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0),
+            prompt: String::new(),
+            negative: None,
+            seed: -1,
+            // Not a registry key, and deliberately not one that could ever be
+            // mistaken for one — the parentheses aren't in any model name. The
+            // grid shows it verbatim, which is the honest answer to "what made
+            // this": nothing here did.
+            template: "(imported)".to_string(),
+            width,
+            height,
+            thumb_width: 0,
+            thumb_height: 0,
+            refine_passes: 0,
+            hires_passes: 0,
+            step: 0,
+            sharpness: 0.0,
+            clarity: 0.0,
+            source: None,
+            profile: Profile::default(),
+        };
+        write_sidecar(&self.output.join(format!("{stem}.json")), &item)?;
+        if let Err(e) = self.ensure_output_thumb(&stem) {
+            eprintln!("[rustimage] thumbnail for {stem} deferred: {e:#}");
+        }
+        Ok(stem)
+    }
+
+    /// `work/output/` itself, for the one caller that writes a whole
+    /// subdirectory into it rather than a single image.
+    pub fn output_dir(&self) -> &Path {
+        &self.output
+    }
+
+    pub fn output_path(&self, stem: &str) -> PathBuf {
+        self.output.join(format!("{stem}.png"))
+    }
+
+    pub fn output_thumb_path(&self, stem: &str) -> PathBuf {
+        self.output.join(format!("{stem}-thumb.png"))
+    }
+
+    fn output_sidecar_path(&self, stem: &str) -> PathBuf {
+        self.output.join(format!("{stem}.json"))
+    }
+
+    /// Make sure `{stem}-thumb.png` exists, and return it.
+    ///
+    /// Generate-on-first-request rather than only-on-save, because the whole
+    /// point of the picker is the images already in `work/output/` — everything
+    /// saved before thumbnails existed has to appear too. After the first request
+    /// it's a cached file and this is a stat.
+    ///
+    /// An output PNG is full resolution, up to 3072², so this is ~100 ms of
+    /// decode and resize. That's why it isn't done inline in the listing: the
+    /// grid asks for the tiles it is actually showing, in parallel, one
+    /// connection thread each.
+    pub fn ensure_output_thumb(&self, stem: &str) -> Result<PathBuf> {
+        if !valid_id(stem) {
+            bail!("'{stem}' is not an output name");
+        }
+        let thumb = self.output_thumb_path(stem);
+        if thumb.is_file() {
+            return Ok(thumb);
+        }
+        let src = self.output_path(stem);
+        let img = image::open(&src)
+            .with_context(|| format!("loading {} for a thumbnail", src.display()))?;
+        let tw = ((img.width() as f32) * (THUMB_HEIGHT as f32) / (img.height().max(1) as f32))
+            .round() as u32;
+        let small = img.thumbnail(tw.max(1), THUMB_HEIGHT);
+        // Written under a unique name and renamed into place, because two
+        // requests for the same tile are two connection threads, and interleaved
+        // writes to one PNG produce a file that decodes to garbage rather than an
+        // error. Rename within a directory is atomic, so the loser of the race
+        // simply replaces identical bytes.
+        //
+        // The counter is what makes the name unique, not the pid: both racing
+        // writers are *this* process, so a pid would have given them the same
+        // temp file and re-created the problem one step earlier.
+        let tmp = self.output.join(format!(
+            "{stem}-thumb.{}.tmp",
+            TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        // `save` picks the encoder from the extension, and this name has none
+        // it would recognise, so the format is named.
+        small
+            .save_with_format(&tmp, image::ImageFormat::Png)
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        std::fs::rename(&tmp, &thumb).with_context(|| format!("publishing {}", thumb.display()))?;
+        Ok(thumb)
+    }
+
+    /// Everything in `work/output/`, newest first.
+    ///
+    /// Keyed by stem, and the sidecar is read for the rest — an output PNG whose
+    /// sidecar is missing is still listed, because the file on disk is the thing
+    /// the user saved and a picker that hides it would be lying. Such an entry
+    /// just has no prompt to show.
+    pub fn list_outputs(&self) -> Vec<Output> {
+        let Ok(entries) = std::fs::read_dir(&self.output) else {
+            return Vec::new();
+        };
+        let mut out: Vec<Output> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let path = e.path();
+                if path.extension()?.to_str()? != "png" {
+                    return None;
+                }
+                let stem = path.file_stem()?.to_str()?;
+                // `{stem}-thumb.png` is a companion, not an entry — the same
+                // trap the work item listing avoids by filtering on `.json`.
+                if stem.ends_with("-thumb") || !valid_id(stem) {
+                    return None;
+                }
+                Some(self.output_entry(stem, &path))
+            })
+            .collect();
+        // Newest first. Stems begin with the generation's millisecond timestamp,
+        // but several saves share one, so the file's own mtime is what orders
+        // them — it is when *this* image was saved.
+        out.sort_by(|a, b| b.created_ms.cmp(&a.created_ms).then(b.stem.cmp(&a.stem)));
+        out
+    }
+
+    fn output_entry(&self, stem: &str, png: &Path) -> Output {
+        let item: Option<WorkItem> = std::fs::read(self.output_sidecar_path(stem))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok());
+        let created_ms = std::fs::metadata(png)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        Output {
+            stem: stem.to_string(),
+            created_ms,
+            width: item.as_ref().map(|i| i.width).unwrap_or(0),
+            height: item.as_ref().map(|i| i.height).unwrap_or(0),
+            prompt: item.as_ref().map(|i| i.prompt.clone()).unwrap_or_default(),
+            seed: item.as_ref().map(|i| i.seed).unwrap_or(0),
+            template: item.as_ref().map(|i| i.template.clone()).unwrap_or_default(),
+        }
+    }
+}
+
+/// One saved image in `work/output/`, as the picker needs it.
+///
+/// The stem is the identity, not `WorkItem::id`: several saves come out of one
+/// generation (`{id}-s{step}`, plus a `-2` suffix when that name is taken), so
+/// the id is shared and only the filename is unique.
+///
+/// `width`/`height` are the image's real size, so the grid can lay out tiles
+/// before their thumbnails have loaded. They're 0 when the sidecar is missing,
+/// which the page treats as "unknown aspect" rather than as an empty tile.
+#[derive(Debug, Clone, Serialize)]
+pub struct Output {
+    pub stem: String,
+    pub created_ms: u128,
+    pub width: u32,
+    pub height: u32,
+    pub prompt: String,
+    pub seed: i64,
+    pub template: String,
 }
 
 fn write_sidecar(path: &Path, item: &WorkItem) -> Result<()> {
@@ -265,6 +498,9 @@ mod tests {
     fn valid_id_is_a_whitelist() {
         assert!(valid_id("1758104523000-12345"));
         assert!(valid_id("0"));
+        // Output stems, which is why letters are in the alphabet at all.
+        assert!(valid_id("1758104523000-12345-s3"));
+        assert!(valid_id("1758104523000-12345-s3-2"));
 
         assert!(!valid_id(""));
         assert!(!valid_id(".."));
@@ -272,8 +508,14 @@ mod tests {
         assert!(!valid_id("a/b"));
         assert!(!valid_id("12.png"));
         assert!(!valid_id("12 34"));
-        assert!(!valid_id("abc"));
         assert!(!valid_id(&"1".repeat(MAX_ID_LEN + 1)));
+        // Widening to letters must not have let a separator back in. These are
+        // the only characters that matter.
+        for bad in [
+            "..", "a.b", "a/b", "a\\b", "%2e%2e", "a%2fb", "a\0b", "a:b", "~", "a b",
+        ] {
+            assert!(!valid_id(bad), "{bad:?} must not be a valid id");
+        }
     }
 
     #[test]
@@ -303,6 +545,7 @@ mod tests {
             step: 0,
             sharpness: 0.0,
             clarity: 0.0,
+            source: None,
             profile: Profile::default(),
         }
     }
@@ -388,6 +631,119 @@ mod tests {
             assert!(p.is_file());
             assert!(p.with_extension("json").is_file());
         }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The picker's half of the store: a listing keyed by stem, and thumbnails
+    /// that appear for images saved long before thumbnails existed.
+    #[test]
+    fn outputs_list_by_stem_and_grow_thumbnails() {
+        let dir = std::env::temp_dir().join(format!("rustimage-pick-{}", new_id(2)));
+        let store = Store::new(&dir);
+        let src = dir.join("src.png");
+        image::RgbaImage::from_pixel(300, 100, image::Rgba([9, 9, 9, 255]))
+            .save(&src)
+            .unwrap();
+
+        let mut it = item("400-7", 400);
+        it.width = 300;
+        it.height = 100;
+        let first = store.save_output(&src, &it).unwrap();
+        let second = store.save_output(&src, &it).unwrap();
+
+        // Saving writes the thumbnail now, so the grid is warm immediately.
+        assert!(store.output_thumb_path("400-7-s0").is_file());
+
+        // An image saved before thumbnails existed: PNG and sidecar, no thumb.
+        std::fs::copy(&src, store.output_path("100-7-s2")).unwrap();
+        assert!(!store.output_thumb_path("100-7-s2").is_file());
+
+        let list = store.list_outputs();
+        let stems: Vec<&str> = list.iter().map(|o| o.stem.as_str()).collect();
+        assert_eq!(stems.len(), 3, "{stems:?}");
+        // Companion thumbnails are not entries — the trap this listing exists to
+        // avoid, since they sit in the same directory with the same extension.
+        assert!(!stems.iter().any(|s| s.ends_with("-thumb")), "{stems:?}");
+        assert!(stems.contains(&"400-7-s0") && stems.contains(&"400-7-s0-2"));
+
+        // Both saves came out of one work item, so the stem is the only thing
+        // telling them apart.
+        assert!(first.file_stem() != second.file_stem());
+
+        let entry = list.iter().find(|o| o.stem == "400-7-s0").unwrap();
+        assert_eq!((entry.width, entry.height), (300, 100));
+        assert_eq!(entry.prompt, it.prompt);
+
+        // A sidecar-less save is still listed; it just has nothing to say.
+        std::fs::copy(&src, store.output_path("999-7-s0")).unwrap();
+        let bare = store
+            .list_outputs()
+            .into_iter()
+            .find(|o| o.stem == "999-7-s0")
+            .expect("a PNG with no sidecar is still the user's image");
+        assert_eq!((bare.width, bare.height), (0, 0));
+        assert!(bare.prompt.is_empty());
+
+        // Generate-on-request, then cache.
+        let thumb = store.ensure_output_thumb("100-7-s2").unwrap();
+        assert!(thumb.is_file());
+        let dims = image::open(&thumb).unwrap();
+        assert_eq!(dims.height(), THUMB_HEIGHT);
+        assert_eq!(dims.width(), THUMB_HEIGHT * 3);
+        let again = store.ensure_output_thumb("100-7-s2").unwrap();
+        assert_eq!(thumb, again);
+        // No temp file left behind by the rename.
+        assert!(!store
+            .list_outputs()
+            .iter()
+            .any(|o| o.stem.contains(".tmp")));
+
+        assert!(store.ensure_output_thumb("../etc").is_err());
+        assert!(store.ensure_output_thumb("nope-s0").is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An import is the one image whose name the *user* chose, and the answer is
+    /// that it doesn't get to: the stem is minted here, because `valid_id` is the
+    /// whole traversal guard for `/outputs/{stem}/thumb.png` and a filename that
+    /// went anywhere near it would have to be sanitized rather than generated.
+    ///
+    /// Two imports in the same millisecond mint the same base, which is why this
+    /// goes through the same collision loop as a save. Rare, and entirely
+    /// reachable by dropping a folder of images onto the page at once.
+    #[test]
+    fn an_import_mints_its_own_name_and_never_overwrites() {
+        let dir = std::env::temp_dir().join(format!("rustimage-imp-{}", new_id(3)));
+        let store = Store::new(&dir);
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(120, 60, image::Rgba([3, 4, 5, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        let a = store.import(&png, 120, 60).unwrap();
+        let b = store.import(&png, 120, 60).unwrap();
+        assert!(valid_id(&a), "{a}");
+        assert!(valid_id(&b), "{b}");
+        assert_ne!(a, b, "a second import must not land on the first");
+        assert!(store.output_path(&a).is_file());
+        assert!(store.output_path(&b).is_file());
+
+        // The bytes go in untouched — what feeds a diffusion pass should not
+        // already be a re-encode.
+        assert_eq!(std::fs::read(store.output_path(&a)).unwrap(), png);
+
+        // It appears in the picker like anything else in work/output/, with its
+        // real dimensions and an origin that can't be mistaken for a model name.
+        let entry = store
+            .list_outputs()
+            .into_iter()
+            .find(|o| o.stem == a)
+            .expect("an import is listed as a source image");
+        assert_eq!((entry.width, entry.height), (120, 60));
+        assert_eq!(entry.template, "(imported)");
+        assert!(!valid_id(&entry.template));
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -91,6 +91,22 @@ refine_strength = 0.05
 # result looks, so raise it before reaching for sharpness.
 hires_steps     = 8
 hires_strength  = 0.30
+# The Image-to-image tab's one pass: a source image you supply, put through this
+# checkpoint once, after which the Refine and Hi-res buttons work on the result
+# exactly as they do on a generation.
+#
+# Much higher than either escalation above, and that is the point rather than an
+# oversight. Those two finish a picture this program already made; this one is
+# asked to make a picture *out of* one it didn't. At 0.30 a source comes back
+# essentially unchanged and the tab looks broken; 0.55 keeps the composition, the
+# pose and the palette and re-draws the surface in the model's own idiom. Go
+# lower for a retouch, higher (0.7+) to treat the source as a rough sketch.
+#
+# Steps are a floor here too, and strength raises it — at 0.55 the effective
+# count is what `steps * 0.55` gives if that is more than this. CFG comes from
+# img2img_cfg_scale above, like the other two img2img passes.
+source_steps    = 12
+source_strength = 0.55
 # Longest side the HI-RES pass may diffuse at. Anything beyond it is reached with
 # a final FSR upscale instead — past ~2048 SDXL's quality drops and the cost
 # climbs quadratically. Measured on a 7900 XTX at 8 steps: 1536² ≈ 12 s,
@@ -127,3 +143,139 @@ hires_flash_attn = true
 # refine_strength = 0.30
 # hires_steps     = 6           # Turbo models need fewer steps here too
 # hires_strength  = 0.30
+# source_steps    = 8           # the Image-to-image tab's pass
+# source_strength = 0.55
+
+# ---------------------------------------------------------------------------
+# [[video]] — video models.
+#
+# You usually don't need this table either. Drop the files into
+# models/video/ and they are identified by what's inside them: both
+# safetensors and GGUF carry a tensor index in a header at the front, and the
+# tensor names in it name the architecture outright. That is how the roles get
+# sorted out — transformer, VAE, text encoder, which of the two Wan VAEs, which
+# expert of a pair — without anyone trusting a filename. `doctor` prints what it
+# found and what it could not place.
+#
+# Suggested layout, which is also ComfyUI's and the one every download
+# instruction assumes. The scan is recursive, so this is for your benefit, not
+# the program's — a flat folder discovers exactly the same models:
+#
+#   models/video/diffusion_models/   the transformers
+#   models/video/vae/                wan_2.1_vae / wan2.2_vae
+#   models/video/text_encoders/      umt5-xxl (shared by every Wan)
+#   models/video/loras/              e.g. the lightx2v 4-step pair
+#   models/video/clip_vision/        Wan 2.1 I2V/FLF2V only
+#
+# What a [[video]] entry is still for:
+#
+#   * naming files you haven't downloaded yet, so the UI and `doctor` list the
+#     model greyed out with the exact filename it is waiting for — the two
+#     entries below do precisely that, and are the download checklist;
+#   * pinning settings once you have measured them on this card;
+#   * the one thing no header can answer: which half of a mixture-of-experts
+#     pair a file is. The two experts have identical tensor names and identical
+#     shapes. If the filename says `LowNoise`/`HighNoise` the scan pairs them;
+#     if it says nothing, the file is listed as a `wan_dense` model that runs on
+#     its own, and pairing it is a decision you make here.
+#
+# An entry REPLACES a discovered model rather than patching it, matching by
+# `name` or by naming the same `diffusion_model` file. So an entry is complete
+# in itself; anything it leaves out comes from the family recipe, not from the
+# discovered copy.
+#
+# `family` is the required field and the one that matters: it decides which
+# flags get emitted (the A14B pair needs a whole second `--high-noise-*` set),
+# which grid width/height and frame count round to, and whether fps is yours to
+# choose. One of:
+#
+#   wan22_ti2v_5b   one dense checkpoint; the only Wan wanting `wan2.2_vae`.
+#                   Size grid 32, native 24 fps.
+#   wan22_a14b      the mixture-of-experts pair. Size grid 16, native 16 fps.
+#                   Needs high_noise_diffusion_model.
+#   wan_dense       any single dense Wan on the 2.1 VAE — a 2.1 T2V, or one
+#                   expert of an A14B run alone. Size grid 16.
+#   wan21_vace      frames in, frames out — the pass that refines a finished
+#                   clip. Size grid 16.
+#   minimax_h3      present so it's a config edit later, not runnable here: a
+#                   19.9 GB DiT plus a 14.6 GB Qwen3-VL-32B encoder at Q4_K_M
+#                   fits neither 24 GB of VRAM nor 30 GB of RAM.
+#
+# Frame counts round to the family's grid, and the two grids round in opposite
+# directions — Wan *down* to 4k+1 (34 frames runs as 33), H3 *up* to 17k+5. The
+# UI shows the rounded number and the duration it implies.
+#
+# Sizes/steps/cfg below are the values every example in stable-diffusion.cpp's
+# own `docs/wan.md` uses. They are a starting point, not a measurement on this
+# card — replace them once you have timings.
+# ---------------------------------------------------------------------------
+
+[[video]]
+name        = "wan2.2-ti2v-5b"
+description = "Wan 2.2 TI2V 5B — one file, the quick way to prove a clip runs"
+family      = "wan22_ti2v_5b"
+diffusion_model = "models/video/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors"
+vae             = "models/video/vae/wan2.2_vae.safetensors"   # NOT wan_2.1_vae
+# Every Wan family shares this one encoder, so it downloads once. This is the
+# fp8 file that was already in models/video/: sd.cpp reads F8_E4M3 safetensors
+# directly, and its name table maps ComfyUI's `.scale_weight` suffix onto the
+# `.weight_scale` it expects, so the scaled variant loads unconverted. Vulkan
+# has no fp8 matmul, so each tensor is cast to BF16 as the graph is built —
+# correct, but if it turns out slow or tight, the drop-in swap is
+# `umt5-xxl-encoder-Q8_0.gguf` from city96/umt5-xxl-encoder-gguf.
+t5xxl           = "models/video/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+width      = 832
+height     = 480
+frames     = 33        # already on the 4k+1 grid: 1.4 s at 24 fps
+fps        = 24        # what this one is trained at
+steps      = 20
+cfg_scale  = 6.0
+flow_shift = 3.0       # every documented Wan run passes 3.0 rather than "auto"
+
+[[video]]
+name        = "wan2.2-i2v-a14b"
+description = "Wan 2.2 I2V A14B — the MoE pair; one expert resident per step"
+family      = "wan22_a14b"
+# Only one expert is active at a time, so one expert's worth of weights is what
+# the card holds — the 24 GB is not the limit. `offload_to_cpu` keeps *both* in
+# system RAM, and that is the wall: 14B at Q4_K_M is roughly 8 GB, so the pair
+# plus the ~7 GB encoder is around 23 GB against 30 GB total. It fits, but not
+# by much, and the estimate is arithmetic rather than a measurement — peak RSS
+# during a run is the number that settles it. Q8_0 (~15 GB an expert) does not
+# fit at all. If 23 GB turns out to crowd the machine, Q3_K_M on the experts
+# and the Q8_0 GGUF encoder are the two levers, in that order.
+diffusion_model            = "models/video/diffusion_models/Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf"
+high_noise_diffusion_model = "models/video/diffusion_models/Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf"
+vae                        = "models/video/vae/wan_2.1_vae.safetensors"
+t5xxl                      = "models/video/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+width      = 832
+height     = 480
+frames     = 33        # 2.1 s at 16 fps
+fps        = 16
+steps      = 10        # the low-noise expert's half of the schedule
+cfg_scale  = 3.5
+high_noise_steps     = 8
+high_noise_cfg_scale = 3.5
+flow_shift = 3.0
+# Where the schedule hands over from the high-noise expert to the low-noise one.
+# sd.cpp only honours it when high_noise_steps is unset (its own flag help says
+# "only enabled if --high-noise-steps is set to -1"), so with the 8 above it
+# would do nothing.
+# moe_boundary = 0.875
+#
+# The 4-step lightx2v LoRA pair, which takes 8+10 steps to 4+4. Named without
+# angle brackets; `|high_noise|` targets the high-noise expert. Uncomment
+# together with steps = 4 / high_noise_steps = 4 once you've measured whether
+# the quality trade is worth it on this card.
+# loras = [
+#   "wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise:1",
+#   "|high_noise|wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise:1",
+# ]
+# lora_dir = "models/loras"
+#
+# If a clip dies in the VAE decode rather than the sampler — the likelier of the
+# two on a Wan model — turn this on first. It costs time, not quality.
+# vae_tiling = true
+#
+# Further OOM escalations, in the order worth trying:
+# extra_args = ["--auto-fit", "off"]

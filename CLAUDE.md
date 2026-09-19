@@ -13,7 +13,8 @@ part it doesn't cover.
 ## Commands
 
 ```sh
-cargo test                                  # no GPU: naga-validates the 3 WGSL shaders + the band-measurement math
+cargo test                                  # no GPU: naga-validates the 3 WGSL shaders, the band-measurement math,
+                                            #   the escalation/upload DTOs and `fit_to`
 cargo run --release                         # server on 127.0.0.1:8080
 cargo run --release -- doctor               # preflight only: binary, checkpoints, web UI
 cargo run --release -- fsr-selftest         # full wgpu path; no sd.cpp or checkpoint needed
@@ -55,6 +56,61 @@ comment in each `.wgsl` is thorough; open the file rather than guessing.
 - `src/fsr/contrast.wgsl` — **not FSR.** A difference-of-Gaussians band-pass on luma
   ("clarity"), computed on a 1/8 plane. Exact identity at clarity 0.0. The knob is
   **signed**, -1..1: negative subtracts the band and softens.
+
+## The image-to-image tab
+
+`Engine::img2img` (`src/pipeline.rs`) is `run` with the txt2img replaced by a source
+image, and `open`'s copy-in rule bolted to the front. Three things about it.
+
+**The source is a `work/output/` stem, never a path**, resolved by
+`Engine::output_source` — the same helper `Engine::video` uses for a first frame, and
+the same contract: the client picks from what `GET /outputs` published, and
+`workitems::valid_id` is the whitelist that makes that safe. One helper rather than
+two copies of the check.
+
+**It is copied into scratch, never adopted.** That file belongs to the user, and a
+`Pending` pointing at it would have `remove_files()` delete it on the first refine —
+invariant 8's failure in a new place. The copy is `{id}-0-src.png` under `Scratch`, so
+a failed pass takes it with it.
+
+**`fit_to` only ever shrinks, and only the width is snapped to 64.** Snapping both
+axes was the obvious thing and is wrong: 5000×2000 into a 1536 budget gives 1536×576
+rather than 1536×614, a 6.7% change of aspect that nothing downstream reports. One
+snapped axis is also what `hires` does, where a single scale factor drives both. A
+source already inside the budget comes back untouched, which is what lets the caller
+`fs::copy` the bytes instead of resampling them — what feeds a diffusion pass should
+not already be a generation of loss. The size ceiling is not politeness: a phone photo
+is 4032×3024 and a pass at that size is an OOM on a 24 GB card.
+
+Uploads (`POST /upload`) land in `work/output/` through `Store::import`, which is why
+the tab needed no new listing, thumbnail or picker route — that directory is already
+*the* pool of images you can start from, and an import is animatable as well as
+diffusable. The stem is minted (`new_id`), never taken from the filename: `valid_id`
+is alphanumerics and `-`, so almost no real filename is even expressible, and
+generating the name is what keeps the guard a whitelist rather than a sanitizer.
+
+The body is **raw PNG bytes**, not base64 in JSON — `Request.body` is a `Vec<u8>` that
+is never UTF-8 validated, so this costs nothing and saves a third of the wire.
+`http.rs` picks the limit per path (`body_limit`, an exact match — a prefix would hand
+32 MiB to anything starting with `/upload`), and over-limit now *answers* 413 instead
+of bailing, which used to close the socket with no response at all. **PNG only in
+Rust, on purpose**: the page re-encodes through a `<canvas>` first, so JPEG/WebP/AVIF
+all work and `image` stays compiled `features = ["png"]`.
+
+## The two image panes
+
+`web/index.html` has two tabs that put an image on screen, and everything below the
+image — the action row, both sliders, Save, the lightbox — is one set of functions
+pointed at whichever is showing. That is `PANES` and `P(k)`.
+
+The module state (`imageId`, `currentSrc`, `workId`) stays **single**, because only one
+tab is visible and the worker is serialized, so there is only ever one live result to
+have; two copies would be two ways to be stale. The price is that `showTab` must
+`clearPane` the tab it leaves — otherwise a picture sits there looking live beside
+Refine and Hi-res buttons that now address a different image, which would work and
+would be wrong. It also means the ids `render()` writes (`refine`, `hires`, `saveout`,
+`upfactor`) exist in at most one pane at a time, which is why `IDLE_LABELS` and
+`setUpFactor` need no second set of them.
 
 ## Invariants
 
@@ -118,7 +174,35 @@ These break silently rather than loudly.
 
    `Pending.work_id` is an id, never a path, for the same reason. It exists only to
    name saves (`work/output/{work_id}-s{step}.png`) and to let the UI mark which
-   thumbnail is on screen.
+   thumbnail is on screen. **`Pending.source` is a stem for the same reason again** —
+   it names an image in `work/output/` that the user either saved or uploaded, and
+   `Engine::img2img` copies it into scratch precisely so `remove_files` can't reach
+   it. The one rule: nothing a `Pending` owns may live in a durable directory.
+
+9. **Filter a clip's frames; never re-diffuse them.** `Engine::enlarge_clip` runs
+   `Fsr::process` over each frame and that is safe *by construction*: EASU, RCAS and
+   clarity are deterministic functions of the pixels, so two near-identical frames
+   produce two near-identical outputs and a fixed kernel cannot flicker. Invariant 6
+   covers the size change with it — both filters size their band from the image, so a
+   sharpness setting survives the enlargement.
+
+   Running the existing `refine` per frame would compile, run, and look plausible on any
+   single frame. Every frame would draw its own noise and invent its own detail with no
+   knowledge of its neighbours; adjacent frames diverge structurally and the eye
+   integrates that as boiling or crawling texture. It is the signature artifact of
+   per-frame SD upscaling and it is only visible *in motion*, which is why it belongs
+   here rather than in a code review. Refining a clip properly is video-native: a second
+   `-M vid_gen` pass with a VACE checkpoint and `--control-video`, which takes a
+   directory of frames — precisely what pass 1 wrote, so no decode and no ffmpeg. That
+   is a `family` entry and a second `SdRunner::video` call, not this function with a
+   sampler bolted on.
+
+   `work/videos/` is also the one archive written *through* rather than copied into,
+   which looks like invariant 8 and isn't. That invariant exists because a live
+   `Pending` deletes its own scratch files; a clip has no scratch stage, being written
+   once by one pass and afterwards only read. What it does need is the failure half, and
+   that is `videos::ClipDir` — a guard that sweeps a half-written directory unless
+   `keep()` is reached. Cancelling is the *common* path here, not the rare one.
 
 ## Adding a per-model knob
 
@@ -140,6 +224,20 @@ The trap: **`Defaults` and `Template` are two separate structs with the same fie
 list**, and `registry()` builds each in its own arm. Adding to one and not the other
 compiles cleanly and silently ignores the knob for half the models.
 
+**A *video* knob is a shorter path and the trap doesn't apply**: there is one struct,
+`VideoModel`, because a `[[video]]` entry has no `[defaults]`/`[templates]` split to keep
+in step. Video *is* discovered, but an explicit entry replaces a discovered model rather
+than merging with it, so there is still only one place a field lives. Add the field there
+(with `#[serde(default)]` unless it is genuinely required), give it a value in
+`VideoModel::discovered()` — a struct literal, so forgetting it is a compile error rather
+than a knob that silently only works for half the models — range-check it in
+`VideoModel::validate()`, consume it in `SdRunner::video_cmd`, add an `Option<T>` to
+`VideoRequest` applied onto the clone in `Engine::video`, a field on the `/video` `Dto`,
+and an input plus a line in `syncVideo()`/`applyClip()`. A knob whose right value depends
+on the architecture belongs in `VideoFamily::recipe()` rather than in a `default_*`
+function. Anything the page must *derive* from `family` goes on `VideoModelDto` instead
+of being reimplemented in JavaScript — see `frame_grid` below.
+
 A knob that *defaults to another knob* stays `Option<T>` all the way onto `Profile` and
 resolves through a method — `img2img_cfg_scale` / `Profile::img2img_cfg()`. Resolving it
 to a number at load, or pinning it in `Engine::run` when the request omits it, both
@@ -158,15 +256,40 @@ The retained profile is the **starting point** for an escalation, though, not a 
 `/refine` and `/hires` take an `EscalateRequest` (`src/pipeline.rs`) and fold it on top
 before the pass runs. Only the knobs that describe a pass which *hasn't happened yet* —
 `refine_steps`, `refine_strength`, `hires_steps`, `hires_strength`,
-`img2img_cfg_scale`. `steps`, `cfg_scale`, `sampler` and the base size are settings of a
-txt2img that already ran, so there is nothing a new value could do to the image in hand;
-they stay retained, and the next *generate* picks them up. Get that boundary wrong in
-either direction and the Advanced panel starts lying: honour a base knob and the image
-claims settings it wasn't made with, ignore an escalation knob and pressing the button
-after editing the box quietly does the old thing.
+`img2img_cfg_scale`, and **`template`**. `steps`, `cfg_scale`, `sampler` and the base
+size are settings of a txt2img that already ran, so there is nothing a new value could
+do to the image in hand; they stay retained, and the next *generate* picks them up. Get
+that boundary wrong in either direction and the Advanced panel starts lying: honour a
+base knob and the image claims settings it wasn't made with, ignore an escalation knob
+and pressing the button after editing the box quietly does the old thing.
 
-`EscalateRequest.img2img_cfg_scale` is `Option<Option<f32>>` for the reason two
-paragraphs up: absent = keep, `null` = unset it so the pass follows `cfg_scale` again, a
+`template` passes that test and is worth stating separately, because it looks like a
+base setting and isn't: a *checkpoint* is a property of the pass about to run. It is
+applied by `Engine::swap_model`, not by `EscalateRequest::apply`, because resolving a
+name needs the registry — and it must run **before** `apply`, since the swap replaces
+the whole profile and would otherwise discard the boxes folded onto it.
+
+The swap is **wholesale**, and that is the decision, not an oversight. The named
+model brings its own `refine_*`, `hires_*`, `img2img_cfg_scale`, `hires_max_side`,
+`weight_type`, `extra_args` and slider start points, and the request's explicit knobs
+land on top — which is consistent, because `syncAdvanced()` already refills those
+boxes from whatever model is selected. A field-wise merge is the `Defaults`/`Template`
+trap from the top of this file wearing a hat: every knob would have to become an
+`Option` so "unset" could be told from "set to the default". The replaced profile is
+what the new `Pending` retains, so `can_refine`, `can_hires` and where the sliders
+reset all describe the model that actually ran — which is what keeps a saved sidecar
+true, and also means a swap can remove the Hi-res button (new model, `hires_steps = 0`)
+or declare the image past budget (smaller `hires_max_side`).
+
+On the wire the field is **`model`, not `template`**, and that is load-bearing:
+`genPayload()` spreads `escalateSettings()` into the `/generate` body, where
+`template` is the model doing the txt2img. A second field by that name would silently
+clobber it — `genPayload` destructures `model` back out, and
+`an_escalation_may_name_a_different_checkpoint` pins both halves.
+
+`EscalateRequest.img2img_cfg_scale` is `Option<Option<f32>>` for the reason the
+"defaults to another knob" paragraph above gives: absent = keep, `null` = unset it so
+the pass follows `cfg_scale` again, a
 number = pin. Serde collapses `null` into `None`, so the DTO needs
 `deserialize_with = "double_option"` — without it an emptied box can never be cleared,
 only overwritten. `escalate_body_tells_an_empty_cfg_box_from_a_missing_one` guards both
@@ -200,11 +323,51 @@ silently restore the old inherit-forever behaviour.
     queue. The worker is serialized, so queueing a thumbnail behind a diffusion would
     freeze the grid for the length of the render. The worker only ever *writes* to that
     directory, so a listing that races a write just misses the newest item.
+  - `/progress` and `/cancel` are on the connection thread for a sharper version of the
+    same reason: they are *about* the job the worker is running. Through the queue, a
+    progress bar would first update once the render it reports on had finished, and Stop
+    would become pressable only when there was nothing left to stop.
+  - The video routes split the same way. `/video` and `/videos/enlarge` are GPU work and
+    go through the queue; `/video-models`, `/videos`, `/videos/{id}/thumb.png`,
+    `/videos/{id}/frames/{n}.png`, `/videos/delete`, `/outputs` and
+    `/outputs/{stem}/thumb.png` are filesystem-only and answer on the connection thread.
+    That matters more here than it does for a still: a clip holds the worker for
+    *minutes*, and the frame player fetching 33 PNGs is exactly what must not queue
+    behind it.
+  - `/outputs/{stem}/thumb.png` is the one thumbnail route that *generates*. Output PNGs
+    are full resolution (up to 3072²) and were written long before there were
+    thumbnails, so `ensure_output_thumb` makes one on first request and caches it. It
+    writes to a counter-suffixed temp name and renames — two requests for the same tile
+    are two threads of *this* process, so a pid in the name would have given them the
+    same file.
+- **`SdRunner::run` streams the child's output; it must not go back to
+  `Command::output()`.** Three things about that are load-bearing and all three break
+  silently:
+  - Progress is on **stdout**, not stderr. sd.cpp sends `SD_LOG_ERROR` to stderr and
+    everything else — including the bars — to stdout (`examples/common/log.cpp`,
+    `out_stream`). Both are read anyway, since a failure message wants the informational
+    tail too, and stderr gets its own thread because a pipe nobody drains fills up and
+    deadlocks the child mid-render.
+  - `drain` splits on `\r` **and** `\n`, which is why it isn't `BufRead::lines`. sd.cpp
+    ends each bar with a carriage return so it can overwrite it in place, and only the
+    final step of a pass gets a newline — read by lines, a 20-step render delivers its
+    whole progress history in one blob after the last step, which is exactly when it
+    stops being progress.
+  - `Monitor` parks the `Child` in a `Mutex` for the length of the run so `cancel` can
+    reach it, and `run` takes it back out *before* `wait`. Waiting while holding that
+    lock would hold it against the very cancel it is waiting for.
+  - `rate` is sd.cpp's own text, kept verbatim. It already picks its unit (`s/it` below
+    one iteration per second, `it/s` above; `MB/s`/`GB/s` while loading weights), and
+    `Phase` is derived from that suffix. Parsing it into a number means a second
+    implementation of the same decision, free to disagree with what the terminal says.
 - JSON out is hand-rolled `format!` for the two long-standing shapes (`result_json`,
   `build_models_json`) and `serde_json` for anything backed by a real struct (work item
   sidecars, `GET /workitems`). `serde_json` was already a dependency for parsing; don't
   hand-roll a 22-field round-trip, and don't churn the two that exist.
-- **Batch and loop generation are a client loop, not a job.** `startRun()` in
+- **Batch and loop generation are a client loop, not a job.** The Image-to-image tab
+  is deliberately single-shot and has no run panel: the run panel's value is drawing
+  N *different* pictures from one prompt, and with a fixed source image the only
+  variation left is the seed. `startRun()` in
   `web/index.html` calls `/generate`, then `/hires`, `/refine` and `/save-output` per
   image; there is no batch route and there shouldn't be. The worker is a single blocking
   consumer (`for job in job_rx`), so one job that owned it for a whole run would leave
@@ -220,4 +383,129 @@ silently restore the old inherit-forever behaviour.
   - `#stop` is deliberately **not** in `IDLE_LABELS`, which is why `setBusy` never
     disables it. A stop button that greys out for the length of the thing it stops is
     furniture.
+- **Video models are discovered by reading their headers, never their filenames**
+  (`src/discover.rs`). A checkpoint is one file, so the image side can identify it by
+  dropping it in the models dir. A video model is three to five files — transformer, VAE,
+  text encoder, sometimes a *second* transformer — whose roles are not in their names, so
+  the scan opens each one instead: safetensors keeps a JSON tensor index behind a `u64`
+  length, GGUF a typed key/value block, and the tensor names in it name the architecture.
+  One seek and a few hundred KB against an 8-20 GB file.
+
+  The discriminators are lifted from sd.cpp's own `ModelLoader::get_sd_version`
+  (`src/model_loader.cpp:495-605`), because the only classification worth having is the
+  one the binary we shell out to will agree with. **Read shapes off square tensors only**
+  (`Tensors::square_dim`): safetensors stores a shape in PyTorch order and GGUF stores it
+  reversed, so a rectangular tensor means picking an end per format and being wrong in
+  one of them. A model's width is in any attention projection, which is `[dim, dim]`.
+
+  The case that justifies the whole approach is in the models dir: a file named
+  `minimax_h3Comfy.safetensors` is a Qwen3-VL-32B *text encoder*. Filename matching would
+  have slotted 15 GB in as a transformer and failed minutes into a run.
+
+  - **`[[video]]` did not go away, it changed job.** It names files that aren't
+    downloaded yet (so the listing stays a checklist), pins measured settings, and
+    settles the one question no header can answer. An entry **replaces** a discovered
+    model rather than patching it, matching on `name` or on naming the same
+    `diffusion_model`. Replacing wholesale is what keeps `VideoModel` a single struct — a
+    field-wise merge would need every knob to be `Option` so "unset" could be told from
+    "set to the default", which is the `Defaults`/`Template` trap from the top of this
+    file. What an entry omits comes from `VideoFamily::recipe`, not from the discovered
+    copy.
+  - **Which half of a MoE pair a file is cannot be read from it.** The two experts have
+    identical tensor names and identical shapes and differ only in their weights, so
+    `noise_marker` falls back to the filename — the only place the information exists.
+    When the filename says nothing either, the file becomes a `wan_dense` model that runs
+    alone, **not** a guess. That variant exists for exactly this: repackagers ship single
+    14B files with no marker, sd.cpp runs a lone expert quite happily, and the
+    alternatives were to guess which half it was or to refuse to list a runnable file.
+  - A missing component is not an error at startup: a half-downloaded 20 GB model is the
+    normal state of one for an hour, so `doctor` and the model select list it greyed out
+    *with the filename it is waiting for*. Discovery keeps that property — a model whose
+    VAE isn't there yet points at the conventional name **inside the role directory it
+    belongs in**, so the path printed is also an instruction. Download one expert of a
+    pair and it names the other one exactly.
+  - The role subdirectories (`diffusion_models/`, `vae/`, `text_encoders/`, `loras/`,
+    `clip_vision/`) are ComfyUI's layout, which is what every download instruction
+    assumes. **The scan is recursive, so they are for the human, not the program** — a
+    flat folder discovers exactly the same models. They exist because the encoder is
+    *shared*: one umt5 serves every Wan family, so a folder per model would mean copying
+    7 GB per model or a tree of symlinks.
+  - **`family` is the load-bearing field.** It decides which flags `video_cmd` emits
+    (the A14B pair needs a whole second `--high-noise-*` set; H3 needs `--llm` and
+    `--audio-vae`), which grid sizes and frame counts round to, and whether fps is the
+    user's to choose. Keeping it explicit from day one is what makes a new architecture a
+    few lines of config rather than a refactor — `minimax_h3` is already a variant, and
+    is unrunnable here only on memory grounds.
+  - **The two grids round in opposite directions**, which is why `align_frames` isn't one
+    formula. Wan goes through `((f - 1) / 4) + 1` latent frames and back, and integer
+    division truncates, so 34 frames runs as 33 — *down* to `4k+1`. H3 has its own
+    branch, `while (frames % 17 != 5) ++frames` — *up* to `17k+5`, floor 5. Sizes always
+    round **up**, to `vae_scale_factor × 2`: 32 for the TI2V-5B and H3, 16 for every
+    other Wan. All of it is in sd.cpp's `src/pipeline/diffusion_engine.cpp` and
+    `src/pipeline/request.cpp`; sd.cpp aligns and *warns*, so getting the direction wrong
+    here doesn't fail, it just makes the sidecar describe a clip that doesn't exist.
+  - The page is handed those rules as data (`VideoModelDto::frame_grid`,
+    `size_multiple`, `forced_fps`) rather than deriving them from `family`. It rounds the
+    frame count to show a duration and `video_cmd` rounds it to run the model; two
+    implementations of `4k+1` that disagree by one frame is exactly how the box above the
+    button starts lying. `the_frame_grid_describes_the_rounding` takes `align_frames` as
+    the truth and asserts the published grid explains every answer it gives.
+  - **A clip is a PNG sequence, not a container**, and `-o` cannot be both — a format
+    specifier in the output path takes an early branch in sd-cli that writes one file per
+    frame, and without one it muxes a single `.avi`/`.webm`/`.webp`. Frames win because
+    of what happens next: both escalations consume frames (`Fsr::process` per frame,
+    `--control-video` for a VACE pass) and this binary has no video decoder to get them
+    back out of a container — `image` is compiled `features = ["png"]` and sd-cli's muxer
+    is internal to sd-cli, with no mode that runs it over existing images. A container
+    would mean regenerating the clip, at minutes a go, to do anything with it. Frames are
+    also lossless, which is invariant 1's argument again: what gets filtered should not
+    already be compression artifacts. The price is disk, ~700 KB a frame at 832×480, so
+    ~23 MB for a 33-frame clip. Playback is therefore a `<canvas>` and a timer rather
+    than a `<video>`, which also buys frame-exact scrubbing.
+  - The video Stop is `POST /cancel` and **kills the child**, unlike the image tab's
+    `#stop`, which lets the image in flight finish and then ends the run. There is only
+    ever one clip in flight, so stopping it can only mean killing it. A cancelled run's
+    error ends in `sd::CANCELLED`, which the page reports as "Stopped" rather than as a
+    wall of sd-cli stderr.
+- **A file's weight type on disk is not what it costs to run**, which is why there is a
+  Convert tab (`src/convert.rs`, `-M convert`). `Linear::forward`
+  (`model/common/ggml_block.hpp:211`) asks the backend whether it can matmul the stored
+  type and, when it can't, puts a `ggml_cast` in the *compute graph* for every linear
+  layer — so an fp8 checkpoint on a Vulkan device (all of which report no fp8) executes
+  as BF16 and needs about twice its file size. `q4_K` is not a downgrade from fp8 there;
+  it is the first type in the list the backend can actually multiply.
+  - **The component flag renames the tensors.** `convert_with_components`
+    (`sd.cpp src/convert.cpp:354`) takes a path per slot and prefixes every tensor name
+    by which slot it arrived in: `--diffusion-model` → `model.diffusion_model.`, `--vae`
+    → `vae.`, `--t5xxl` → `text_encoders.t5xxl.transformer.`, `-m` → nothing. The wrong
+    flag writes a *valid* file full of misnamed tensors that fails minutes into a later
+    run. `Slot::for_role` is that mapping and it is derived from the discovered role, so
+    the client never picks it. Roles with no slot at all (`QwenVl` needs `--llm`,
+    `ClipVision` needs `--clip_vision`, neither being a parameter of that function) are
+    left off the list rather than squeezed through a neighbouring flag. Prefixing is
+    idempotent (`model_loader.cpp:292`), so a converted file round-trips.
+  - **`-t 1` is load-bearing, not caution.** sd.cpp's streaming converter runs a worker
+    per core, all calling `ModelLoader::load_tensor` on one shared loader
+    (`convert.cpp:244`), which re-enters `load_tensors` → `process_model_files` and
+    mutates that loader's `file_data` unlocked. At the default it aborts in glibc on
+    roughly one run in three. The crash is survivable — `Engine::convert` removes the
+    partial file — but the race is in the loader's bookkeeping *while other threads read
+    through the mappings it is remaking*, so it can also write wrong bytes and exit
+    cleanly. Measured cost of serializing: 254 MB in 2.07 s against 0.53 s at four
+    threads. Revisit if upstream takes a lock.
+  - **A shape does not always survive a conversion, and the VAE is where that bit.**
+    GGUF has four dimensions, so exporting a 5-D Conv3d weight folds the trailing axes:
+    `conv2.weight` `[16, 16, 1, 1, 1]` comes back `[1, 1, 1, 256]`, element count kept
+    and the width gone. So the Wan VAE's `z_dim` is read off `conv2.bias` — one
+    dimension, therefore immune to both that and the PyTorch/ggml order flip — with
+    `square_dim` on the weight kept only as a fallback. `Tensors::vector_len` is for
+    exactly this, and `a_vae_survives_the_trip_through_gguf` is the regression. Biases
+    are never quantized (`model_loader.cpp:1517`), so they are always there to read.
+  - The size shown before the button is `estimate`, which transcribes
+    `ModelLoader::tensor_should_be_converted` (`model_loader.cpp:1509`) rather than
+    assuming everything is quantized — a transformer keeps every bias, norm scale and
+    embedding at full width, which is enough to matter when the question is "does this
+    fit in 24 GB". It lands within 0.01% of a real conversion. The **type table is
+    served**, not written into the page, for the reason `frame_grid` is: a second copy in
+    JavaScript is free to disagree with the one the CLI validates against.
 - No Python anywhere in build or runtime. That is the project's whole pitch.

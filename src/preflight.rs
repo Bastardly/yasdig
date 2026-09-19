@@ -4,6 +4,24 @@
 //! fix instructions for anything missing.
 
 use crate::config::Config;
+use crate::discover::{DitKind, Role, VaeKind};
+
+/// One line naming what a shared component is, for the `doctor` listing.
+fn describe_role(role: &Role) -> String {
+    match role {
+        Role::Umt5 => "umt5-xxl text encoder (shared by every Wan family)".into(),
+        Role::QwenVl => "Qwen3-VL text encoder (MiniMax H3 only)".into(),
+        Role::ClipVision => "CLIP-Vision tower (Wan 2.1 I2V/FLF2V)".into(),
+        Role::Vae(VaeKind::Wan21) => "wan_2.1 VAE — every Wan except the TI2V-5B".into(),
+        Role::Vae(VaeKind::Wan22) => "wan2.2 VAE — TI2V-5B only".into(),
+        Role::Lora => "LoRA (name it in a [[video]] entry's `loras` to use it)".into(),
+        Role::Dit(DitKind::WanOther { dim }) => {
+            format!("a Wan transformer of width {dim}, which is not a family this build runs")
+        }
+        Role::Dit(_) => "transformer".into(),
+        Role::Unknown(why) => why.clone(),
+    }
+}
 
 pub struct Report {
     /// Fatal problems — the app cannot usefully serve requests.
@@ -133,7 +151,67 @@ pub fn check(cfg: &Config) -> Report {
         ));
     }
 
-    // 3) Web UI (API still works without it, so this is only a warning).
+    // 3) Video models: whatever the video dir was identified as, plus the
+    // `[[video]]` table.
+    //
+    // Never an error, even with nothing on disk. The image side must have a
+    // usable checkpoint to be worth starting at all; video is an extra tab, and
+    // a half-downloaded 20 GB model is the normal state of one for an hour at a
+    // time. So the report is a download checklist: it says which component file
+    // is still missing, which is exactly what the config comments promise.
+    let clips = cfg.video_models();
+    let scan = cfg.discover_video();
+    if !clips.is_empty() {
+        let ready = clips.iter().filter(|m| m.exists).count();
+        info.push(format!("{ready}/{} video model(s) ready:", clips.len()));
+        for m in &clips {
+            let (w, h, frames) = m.aligned();
+            info.push(format!(
+                "  {} {:<24} [{}]  {w}x{h}, {frames} frames @ {} fps ({:.1}s){}",
+                if m.exists { "•" } else { "○" },
+                m.name,
+                m.family.as_str(),
+                m.effective_fps(),
+                m.duration(),
+                if m.discovered { "" } else { "  (models.toml)" },
+            ));
+            for path in m.missing() {
+                info.push(format!("      missing: {}", path.display()));
+            }
+        }
+    }
+    // The shared parts, so a folder of eight files that produced two models
+    // doesn't look like it lost six of them.
+    if !scan.components.is_empty() {
+        info.push(format!(
+            "{} shared video component(s) in {}:",
+            scan.components.len(),
+            cfg.video_dir().display()
+        ));
+        for c in &scan.components {
+            info.push(format!(
+                "  · {:<44} {}",
+                c.path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                describe_role(&c.role),
+            ));
+        }
+    }
+    // And the ones nothing could be made of. A warning rather than info: an
+    // unplaceable 15 GB file in the models dir is either a bad download or
+    // something the user believes is working, and both are worth saying out
+    // loud once.
+    for u in &scan.unrecognized {
+        warnings.push(format!(
+            "not recognised as a video model component:\n  {}\n  {}",
+            u.path.display(),
+            u.why
+        ));
+    }
+
+    // 4) Web UI (API still works without it, so this is only a warning).
     let index = cfg.base_dir.join("web").join("index.html");
     if !index.exists() {
         warnings.push(format!(

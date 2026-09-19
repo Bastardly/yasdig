@@ -30,6 +30,14 @@
      (with gaps) to ~1400px, which is the width at which all three fit on one
      row; under that the work items wrap, and under ~960 the result does too. */
   .layout { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+  /* `hidden` is only `display: none` from the UA stylesheet, and *any* author
+     rule that sets `display` beats it — author styles win over UA styles whatever
+     the specificity. `.layout` sets `display: flex`, so `showTab` hid the video
+     panel by setting an attribute that the rule above silently ignored and both
+     tabs rendered stacked. The `!important` is the fix the HTML spec itself
+     recommends for author sheets; it applies to every `hidden` toggle on the
+     page, all of which mean the same thing. */
+  [hidden] { display: none !important; }
   /* Without this a flex item's automatic minimum size is its content's intrinsic
      width — the image's own pixel width — which would blow the column out past
      the viewport instead of scaling the picture down. */
@@ -128,6 +136,57 @@
   .wigrid button.sel { border-color: #f85149; }
   .wigrid button.sel img { filter: sepia(1) saturate(3) hue-rotate(-40deg) brightness(.85); }
   .wigrid.deleting button:hover { border-color: #f85149; }
+
+  /* Image | Video. Two workflows that share one GPU and almost no controls — a
+     clip has frames, fps and a flow shift and no upscale ladder at all — so they
+     are separate panels rather than one panel with half its fields hidden. */
+  .tabs { display: flex; gap: 4px; margin: 0 0 16px; }
+  .tabs button {
+    margin: 0; width: auto; padding: 8px 18px; background: #161b22;
+    color: #8b949e; border: 1px solid #30363d; border-radius: 8px;
+  }
+  .tabs button.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+
+  /* The frame player. A clip is a PNG sequence — see SdRunner::video — so
+     playback is a canvas and a timer rather than a <video>. Which also gives
+     frame-exact scrubbing for free, and that is what you want from two seconds
+     of footage you are judging rather than watching. */
+  #vcanvas {
+    max-width: 100%; border-radius: 10px; border: 1px solid #30363d;
+    display: block; margin-top: 12px; background: #0d1117;
+  }
+  .player { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .player button { margin: 0; width: auto; padding: 8px 14px; flex: 0 0 auto; }
+  .player input[type=range] { flex: 1; padding: 0; border: 0; background: none; accent-color: #388bfd; }
+  .player .val { flex: 0 0 auto; font-size: 13px; color: #8b949e; font-variant-numeric: tabular-nums; }
+
+  /* The img2img source zone. A dashed box because the whole area takes a drop,
+     not just the button inside it — dragging a file onto a 90x30 target is a
+     game of skill. */
+  .drop {
+    border: 1px dashed #30363d; border-radius: 10px; padding: 10px 12px;
+    margin-bottom: 14px; background: #0d1117;
+  }
+  .drop.over { border-color: #388bfd; background: #10202f; }
+  .drop .picked { margin-top: 0; }
+  .drop button { margin: 0 6px 0 0; width: auto; padding: 7px 12px; font-size: 13px; }
+  .wihead #i2refresh { margin: 0; width: auto; padding: 7px 12px; font-size: 13px; }
+  /* Half the height of the work-items strip: this is a picker, and twice as many
+     candidates on screen is worth more here than detail. */
+  #i2grid img { height: 120px; }
+  #i2grid button.active { border-color: #388bfd; }
+
+  /* The chosen first frame, beside the button that chose it. */
+  .picked { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .picked img { height: 56px; width: auto; border-radius: 6px; border: 1px solid #30363d; }
+  .picked button { margin: 0; width: auto; padding: 7px 12px; font-size: 13px; }
+  /* The outputs picker. Same grid as the work items, in a dialog. */
+  #picker {
+    max-width: min(1100px, 92vw); max-height: 86vh; background: #161b22;
+    color: #e6edf3; border: 1px solid #30363d; border-radius: 10px; padding: 16px;
+  }
+  #picker::backdrop { background: rgba(0, 0, 0, .7); }
+  #picker .wigrid img { height: 140px; }
 </style>
 </head>
 <body>
@@ -135,7 +194,14 @@
   <h1>rustimage</h1>
   <p class="sub">Vulkan · stable-diffusion.cpp + native FSR upscale — no Python.</p>
 
-  <div class="layout">
+  <div class="tabs">
+    <button type="button" class="tab active" data-tab="image">Image</button>
+    <button type="button" class="tab" data-tab="img2img">Image to image</button>
+    <button type="button" class="tab" data-tab="video">Video</button>
+    <button type="button" class="tab" data-tab="convert">Convert</button>
+  </div>
+
+  <div class="layout" id="tab-image">
   <div class="card col-controls">
     <label for="prompt">Prompt</label>
     <textarea id="prompt" placeholder="a lovely robot crab, cinematic lighting, sharp, in focus">a lovely robot crab, cinematic lighting, sharp, in focus</textarea>
@@ -215,6 +281,14 @@
                currently resolves to, so an empty field still says what it does. -->
           <input id="icfg" type="number" step="0.1" min="0">
         </div>
+        <div>
+          <!-- A checkpoint is a setting of the pass about to run, not of the one
+               that made the image — so unlike Steps or CFG above, changing this
+               after a generate does something. Draft on a Turbo model, finish on
+               a detailed one. -->
+          <label for="escmodel">Refine/hi-res model</label>
+          <select id="escmodel"></select>
+        </div>
       </div>
       <p class="sub" id="stepnote" style="margin:6px 0 0"></p>
 
@@ -254,6 +328,7 @@
          button that greys out for the length of the thing it stops is
          furniture. It hides itself again when the run ends. -->
     <button id="stop" class="danger" hidden>Stop</button>
+    <p class="sub" id="prog" style="margin:8px 0 0"></p>
     <div id="err" class="err"></div>
   </div>
 
@@ -298,9 +373,344 @@
     <div id="wigrid" class="wigrid"></div>
   </div>
   </div>
+
+  <!-- ==================== Image to image ====================
+       One diffusion pass over a picture that already exists, and then the same
+       ladder the Image tab has. A separate panel rather than a mode of the first
+       one because almost nothing carries over: there is no base size (sd.cpp
+       takes the size from the init image), no upscale factor on the way in, and
+       the thing that decides the result is a source image rather than a prompt.
+       What it does share is the result column, and that sharing is real — see
+       PANES in the script. -->
+  <div class="layout" id="tab-img2img" hidden>
+  <div class="card col-controls">
+    <label>Source image</label>
+    <!-- The drop target is the whole zone, not just the button: dragging a file
+         onto a 90×30 button is a game of skill. Paste is bound to the document
+         and checks which tab is showing. -->
+    <div id="i2drop" class="drop">
+      <div class="picked">
+        <img id="i2srcthumb" alt="" hidden>
+        <div>
+          <span id="i2srcname" class="sub">Drop an image here, paste one, or pick one below.</span>
+          <div style="margin-top:6px">
+            <button type="button" id="i2browse">Choose a file…</button>
+            <button type="button" id="i2clear" hidden>Clear</button>
+          </div>
+        </div>
+      </div>
+      <!-- Anything the browser can decode. It is re-encoded to PNG in a canvas
+           before upload, which is why this build needs no JPEG decoder. -->
+      <input type="file" id="i2file" accept="image/*" hidden>
+    </div>
+
+    <label for="i2prompt">Prompt</label>
+    <textarea id="i2prompt" placeholder="oil painting, thick impasto, warm light"></textarea>
+
+    <label for="i2negative">Negative prompt (optional)</label>
+    <input id="i2negative" placeholder="blurry, low quality" value="watermark, worst quality, low quality">
+
+    <div class="row">
+      <div>
+        <label for="i2template">Model</label>
+        <select id="i2template"></select>
+      </div>
+      <div>
+        <label for="i2seed">Seed (-1 = random)</label>
+        <input id="i2seed" type="number" value="-1">
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="i2strength">Strength</label>
+        <!-- The one knob that decides whether this is a re-render or a retouch.
+             Higher redraws more and keeps less of the source. -->
+        <input id="i2strength" type="number" step="0.05" min="0.05" max="0.95">
+      </div>
+      <div>
+        <label for="i2steps">Steps</label>
+        <input id="i2steps" type="number" min="1" max="100">
+      </div>
+      <div>
+        <label for="i2maxside">Working size</label>
+        <!-- A ceiling, not a target: a source already smaller than this is left
+             alone. It exists because a phone photo is 4000 px on its long side
+             and diffusing that takes the card out of memory. -->
+        <select id="i2maxside"></select>
+      </div>
+    </div>
+
+    <details>
+      <summary>Advanced</summary>
+      <div class="row">
+        <div>
+          <label for="i2cfg">CFG scale</label>
+          <input id="i2cfg" type="number" step="0.1" min="0">
+        </div>
+        <div>
+          <label for="i2icfg">img2img CFG</label>
+          <input id="i2icfg" type="number" step="0.1" min="0">
+        </div>
+        <div>
+          <label for="i2sampler">Sampler</label>
+          <select id="i2sampler">
+            <option value="euler">euler</option>
+            <option value="euler_a">euler_a</option>
+            <option value="dpm++2m">dpm++2m</option>
+            <option value="dpm++2mv2">dpm++2mv2</option>
+            <option value="lcm">lcm</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="i2rsteps">Refine steps</label>
+          <input id="i2rsteps" type="number" min="0" max="100">
+        </div>
+        <div>
+          <label for="i2rstrength">Refine strength</label>
+          <input id="i2rstrength" type="number" step="0.05" min="0.05" max="0.95">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="i2hsteps">Hi-res steps</label>
+          <input id="i2hsteps" type="number" min="0" max="100">
+        </div>
+        <div>
+          <label for="i2hstrength">Hi-res strength</label>
+          <input id="i2hstrength" type="number" step="0.05" min="0.05" max="0.95">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="i2escmodel">Refine/hi-res model</label>
+          <select id="i2escmodel"></select>
+        </div>
+      </div>
+      <p class="sub" id="i2note" style="margin:6px 0 0"></p>
+    </details>
+
+    <button id="i2go">Run img2img</button>
+    <button id="i2stop" class="danger" hidden>Stop</button>
+    <p class="sub" id="i2prog" style="margin:8px 0 0"></p>
+    <div id="i2err" class="err"></div>
+  </div>
+
+  <div class="col-result">
+    <div id="i2result" class="result"></div>
+    <div id="i2post" class="card" hidden>
+      <div class="posthead">
+        <b>Postprocessing</b><span id="i2postms" class="meta"></span>
+      </div>
+      <div class="slider">
+        <label for="i2clarity">Clarity</label>
+        <input id="i2clarity" type="range" min="-1" max="1" step="0.01">
+        <span class="val" id="i2clarityval"></span>
+      </div>
+      <div class="slider">
+        <label for="i2sharpness">Sharpness</label>
+        <input id="i2sharpness" type="range" min="0" max="1" step="0.01">
+        <span class="val" id="i2sharpnessval"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Everything in work/output/: what you saved, and what you dropped in. One
+       pool, because at the moment you are choosing something to diffuse the
+       difference between the two is not interesting. -->
+  <div class="workitems card">
+    <div class="wihead">
+      <b>Source images</b>
+      <button type="button" id="i2refresh">Refresh</button>
+    </div>
+    <div id="i2grid" class="wigrid"></div>
+  </div>
+  </div>
+
+  <!-- ==================== Video ==================== -->
+  <div class="layout" id="tab-video" hidden>
+  <div class="card col-controls">
+    <label for="vprompt">Prompt</label>
+    <textarea id="vprompt" placeholder="the crab lifts a claw, slow camera push in"></textarea>
+
+    <label for="vnegative">Negative prompt</label>
+    <!-- Pre-filled from the model, which for Wan means Wan's own published
+         negative prompt — 400 characters of Chinese nobody should have to
+         retype. Emptying it deliberately means "no negative". -->
+    <textarea id="vnegative" style="min-height:48px"></textarea>
+
+    <div class="row">
+      <div>
+        <label for="vmodel">Model</label>
+        <select id="vmodel"></select>
+      </div>
+      <div>
+        <label for="vseed">Seed (-1 = random)</label>
+        <input id="vseed" type="number" value="-1">
+      </div>
+    </div>
+    <p class="sub" id="vmodelnote" style="margin:8px 0 0"></p>
+
+    <!-- The first frame comes from work/output/ — the images that were worth
+         keeping are the ones worth animating. Clearing it makes the same model
+         run as plain text-to-video. -->
+    <label class="grouphead">First frame</label>
+    <div class="picked">
+      <img id="vsrcthumb" alt="" hidden>
+      <span class="sub" id="vsrcname" style="margin:0">None — text to video</span>
+      <button type="button" id="vpick" class="secondary">Choose…</button>
+      <button type="button" id="vclear" class="danger" hidden>Clear</button>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="vw">Width</label>
+        <input id="vw" type="number" min="64">
+      </div>
+      <div>
+        <label for="vh">Height</label>
+        <input id="vh" type="number" min="64">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="vframes">Frames</label>
+        <input id="vframes" type="number" min="1">
+      </div>
+      <div>
+        <label for="vfps">fps</label>
+        <input id="vfps" type="number" min="1" max="60">
+      </div>
+    </div>
+    <p class="sub" id="vgridnote" style="margin:6px 0 0"></p>
+
+    <div class="row">
+      <div>
+        <label for="vsteps">Steps</label>
+        <input id="vsteps" type="number" min="1" max="100">
+      </div>
+      <div>
+        <label for="vcfg">CFG scale</label>
+        <input id="vcfg" type="number" step="0.1" min="0">
+      </div>
+      <div>
+        <label for="vsampler">Sampler</label>
+        <select id="vsampler">
+          <option value="euler">euler</option>
+          <option value="euler_a">euler_a</option>
+          <option value="dpm++2m">dpm++2m</option>
+        </select>
+      </div>
+    </div>
+    <!-- Shown only for the mixture-of-experts pair, which is the only family
+         with a second expert for these to describe. -->
+    <div class="row" id="vmoe" hidden>
+      <div>
+        <label for="vhsteps">High-noise steps</label>
+        <input id="vhsteps" type="number" min="0" max="100">
+      </div>
+      <div>
+        <label for="vhcfg">High-noise CFG</label>
+        <input id="vhcfg" type="number" step="0.1" min="0">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="vshift">Flow shift</label>
+        <input id="vshift" type="number" step="0.5" min="0">
+      </div>
+    </div>
+    <div class="checks">
+      <!-- The first OOM escalation, and the one worth reaching for before the
+           others: Wan's VAE is the memory-hungry end of the pipeline, and
+           tiling it costs time rather than quality. -->
+      <label><input type="checkbox" id="vtiling"> VAE tiling (if the decode runs out of VRAM)</label>
+    </div>
+
+    <button id="vgo">Generate clip</button>
+    <!-- Not the image tab's Stop, which finishes the image in flight and then
+         ends the run. There is only ever one clip in flight, so stopping it
+         means killing it — POST /cancel. -->
+    <button id="vstop" class="danger" hidden>Stop</button>
+    <p class="sub" id="vprog" style="margin:8px 0 0"></p>
+    <div id="verr" class="err"></div>
+  </div>
+
+  <div class="col-result">
+    <div id="vresult"></div>
+  </div>
+
+  <div class="workitems card">
+    <div class="wihead">
+      <b>Clips</b>
+      <span class="wimodes">
+        <label><input type="radio" name="vmode" value="open" checked> Click to open</label>
+        <label><input type="radio" name="vmode" value="delete"> Click to delete</label>
+      </span>
+      <button id="vdelete" class="danger" hidden></button>
+    </div>
+    <div id="vgrid" class="wigrid"></div>
+  </div>
+  </div>
+
+  <!-- Convert: requantize a file you already have, rather than downloading a
+       different copy of it. The whole tab is driven by what `crate::discover`
+       already read out of each file's header — the role is what picks the
+       `sd-cli` component flag, and picking the wrong one produces a valid file
+       full of misnamed tensors. So the page never names a path or a flag; it
+       chooses from what /convert-models offered. -->
+  <div class="layout" id="tab-convert" hidden>
+  <div class="card col-controls">
+    <label for="csource">Model file</label>
+    <select id="csource"></select>
+    <p class="sub" id="crole" style="margin:8px 0 0"></p>
+    <p class="sub" id="cnote" style="margin:8px 0 0"></p>
+
+    <label for="ctype" class="grouphead">Convert to</label>
+    <select id="ctype"></select>
+    <p class="sub" id="ctypenote" style="margin:8px 0 0"></p>
+
+    <p class="sub" id="csize" style="margin:12px 0 0"></p>
+    <p class="sub" id="cdest" style="margin:6px 0 0"></p>
+
+    <button id="cgo">Convert</button>
+    <!-- Same Stop as the video tab and for the same reason: there is one child
+         process, so stopping it means killing it. A half-written GGUF is
+         removed by Engine::convert rather than left for discovery to find. -->
+    <button id="cstop" class="danger" hidden>Stop</button>
+    <p class="sub" id="cprog" style="margin:8px 0 0"></p>
+    <div id="cerr" class="err"></div>
+  </div>
+
+  <div class="col-result">
+    <div class="card">
+      <b>What this is for</b>
+      <p class="sub">A file's type on disk is not what it costs to run. When the
+      backend can't multiply the stored type — every Vulkan device today reports
+      no fp8 — sd.cpp casts each layer's weights at run time instead, so an fp8
+      checkpoint executes as if it were BF16 and needs about twice its own size.
+      Converting to a type the backend multiplies natively is smaller
+      <em>and</em> faster.</p>
+      <p class="sub">The result is written beside its source, so it is
+      discovered on the next start with no config edit. Nothing is deleted — the
+      original stays where it is.</p>
+      <div id="cresult"></div>
+    </div>
+  </div>
+  </div>
 </div>
 
 <dialog id="lightbox"><img alt="full size result"></dialog>
+<dialog id="picker">
+  <div class="wihead">
+    <b>Pick a first frame</b>
+    <span class="sub" style="margin:0">from work/output/</span>
+    <button type="button" id="pickclose" class="secondary">Close</button>
+  </div>
+  <div id="pickgrid" class="wigrid"></div>
+</dialog>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -326,6 +736,28 @@ let workId = null;
 // loop mode, `stop` is set by the Stop button and read between images. It is
 // also the flag everything else reads to know the GPU is spoken for.
 let run = null;
+
+// ---------------------------------------------------------------------------
+// Two tabs put an image on screen, and everything under it — the action row,
+// the two sliders, Save, the lightbox — is the same machinery pointed at a
+// different pair of elements. `pane` says which.
+//
+// The state above stays single on purpose. Only one tab is visible at a time and
+// the GPU worker is serialized, so there is only ever one live `imageId` to
+// have; two copies would mean two ways to be stale. What that costs is that
+// switching tabs has to *clear* the pane being left (see showTab), or a picture
+// would sit there looking live while `imageId` addressed a different one.
+//
+// It also means the ids render() writes — refine, hires, saveout, upfactor —
+// exist in at most one pane at a time, which is why IDLE_LABELS and setUpFactor
+// need no second set of them.
+// ---------------------------------------------------------------------------
+const PANES = {
+  image:   { result: 'result',   post: 'post',   ms: 'postms',   sharp: 'sharpness',   clar: 'clarity',   err: 'err',    escmodel: 'escmodel' },
+  img2img: { result: 'i2result', post: 'i2post', ms: 'i2postms', sharp: 'i2sharpness', clar: 'i2clarity', err: 'i2err',  escmodel: 'i2escmodel' },
+};
+let pane = 'image';
+const P = (k) => $(PANES[pane][k]);
 
 // The grid renders user-supplied prompts into attributes, which nothing else on
 // this page does — every other interpolation is a number from the server.
@@ -362,14 +794,14 @@ function syncAdvanced() {
 // /generate reads. Pre-filled from the model, then re-set from the server's
 // reply — which is authoritative, since it says what the image actually has.
 function setPost(sharpness, clarity) {
-  $('sharpness').value = sharpness;
-  $('clarity').value = clarity;
+  P('sharp').value = sharpness;
+  P('clar').value = clarity;
   syncPostLabels();
 }
 
 function syncPostLabels() {
-  for (const id of ['sharpness', 'clarity']) {
-    $(id + 'val').textContent = Number($(id).value).toFixed(2);
+  for (const k of ['sharp', 'clar']) {
+    $(PANES[pane][k] + 'val').textContent = Number(P(k).value).toFixed(2);
   }
 }
 
@@ -414,19 +846,38 @@ function cfgNote() {
 async function loadModels() {
   try {
     models = await (await fetch('/models')).json();
-    const sel = $('template');
-    sel.innerHTML = '';
-    for (const m of models) {
-      const opt = document.createElement('option');
-      opt.value = m.name;
-      const tag = m.discovered ? 'discovered' : 'preset';
-      opt.textContent = `${m.name} [${tag}] — ${m.out_width}×${m.out_height}`;
-      sel.appendChild(opt);
+    // Four selects off one list: the two that choose what generates, and the two
+    // that choose what escalates. The escalation pair leads with a blank option
+    // meaning "whatever made the image", which is what the server reads an empty
+    // string as.
+    for (const [id, blank] of [['template', null], ['i2template', null],
+                               ['escmodel', '— same as generated —'],
+                               ['i2escmodel', '— same as generated —']]) {
+      const sel = $(id);
+      sel.innerHTML = '';
+      if (blank) {
+        const none = document.createElement('option');
+        none.value = '';
+        none.textContent = blank;
+        sel.appendChild(none);
+      }
+      for (const m of models) {
+        const opt = document.createElement('option');
+        opt.value = m.name;
+        const tag = m.discovered ? 'discovered' : 'preset';
+        opt.textContent = blank
+          // An escalation never uses a model's base size, so quoting it there
+          // would be a number that means nothing about what the button will do.
+          ? `${m.name} [${tag}]`
+          : `${m.name} [${tag}] — ${m.out_width}×${m.out_height}`;
+        sel.appendChild(opt);
+      }
     }
     if (!models.length) {
       $('err').textContent = 'No models found. Drop a .safetensors into the models/ folder.';
     }
     syncAdvanced();
+    syncI2();
   } catch (e) {
     $('err').textContent = 'Could not load models: ' + e;
   }
@@ -441,16 +892,17 @@ function bar(name, ms, max) {
 
 const UPSCALES = [[1, '1× (same size)'], [1.5, '1.5×'], [2, '2×'], [3, '3×'], [4, '4×']];
 
-// One factor, two places to set it: the select above the image, and the one in
-// the run panel — which has to exist too, because the first is rebuilt by every
-// render and so isn't there before the first image. Both are views of
-// `upFactor`; this keeps them saying the same thing.
+// One factor, three places to set it: the select above the image, the one in the
+// run panel — which has to exist too, because the first is rebuilt by every
+// render and so isn't there before the first image — and the one over a clip's
+// frames. All three are views of `upFactor`; this keeps them saying the same
+// thing, which matters because two of them are on tabs you can't see at once.
 const upOptions = () => UPSCALES.map(([v, label]) =>
   `<option value="${v}"${v === upFactor ? ' selected' : ''}>${label}</option>`).join('');
 
 function setUpFactor(v) {
   upFactor = v;
-  for (const id of ['upfactor', 'runscale']) {
+  for (const id of ['upfactor', 'runscale', 'vfactor']) {
     if ($(id) && parseFloat($(id).value) !== v) $(id).value = v;
   }
   syncRunNote();
@@ -495,7 +947,7 @@ function render(data) {
     + (data.hires_passes ? ` · hi-res${times(data.hires_passes)}` : '');
   currentSrc = `data:image/png;base64,${data.image_base64}`;
 
-  $('result').innerHTML = `
+  P('result').innerHTML = `
     <div class="meta"><b>${data.width}×${data.height}</b> · seed
       <b id="seedval" class="pin" title="Put this seed in the box, to generate it again">${data.seed}</b>
       · total <b>${total} ms</b>${tags}</div>
@@ -505,10 +957,12 @@ function render(data) {
     <div id="rerr" class="err"></div>
     <img src="${currentSrc}" alt="result" title="Click to view at full size">`;
 
-  $('result').querySelector('img').addEventListener('click', () => showFullSize(currentSrc));
+  P('result').querySelector('img').addEventListener('click', () => showFullSize(currentSrc));
   // Opt-in reproducibility: pinning the seed is a thing you choose, not
   // something that happens to the box you just typed in.
-  $('seedval').addEventListener('click', () => { $('seed').value = data.seed; });
+  $('seedval').addEventListener('click', () => {
+    $(pane === 'image' ? 'seed' : 'i2seed').value = data.seed;
+  });
   if ($('refine')) $('refine').addEventListener('click', refine);
   if ($('hires')) $('hires').addEventListener('click', hires);
   if ($('saveout')) $('saveout').addEventListener('click', saveOutput);
@@ -525,8 +979,18 @@ function render(data) {
   // What the server actually applied — which after a generate is the model's
   // default, and after an escalation is whatever the sliders were left at.
   setPost(data.sharpness, data.clarity);
-  $('postms').textContent = '';
-  $('post').hidden = false;
+  P('ms').textContent = '';
+  P('post').hidden = false;
+}
+
+// Empty a pane and forget the image it was showing.
+//
+// Called when a tab is left, and it is not housekeeping: `imageId` is single, so
+// the picture in the pane you walked away from would otherwise keep sitting
+// there beside Refine and Hi-res buttons that now address a different image.
+function clearPane(which) {
+  $(PANES[which].result).innerHTML = '';
+  $(PANES[which].post).hidden = true;
 }
 
 // The image is already a data: URL on the page, so this re-uses it rather than
@@ -539,9 +1003,15 @@ function showFullSize(src) {
   box.scrollLeft = 0;
 }
 
+// The video buttons are in here too, and that is the important part: the GPU
+// worker is serialized, so a clip generating has to lock the image tab's
+// Generate as surely as it locks its own.
 const IDLE_LABELS = {
   go: 'Generate', refine: 'Refine image', hires: 'Hi-res pass',
   saveout: 'Save to output',
+  i2go: 'Run img2img',
+  vgo: 'Generate clip', venlarge: 'Enlarge frames',
+  cgo: 'Convert',
 };
 
 // The GPU worker is serialized, so every action locks out together; only the
@@ -558,19 +1028,56 @@ function setBusy(active, label) {
   // the run panel, which the map can't know. Restoring it here means every path
   // back to idle goes through one place.
   if (!active) syncGoLabel();
+  // Likewise: "Run img2img" is only pressable once there is something to run it
+  // on, which IDLE_LABELS can't know either.
+  if (!active) $('i2go').disabled = !i2source;
   // Both views of the upscale factor, not just the one above the image: they
   // are one value, so leaving the run panel's copy live during a pass would let
   // the pair disagree about a number the next image is about to read.
-  for (const id of ['upfactor', 'runscale']) {
+  for (const id of ['upfactor', 'runscale', 'vfactor']) {
     if ($(id)) $(id).disabled = !!active;
   }
   // The retained entry stays live during an escalation, so an adjust would
   // succeed and then be silently overwritten by the escalation's render.
   // Dropping a debounced one costs nothing: render() puts the sliders back to
   // what the server applied, which is where they already are.
-  $('sharpness').disabled = !!active;
-  $('clarity').disabled = !!active;
+  P('sharp').disabled = !!active;
+  P('clar').disabled = !!active;
   if (active) clearTimeout(postTimer);
+  // Called again for each stage of a run, so the poll is started once and left
+  // alone rather than restarted per stage.
+  if (active) {
+    if (!progTimer) progTimer = setInterval(pollProgress, PROGRESS_MS);
+  } else {
+    clearInterval(progTimer);
+    progTimer = null;
+    for (const id of ['prog', 'i2prog', 'vprog', 'cprog']) $(id).textContent = '';
+  }
+}
+
+// How often to ask what the worker is doing. Polled rather than pushed because
+// there is no channel from the server to the page, and it stays cheap: /progress
+// is answered on the connection thread, so it never queues behind the render it
+// reports on, and one small GET per second against a multi-second step is
+// nothing.
+const PROGRESS_MS = 700;
+let progTimer = null;
+
+async function pollProgress() {
+  try {
+    const p = await (await fetch('/progress')).json();
+    // `steps` is 0 until sd-cli prints its first bar, which is a real state and
+    // not worth rendering as '0/0'.
+    const text = p.busy && p.steps
+      ? `${p.phase === 'loading' ? 'Loading weights' : 'Step'} ${p.step}/${p.steps} · ${p.rate}`
+      : '';
+    // Written to both tabs' readouts rather than to whichever is showing: they
+    // report the same worker, and only one of them is ever visible.
+    for (const id of ['prog', 'i2prog', 'vprog', 'cprog']) $(id).textContent = text;
+  } catch {
+    // A dropped poll needs no reporting — the next one is PROGRESS_MS away, and
+    // the request that actually matters reports its own failure.
+  }
 }
 
 async function post(path, payload) {
@@ -594,7 +1101,7 @@ async function post(path, payload) {
 // control column, which on a wide screen is nowhere near the result. The slot is
 // part of render()'s output, and render() only runs on success, so the one from
 // the last successful render is still on the page to write into.
-const escErr = (msg) => { ($('rerr') || $('err')).textContent = msg; };
+const escErr = (msg) => { ($('rerr') || P('err')).textContent = msg; };
 
 async function escalate(which, path, payload, label) {
   if (imageId === null) return;
@@ -637,28 +1144,28 @@ function schedulePost() {
 async function runPost() {
   // `disabled` means an escalation is running; the follow-up from a coalesced
   // drag can land after one has started.
-  if (imageId === null || $('sharpness').disabled) return;
+  if (imageId === null || P('sharp').disabled) return;
   if (postBusy) { postAgain = true; return; }
   postBusy = true;
   try {
     const t0 = performance.now();
     const data = await post('/adjust', {
       image_id: imageId,
-      sharpness: parseFloat($('sharpness').value),
-      clarity: parseFloat($('clarity').value),
+      sharpness: parseFloat(P('sharp').value),
+      clarity: parseFloat(P('clar').value),
     });
     // Swap the pixels only. Rebuilding the result block would drop the image's
     // layout height for a frame, so the page would jump under the cursor on
     // every step of a drag.
     currentSrc = `data:image/png;base64,${data.image_base64}`;
-    const img = $('result').querySelector('img');
+    const img = P('result').querySelector('img');
     if (img) img.src = currentSrc;
-    $('postms').textContent =
+    P('ms').textContent =
       `${Math.round(performance.now() - t0)} ms · gpu ${data.timings.fsr_ms} ms`;
     escErr('');
   } catch (e) {
     escErr(String(e.message || e));
-    if (e.status === 400) { imageId = null; $('post').hidden = true; }
+    if (e.status === 400) { imageId = null; P('post').hidden = true; }
   } finally {
     postBusy = false;
     if (postAgain) { postAgain = false; runPost(); }
@@ -677,19 +1184,31 @@ const numOr = (id) => {
 // and folds these on top, so editing "Refine strength" and pressing Refine runs
 // at the new number rather than silently re-using the old one.
 //
-// Only these five: steps, CFG, sampler and base size describe the txt2img that
+// Only these six: steps, CFG, sampler and base size describe the txt2img that
 // has already run, and there is nothing a new value could do to the image in
 // hand. They stay as they are, and a later generate picks them up.
-const escalateSettings = () => ({
-  refine_steps: numOr('rsteps'),
-  refine_strength: numOr('rstrength'),
-  hires_steps: numOr('hsteps'),
-  hires_strength: numOr('hstrength'),
-  // Here null is a value, not an omission: clearing the box unsets the override
-  // so the passes follow the CFG box again. Sending nothing would pin whatever
-  // was last set, which is the one thing this field must never do.
-  img2img_cfg_scale: numOr('icfg'),
-});
+//
+// Read from whichever pane is showing, because both tabs end in the same two
+// buttons. There is deliberately one function rather than a copy per tab: a run
+// that grew its own list of knobs is how the panel starts lying about what the
+// button will do.
+const escalateSettings = () => {
+  const p = (id) => (pane === 'image' ? id : 'i2' + id);
+  return {
+    // A checkpoint, unlike everything else here, isn't a number in a box — but
+    // it passes the same test: it describes the pass about to run. Empty means
+    // "the one that made the image", which is what an unchosen select sends.
+    model: P('escmodel').value || null,
+    refine_steps: numOr(p('rsteps')),
+    refine_strength: numOr(p('rstrength')),
+    hires_steps: numOr(p('hsteps')),
+    hires_strength: numOr(p('hstrength')),
+    // Here null is a value, not an omission: clearing the box unsets the override
+    // so the passes follow the CFG box again. Sending nothing would pin whatever
+    // was last set, which is the one thing this field must never do.
+    img2img_cfg_scale: numOr(pane === 'image' ? 'icfg' : 'i2icfg'),
+  };
+};
 
 const refine = () => escalate('refine', '/refine', escalateSettings(), 'Refining…');
 const hires = () => escalate('hires', '/hires',
@@ -761,7 +1280,12 @@ function genPayload(index) {
     // afterwards. `img2img_cfg_scale` is among them, and null for an empty box
     // still means "leave it unset" here: the passes keep following cfg_scale
     // rather than getting pinned to whatever it resolves to today.
-    ...escalateSettings(),
+    //
+    // `model` is dropped rather than spread, and this is the one place it
+    // matters: it is the escalations' checkpoint, and `template` above is this
+    // generation's. Sent as-is it would arrive at /generate as a stray key —
+    // harmless today, and a name collision waiting to be renamed into a bug.
+    ...(({ model, ...esc }) => esc)(escalateSettings()),
     // Not sharpness/clarity: those are post-process, not generation settings,
     // so a new image starts from the model's values rather than inheriting
     // wherever the last one's sliders were left.
@@ -855,6 +1379,9 @@ async function saveOutput() {
   try {
     const data = await post('/save-output', { image_id: imageId });
     $('saved').textContent = `saved → ${data.path}`;
+    // work/output/ is also the img2img tab's source pool, so what was just
+    // saved is now something to start from.
+    loadI2Outputs();
   } catch (e) {
     escErr(String(e.message || e));
   } finally {
@@ -977,6 +1504,23 @@ function applyWorkItem(item) {
   $('rstrength').value = p.refine_strength;
   $('hsteps').value = p.hires_steps;
   $('hstrength').value = p.hires_strength;
+  // An image-to-image generation remembers what it was diffused from, so
+  // reopening one puts the source back rather than quietly forgetting where the
+  // picture came from. Only the img2img panel is restored — the model and
+  // strength that made it live there, not in this tab's boxes.
+  if (item.source) {
+    $('i2prompt').value = item.prompt;
+    $('i2negative').value = item.negative ?? '';
+    $('i2seed').value = item.seed;
+    if (models.some((m) => m.name === item.template)) $('i2template').value = item.template;
+    $('i2steps').value = p.source_steps;
+    $('i2strength').value = p.source_strength;
+    $('i2cfg').value = p.cfg_scale;
+    $('i2icfg').value = p.img2img_cfg_scale ?? '';
+    $('i2sampler').value = p.sampler;
+    setI2Source(item.source);
+    syncI2Note();
+  }
   // Not the sliders: render() sets those from what the server actually applied.
   syncStepNote();
 }
@@ -1010,6 +1554,926 @@ for (const r of document.querySelectorAll('input[name=wimode]')) {
   });
 }
 
+// ---- Video ------------------------------------------------------------------
+//
+// A second workflow over the same GPU. Almost nothing is shared with the image
+// side except setBusy and the progress poll, which is the point: a clip has
+// frames, an fps and a flow shift, and no escalation ladder at all. What it does
+// share is the worker, so a clip generating locks the image tab's buttons too —
+// there is one GPU and one queue.
+//
+// The result of a generation is a directory of PNGs, not a container (see
+// SdRunner::video for why). So playback is a canvas driven by a timer: every
+// frame is fetched once, decoded once, and then the clip scrubs frame-exactly,
+// which is what you want from two seconds of footage you are judging rather
+// than watching.
+
+let videoModels = [];
+// The clip on screen, its decoded frames, and where the playhead is.
+let clip = null;
+let vframes = [];
+let vframe = 0;
+let vtimer = null;
+// The chosen first frame: a work/output/ stem, or null for text-to-video.
+let vsource = null;
+// The last /videos listing, and which clips are marked for deletion.
+let clips = [];
+const vselected = new Set();
+// A clip generation in flight. Only ever one — there is no batch here, because
+// a single clip already owns the GPU for minutes.
+let vrunning = false;
+
+function currentVideoModel() {
+  return videoModels.find((m) => m.name === $('vmodel').value);
+}
+
+// Round the way the server will. Both rules come from /video-models rather than
+// being written out here, because `video_cmd` rounds the same numbers to run the
+// model and the duration below is only honest if the two agree exactly.
+const alignSize = (v, mult) => Math.max(mult, Math.ceil((v || 0) / mult) * mult);
+
+function alignFrames(v, g) {
+  const f = Math.max(v || 0, g.min);
+  if (g.round_up) return f + (((g.offset - f) % g.multiple) + g.multiple) % g.multiple;
+  return Math.max(g.min, Math.floor((f - g.offset) / g.multiple) * g.multiple + g.offset);
+}
+
+// What the boxes add up to, before anything runs: the size and frame count after
+// rounding, the fps the model will actually use, and the duration that implies.
+function syncVideoNote() {
+  const m = currentVideoModel();
+  if (!m) { $('vgridnote').textContent = ''; return; }
+  const w = alignSize(parseInt($('vw').value, 10), m.size_multiple);
+  const h = alignSize(parseInt($('vh').value, 10), m.size_multiple);
+  const frames = alignFrames(parseInt($('vframes').value, 10), m.frame_grid);
+  const fps = m.forced_fps ?? (parseInt($('vfps').value, 10) || 1);
+  const asked = [
+    parseInt($('vw').value, 10) !== w || parseInt($('vh').value, 10) !== h
+      ? `rounded to ${w}×${h} (multiples of ${m.size_multiple})` : null,
+    parseInt($('vframes').value, 10) !== frames
+      ? `${frames} frames (the grid is ${m.frame_grid.multiple}k+${m.frame_grid.offset})` : null,
+    m.forced_fps ? `${fps} fps — this model overrides anything else` : null,
+  ].filter(Boolean);
+  $('vgridnote').textContent =
+    `${w}×${h}, ${frames} frames @ ${fps} fps = ${(frames / fps).toFixed(2)} s`
+    + (asked.length ? ` · ${asked.join(' · ')}` : '');
+}
+
+// Pre-fill from the selected model, the same job syncAdvanced does for an image.
+function syncVideo() {
+  const m = currentVideoModel();
+  if (!m) return;
+  $('vnegative').value = m.negative_prompt ?? '';
+  $('vw').value = m.width;
+  $('vh').value = m.height;
+  $('vw').step = m.size_multiple;
+  $('vh').step = m.size_multiple;
+  $('vframes').value = m.frames;
+  $('vframes').step = m.frame_grid.multiple;
+  $('vfps').value = m.forced_fps ?? m.fps;
+  $('vfps').disabled = !!m.forced_fps;
+  $('vsteps').value = m.steps;
+  $('vcfg').value = m.cfg_scale;
+  $('vsampler').value = m.sampler;
+  $('vshift').value = m.flow_shift ?? '';
+  $('vtiling').checked = !!m.vae_tiling;
+  // The second expert's knobs only exist for the pair.
+  $('vmoe').hidden = !m.is_moe;
+  $('vhsteps').value = m.high_noise_steps ?? '';
+  // Blank rather than pre-filled, for the reason the image tab's CFG box gives:
+  // a number here pins it and quietly stops it following the CFG above.
+  $('vhcfg').value = m.high_noise_cfg_scale ?? '';
+  $('vhcfg').placeholder = m.cfg_scale;
+  // A video model is several files and tens of gigabytes, so "not downloaded
+  // yet" is a normal state to be in for an hour. Say which file is missing.
+  $('vmodelnote').textContent = m.missing.length
+    ? `Not ready — missing ${m.missing.length} file(s): ${m.missing.join(', ')}`
+    : (m.description || '');
+  $('vgo').disabled = !!m.missing.length || vrunning;
+  syncVideoNote();
+}
+
+async function loadVideoModels() {
+  try {
+    const data = await (await fetch('/video-models')).json();
+    if (!Array.isArray(data)) throw new Error(data.error || 'unexpected response');
+    videoModels = data;
+    const sel = $('vmodel');
+    sel.innerHTML = '';
+    for (const m of videoModels) {
+      const opt = document.createElement('option');
+      opt.value = m.name;
+      opt.textContent = `${m.name}${m.exists ? '' : ' — not downloaded'}`;
+      sel.appendChild(opt);
+    }
+    if (!videoModels.length) {
+      $('verr').textContent =
+        'No video models configured. Add a [[video]] entry to models.toml — '
+        + 'the comments there list what each family needs.';
+      $('vgo').disabled = true;
+      return;
+    }
+    syncVideo();
+  } catch (e) {
+    $('verr').textContent = 'Could not load video models: ' + (e.message || e);
+  }
+}
+
+// ---- The frame player -------------------------------------------------------
+
+function stopPlayback() {
+  clearInterval(vtimer);
+  vtimer = null;
+  const b = $('vplay');
+  if (b) b.textContent = 'Play';
+}
+
+function drawFrame(i) {
+  const cv = $('vcanvas');
+  if (!cv || !vframes[i]) return;
+  vframe = i;
+  cv.getContext('2d').drawImage(vframes[i], 0, 0);
+  const scrub = $('vscrub');
+  if (scrub) scrub.value = i;
+  const at = $('vat');
+  if (at) {
+    at.textContent =
+      `${i + 1}/${vframes.length} · ${(i / (clip.fps || 1)).toFixed(2)}s`;
+  }
+}
+
+function togglePlay() {
+  if (vtimer) { stopPlayback(); return; }
+  if (!vframes.length) return;
+  $('vplay').textContent = 'Pause';
+  vtimer = setInterval(() => {
+    drawFrame((vframe + 1) % vframes.length);
+  }, 1000 / Math.max(1, clip.fps));
+}
+
+// Every frame, decoded before the first one is shown. A clip is 33 PNGs off
+// localhost, so this is a fraction of a second — and decoding as we play would
+// show the first pass through at whatever rate the disk managed rather than at
+// the clip's own fps.
+async function loadFrames(c) {
+  stopPlayback();
+  vframes = [];
+  const load = (n) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    // A frame that won't decode must not hang the whole clip; it is dropped and
+    // the count below says so.
+    img.onerror = () => resolve(null);
+    img.src = `/videos/${encodeURIComponent(c.id)}/frames/${n}.png`;
+  });
+  const loaded = await Promise.all(
+    Array.from({ length: c.frames }, (_, n) => load(n)));
+  vframes = loaded.filter(Boolean);
+  const cv = $('vcanvas');
+  if (cv) {
+    cv.width = c.width;
+    cv.height = c.height;
+  }
+  const scrub = $('vscrub');
+  if (scrub) scrub.max = Math.max(0, vframes.length - 1);
+  if (vframes.length) {
+    drawFrame(0);
+    togglePlay();
+  }
+  if (vframes.length !== c.frames) {
+    $('verr').textContent =
+      `${c.frames - vframes.length} of ${c.frames} frames could not be loaded.`;
+  }
+}
+
+// The result block, rebuilt per clip. `ms` is only there for a clip that was
+// just generated — opening one from the grid has no timing to report, and
+// inventing one would be worse than leaving it out.
+function renderClip(c, ms) {
+  clip = c;
+  const secs = (c.frames / Math.max(1, c.fps)).toFixed(2);
+  const took = ms ? ` · took ${(ms / 1000).toFixed(1)}s (${(ms / Math.max(1, c.frames)).toFixed(0)} ms/frame)` : '';
+  $('vresult').innerHTML = `
+    <canvas id="vcanvas"></canvas>
+    <div class="player">
+      <button type="button" id="vplay" class="secondary">Play</button>
+      <input id="vscrub" type="range" min="0" max="0" step="1" value="0">
+      <span class="val" id="vat"></span>
+    </div>
+    <div class="meta" style="margin-top:10px">
+      <b>${c.width}×${c.height}</b> · ${c.frames} frames @ ${c.fps} fps · ${secs}s
+      · seed <b>${c.seed}</b> · ${esc(c.model)}${took}
+    </div>
+    <div class="actions">
+      <select id="vfactor" title="FSR enlarge every frame">${upOptions()}</select>
+      <button type="button" id="venlarge" class="secondary">Enlarge frames</button>
+    </div>
+    <div class="row">
+      <div>
+        <label for="vsharp">Sharpness</label>
+        <input id="vsharp" type="number" step="0.05" min="0" max="1" value="0">
+      </div>
+      <div>
+        <label for="vclarity">Clarity</label>
+        <input id="vclarity" type="number" step="0.05" min="-1" max="1" value="0">
+      </div>
+    </div>
+    <!-- Their own boxes rather than the Image tab's sliders. Those live under
+         the still on the other tab, so reading them here would apply a filter
+         the user can neither see nor set — and every clip would inherit
+         whatever the last image was left at. -->
+    <p class="sub" id="venlargenote" style="margin:8px 0 0">
+      Writes a filtered PNG sequence to work/output/. A fixed kernel can't
+      flicker, so the frames stay stable — unlike a per-frame diffusion, which
+      invents new detail each frame and boils.</p>
+    <div id="vsaved" class="meta"></div>`;
+  $('vfactor').value = upFactor;
+  $('vfactor').addEventListener('change', (e) => setUpFactor(parseFloat(e.target.value)));
+  $('vplay').addEventListener('click', togglePlay);
+  $('vscrub').addEventListener('input', (e) => {
+    stopPlayback();
+    drawFrame(parseInt(e.target.value, 10) || 0);
+  });
+  $('venlarge').addEventListener('click', enlargeClip);
+  loadFrames(c);
+}
+
+// ---- Generating -------------------------------------------------------------
+
+function vidPayload() {
+  const seed = parseInt($('vseed').value, 10);
+  const m = currentVideoModel();
+  return {
+    prompt: $('vprompt').value,
+    model: $('vmodel').value,
+    // Sent even when empty: an emptied box means "no negative", which is not
+    // the same as "inherit the model's".
+    negative: $('vnegative').value,
+    seed: Number.isFinite(seed) ? seed : -1,
+    source: vsource,
+    width: numOr('vw'),
+    height: numOr('vh'),
+    frames: numOr('vframes'),
+    fps: numOr('vfps'),
+    steps: numOr('vsteps'),
+    cfg_scale: numOr('vcfg'),
+    high_noise_steps: m && m.is_moe ? numOr('vhsteps') : null,
+    high_noise_cfg_scale: m && m.is_moe ? numOr('vhcfg') : null,
+    flow_shift: numOr('vshift'),
+    sampler: $('vsampler').value || null,
+    vae_tiling: $('vtiling').checked,
+  };
+}
+
+async function startClip() {
+  if (vrunning) return;
+  vrunning = true;
+  $('verr').textContent = '';
+  $('vstop').hidden = false;
+  $('vstop').disabled = false;
+  $('vstop').textContent = 'Stop';
+  setBusy('vgo', 'Generating clip…');
+  try {
+    const data = await post('/video', vidPayload());
+    renderClip(data.clip, data.gen_ms);
+    loadClips();
+  } catch (e) {
+    const msg = String(e.message || e);
+    // The marker SdRunner::run puts in a killed pass's error. A clip the user
+    // stopped is not a failure, and reporting a stack of sd-cli stderr for it
+    // would read as one.
+    $('verr').textContent = msg.includes('cancelled by request')
+      ? 'Stopped. Nothing was kept — the partial frames are swept.'
+      : msg;
+  } finally {
+    vrunning = false;
+    $('vstop').hidden = true;
+    setBusy(null);
+    syncVideo();
+  }
+}
+
+// Kill the running pass. Unlike the image tab's Stop — which lets the image in
+// flight finish and then ends the run — there is only ever one clip in flight,
+// so "stop" can only mean "kill it". The half-written frames go with it:
+// ClipDir sweeps the directory when the pass doesn't reach `keep`.
+async function cancelRun(stopId, errId) {
+  $(stopId).disabled = true;
+  $(stopId).textContent = 'Stopping…';
+  try {
+    await post('/cancel', {});
+  } catch (e) {
+    $(errId).textContent = String(e.message || e);
+  }
+}
+
+const cancelClip = () => cancelRun('vstop', 'verr');
+
+async function enlargeClip() {
+  if (!clip) return;
+  setBusy('venlarge', 'Enlarging…');
+  $('verr').textContent = '';
+  try {
+    const data = await post('/videos/enlarge', {
+      id: clip.id,
+      upscale: upFactor,
+      sharpness: parseFloat($('vsharp').value) || 0,
+      clarity: parseFloat($('vclarity').value) || 0,
+    });
+    $('vsaved').textContent =
+      `${data.frames} frames at ${data.width}×${data.height} → ${data.dir} (${data.ms} ms)`;
+  } catch (e) {
+    $('verr').textContent = String(e.message || e);
+  } finally {
+    setBusy(null);
+  }
+}
+
+// ---- The clip grid ----------------------------------------------------------
+
+const vDeleteMode = () =>
+  document.querySelector('input[name=vmode]:checked').value === 'delete';
+
+async function loadClips() {
+  try {
+    const data = await (await fetch('/videos')).json();
+    if (!Array.isArray(data)) throw new Error(data.error || 'unexpected response');
+    clips = data;
+  } catch (e) {
+    clips = [];
+    $('verr').textContent = 'Could not load clips: ' + (e.message || e);
+  }
+  for (const id of [...vselected]) {
+    if (!clips.some((c) => c.id === id)) vselected.delete(id);
+  }
+  renderClips();
+}
+
+function renderClips() {
+  const grid = $('vgrid');
+  if (!clips.length) {
+    grid.innerHTML = '<p class="sub" style="margin:0">No clips yet.</p>';
+    syncVDelete();
+    return;
+  }
+  grid.innerHTML = clips.map((c) => `
+    <button type="button" data-id="${esc(c.id)}"
+      title="${esc(c.prompt)}&#10;${c.width}×${c.height} · ${c.frames} frames @ ${c.fps} fps · seed ${c.seed}">
+      <img src="/videos/${esc(c.id)}/thumb.png" alt="" loading="lazy"
+        width="${c.thumb_width}" height="${c.thumb_height}"></button>`).join('');
+  for (const b of grid.querySelectorAll('button')) {
+    b.addEventListener('click', () => clickClip(b.dataset.id));
+  }
+  markClips();
+}
+
+function markClips() {
+  for (const b of $('vgrid').querySelectorAll('button')) {
+    b.classList.toggle('sel', vselected.has(b.dataset.id));
+    b.classList.toggle('active', !!clip && b.dataset.id === clip.id);
+  }
+  syncVDelete();
+}
+
+function syncVDelete() {
+  $('vdelete').hidden = vselected.size === 0;
+  $('vdelete').textContent = `Delete ${vselected.size} selected`;
+}
+
+// Opening a clip needs no server round trip at all: the frames are already on
+// disk under /videos/{id}/frames/, so this is the player pointed at them. The
+// settings come back from the listing, which carries each clip's whole sidecar.
+function clickClip(id) {
+  if (vDeleteMode()) {
+    if (!vselected.delete(id)) vselected.add(id);
+    markClips();
+    return;
+  }
+  if (vrunning) return;
+  const c = clips.find((x) => x.id === id);
+  if (!c) return;
+  $('verr').textContent = '';
+  applyClip(c);
+  renderClip(c);
+  markClips();
+}
+
+// Put a clip's stored settings back in the controls, so the next Generate starts
+// from what made the clip on screen rather than from whatever was last typed.
+function applyClip(c) {
+  const v = c.video;
+  $('vprompt').value = c.prompt;
+  $('vnegative').value = c.negative ?? '';
+  $('vseed').value = c.seed;
+  if (videoModels.some((m) => m.name === c.model)) $('vmodel').value = c.model;
+  // Deliberately not firing `change`: that listener is syncVideo, which would
+  // overwrite everything below with the model's defaults.
+  $('vw').value = v.width;
+  $('vh').value = v.height;
+  $('vframes').value = v.frames;
+  $('vfps').value = v.fps;
+  $('vsteps').value = v.steps;
+  $('vcfg').value = v.cfg_scale;
+  $('vsampler').value = v.sampler;
+  $('vshift').value = v.flow_shift ?? '';
+  $('vtiling').checked = !!v.vae_tiling;
+  $('vmoe').hidden = !(currentVideoModel() || {}).is_moe;
+  $('vhsteps').value = v.high_noise_steps ?? '';
+  $('vhcfg').value = v.high_noise_cfg_scale ?? '';
+  setSource(c.source);
+  syncVideoNote();
+}
+
+async function deleteClips() {
+  const ids = [...vselected];
+  if (!ids.length) return;
+  $('vdelete').disabled = true;
+  try {
+    await post('/videos/delete', { ids });
+    vselected.clear();
+    await loadClips();
+  } catch (e) {
+    $('verr').textContent = String(e.message || e);
+  } finally {
+    $('vdelete').disabled = false;
+  }
+}
+
+// ---- The first-frame picker -------------------------------------------------
+
+function setSource(stem) {
+  vsource = stem || null;
+  $('vsrcthumb').hidden = !vsource;
+  $('vclear').hidden = !vsource;
+  if (vsource) $('vsrcthumb').src = `/outputs/${encodeURIComponent(vsource)}/thumb.png`;
+  $('vsrcname').textContent = vsource || 'None — text to video';
+}
+
+async function openPicker() {
+  const grid = $('pickgrid');
+  grid.innerHTML = '<p class="sub" style="margin:0">Loading…</p>';
+  $('picker').showModal();
+  let outputs = [];
+  try {
+    const data = await (await fetch('/outputs')).json();
+    if (!Array.isArray(data)) throw new Error(data.error || 'unexpected response');
+    outputs = data;
+  } catch (e) {
+    grid.innerHTML = `<p class="err" style="margin:0">${esc(e.message || e)}</p>`;
+    return;
+  }
+  if (!outputs.length) {
+    grid.innerHTML = '<p class="sub" style="margin:0">Nothing in work/output/ yet — '
+      + 'press "Save to output" under an image on the Image tab.</p>';
+    return;
+  }
+  // No declared width/height here, unlike the work item grid: an output's
+  // thumbnail is generated on first request, so the server has nothing to tell
+  // us about its size until it exists. The aspect from the sidecar is enough to
+  // reserve the space.
+  grid.innerHTML = outputs.map((o) => {
+    const w = o.height ? Math.round(140 * o.width / o.height) : 140;
+    return `<button type="button" data-stem="${esc(o.stem)}"
+      title="${esc(o.prompt)}&#10;${o.width}×${o.height} · seed ${o.seed}">
+      <img src="/outputs/${esc(o.stem)}/thumb.png" alt="" loading="lazy"
+        width="${w}" height="140"></button>`;
+  }).join('');
+  for (const b of grid.querySelectorAll('button')) {
+    b.addEventListener('click', () => {
+      setSource(b.dataset.stem);
+      $('picker').close();
+    });
+  }
+}
+
+// ---- Convert ----------------------------------------------------------------
+
+// The list the server published: which files exist, what each one is, and what
+// every offered type would cost. The page does no arithmetic on any of it — the
+// estimate is keyed by type name and looked up, because the rule for what gets
+// quantized is sd.cpp's and lives in Rust where it is tested against the real
+// files.
+let cfiles = [];
+let ctypes = [];
+let crunning = false;
+
+function gb(bytes) {
+  return (bytes / (1024 ** 3)).toFixed(2) + ' GB';
+}
+
+function currentConvertFile() {
+  return cfiles.find((f) => f.id === $('csource').value) || null;
+}
+
+async function loadConvertModels() {
+  try {
+    const data = await (await fetch('/convert-models')).json();
+    ctypes = data.types || [];
+    cfiles = data.files || [];
+  } catch (e) {
+    $('cerr').textContent = String(e.message || e);
+    return;
+  }
+  $('ctype').innerHTML = ctypes
+    .map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`)
+    .join('');
+  // q4_K is the default because it is the answer to the question this tab
+  // exists for — a 14B video model that has to fit beside its encoder on a
+  // 24 GB card. Falls back to whatever is first if the list ever changes.
+  if (ctypes.some((t) => t.name === 'q4_K')) $('ctype').value = 'q4_K';
+
+  if (!cfiles.length) {
+    $('csource').innerHTML = '<option value="">No convertible model files found</option>';
+    $('cgo').disabled = true;
+    syncConvert();
+    return;
+  }
+  $('csource').innerHTML = cfiles
+    .map((f) => `<option value="${esc(f.id)}">${esc(f.file)} — ${gb(f.bytes)} ${esc(f.dtype)}</option>`)
+    .join('');
+  syncConvert();
+}
+
+function syncConvert() {
+  const f = currentConvertFile();
+  const ty = $('ctype').value;
+  const t = ctypes.find((x) => x.name === ty);
+  $('ctypenote').textContent = t ? `${t.bits} bits per weight — ${t.note}` : '';
+  if (!f) {
+    $('crole').textContent = '';
+    $('cnote').textContent = '';
+    $('csize').textContent = '';
+    $('cdest').textContent = '';
+    return;
+  }
+  $('crole').textContent = `${f.role} · stored as ${f.dtype} · goes in as ${f.slot}`;
+  $('cnote').textContent = f.note || '';
+  const after = f.estimates[ty];
+  if (after === undefined) {
+    $('csize').textContent = '';
+  } else {
+    // Signed, and shown as a percentage, because the interesting cases go both
+    // ways: q4_K halves an fp8 transformer, and f16 doubles it.
+    const pct = Math.round(((after - f.bytes) / f.bytes) * 100);
+    const dir = pct === 0 ? 'no change' : (pct < 0 ? `${-pct}% smaller` : `${pct}% larger`);
+    $('csize').innerHTML = `<b>${gb(f.bytes)} → ~${gb(after)}</b> (${dir}, estimated)`;
+  }
+  // The destination is shown rather than chosen: it goes beside the source so
+  // discovery finds it, and the server derives it the same way.
+  const dot = f.file.lastIndexOf('.');
+  $('cdest').textContent =
+    `Writes ${(dot < 0 ? f.file : f.file.slice(0, dot))}-${ty}.gguf beside the original.`;
+  $('cgo').disabled = crunning || f.dtype === ty;
+}
+
+async function startConvert() {
+  if (crunning) return;
+  const f = currentConvertFile();
+  if (!f) return;
+  crunning = true;
+  $('cerr').textContent = '';
+  $('cresult').innerHTML = '';
+  $('cstop').hidden = false;
+  $('cstop').disabled = false;
+  $('cstop').textContent = 'Stop';
+  setBusy('cgo', 'Converting…');
+  try {
+    const r = await post('/convert', { source: f.id, type: $('ctype').value });
+    const mins = (r.ms / 60000).toFixed(1);
+    // The estimate's only feedback. Reported next to the outcome rather than
+    // quietly discarded, because it is the number the select was chosen on.
+    const off = r.estimated_bytes
+      ? ` (estimated ${gb(r.estimated_bytes)}, off by ` +
+        `${Math.abs(Math.round(((r.bytes - r.estimated_bytes) / r.estimated_bytes) * 1000) / 10)}%)`
+      : '';
+    $('cresult').innerHTML =
+      `<div class="meta" style="margin-top:12px"><b>Done in ${mins} min.</b><br>` +
+      `${esc(r.out)}<br>${gb(r.source_bytes)} → <b>${gb(r.bytes)}</b>${esc(off)}<br>` +
+      `It is picked up on the next restart — the model list is read at startup.</div>`;
+    // So the new file appears in the list, and the old one now shows a sibling.
+    loadConvertModels();
+  } catch (e) {
+    const msg = String(e.message || e);
+    $('cerr').textContent = msg.includes('cancelled by request')
+      ? 'Stopped. The partial file was removed.'
+      : msg;
+  } finally {
+    crunning = false;
+    $('cstop').hidden = true;
+    setBusy(null);
+    syncConvert();
+  }
+}
+
+// ---- Image to image ---------------------------------------------------------
+//
+// One pass over a picture that already exists, and then the ordinary ladder. The
+// tab owns three things and borrows the rest: where the source comes from, the
+// upload, and the one request. Everything after the result lands — refine,
+// hi-res, the sliders, Save — is the shared machinery, pointed here by `pane`.
+
+// The chosen source: a work/output/ stem, never a path. Same shape as the video
+// tab's first frame, and the same reason — the page picks from what the server
+// published, it never names a file.
+let i2source = null;
+let i2outputs = [];
+
+// The long side an upload is capped at before it leaves the browser. Bigger than
+// anything worth diffusing (the working-size select tops out at 3072), and
+// chosen against the body limit in http.rs: a 4096² PNG is ~25 MB against a
+// 32 MB cap, while a 6000 px phone photo would not fit at all.
+const MAX_UPLOAD_SIDE = 4096;
+
+// Both this and the img2img pass itself round to 64, and they must agree: this
+// is what the picture is scaled to, that is what the latent grid allows.
+const WORKING_SIDES = [768, 1024, 1536, 2048, 3072];
+
+function currentI2Model() {
+  return models.find((m) => m.name === $('i2template').value);
+}
+
+// Pre-fill from the selected model, the same job syncAdvanced does for the other
+// tab. The working size starts at the model's hi-res budget: that is the same
+// question — how large can this card afford to diffuse — already answered for
+// this hardware, so the page doesn't invent a second answer to it.
+function syncI2() {
+  const m = currentI2Model();
+  if (!m) return;
+  $('i2steps').value = m.source_steps;
+  $('i2strength').value = m.source_strength;
+  $('i2cfg').value = m.cfg_scale;
+  $('i2icfg').value = m.img2img_cfg_scale ?? '';
+  $('i2sampler').value = m.sampler;
+  $('i2rsteps').value = m.refine_steps;
+  $('i2rstrength').value = m.refine_strength;
+  $('i2hsteps').value = m.hires_steps;
+  $('i2hstrength').value = m.hires_strength;
+
+  const want = parseInt($('i2maxside').value, 10) || m.hires_max_side;
+  $('i2maxside').innerHTML = WORKING_SIDES.map((v) =>
+    `<option value="${v}"${v === want ? ' selected' : ''}>${v} px${
+      v === m.hires_max_side ? ' (model budget)' : ''}</option>`).join('');
+  if (!WORKING_SIDES.includes(want)) $('i2maxside').value = m.hires_max_side;
+
+  syncI2Note();
+}
+
+function syncI2Note() {
+  const m = currentI2Model();
+  if (!m) return;
+  // The step floor is `profile.steps * strength`, and `profile.steps` is the
+  // model's base step count — which this tab has no box for, because it has no
+  // txt2img. So it comes from the model rather than from a field, and passing
+  // the CFG here instead would make the whole line quietly wrong.
+  const n = parseFloat($('i2steps').value) || 0;
+  const s = parseFloat($('i2strength').value) || 0;
+  const eff = effectiveSteps(n, s, m.steps);
+
+  const cfgBase = parseFloat($('i2cfg').value);
+  const own = parseFloat($('i2icfg').value);
+  $('i2icfg').placeholder = Number.isFinite(cfgBase) ? cfgBase : '';
+  const cfg = Number.isFinite(own) ? own : cfgBase;
+
+  $('i2note').textContent =
+    `Runs ${eff} step${eff === 1 ? '' : 's'} at strength ${s}`
+    + (eff > n ? ` (raised from ${n} — the floor is ${Math.ceil(m.steps * s)} at this strength)` : '')
+    + (Number.isFinite(cfg) ? ` · CFG ${cfg}` : '')
+    + ` · a source over ${$('i2maxside').value} px on its long side is scaled down first`;
+}
+
+function setI2Source(stem) {
+  i2source = stem;
+  $('i2srcthumb').hidden = !stem;
+  if (stem) $('i2srcthumb').src = `/outputs/${encodeURIComponent(stem)}/thumb.png`;
+  $('i2clear').hidden = !stem;
+  $('i2srcname').textContent = stem
+    ? stem
+    : 'Drop an image here, paste one, or pick one below.';
+  $('i2go').disabled = !stem || !!run;
+  markI2Grid();
+}
+
+async function loadI2Outputs() {
+  try {
+    const list = await (await fetch('/outputs')).json();
+    i2outputs = Array.isArray(list) ? list : [];
+  } catch {
+    i2outputs = [];
+  }
+  // Half the height of the work-items strip, so a tile's width is half too.
+  $('i2grid').innerHTML = i2outputs.map((o) => `
+    <button type="button" data-stem="${esc(o.stem)}"
+      title="${esc(o.prompt || o.stem)}&#10;${o.width}×${o.height} · ${esc(o.template)}">
+      <img src="/outputs/${esc(o.stem)}/thumb.png" alt="" loading="lazy"
+        width="${o.height ? Math.round(120 * o.width / o.height) : 120}" height="120"></button>`).join('')
+    || '<p class="sub">Nothing in work/output/ yet — drop an image above, or save one from the Image tab.</p>';
+  for (const b of $('i2grid').querySelectorAll('button')) {
+    b.addEventListener('click', () => setI2Source(b.dataset.stem));
+  }
+  markI2Grid();
+}
+
+function markI2Grid() {
+  for (const b of $('i2grid').querySelectorAll('button')) {
+    b.classList.toggle('active', b.dataset.stem === i2source);
+  }
+}
+
+// Whatever the browser can decode becomes a PNG on the way out.
+//
+// This is what keeps `image` compiled with the `png` feature alone: the format
+// list tracks the browser's rather than a crate's, so JPEG, WebP and AVIF all
+// work without this binary growing a decoder it would then own. The cap is here
+// rather than on the server for the same practical reason the whole route has a
+// raised body limit — 25 MB of phone photo is not worth uploading to scale it
+// down at the other end.
+async function uploadFile(file) {
+  if (!file || !file.type.startsWith('image/')) {
+    $('i2err').textContent = 'That is not an image.';
+    return;
+  }
+  $('i2err').textContent = '';
+  $('i2srcname').textContent = 'Reading…';
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_UPLOAD_SIDE / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    const cv = document.createElement('canvas');
+    cv.width = w;
+    cv.height = h;
+    cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    bmp.close?.();
+    const blob = await new Promise((ok) => cv.toBlob(ok, 'image/png'));
+    if (!blob) throw new Error('the browser could not encode that image');
+
+    // Raw bytes, not JSON: /upload is the one route with a binary body, which is
+    // a third smaller on the wire and needs no decoder at either end.
+    const resp = await fetch('/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'image/png' },
+      body: blob,
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || ('HTTP ' + resp.status));
+    await loadI2Outputs();
+    setI2Source(data.stem);
+  } catch (e) {
+    setI2Source(i2source);
+    $('i2err').textContent = 'Could not import that image: ' + (e.message || e);
+  }
+}
+
+async function startI2() {
+  if (run || !i2source) return;
+  run = { stop: false, done: 0, total: 1 };
+  $('i2err').textContent = '';
+  // Stop here kills the child, like the video tab's and unlike the Image tab's:
+  // there is only ever one pass in flight on this tab, so stopping it can only
+  // mean stopping *it*. A cancelled pass leaves the source image untouched —
+  // it was only ever read.
+  $('i2stop').hidden = false;
+  $('i2stop').disabled = false;
+  $('i2stop').textContent = 'Stop';
+  setBusy('i2go', 'Running…');
+  try {
+    const seed = parseInt($('i2seed').value, 10);
+    render(await post('/img2img', {
+      prompt: $('i2prompt').value,
+      template: $('i2template').value,
+      source: i2source,
+      negative: $('i2negative').value || null,
+      seed: Number.isFinite(seed) ? seed : -1,
+      max_side: numOr('i2maxside'),
+      source_steps: numOr('i2steps'),
+      source_strength: numOr('i2strength'),
+      cfg_scale: numOr('i2cfg'),
+      sampler: $('i2sampler').value || null,
+      // The escalation knobs travel with the generation here too, so a later
+      // Refine starts from what this panel says rather than from the model's
+      // defaults — and `model` is dropped for the reason genPayload drops it.
+      ...(({ model, ...esc }) => esc)(escalateSettings()),
+    }));
+    // The result is archived like any other generation, so it belongs in the
+    // other tab's grid immediately.
+    loadWorkItems();
+  } catch (e) {
+    const msg = String(e.message || e);
+    // sd-cli's own stderr tail is the wrong thing to show for a deliberate stop.
+    $('i2err').textContent = msg.includes('cancelled by request') ? 'Stopped.' : msg;
+  } finally {
+    run = null;
+    $('i2stop').hidden = true;
+    setBusy(null);
+    setI2Source(i2source);
+  }
+}
+
+// ---- Tabs -------------------------------------------------------------------
+
+function showTab(name) {
+  for (const b of document.querySelectorAll('.tab')) {
+    b.classList.toggle('active', b.dataset.tab === name);
+  }
+  $('tab-image').hidden = name !== 'image';
+  $('tab-img2img').hidden = name !== 'img2img';
+  $('tab-video').hidden = name !== 'video';
+  $('tab-convert').hidden = name !== 'convert';
+  // Nothing is playing on a tab nobody is looking at. A 24 fps canvas timer is
+  // cheap but it is not free, and it would go on redrawing all night.
+  if (name !== 'video') stopPlayback();
+
+  // The two image panes share one `imageId`, so leaving one has to empty it.
+  // Otherwise the picture stays on screen beside Refine and Hi-res buttons that
+  // now address whatever the other tab produces next — which would work, and
+  // would apply the pass to an image other than the one being looked at.
+  if (name === 'image' || name === 'img2img') {
+    if (pane !== name) {
+      clearPane(pane);
+      imageId = null;
+      currentSrc = null;
+      workId = null;
+      markGrid();
+      pane = name;
+    }
+    if (name === 'img2img') loadI2Outputs();
+  }
+}
+
+for (const b of document.querySelectorAll('.tab')) {
+  b.addEventListener('click', () => showTab(b.dataset.tab));
+}
+$('vgo').addEventListener('click', startClip);
+$('vstop').addEventListener('click', cancelClip);
+$('vpick').addEventListener('click', openPicker);
+$('vclear').addEventListener('click', () => setSource(null));
+$('pickclose').addEventListener('click', () => $('picker').close());
+$('vdelete').addEventListener('click', deleteClips);
+$('vmodel').addEventListener('change', syncVideo);
+for (const id of ['vw', 'vh', 'vframes', 'vfps']) {
+  $(id).addEventListener('input', syncVideoNote);
+}
+for (const r of document.querySelectorAll('input[name=vmode]')) {
+  r.addEventListener('change', () => {
+    if (!vDeleteMode()) vselected.clear();
+    $('vgrid').classList.toggle('deleting', vDeleteMode());
+    markClips();
+  });
+}
+// ---- Image to image wiring --------------------------------------------------
+$('i2go').addEventListener('click', startI2);
+$('i2stop').addEventListener('click', () => cancelRun('i2stop', 'i2err'));
+$('i2browse').addEventListener('click', () => $('i2file').click());
+$('i2clear').addEventListener('click', () => setI2Source(null));
+$('i2refresh').addEventListener('click', loadI2Outputs);
+$('i2file').addEventListener('change', (e) => {
+  uploadFile(e.target.files[0]);
+  // Cleared so re-picking the same file fires `change` again.
+  e.target.value = '';
+});
+$('i2template').addEventListener('change', syncI2);
+for (const id of ['i2steps', 'i2strength', 'i2cfg', 'i2icfg', 'i2maxside']) {
+  $(id).addEventListener('input', syncI2Note);
+}
+// The whole zone, not the button — dragging a file onto a 90×30 target is a game
+// of skill. `dragover` must be cancelled or the browser navigates to the file.
+for (const ev of ['dragenter', 'dragover']) {
+  $('i2drop').addEventListener(ev, (e) => {
+    e.preventDefault();
+    $('i2drop').classList.add('over');
+  });
+}
+for (const ev of ['dragleave', 'drop']) {
+  $('i2drop').addEventListener(ev, () => $('i2drop').classList.remove('over'));
+}
+$('i2drop').addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadFile(e.dataTransfer?.files?.[0]);
+});
+// Paste is on the document because there is nothing sensible to focus first, so
+// it checks the tab itself — and stays out of the way of pasting a prompt.
+document.addEventListener('paste', (e) => {
+  if ($('tab-img2img').hidden) return;
+  if (/^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName)) return;
+  const file = [...(e.clipboardData?.items || [])]
+    .find((i) => i.kind === 'file' && i.type.startsWith('image/'));
+  if (file) {
+    e.preventDefault();
+    uploadFile(file.getAsFile());
+  }
+});
+for (const id of ['i2sharpness', 'i2clarity']) {
+  $(id).addEventListener('input', schedulePost);
+}
+
+$('cgo').addEventListener('click', startConvert);
+$('cstop').addEventListener('click', () => cancelRun('cstop', 'cerr'));
+$('csource').addEventListener('change', syncConvert);
+$('ctype').addEventListener('change', syncConvert);
+loadVideoModels();
+loadClips();
+loadConvertModels();
+
 $('go').addEventListener('click', startRun);
 $('stop').addEventListener('click', stopRun);
 // The run panel's view of the shared upscale factor. Built here rather than in
@@ -1042,6 +2506,9 @@ $('lightbox').addEventListener('click', () => $('lightbox').close());
 loadModels();
 // Independent of the model list: the grid is what survived the last restart.
 loadWorkItems();
+// The source grid and the "nothing picked yet" state of the zone above it.
+loadI2Outputs();
+setI2Source(null);
 // Both are labels for controls that start with a value, so neither can wait for
 // the first edit to say what it does.
 syncGoLabel();
