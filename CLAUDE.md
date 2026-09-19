@@ -13,7 +13,7 @@ part it doesn't cover.
 ## Commands
 
 ```sh
-cargo test                                  # no GPU: naga-validates the 3 WGSL shaders, the band-measurement math,
+cargo test                                  # no GPU: naga-validates the 4 WGSL shaders, the band-measurement math,
                                             #   the escalation/upload DTOs and `fit_to`
 cargo run --release                         # server on 127.0.0.1:8080
 cargo run --release -- doctor               # preflight only: binary, checkpoints, web UI
@@ -27,8 +27,9 @@ thread. `fsr-selftest` and `fsr` exercise the GPU path with no model weights —
 fast loop when touching `src/fsr/`.
 
 **`fsr-selftest` is what to run after changing a filter constant.** It asserts the
-dimensions and that scale 1.0 with both filters at 0 is byte-exact (claimed by two
-shader headers and by `README.md`, and unchecked until it wasn't), then plants four
+dimensions and that scale 1.0 with every filter at 0 is byte-exact (claimed by three
+shader headers and by `README.md`, and unchecked until it wasn't), checks the grade
+pass knob by knob (`check_grade`), then plants four
 gratings at wavelengths proportional to the image and prints how much each filter moved
 each band, at 1536² and 3072². Those two sizes are invariant 6 below with a number on
 it — same setting, RCAS radius 1 vs 2 — and the band rows are how you catch a "clarity"
@@ -39,10 +40,11 @@ the measurement — that the DFT reports a planted amplitude correctly and doesn
 between bins — is in `cargo test`, since a plausible-looking table that says nothing
 true is the failure worth guarding against.
 
-## The three GPU passes
+## The four GPU passes
 
-`Fsr::process()` in `src/fsr/mod.rs` is the single entry point for all three. Each is
-skipped, and its textures never allocated, when it would be a no-op. The header
+`Fsr::process()` in `src/fsr/mod.rs` is the single entry point for all four, and takes
+them as one `Filters` (`src/config.rs`) rather than as a widening list of floats. Each
+pass is skipped, and its textures never allocated, when it would be a no-op. The header
 comment in each `.wgsl` is thorough; open the file rather than guessing.
 
 - `src/fsr/upscale.wgsl` — **FSR1 EASU**, a port of `FsrEasuF`. Skipped at scale 1.0.
@@ -56,6 +58,26 @@ comment in each `.wgsl` is thorough; open the file rather than guessing.
 - `src/fsr/contrast.wgsl` — **not FSR.** A difference-of-Gaussians band-pass on luma
   ("clarity"), computed on a 1/8 plane. Exact identity at clarity 0.0. The knob is
   **signed**, -1..1: negative subtracts the band and softens.
+- `src/fsr/grade.wgsl` — **not FSR either.** Eight colour-grading knobs — lightness,
+  contrast, highlights, shadows, saturation, hue, temperature, tint — in **one** pass,
+  because every one of them reads a single texel and writes a single texel. They are
+  one dispatch together whatever they are set to (too cheap to measure at 3072²), so
+  the ninth knob costs nothing to add and belongs here rather than in a pass of its own.
+
+  It works in **OKLab**, which is what keeps it one shader: in that space each knob is
+  a named operation on three numbers, and the two white-balance knobs are *exactly* its
+  two chroma axes. The header says what temperature and tint are and are not (chroma
+  shifts, not a von Kries adaptation) and where to go if that reads wrong.
+
+  **Order is EASU → grade → clarity → RCAS.** A photo editor's order, and load-bearing:
+  clarity's band and RCAS's limiter both act on contrast the grade has just changed, and
+  grading after a sharpen amplifies its halos and then clips them.
+
+  Neutral is skipped rather than relied on: the sRGB/OKLab round trip loses a
+  least-significant bit here and there, and `fsr-selftest` asserts byte equality.
+  `check_grade` in `src/main.rs` is what makes the eight knobs safe to extend — it runs
+  each at 1.0 and fails if it moved nothing, which is the copy-paste that `GradeParams`
+  and the shader's `Params` invite.
 
 ## The image-to-image tab
 
@@ -114,9 +136,9 @@ would be wrong. It also means the ids `render()` writes (`refine`, `hires`, `sav
 
 A pane is down to three keys — `result`, `err`, `escmodel` — and the two it lost say
 what the viewer bought. The sliders and their timing readout used to be duplicated per
-pane; there is one dialog, so there is now one pair, addressed by plain id. `setPost`,
+pane; there is one dialog, so there is now one set, addressed by plain id. `setPost`,
 `syncPostLabels`, `runPost` and `setBusy` reach them with `$()` rather than `P()`, and
-adding a third slider is a change in one place rather than two.
+adding a slider is a change in one place rather than two.
 
 ## The viewer
 
@@ -126,12 +148,31 @@ band whose width is proportional to the image (invariant 6). Both were being jud
 the result column's fitted preview, a few hundred pixels wide, which is why the feature
 read as broken while `/adjust` was doing exactly what it claimed.
 
-Three decisions in it are load-bearing:
+**The ten sliders are generated from one table, `FILTERS`.** It carries the id, the
+label, the odd override (sharpness starts at 0, hue prints degrees), and it is read by
+the markup, `setPost`, `syncPostLabels`, `setBusy`, the `/adjust` body and the input
+listeners — so a new slider is a row here and a field on the server's `Filters`, not a
+block of markup plus five matching edits. The ids are the **wire names**, which is what
+lets the request and the response be built by looping instead of by naming ten keys
+twice. Don't hand-write a slider into the panel; the next one after it will be
+hand-written too, and then the list has stopped being the truth.
+
+The label sits **above** its track rather than beside it. Beside was right when there
+were two of these under a full-width image; in a 300 px column a 72 px label was a
+quarter of the travel.
+
+Four more decisions in it are load-bearing:
 
 - **Closing is the `×` and Escape, nothing else.** The old viewer dismissed on any
   click, which is right for something you only look at and hostile for something you
   edit in: one stray click on the picture and the picture is gone. Don't put the
   click-to-close listener back.
+- **Fit, 1:1 and Reset are styled as `.tabs button`, not as buttons.** They share that
+  rule rather than copying it, because they are the same kind of control: a set of
+  choices where blue means "this is the one you are in". Green is reserved for the
+  buttons that *do* something, so there is one blue button in the row and no green one
+  that isn't an action — which is why `setFit` toggles `active` rather than a class of
+  its own.
 - **Fit and 1:1 are both needed**, because the two filters ask different questions — a
   look across the whole frame, and a pixel. 1:1 centres its scroll (`centreView`)
   rather than landing in a corner, and the centring runs twice: once inline and once on
@@ -154,17 +195,35 @@ it unreachable by scrolling.
 The panel is a fixed 300 px and scrolls on its own because it is a stack that is
 expected to grow; new sliders go in it, not under the image.
 
+**Reset goes to `filters_start`, which is neither zero nor what is applied.** Not zero,
+because "off" is not where two of the ten live: a fresh image arrives at the model's
+sharpness, and resetting it to 0 would leave it softer than it was generated. And not
+`filters`, because after a Refine or Hi-res those carry the grade across (invariant 1) —
+taking them as the reset target makes every edit the next image's neutral, and there is
+then no way back to an ungraded picture. `GenResult.start` is the profile's two values
+with no grade, computed from the *retained* profile so it still describes the model that
+ran after a checkpoint swap. `render()` stores it in `postStart`; double-clicking one
+slider sends that one home, the only way back to an exact value with a pointer.
+
 ## Invariants
 
 These break silently rather than loudly.
 
-1. **Nothing ever diffuses over sharpened pixels.** `Pending.raw` (`src/pipeline.rs`)
-   is the unsharpened output-resolution image; every escalation reads it, and RCAS is
-   applied exactly once, in `Engine::publish()`. A new pass that read `display`
-   instead would compound sharpening along the whole ladder. `Engine::adjust` — the
-   live sharpness/clarity sliders — rests on this directly: re-filtering `raw` is
+1. **Nothing ever diffuses over sharpened — or graded — pixels.** `Pending.raw`
+   (`src/pipeline.rs`) is the unfiltered output-resolution image; every escalation
+   reads it, and the display passes run exactly once, in `Engine::publish()`. A new
+   pass that read `display` instead would compound sharpening along the whole ladder.
+   `Engine::adjust` — the live sliders — rests on this directly: re-filtering `raw` is
    lossless however many times a drag does it. Break the invariant and the sliders
    silently become destructive.
+
+   It is also what makes the grade safe to **carry across an escalation**
+   (`Filters::restart`): the new pass diffuses the ungraded `raw`, so the grade is
+   re-applied to the new pixels rather than stacked on top of itself. Sharpness and
+   clarity reset there instead — they size their band from the image (invariant 6), so
+   a number picked for the previous pixels is stale by definition. Detail resets,
+   colour carries; that asymmetry is deliberate and the obvious tidy-up is to make it
+   "consistent", which throws away a look on every rung of the ladder.
 2. **sd.cpp *trims* an img2img schedule by strength, it doesn't scale it** — it keeps
    the last `steps × strength` of a `steps`-long schedule. So `SdRunner::img2img`
    (`src/sd.rs:102`) hands it `steps / strength`. Drop that and `--steps 2
@@ -337,12 +396,22 @@ number = pin. Serde collapses `null` into `None`, so the DTO needs
 only overwritten. `escalate_body_tells_an_empty_cfg_box_from_a_missing_one` guards both
 that and the `#[serde(flatten)]` on the hi-res body, and needs no GPU.
 
-The two **display** filters are the deliberate exception, and the distinction is easy
-to collapse by accident. `profile.sharpness`/`.clarity` are where the sliders *start*;
-`Pending.sharpness`/`.clarity` are where they are *now*. `adjust` writes the second
-pair only, and `run`/`refine`/`hires` all reset it from the first — so every new image
-arrives unfiltered. Putting the live value back on the profile would compile fine and
-silently restore the old inherit-forever behaviour.
+The **display** filters are the deliberate exception, and the distinction is easy to
+collapse by accident. `profile.sharpness`/`.clarity` are where the sliders *start*;
+`Pending.filters` is where all ten of them are *now*. `adjust` writes the second only,
+and `run`/`img2img`/`open` reset it from the first — so every new image arrives
+unfiltered. Putting a live value back on the profile would compile fine and silently
+restore the old inherit-forever behaviour. (`refine`/`hires` are the half-exception:
+`Filters::restart`, invariant 1.)
+
+**The eight grading knobs are not per-model at all**, and that is the reason the table
+above doesn't apply to them: they live only on `Filters`, so adding the eleventh is a
+field there, a row in `Filters::table`, a line in `grade.wgsl` plus its `GradeParams`,
+and a row in the page's `FILTERS` — no `Defaults`/`Template` pair to keep in step, no
+`registry()` arm, no `models.toml`, no field-table row. A checkpoint has a house
+sharpness; no checkpoint has an opinion about your hue. If one ever needs a start point,
+that is the full seven-step path above, and the trap at the top of this file applies
+again.
 
 ## Conventions
 

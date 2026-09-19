@@ -100,9 +100,14 @@
     flex: 0 0 300px; overflow-y: auto; padding: 16px;
     background: #161b22; border-right: 1px solid #30363d;
   }
-  .lbzoom { display: flex; gap: 8px; }
-  .lbzoom button { margin-top: 12px; padding: 6px 0; font-size: 13px; }
-  .lbzoom button.off { background: #21262d; color: #8b949e; }
+  /* Styled as tabs, down with `.tabs button` — these three pick a view, they
+     don't perform an action, and the page already has a control that says so.
+     Only the layout is here; the appearance is shared, not copied. */
+  .lbzoom { display: flex; gap: 8px; margin-top: 12px; }
+  .lbzoom button { flex: 1; font-size: 13px; }
+  /* The tab rule wins over the global button:disabled by source order, so the
+     one of these that greys out has to say so itself. */
+  .lbzoom button:disabled { opacity: .55; cursor: default; }
   /* min-width:0 because a flex item's default min-width is its content: a 3072 px
      image would otherwise refuse to let its pane shrink and shove the panel off
      the left edge of the screen. */
@@ -135,16 +140,28 @@
   .bar .track { flex: 1; background: #0d1117; border-radius: 4px; height: 10px; overflow: hidden; }
   .bar .fill { height: 100%; background: #388bfd; }
   .bar .val { width: 72px; text-align: right; color: #e6edf3; }
-  /* The post-process panel is laid out like the timing bars in the result block:
-     fixed-width name, the control taking the slack, value right. It lives in the
-     viewer's side panel, which is why there is no width here — the column sets it. */
+  /* The post-process panel. The label sits *above* its track rather than beside
+     it: beside was right when these two controls were under a full-width image,
+     and in a 300 px column a 72 px label was a quarter of the travel — with ten
+     of them, the travel is the whole point. Name and value share the top line,
+     so a slider is two lines and the track is the full width of the panel. */
   .posthead { display: flex; justify-content: space-between; align-items: baseline; }
-  .slider { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-  .slider label { margin: 0; width: 72px; flex: 0 0 auto; }
-  .slider input[type=range] { flex: 1; padding: 0; border: 0; background: none; accent-color: #388bfd; }
-  /* Wide enough for a minus sign: clarity runs -1..1. */
-  .slider .val { width: 48px; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .slider { margin-top: 12px; }
+  .slider .head { display: flex; justify-content: space-between; align-items: baseline; }
+  .slider label { margin: 0; font-size: 12px; color: #8b949e; }
+  .slider .val { font-size: 12px; color: #e6edf3; font-variant-numeric: tabular-nums; }
+  .slider input[type=range] {
+    display: block; width: 100%; margin-top: 2px;
+    padding: 0; border: 0; background: none; accent-color: #388bfd;
+  }
   .slider input:disabled { opacity: .5; }
+  /* A heading every few sliders, so ten controls read as three short lists
+     rather than one column to scroll. */
+  .lbgroup {
+    margin-top: 18px; font-size: 11px; letter-spacing: .06em;
+    text-transform: uppercase; color: #6e7681;
+  }
+  .lbgroup:first-child { margin-top: 12px; }
 
   /* What pressing Generate will actually do — how many images, and what happens
      to each one — as opposed to what any single image is made of. Hence the rule
@@ -181,11 +198,18 @@
      clip has frames, fps and a flow shift and no upscale ladder at all — so they
      are separate panels rather than one panel with half its fields hidden. */
   .tabs { display: flex; gap: 4px; margin: 0 0 16px; }
-  .tabs button {
+  /* Shared with the viewer's Fit / 1:1 / Reset row, which is the same kind of
+     control: a set of choices where blue means "this is the one you are in".
+     Green is for the buttons that *do* something — Generate, Refine, Save — so
+     there is exactly one blue button in any of these rows and never a green one
+     that isn't an action. */
+  .tabs button, .lbzoom button {
     margin: 0; width: auto; padding: 8px 18px; background: #161b22;
     color: #8b949e; border: 1px solid #30363d; border-radius: 8px;
   }
-  .tabs button.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+  .tabs button.active, .lbzoom button.active {
+    background: #1f6feb; color: #fff; border-color: #1f6feb;
+  }
 
   /* The frame player. A clip is a PNG sequence — see SdRunner::video — so
      playback is a canvas and a timer rather than a <video>. Which also gives
@@ -713,7 +737,7 @@
   </div>
 </div>
 
-<!-- The viewer, and the only place the two display filters can be judged: a
+<!-- The viewer, and the only place the display filters can be judged: a
      sharpness setting read off a 400 px preview is a guess. Panel on the left,
      viewport on the right, and the image the sliders act on is the big one.
 
@@ -726,23 +750,19 @@
     <div class="posthead">
       <b>Postprocessing</b><span id="postms" class="meta"></span>
     </div>
-    <!-- Two views, because the two filters ask different questions: clarity is a
-         look you judge on the whole frame, sharpness is a pixel you have to see. -->
+    <!-- Two views, because the filters ask different questions: a grade and
+         clarity are a look you judge on the whole frame, sharpness is a pixel
+         you have to see. Reset is here because ten knobs with no way home is a
+         trap — and "home" is not zero for two of them. -->
     <div class="lbzoom">
       <button type="button" id="lbfit">Fit</button>
       <button type="button" id="lbfull">1:1</button>
+      <button type="button" id="lbreset">Reset</button>
     </div>
-    <div class="slider">
-      <label for="clarity">Clarity</label>
-      <!-- Signed, like a photo editor's: left of centre softens. -->
-      <input id="clarity" type="range" min="-1" max="1" step="0.01">
-      <span class="val" id="clarityval"></span>
-    </div>
-    <div class="slider">
-      <label for="sharpness">Sharpness</label>
-      <input id="sharpness" type="range" min="0" max="1" step="0.01">
-      <span class="val" id="sharpnessval"></span>
-    </div>
+    <!-- The sliders are built from the FILTERS table below rather than written
+         out here: adding one is meant to be a row in a list, not a block of
+         markup plus a matching entry in five functions. -->
+    <div id="lbsliders"></div>
     <!-- In the panel rather than in the result block, because while this dialog
          is modal the result block is behind it and an error written there is an
          error nobody reads. -->
@@ -842,23 +862,63 @@ function syncAdvanced() {
   $('rstrength').value = m.refine_strength;
   $('hsteps').value = m.hires_steps;
   $('hstrength').value = m.hires_strength;
-  setPost(m.sharpness, m.clarity);
+  setPost({ sharpness: m.sharpness, clarity: m.clarity });
   syncStepNote();
 }
+
+// The viewer's panel, top to bottom. This list is the only place a filter is
+// declared: the markup, the labels, setPost, setBusy, the /adjust body and the
+// input listeners all read it, so adding one is a row here and a field on the
+// server's `Filters`. The names are the wire names — that is what lets the body
+// and the response be built by looping rather than by naming ten keys twice.
+//
+// Only the last two are per-model; the eight grading knobs always start at 0,
+// because a checkpoint has a house sharpness and no opinion about your hue.
+const FILTERS = [
+  { group: 'Tone', id: 'lightness', label: 'Lightness' },
+  { id: 'contrast', label: 'Contrast' },
+  { id: 'highlights', label: 'Highlights' },
+  { id: 'shadows', label: 'Shadows' },
+  { group: 'Colour', id: 'saturation', label: 'Saturation' },
+  { id: 'temperature', label: 'Temperature' },
+  { id: 'tint', label: 'Tint' },
+  // Degrees, because 0.25 is not a number anyone has an opinion about and 45°
+  // is. The wire value stays -1..1 like every other knob.
+  { id: 'hue', label: 'Hue', fmt: (v) => `${Math.round(v * 180)}°` },
+  { group: 'Detail', id: 'clarity', label: 'Clarity' },
+  // The one unsigned knob: RCAS has no direction to run backwards in.
+  { id: 'sharpness', label: 'Sharpness', min: 0 },
+];
+
+// Built once, at load, so the panel exists before the first image does —
+// `syncAdvanced` writes the model's start points into it while the viewer is
+// still closed.
+$('lbsliders').innerHTML = FILTERS.map((f) => `
+  ${f.group ? `<div class="lbgroup">${f.group}</div>` : ''}
+  <div class="slider">
+    <div class="head">
+      <label for="${f.id}">${f.label}</label><span class="val" id="${f.id}val"></span>
+    </div>
+    <input id="${f.id}" type="range" min="${f.min ?? -1}" max="1" step="0.01" value="0">
+  </div>`).join('');
 
 // Where the sliders *start*: pre-filled from the model when one is selected, then
 // re-set from the server's reply, which is authoritative since it says what the
 // image on screen actually has. Called whether or not the viewer is open — the
 // controls exist the whole time, they are just off-screen until it is.
-function setPost(sharpness, clarity) {
-  $('sharpness').value = sharpness;
-  $('clarity').value = clarity;
+//
+// A missing key is 0, not "leave it": the two callers both describe a *whole*
+// state — a model's start points, or what the server has applied — and a knob
+// either of them omits is a knob that is off.
+function setPost(filters) {
+  for (const f of FILTERS) $(f.id).value = filters[f.id] ?? 0;
   syncPostLabels();
 }
 
 function syncPostLabels() {
-  for (const id of ['sharpness', 'clarity']) {
-    $(id + 'val').textContent = Number($(id).value).toFixed(2);
+  for (const f of FILTERS) {
+    const v = Number($(f.id).value);
+    $(f.id + 'val').textContent = f.fmt ? f.fmt(v) : v.toFixed(2);
   }
 }
 
@@ -1043,9 +1103,17 @@ function render(data) {
   workId = data.work_id ?? null;
   markGrid();
 
-  // What the server actually applied — which after a generate is the model's
-  // default, and after an escalation is whatever the sliders were left at.
-  setPost(data.sharpness, data.clarity);
+  // What the server actually applied — after a generate the model's two start
+  // points and no grade, after an escalation the grade that was carried and the
+  // detail filters back at those start points.
+  //
+  // Reset goes to `filters_start`, which is a different thing and has to be:
+  // that is the model's starting point, while `filters` after a Refine includes
+  // the grade carried over from the last edit. Taking the applied values as the
+  // reset target would make each edit the next image's neutral, with no way
+  // back to an ungraded picture.
+  postStart = data.filters_start ?? data.filters;
+  setPost(data.filters);
   $('postms').textContent = '';
 }
 
@@ -1091,8 +1159,8 @@ let lbCentre = false;
 function setFit(fit) {
   lbFit = fit;
   $('lbview').classList.toggle('fit', fit);
-  $('lbfit').classList.toggle('off', !fit);
-  $('lbfull').classList.toggle('off', fit);
+  $('lbfit').classList.toggle('active', fit);
+  $('lbfull').classList.toggle('active', !fit);
   if (!fit) centreView();
 }
 
@@ -1162,8 +1230,8 @@ function setBusy(active, label) {
   // succeed and then be silently overwritten by the escalation's render.
   // Dropping a debounced one costs nothing: render() puts the sliders back to
   // what the server applied, which is where they already are.
-  $('sharpness').disabled = !!active;
-  $('clarity').disabled = !!active;
+  for (const f of FILTERS) $(f.id).disabled = !!active;
+  $('lbreset').disabled = !!active;
   if (active) clearTimeout(postTimer);
   // Called again for each stage of a run, so the poll is started once and left
   // alone rather than restarted per stage.
@@ -1251,6 +1319,12 @@ async function escalate(which, path, payload, label) {
 let postBusy = false;   // a request is in flight
 let postAgain = false;  // ...and the slider moved while it was
 let postTimer = null;
+// Where Reset goes: the model's sharpness and clarity with the grade at neutral,
+// as the server reports it (`filters_start`). Not all zeros — resetting a fresh
+// image to sharpness 0 would leave it softer than it arrived — and not the
+// filters currently applied either, since after a Refine those carry the grade
+// from the previous edit.
+let postStart = {};
 
 // Debounce, then *coalesce*: while a request is out, later moves collapse into
 // one follow-up with the latest values. The GPU worker is serialized, so a
@@ -1270,10 +1344,13 @@ async function runPost() {
   postBusy = true;
   try {
     const t0 = performance.now();
+    // Every knob, every time. The route takes a patch and would accept just the
+    // one that moved, but the panel is the state of the image and sending it
+    // whole is what makes a coalesced drag — where two sliders moved and only
+    // the last request survives — land both of them.
     const data = await post('/adjust', {
       image_id: imageId,
-      sharpness: parseFloat($('sharpness').value),
-      clarity: parseFloat($('clarity').value),
+      ...Object.fromEntries(FILTERS.map((f) => [f.id, parseFloat($(f.id).value)])),
     });
     setResultImage(`data:image/png;base64,${data.image_base64}`);
     $('postms').textContent =
@@ -2612,15 +2689,22 @@ $('template').addEventListener('change', syncAdvanced);
 for (const id of ['steps', 'rsteps', 'rstrength', 'hsteps', 'hstrength', 'cfg', 'icfg']) {
   $(id).addEventListener('input', syncStepNote);
 }
-// 'input', not 'change': the point is to see the filter while dragging.
-for (const id of ['sharpness', 'clarity']) {
-  $(id).addEventListener('input', schedulePost);
+// 'input', not 'change': the point is to see the filter while dragging. Double
+// click sends one knob home, which is the only way back to an exact 0 on a
+// pointer — a drag can always land a hundredth off.
+for (const f of FILTERS) {
+  $(f.id).addEventListener('input', schedulePost);
+  $(f.id).addEventListener('dblclick', () => {
+    $(f.id).value = postStart[f.id] ?? 0;
+    schedulePost();
+  });
 }
 
 // The viewer. Closing is the x and Escape (which <dialog> handles itself) and
 // nothing else: a click-anywhere-to-dismiss is fine for something you only look
 // at and hostile for something you edit in.
 $('lbclose').addEventListener('click', () => $('lightbox').close());
+$('lbreset').addEventListener('click', () => { setPost(postStart); schedulePost(); });
 $('lbfit').addEventListener('click', () => setFit(true));
 $('lbfull').addEventListener('click', () => setFit(false));
 // See showFullSize: the centring has to be re-run once the decode has given the

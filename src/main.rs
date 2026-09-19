@@ -60,7 +60,7 @@ mod workitems;
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
-use config::Config;
+use config::{Config, Filters, FiltersPatch};
 use pipeline::{Engine, EscalateRequest, GenRequest, GenResult, Img2ImgRequest, VideoRequest};
 use sd::Monitor;
 use std::net::TcpListener;
@@ -94,11 +94,7 @@ enum JobKind {
         over: EscalateRequest,
     },
     /// Re-filter an earlier result — display passes only, no diffusion.
-    Adjust {
-        id: u64,
-        sharpness: Option<f32>,
-        clarity: Option<f32>,
-    },
+    Adjust { id: u64, patch: FiltersPatch },
     /// Reopen an archived generation as a live result. Needs the worker because
     /// it ends in a `publish`, and because the new `Pending` lives there.
     Open(String),
@@ -183,13 +179,9 @@ fn main() -> Result<()> {
                         JobKind::Hires { id, upscale, over } => {
                             engine.hires(id, upscale, &over).map(|r| result_json(&r))
                         }
-                        JobKind::Adjust {
-                            id,
-                            sharpness,
-                            clarity,
-                        } => engine
-                            .adjust(id, sharpness, clarity)
-                            .map(|r| result_json(&r)),
+                        JobKind::Adjust { id, patch } => {
+                            engine.adjust(id, &patch).map(|r| result_json(&r))
+                        }
                         JobKind::Open(work_id) => engine.open(&work_id).map(|r| result_json(&r)),
                         JobKind::SaveOutput(id) => engine.save_output(id).map(|p| saved_json(&p)),
                         JobKind::Video(req) => engine.video(&req).and_then(|r| json_body(&r)),
@@ -205,8 +197,10 @@ fn main() -> Result<()> {
                             .enlarge_clip(
                                 &id,
                                 upscale,
-                                sharpness.unwrap_or(0.0),
-                                clarity.unwrap_or(0.0),
+                                &Filters::starting_at(
+                                    sharpness.unwrap_or(0.0),
+                                    clarity.unwrap_or(0.0),
+                                ),
                             )
                             .and_then(|r| json_body(&r)),
                     };
@@ -223,7 +217,8 @@ fn main() -> Result<()> {
         Ok(name) => {
             println!("[rustimage] GPU worker ready on adapter: {name}");
             println!(
-                "[rustimage] GPU post-process: upscale=easu, contrast=clarity, sharpen=rcas"
+                "[rustimage] GPU post-process: upscale=easu, grade=oklab, contrast=clarity, \
+                 sharpen=rcas"
             );
         }
         Err(e) => {
@@ -1075,13 +1070,14 @@ fn handle_hires(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) 
 /// comes back in milliseconds and can be driven live from the UI's sliders.
 /// An omitted field keeps whatever the image currently has.
 fn handle_adjust(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
+    // Flattened rather than nested under a `filters` key, so the body stays the
+    // flat `{"image_id":1,"sharpness":0.5}` it has always been and simply gains
+    // eight more optional fields.
     #[derive(serde::Deserialize)]
     struct Dto {
         image_id: u64,
-        #[serde(default)]
-        sharpness: Option<f32>,
-        #[serde(default)]
-        clarity: Option<f32>,
+        #[serde(flatten)]
+        patch: FiltersPatch,
     }
 
     match parse_json::<Dto>(conn, body)? {
@@ -1090,8 +1086,7 @@ fn handle_adjust(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8])
             job_tx,
             JobKind::Adjust {
                 id: dto.image_id,
-                sharpness: dto.sharpness,
-                clarity: dto.clarity,
+                patch: dto.patch,
             },
             400,
         ),
@@ -1159,10 +1154,16 @@ fn submit(
 /// the buttons above the image off.
 fn result_json(res: &GenResult) -> String {
     let b64 = base64::engine::general_purpose::STANDARD.encode(&res.png);
+    // The filters go out as one nested object, serialized from the struct that
+    // owns them rather than as ten more holes in this format string — the
+    // convention's "serde_json for anything backed by a real struct", and the
+    // thing that keeps slider eleven from touching this function at all.
+    let filters = serde_json::to_string(&res.filters).unwrap_or_else(|_| "{}".to_string());
+    let start = serde_json::to_string(&res.start).unwrap_or_else(|_| "{}".to_string());
     format!(
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
          \"hires_passes\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\
-         \"sharpness\":{},\"clarity\":{},\
+         \"filters\":{},\"filters_start\":{},\
          \"timings\":{{\"gen_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{}}}}}",
         b64,
         res.width,
@@ -1179,8 +1180,8 @@ fn result_json(res: &GenResult) -> String {
             .unwrap_or_else(|| "null".to_string()),
         res.can_refine,
         res.can_hires,
-        res.sharpness,
-        res.clarity,
+        filters,
+        start,
         res.timings.gen_ms,
         res.timings.fsr_ms,
         res.timings.refine_ms,
@@ -1319,7 +1320,9 @@ fn run_fsr_cli(args: &[String]) -> Result<()> {
     let fsr = fsr::Fsr::new()?;
     println!("[fsr] adapter: {}", fsr.adapter_name());
     let start = std::time::Instant::now();
-    let (w, h) = fsr.process(&in_png, &out_png, factor, sharp, clarity)?;
+    // Two positional filters and no more: the eight grading knobs are a UI
+    // thing, and a command line with ten trailing floats on it is unusable.
+    let (w, h) = fsr.process(&in_png, &out_png, factor, &Filters::starting_at(sharp, clarity))?;
     println!(
         "[fsr] {} -> {} : {}x{} (x{factor}, sharpness {sharp}, clarity {clarity}) in {} ms",
         in_png.display(),
@@ -1337,11 +1340,13 @@ fn run_fsr_cli(args: &[String]) -> Result<()> {
 /// what to run after touching a filter constant.
 ///
 /// 1. **Dimensions** — a 2× pass on a 128² pattern comes back 256².
-/// 2. **Identity** — at scale 1.0 with both filters at 0 the output is
-///    byte-identical to the input. `sharpen.wgsl` and `contrast.wgsl` both
-///    claim this in their headers and `README.md` promises it to users; until
-///    now nothing checked it.
-/// 3. **Band response** — printed, not asserted. See [`report_bands`].
+/// 2. **Identity** — at scale 1.0 with every filter at 0 the output is
+///    byte-identical to the input. `sharpen.wgsl`, `contrast.wgsl` and
+///    `grade.wgsl` all claim this in their headers and `README.md` promises it
+///    to users; until now nothing checked it.
+/// 3. **The grade** — that each of the eight knobs is wired at all, and that
+///    the four with an unambiguous direction move that way. See [`check_grade`].
+/// 4. **Band response** — printed, then asserted. See [`report_bands`].
 fn run_fsr_selftest(args: &[String]) -> Result<()> {
     let out_png = PathBuf::from(args.get(0).map(String::as_str).unwrap_or("fsr-selftest.png"));
 
@@ -1368,7 +1373,7 @@ fn run_fsr_selftest(args: &[String]) -> Result<()> {
     println!("[fsr-selftest] adapter: {}", fsr.adapter_name());
 
     // 1) Dimensions.
-    let (w, h) = fsr.process(&in_png, &out_png, 2.0, 0.4, 0.5)?;
+    let (w, h) = fsr.process(&in_png, &out_png, 2.0, &Filters::starting_at(0.4, 0.5))?;
     let expected = (size * 2, size * 2);
     if (w, h) != expected {
         anyhow::bail!("expected {expected:?}, got {:?}", (w, h));
@@ -1385,12 +1390,145 @@ fn run_fsr_selftest(args: &[String]) -> Result<()> {
     //    edges are where RCAS has the most to do, so a pass that is running
     //    when it claims to be skipped shows up here first.
     let ident_png = out_png.with_file_name("fsr-selftest-identity.png");
-    fsr.process(&in_png, &ident_png, 1.0, 0.0, 0.0)?;
+    fsr.process(&in_png, &ident_png, 1.0, &Filters::NONE)?;
     check_identity(&img, &ident_png)?;
-    println!("[fsr-selftest] identity OK: scale 1.0, sharpness 0, clarity 0 is byte-exact");
+    println!("[fsr-selftest] identity OK: scale 1.0, every filter at 0 is byte-exact");
 
-    // 3) Bands.
+    // 3) The grade.
+    check_grade(&fsr, &img, &in_png, &out_png)?;
+
+    // 4) Bands.
     report_bands(&fsr, &out_png)?;
+    Ok(())
+}
+
+/// Check the grade pass: that every knob is *connected*, and that the ones with
+/// an unarguable direction move that way.
+///
+/// The realistic regression here is not bad maths, it is a knob wired to the
+/// wrong field or left out of `GradeParams` — eight floats going into one
+/// uniform, where a copy-paste is invisible and the symptom is one slider that
+/// does nothing or does its neighbour's job. So every knob is run at +1 and has
+/// to change *something*, and the four whose direction is not a matter of taste
+/// are measured: lightness up, contrast spreading, saturation at -1 landing
+/// exactly on grey, and temperature moving blue towards yellow.
+///
+/// Hue and tint are only checked for being connected. A hue rotation of 180°
+/// pushes colours out of gamut, where the clamp makes it non-invertible, so
+/// "rotate twice and compare" would assert the clamp rather than the rotation —
+/// the honest check for those two is a pair of eyes on the slider.
+fn check_grade(
+    fsr: &fsr::Fsr,
+    src: &image::RgbaImage,
+    in_png: &std::path::Path,
+    near: &std::path::Path,
+) -> Result<()> {
+    let out_png = near.with_file_name("fsr-selftest-grade.png");
+    let graded = |f: Filters| -> Result<image::RgbaImage> {
+        fsr.process(in_png, &out_png, 1.0, &f)?;
+        Ok(image::open(&out_png)?.to_rgba8())
+    };
+    // Rec. 601 luma on the stored (sRGB-encoded) values. Not a colour science
+    // claim — just a stable scalar to compare two images by.
+    let luma = |p: &image::Rgba<u8>| {
+        0.299 * p.0[0] as f32 + 0.587 * p.0[1] as f32 + 0.114 * p.0[2] as f32
+    };
+    let mean = |img: &image::RgbaImage, f: &dyn Fn(&image::Rgba<u8>) -> f32| {
+        img.pixels().map(f).sum::<f32>() / img.pixels().len() as f32
+    };
+    let spread = |img: &image::RgbaImage| {
+        let m = mean(img, &luma);
+        (img.pixels().map(|p| (luma(p) - m).powi(2)).sum::<f32>() / img.pixels().len() as f32)
+            .sqrt()
+    };
+    let blue_minus_red = |p: &image::Rgba<u8>| p.0[2] as f32 - p.0[0] as f32;
+
+    // Every knob at +1, and the count of pixels it moved. Zero is the failure.
+    type Knob = (&'static str, fn(&mut Filters));
+    let knobs: [Knob; 8] = [
+        ("lightness", |f| f.lightness = 1.0),
+        ("contrast", |f| f.contrast = 1.0),
+        ("highlights", |f| f.highlights = 1.0),
+        ("shadows", |f| f.shadows = 1.0),
+        ("saturation", |f| f.saturation = 1.0),
+        ("hue", |f| f.hue = 1.0),
+        ("temperature", |f| f.temperature = 1.0),
+        ("tint", |f| f.tint = 1.0),
+    ];
+    let mut moved = Vec::new();
+    for (name, set) in knobs {
+        let mut f = Filters::NONE;
+        set(&mut f);
+        let got = graded(f)?;
+        let n = src
+            .pixels()
+            .zip(got.pixels())
+            .filter(|(a, b)| a.0[..3] != b.0[..3])
+            .count();
+        if n == 0 {
+            anyhow::bail!(
+                "grade: '{name}' at 1.0 changed nothing. The pass ran (the other knobs \
+                 move it), so the value is not reaching the shader — check that \
+                 GradeParams and `Params` in grade.wgsl still list the same fields in \
+                 the same order."
+            );
+        }
+        moved.push((name, n));
+    }
+    let total = src.pixels().len();
+    let cells: String = moved
+        .iter()
+        .map(|(n, c)| format!("{n} {:.0}%", 100.0 * *c as f32 / total as f32))
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!("[fsr-selftest] grade: pixels moved at +1.0 — {cells}");
+
+    // Direction, for the four that have one.
+    let base_luma = mean(src, &luma);
+    let up = mean(&graded(Filters { lightness: 1.0, ..Filters::NONE })?, &luma);
+    let down = mean(&graded(Filters { lightness: -1.0, ..Filters::NONE })?, &luma);
+    if !(down < base_luma && base_luma < up) {
+        anyhow::bail!("grade: lightness runs backwards — {down:.1} / {base_luma:.1} / {up:.1}");
+    }
+    let harder = spread(&graded(Filters { contrast: 1.0, ..Filters::NONE })?);
+    let softer = spread(&graded(Filters { contrast: -1.0, ..Filters::NONE })?);
+    if !(softer < spread(src) && spread(src) < harder) {
+        anyhow::bail!(
+            "grade: contrast runs backwards — luma spread {softer:.1} / {:.1} / {harder:.1}",
+            spread(src)
+        );
+    }
+    let grey = graded(Filters { saturation: -1.0, ..Filters::NONE })?;
+    let worst = grey
+        .pixels()
+        .map(|p| {
+            let (r, g, b) = (p.0[0] as i32, p.0[1] as i32, p.0[2] as i32);
+            (r - g).abs().max((g - b).abs())
+        })
+        .max()
+        .unwrap_or(0);
+    if worst > 1 {
+        anyhow::bail!(
+            "grade: saturation -1.0 left {worst}/255 of colour in the worst pixel. It \
+             should land exactly on a = b = 0, which is exactly neutral."
+        );
+    }
+    let warm = mean(&graded(Filters { temperature: 1.0, ..Filters::NONE })?, &blue_minus_red);
+    let cool = mean(&graded(Filters { temperature: -1.0, ..Filters::NONE })?, &blue_minus_red);
+    if !(warm < mean(src, &blue_minus_red) && mean(src, &blue_minus_red) < cool) {
+        anyhow::bail!(
+            "grade: temperature runs backwards — blue-red {warm:.1} warm / {:.1} neutral / \
+             {cool:.1} cool. Positive is meant to be warmer.",
+            mean(src, &blue_minus_red)
+        );
+    }
+    println!(
+        "[fsr-selftest] grade OK: lightness {base_luma:.1} -> {up:.1}/{down:.1}, contrast \
+         spread {:.1} -> {harder:.1}/{softer:.1}, saturation -1 is neutral to {worst}/255, \
+         temperature blue-red {:.1} -> {warm:.1}/{cool:.1}",
+        spread(src),
+        mean(src, &blue_minus_red)
+    );
     Ok(())
 }
 
@@ -1490,7 +1628,7 @@ fn report_bands(fsr: &fsr::Fsr, near: &std::path::Path) -> Result<()> {
             ("sharpness 1.0", 1.0, 0.0),
         ] {
             let t = std::time::Instant::now();
-            fsr.process(&in_png, &out_png, 1.0, sharpness, clarity)?;
+            fsr.process(&in_png, &out_png, 1.0, &Filters::starting_at(sharpness, clarity))?;
             let ms = t.elapsed().as_millis();
             let after = band_amplitudes(&image::open(&out_png)?.to_rgba8(), &waves);
             let gains: Vec<f32> = before.iter().zip(&after).map(|(b, a)| a / b).collect();

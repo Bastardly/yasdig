@@ -10,7 +10,7 @@
 //! uses.
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -412,27 +412,184 @@ impl Profile {
                 bail!("'{}': {field} is {v}, must be 0 or greater", self.name);
             }
         }
-        validate_filters(&self.name, self.sharpness, self.clarity)
+        Filters::starting_at(self.sharpness, self.clarity).validate(&self.name)
     }
 }
 
-/// Range-check the two display filters.
+/// Every display filter on one image, as one value.
 ///
-/// Split out of [`Profile::validate`] because `Engine::adjust` checks values
-/// that aren't on a profile at all: the profile carries where the sliders
-/// *start*, and the live positions live on the result they apply to.
+/// Ten knobs travel together through `publish`, `Pending`, `/adjust` and the
+/// result JSON, so they are one struct rather than ten parameters: adding the
+/// eleventh is a field here, a row in [`Filters::TABLE`], a line in `grade.wgsl`
+/// and a row in the page's `FILTERS` list — not a signature edited in six files.
 ///
-/// Both shaders clamp internally, but an out-of-range value is a typo worth
-/// reporting rather than silently flooring. Clarity is signed — negative
-/// subtracts the mid band instead of adding it, which softens. Sharpness isn't;
-/// RCAS has no meaningful direction to run backwards in.
-pub fn validate_filters(name: &str, sharpness: f32, clarity: f32) -> Result<()> {
-    for (field, v, lo) in [("sharpness", sharpness, 0.0), ("clarity", clarity, -1.0)] {
-        if !(lo..=1.0).contains(&v) {
-            bail!("'{name}': {field} is {v}, must be between {lo} and 1.0");
+/// **Only the first two are per-model.** `sharpness` and `clarity` are on
+/// `Defaults`/`Template` because a checkpoint has a house look for them; the
+/// eight grading knobs always start neutral, because no checkpoint has an
+/// opinion about your hue. That is also why this struct isn't the one the config
+/// deserializes — see [`Profile`].
+///
+/// Neutral is all-zero, which is what `Default` derives and what every
+/// `Fsr::process` call that isn't `Engine::publish` passes ([`Filters::NONE`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Filters {
+    /// RCAS amount, 0..1. Unsigned: there is no meaningful direction to run a
+    /// sharpen backwards in.
+    pub sharpness: f32,
+    /// Difference-of-Gaussians local contrast, -1..1. Negative softens the band.
+    pub clarity: f32,
+    // The eight below are the grade pass: per-pixel, -1..1, 0 = identity, and
+    // all of them are one dispatch together whatever they are set to.
+    /// Perceptual lightness, ±1.5 stops at the ends.
+    pub lightness: f32,
+    /// Tone curve slope about mid-grey.
+    pub contrast: f32,
+    /// Lift or recover the top of the range only.
+    pub highlights: f32,
+    /// Open or crush the bottom of the range only.
+    pub shadows: f32,
+    /// Chroma scale. -1 is exactly greyscale, +1 is double.
+    pub saturation: f32,
+    /// Hue rotation, -1..1 = ±180°.
+    pub hue: f32,
+    /// Blue↔yellow shift.
+    pub temperature: f32,
+    /// Green↔magenta shift.
+    pub tint: f32,
+}
+
+impl Filters {
+    /// Every filter off. `Fsr::process` with this is a byte-exact identity at
+    /// scale 1.0 — all three optional passes are skipped — which
+    /// `fsr-selftest` asserts.
+    pub const NONE: Filters = Filters {
+        sharpness: 0.0,
+        clarity: 0.0,
+        lightness: 0.0,
+        contrast: 0.0,
+        highlights: 0.0,
+        shadows: 0.0,
+        saturation: 0.0,
+        hue: 0.0,
+        temperature: 0.0,
+        tint: 0.0,
+    };
+
+    /// Where a fresh image's sliders start: the model's two display settings,
+    /// and no grade. Every new generation, refine, hi-res and reopen goes
+    /// through here or through [`Filters::restart`].
+    pub fn starting_at(sharpness: f32, clarity: f32) -> Filters {
+        Filters {
+            sharpness,
+            clarity,
+            ..Filters::NONE
         }
     }
-    Ok(())
+
+    /// What this image's filters become when an escalation replaces its pixels:
+    /// **detail resets, colour carries.**
+    ///
+    /// `sharpness` and `clarity` size their band from the image (invariant 6),
+    /// so the numbers that looked right are stale the moment a pass changes the
+    /// resolution or redraws the detail — and inheriting them hides what the
+    /// pass did underneath a filter chosen for the previous picture. A hue
+    /// rotation is the same rotation at any size, and losing a grade on every
+    /// rung of the ladder is a reason not to press the button.
+    ///
+    /// Safe under invariant 1 either way: `raw` is never graded, so carrying the
+    /// numbers re-filters the unsharpened image rather than compounding onto an
+    /// already-graded one.
+    pub fn restart(&self, sharpness: f32, clarity: f32) -> Filters {
+        Filters {
+            sharpness,
+            clarity,
+            ..*self
+        }
+    }
+
+    /// Name, value and lower bound of each knob. The upper bound is 1.0 for all
+    /// ten. One table so that a new knob is range-checked by existing code.
+    fn table(&self) -> [(&'static str, f32, f32); 10] {
+        [
+            ("sharpness", self.sharpness, 0.0),
+            ("clarity", self.clarity, -1.0),
+            ("lightness", self.lightness, -1.0),
+            ("contrast", self.contrast, -1.0),
+            ("highlights", self.highlights, -1.0),
+            ("shadows", self.shadows, -1.0),
+            ("saturation", self.saturation, -1.0),
+            ("hue", self.hue, -1.0),
+            ("temperature", self.temperature, -1.0),
+            ("tint", self.tint, -1.0),
+        ]
+    }
+
+    /// Does the grade pass have anything to do? All eight at 0 is an exact
+    /// identity, so the pass is skipped and its texture never allocated — which
+    /// is what keeps a neutral `process` byte-exact.
+    pub fn grades(&self) -> bool {
+        self.table()[2..].iter().any(|(_, v, _)| *v != 0.0)
+    }
+
+    /// Range-check every knob.
+    ///
+    /// Not folded into [`Profile::validate`] because `Engine::adjust` checks
+    /// values that aren't on a profile at all: the profile carries where the
+    /// sliders *start*, and the live positions live on the result they apply to.
+    ///
+    /// Every shader clamps internally, but an out-of-range value is a typo worth
+    /// reporting rather than silently flooring.
+    pub fn validate(&self, name: &str) -> Result<()> {
+        for (field, v, lo) in self.table() {
+            if !(lo..=1.0).contains(&v) {
+                bail!("'{name}': {field} is {v}, must be between {lo} and 1.0");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A `/adjust` body: every knob optional, absent meaning "leave that one alone".
+///
+/// The route has always had those semantics and keeps them, so adjusting one
+/// filter stays a one-field request — the page sends all ten because it has all
+/// ten on screen, but a `curl` shouldn't have to. Mirrors
+/// [`crate::pipeline::EscalateRequest::apply`].
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(default)]
+pub struct FiltersPatch {
+    pub sharpness: Option<f32>,
+    pub clarity: Option<f32>,
+    pub lightness: Option<f32>,
+    pub contrast: Option<f32>,
+    pub highlights: Option<f32>,
+    pub shadows: Option<f32>,
+    pub saturation: Option<f32>,
+    pub hue: Option<f32>,
+    pub temperature: Option<f32>,
+    pub tint: Option<f32>,
+}
+
+impl FiltersPatch {
+    pub fn apply(&self, f: &mut Filters) {
+        for (dst, src) in [
+            (&mut f.sharpness, self.sharpness),
+            (&mut f.clarity, self.clarity),
+            (&mut f.lightness, self.lightness),
+            (&mut f.contrast, self.contrast),
+            (&mut f.highlights, self.highlights),
+            (&mut f.shadows, self.shadows),
+            (&mut f.saturation, self.saturation),
+            (&mut f.hue, self.hue),
+            (&mut f.temperature, self.temperature),
+            (&mut f.tint, self.tint),
+        ] {
+            if let Some(v) = src {
+                *dst = v;
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1605,5 +1762,93 @@ t5xxl = "v/umt5.gguf"
         assert_eq!(m.high_noise_cfg(), 5.0, "unset must not pin the old value");
         m.high_noise_cfg_scale = Some(1.0);
         assert_eq!(m.high_noise_cfg(), 1.0);
+    }
+
+    /// An absent knob keeps what the image has. This is the whole contract of
+    /// `/adjust`: the page sends all ten because it has all ten on screen, and
+    /// anything else may send one.
+    #[test]
+    fn a_patch_moves_only_the_knobs_it_names() {
+        let mut f = Filters {
+            sharpness: 0.35,
+            saturation: 0.4,
+            hue: -0.2,
+            ..Filters::NONE
+        };
+        let patch: FiltersPatch = serde_json::from_str(r#"{"saturation":-1.0}"#).unwrap();
+        patch.apply(&mut f);
+        assert_eq!(f.saturation, -1.0);
+        assert_eq!(f.sharpness, 0.35, "an absent knob must not be reset to 0");
+        assert_eq!(f.hue, -0.2);
+    }
+
+    /// Every knob is range-checked, not just the two that predate the grade —
+    /// the trap being a new field added to the struct and forgotten in the
+    /// table, which validates clean and reaches the shader as anything at all.
+    #[test]
+    fn every_filter_is_range_checked() {
+        assert!(Filters::NONE.validate("m").is_ok());
+        for (name, set) in [
+            ("sharpness", (|f: &mut Filters, v| f.sharpness = v) as fn(&mut Filters, f32)),
+            ("clarity", |f, v| f.clarity = v),
+            ("lightness", |f, v| f.lightness = v),
+            ("contrast", |f, v| f.contrast = v),
+            ("highlights", |f, v| f.highlights = v),
+            ("shadows", |f, v| f.shadows = v),
+            ("saturation", |f, v| f.saturation = v),
+            ("hue", |f, v| f.hue = v),
+            ("temperature", |f, v| f.temperature = v),
+            ("tint", |f, v| f.tint = v),
+        ] {
+            let mut f = Filters::NONE;
+            set(&mut f, 1.5);
+            let err = f.validate("m").unwrap_err().to_string();
+            assert!(err.contains(name), "1.5 in {name} was accepted: {err}");
+            // Sharpness is the one knob with no negative half — RCAS has no
+            // direction to run backwards in.
+            let mut f = Filters::NONE;
+            set(&mut f, -0.5);
+            assert_eq!(
+                f.validate("m").is_err(),
+                name == "sharpness",
+                "{name} disagrees with its own lower bound"
+            );
+        }
+    }
+
+    /// The pass has to be skipped at neutral, because the sRGB/OKLab round trip
+    /// is not byte-exact and `fsr-selftest` asserts byte equality.
+    #[test]
+    fn a_neutral_grade_is_no_work_at_all() {
+        assert!(!Filters::NONE.grades());
+        assert!(!Filters::starting_at(1.0, -1.0).grades(), "detail is not a grade");
+        assert!(Filters { tint: -0.01, ..Filters::NONE }.grades());
+    }
+
+    /// Detail resets, colour carries. Both halves, because the rule is an
+    /// asymmetry and the obvious tidy-up is to make it consistent.
+    ///
+    /// The third assertion is the one that had to be learned: what an escalation
+    /// carries is *not* where the sliders start any more, so the two have to be
+    /// reported separately or the viewer's Reset makes each edit the next
+    /// image's neutral and there is no way back to an ungraded picture.
+    #[test]
+    fn an_escalation_keeps_the_grade_and_drops_the_detail() {
+        let live = Filters {
+            sharpness: 0.9,
+            clarity: 0.5,
+            saturation: 0.3,
+            temperature: -0.4,
+            ..Filters::NONE
+        };
+        let next = live.restart(0.35, 0.0);
+        assert_eq!((next.sharpness, next.clarity), (0.35, 0.0));
+        assert_eq!((next.saturation, next.temperature), (0.3, -0.4));
+        assert_ne!(
+            next,
+            Filters::starting_at(0.35, 0.0),
+            "a carried grade is not a starting point — GenResult.start is the one \
+             the viewer resets to"
+        );
     }
 }

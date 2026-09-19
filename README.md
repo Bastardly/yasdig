@@ -12,16 +12,16 @@ SDXL-Turbo want a template with 1–4 steps and CFG 1). Anything better than tha
 **escalated on demand**, so you only pay for it on the images worth keeping.
 
 ```
-prompt ──▶ sd-cli (Vulkan, 768px default) ──▶ EASU upscale ──▶ clarity + RCAS ──▶ PNG
+prompt ──▶ sd-cli (Vulkan, 768px default) ──▶ EASU upscale ──▶ grade + clarity + RCAS ──▶ PNG
 your image ──▶ fit to budget ──▶ img2img ─────────▶ ▲
                                                     ├─▶ hi-res   enlarge, then img2img
     on demand, from the buttons above the result:   └─▶ refine   img2img in place, no rescale
     (either order, repeatable, and each may name its own checkpoint)
 ```
 
-Both escalations read the *unfiltered* image and write a new one; clarity and RCAS
-run once on the way out. So neither filter compounds, and no pass ever diffuses
-over pixels an earlier pass already sharpened.
+Both escalations read the *unfiltered* image and write a new one; the grade, clarity
+and RCAS run once on the way out. So no filter compounds, and no pass ever diffuses
+over pixels an earlier pass already sharpened or graded.
 
 The **Image to image** tab is the second way in: drop, paste or pick a picture and
 run one diffusion pass over it, after which it climbs the same ladder. And because
@@ -61,13 +61,20 @@ post-process is implemented directly as Vulkan compute shaders through `wgpu`:
   is the one thing the refine pass structurally cannot add, and raising strength to
   reach it re-composes the picture instead.
 
-All three run on the same AMD GPU sd.cpp uses, with no model weights. `cargo test`
+- `src/fsr/grade.wgsl` — not FSR either: eight colour knobs (lightness, contrast,
+  highlights, shadows, saturation, hue, temperature, tint) in a single pass, ahead of
+  the other two. Every one of them is a per-pixel transform, so they cost one dispatch
+  together however many you have moved. It works in OKLab, where each knob is one named
+  operation and where "warmer" and "greener" are literally the two colour axes.
+
+All four run on the same AMD GPU sd.cpp uses, with no model weights. `cargo test`
 validates the WGSL through naga, since it would otherwise only compile at GPU device
 creation — a shader typo would surface as a startup failure on the worker thread.
 
-Each stage is skipped when it would be a no-op — EASU at scale 1.0, contrast at
-clarity 0.0 — so `rustimage fsr in.png out.png 1.0 0.5` is an exact sharpen-only pass,
-and `rustimage fsr in.png out.png 1.0 0.0 0.0` is a byte-exact copy.
+Each stage is skipped when it would be a no-op — EASU at scale 1.0, the grade with all
+eight knobs at 0, contrast at clarity 0.0 — so `rustimage fsr in.png out.png 1.0 0.5`
+is an exact sharpen-only pass, and `rustimage fsr in.png out.png 1.0 0.0 0.0` is a
+byte-exact copy.
 
 ## Requirements
 
@@ -156,7 +163,7 @@ Settings fields, shared between `[defaults]` and `[templates.*]` except where no
 | `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `20`, `5.0`, `euler` (Turbo → few steps, cfg 1) |
 | `img2img_cfg_scale` *(opt)* | CFG for the refine and hi-res passes only; unset (the default) follows `cfg_scale`. `0` is legal and means guidance off |
 | `upscale_factor` | FSR upscale, default `2.0` (768 → 1536) |
-| `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the viewer's slider starts |
+| `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the viewer's slider starts. The only display filter here besides `clarity`: the eight colour knobs are not per-model and always start neutral |
 | `clarity` | local contrast, -1..1, default `0.0` = off — positive adds mid-frequency depth, negative softens; likewise the slider's starting value |
 | `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size (0 steps = disabled, and `refine_steps` defaults to 0) |
 | `source_steps` / `source_strength` | the **Image to image** tab's one pass over a source image you supply. Defaults `12` and `0.55` — far higher than the two escalations, because this one is asked to make a picture *out of* one rather than to finish one it made |
@@ -305,7 +312,7 @@ cargo run --release
 # [rustimage]   • samExtTURBO_v10   [discovered, 6.5 GB]  768x768 → 1536x1536
 # [rustimage]   • sd_xl_base_1.0    [discovered, 6.5 GB]  768x768 → 1536x1536
 # [rustimage] GPU worker ready on adapter: AMD Radeon RX 7900 XTX (RADV NAVI31)
-# [rustimage] GPU post-process: upscale=easu, contrast=clarity, sharpen=rcas
+# [rustimage] GPU post-process: upscale=easu, grade=oklab, contrast=clarity, sharpen=rcas
 # [rustimage] listening on http://127.0.0.1:8080
 ```
 
@@ -521,9 +528,9 @@ writes the result to `work/output/{id}-x{factor}/`. A subdirectory, so 33 near-i
 tiles don't bury the picker. Two things make this work on video where per-frame "AI
 upscaling" doesn't:
 
-- **A fixed kernel cannot flicker.** EASU, RCAS and clarity are deterministic functions
-  of the pixels, so two near-identical frames produce two near-identical outputs.
-  Stability is by construction, not by luck.
+- **A fixed kernel cannot flicker.** EASU, RCAS, clarity and the colour grade are
+  deterministic functions of the pixels, so two near-identical frames produce two
+  near-identical outputs. Stability is by construction, not by luck.
 - The filters **size their band from the image**, so a sharpness setting means the same
   thing after the enlargement as before it.
 
@@ -583,20 +590,32 @@ is measured: 254 MB of VAE takes 2.07 s serialized against 0.53 s at four thread
 
 ### Postprocessing
 
-**Clarity** and **Sharpness** live in the **viewer** — press **View & adjust**, or
-click the picture. They work like a photo editor rather than a generation setting: drag
-one and the image re-filters under the cursor. There is no diffusion involved — the
-server re-runs the GPU filters on the unfiltered image it already retained — so a
-re-tune costs milliseconds against the minutes a regenerate would, and it stays lossless
-however many times you do it.
+Ten sliders live in the **viewer** — press **View & adjust**, or click the picture.
+They work like a photo editor rather than a generation setting: drag one and the image
+re-filters under the cursor. There is no diffusion involved — the server re-runs the GPU
+filters on the unfiltered image it already retained — so a re-tune costs milliseconds
+against the minutes a regenerate would, and it stays lossless however many times you do
+it.
 
-They are in the viewer because that is the only place you can see what they do. Both
-filters work at or near the pixel level, and the result column shows a fitted preview a
-few hundred pixels across; a sharpness setting chosen there is a guess. The viewer opens
-with the whole frame fitted, which is the right view for clarity, and **1:1** switches
-to true pixels, which is the right view for sharpness — drag the image to move around
-it. Only the **×** and Escape close it, so a stray click while you are working can't
-dismiss the thing you are working on.
+| | |
+|---|---|
+| **Tone** | **Lightness** overall brightness, about ±1.5 stops. **Contrast** steepens or flattens the curve about mid-grey. **Highlights** and **Shadows** move one end of the range and leave the other alone — pull Highlights down to recover a blown sky, push Shadows up to open the dark half. |
+| **Colour** | **Saturation** (-1 is exactly greyscale, +1 is double). **Temperature** blue↔yellow and **Tint** green↔magenta, scaled so black stays black. **Hue** rotates every colour, ±180°. |
+| **Detail** | **Clarity** and **Sharpness**, described below. |
+
+They are in the viewer because that is the only place you can see what they do. The two
+detail filters work at or near the pixel level, and the result column shows a fitted
+preview a few hundred pixels across; a sharpness setting chosen there is a guess. The
+viewer opens with the whole frame fitted, which is the right view for a grade and for
+clarity, and **1:1** switches to true pixels, which is the right view for sharpness —
+drag the image to move around it. Only the **×** and Escape close it, so a stray click
+while you are working can't dismiss the thing you are working on. **Reset** puts every
+slider back to where this image started, and a double-click does the same for one.
+
+The eight colour knobs are one GPU pass between the upscale and the detail filters, so
+moving eight of them costs exactly what moving one does. They are all 0 by default and
+0 is exactly off — the pass is skipped outright rather than run as an identity, so an
+ungraded image is byte-for-byte what came out of the upscaler.
 
 **Clarity** runs **-1 to 1**. Positive is a wide unsharp mask on brightness: it moves
 the mid frequencies that read as contrast and depth, and leaves fine detail alone.
@@ -624,11 +643,18 @@ three times finer, relative to the subject, than the same kernel at 1024.
 default to off, so the first image you see is what the model and the upscaler actually
 produced — everything on top of it is a choice you made and can take back.
 
-Both sliders reset to the model's values on every new image — a fresh generate, a
-refine, a hi-res. That is deliberate: an escalation replaces the pixels, so whatever
-sharpening looked right a moment ago is stale by definition, and inheriting it would
-hide what the pass actually did under a filter chosen for the previous image. Dialling
-it back in costs a drag, not a render.
+Clarity and Sharpness reset to the model's values on every new image, including after a
+**Refine** or **Hi-res**. That is deliberate: an escalation replaces the pixels, so
+whatever sharpening looked right a moment ago is stale by definition, and inheriting it
+would hide what the pass actually did under a filter chosen for the previous image.
+Dialling it back in costs a drag, not a render.
+
+**The eight colour sliders survive Refine and Hi-res**, which is the other half of the
+same argument: +0.2 saturation means the same thing at any size, so there is nothing
+stale about it, and losing a grade every time you climb a rung would be a reason not to
+climb it. It is re-applied to the new pixels rather than stacked on them — the escalation
+diffuses the ungraded image, as everything here does. A fresh generate, an
+image-to-image, or reopening a work item all start from neutral again.
 
 A different config file can be passed as the first argument:
 `cargo run --release -- /path/to/models.toml`.
@@ -641,17 +667,19 @@ way to check the Vulkan side in isolation.
 
 ```sh
 rustimage doctor [models.toml]      # run the startup checks and report, without starting
-rustimage fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]
+rustimage fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]  # no colour knobs: UI only
 rustimage fsr-selftest [out.png]    # synthesize patterns and check the filters
 ```
 
 From a source checkout, put them after `--`: `cargo run --release -- doctor`.
 
-`fsr-selftest` verifies the output dimensions, asserts that sharpness 0 and clarity 0
-really are a byte-exact copy (the promise made further up), and then measures how much
-each filter moves each spatial frequency — at two image sizes, because both filters size
-their band from the image rather than the pixel grid, and that is the claim worth
-checking. It needs a Vulkan device and nothing else.
+`fsr-selftest` verifies the output dimensions, asserts that every filter at 0 really is
+a byte-exact copy (the promise made further up), checks each of the eight colour knobs
+one at a time — that it reaches the GPU at all, and that lightness, contrast, saturation
+and temperature run in the direction they claim — and then measures how much each detail
+filter moves each spatial frequency, at three image sizes, because those two size their
+band from the image rather than the pixel grid and that is the claim worth checking. It
+needs a Vulkan device and nothing else.
 
 ## API
 
@@ -689,19 +717,27 @@ checking. It needs a Vulkan device and nothing else.
   following whatever `cfg_scale` this request used. `sharpness` and
   `clarity` are the exception, because they aren't generation settings: they set the
   image's starting filters, `/adjust` moves them from there, and every later pass resets
-  them. The web UI leaves both out for that reason. `seed` defaults to `-1` (pick one).
+  them. The web UI leaves both out for that reason. The eight colour knobs aren't here
+  at all — they are not per-model, so they start at 0 on every image and only `/adjust`
+  sets them. `seed` defaults to `-1` (pick one).
   Response:
   ```json
   { "image_base64": "…", "width": 1536, "height": 1536, "seed": 12345,
     "refine_passes": 0, "hires_passes": 0,
     "image_id": 3, "work_id": "1758104523000-12345",
     "can_refine": true, "can_hires": true,
-    "sharpness": 0.35, "clarity": 0.0,
+    "filters": { "sharpness": 0.35, "clarity": 0.0, "lightness": 0.0, "contrast": 0.0,
+                 "highlights": 0.0, "shadows": 0.0, "saturation": 0.0, "hue": 0.0,
+                 "temperature": 0.0, "tint": 0.0 },
+    "filters_start": { "sharpness": 0.35, "clarity": 0.0, "…": 0.0 },
     "timings": { "gen_ms": 0, "fsr_ms": 0, "refine_ms": 0, "hires_ms": 0 } }
   ```
   `image_id` addresses the retained intermediates; `can_refine` / `can_hires` say which
-  escalations that image can still take; `sharpness` / `clarity` report the filters
-  actually applied, which is what the UI's sliders reflect. `work_id` is the archived
+  escalations that image can still take; `filters` reports all ten display filters as
+  actually applied, which is what the UI's sliders reflect, and `filters_start` reports
+  where they would start on a new image from the same model — the two differ after an
+  escalation, which carries the colour grade across, and `filters_start` is what the
+  viewer's **Reset** goes back to. `work_id` is the archived
   generation this descends from — it outlives the process, unlike `image_id`, and is
   `null` only if the archive write failed.
 - `POST /upload` — the one route with a **binary body**: a PNG, sent as-is with
@@ -762,14 +798,15 @@ checking. It needs a Vulkan device and nothing else.
   `sampler`, `width`, `height` — are deliberately not accepted here: they describe a
   txt2img that has already run, and nothing they could say would change the image in
   hand. Change those and press **Generate**.
-- `POST /adjust` — `{ "image_id": 3, "sharpness": 0.5, "clarity": 0.3 }`. Re-runs the
-  display filters on the retained image; both fields are optional, and an omitted one
-  keeps its current value. No diffusion runs, so this returns in milliseconds — it is
-  what the viewer's sliders call, and it is safe to call repeatedly because the
-  image it filters is always the unfiltered one. The new values belong to that image
-  and last until the next pass over it — `/refine` and `/hires` both reset the filters
-  to the model's values. Same response shape as `/generate`, with the time reported in
-  `fsr_ms`.
+- `POST /adjust` — `{ "image_id": 3, "sharpness": 0.5, "saturation": -0.2 }`. Re-runs
+  the display filters on the retained image. Every filter named in the `filters` object
+  above is accepted here, flat; all are optional, and an omitted one keeps its current
+  value, so adjusting one knob is a one-field request. No diffusion runs, so this
+  returns in milliseconds — it is what the viewer's sliders call, and it is safe to call
+  repeatedly because the image it filters is always the unfiltered one. The new values
+  belong to that image and last until the next pass over it — `/refine` and `/hires`
+  reset `sharpness` and `clarity` to the model's values and carry the eight colour knobs
+  across. Same response shape as `/generate`, with the time reported in `fsr_ms`.
 - `POST /save-output` — `{ "image_id": 3 }`. Copies the image on screen, filters and
   all, into `work/output/`. Returns `{ "path": "work/output/…png" }`.
 - `GET /workitems` — every archived generation, newest first. Each carries `id`,
@@ -902,8 +939,8 @@ the GPU worker is gone.
   src/pipeline.rs  orchestrate sd -> fsr -> escalations, with timings + result cache
   src/workitems.rs durable storage: work/workitems/ + work/output/
   src/videos.rs    durable storage for clips: work/videos/
-  src/fsr/         wgpu compute (upscale.wgsl = EASU, contrast.wgsl = clarity,
-                   sharpen.wgsl = RCAS)
+  src/fsr/         wgpu compute (upscale.wgsl = EASU, grade.wgsl = colour,
+                   contrast.wgsl = clarity, sharpen.wgsl = RCAS)
   web/index.html   frontend
   models.toml      config + model profiles + the [[video]] overrides
   models/video/    video components, scanned recursively and identified by header

@@ -22,7 +22,7 @@
 //! re-run on it for free: that is `adjust`, and it is why they are a slider
 //! rather than a reason to regenerate.
 
-use crate::config::{Config, Profile};
+use crate::config::{Config, Filters, FiltersPatch, Profile};
 use crate::fsr::Fsr;
 use crate::sd::{Monitor, SdRunner, VideoIo};
 use crate::videos::{Clip, VideoStore};
@@ -274,8 +274,17 @@ pub struct GenResult {
     pub can_hires: bool,
     /// The display filters currently applied, so the UI reflects what the image
     /// actually has rather than what its controls last said.
-    pub sharpness: f32,
-    pub clarity: f32,
+    pub filters: Filters,
+    /// Where those filters *would* start on a new image from the profile this
+    /// one was made with: the model's sharpness and clarity, and no grade.
+    ///
+    /// Reported separately because after an escalation `filters` is not it —
+    /// `Filters::restart` carries the grade across, so a viewer that took the
+    /// applied values as its reset target would make the last edit the new
+    /// neutral and leave no way back. It comes off the retained profile, so it
+    /// still describes the model that actually ran even when the escalation
+    /// named a different checkpoint.
+    pub start: Filters,
 }
 
 /// The intermediates of one result, kept on disk so quality can be escalated
@@ -298,16 +307,19 @@ struct Pending {
     display: PathBuf,
     profile: Profile,
     /// The display filters as they stand on *this* image. Deliberately not on
-    /// `profile`: the profile's values are where the sliders start, and every
-    /// new image — a fresh generate, a refine, a hi-res — starts there again.
-    /// `adjust` moves these two and touches nothing else.
+    /// `profile`: the profile's two values are where the sliders start, and a
+    /// fresh generate, an img2img or a reopen starts there again. `adjust` moves
+    /// these and touches nothing else.
     ///
-    /// Carrying them forward instead was the obvious thing and the wrong one.
-    /// An escalation replaces the pixels, so the amount of sharpening that
-    /// looked right is stale by definition, and inheriting it hides what the
-    /// pass actually did underneath a filter chosen for the previous image.
-    sharpness: f32,
-    clarity: f32,
+    /// An escalation is the one case that isn't all-or-nothing, and
+    /// [`Filters::restart`] holds the rule: **detail resets, colour carries.**
+    /// Carrying sharpness and clarity forward was the obvious thing and the
+    /// wrong one — a new pass replaces the pixels, so the amount of sharpening
+    /// that looked right is stale by definition, and inheriting it hides what
+    /// the pass did underneath a filter chosen for the previous image. The eight
+    /// grading knobs have no such tie to the pixels, and re-dialling a look on
+    /// every rung of the ladder is a reason not to climb it.
+    filters: Filters,
     prompt: String,
     negative: Option<String>,
     seed: i64,
@@ -606,13 +618,14 @@ impl Engine {
         //    both of which read this image rather than the sharpened one.
         let t = Instant::now();
         self.fsr
-            .process(&lowres, &raw, tpl.upscale_factor, 0.0, 0.0)?;
+            .process(&lowres, &raw, tpl.upscale_factor, &Filters::NONE)?;
         // Nothing reads the base render once it has been upscaled — every
         // escalation works at output resolution now — so it stays in `scratch`
         // and goes when this returns, whichever way it returns.
 
         // 3) Sharpen for display.
-        let (png, w, h) = self.publish(&raw, &display, tpl.sharpness, tpl.clarity)?;
+        let filters = Filters::starting_at(tpl.sharpness, tpl.clarity);
+        let (png, w, h) = self.publish(&raw, &display, &filters)?;
         let fsr_ms = t.elapsed().as_millis();
 
         // Past every `?`: these two are the result, and the `Pending` below owns
@@ -664,8 +677,7 @@ impl Engine {
             raw_w: w,
             raw_h: h,
             display,
-            sharpness: profile.sharpness,
-            clarity: profile.clarity,
+            filters,
             profile: profile.clone(),
             prompt: req.prompt.clone(),
             negative: req.negative.clone(),
@@ -789,7 +801,7 @@ impl Engine {
             // Magnification, which is EASU's whole job — and unsharpened, like
             // everything that feeds a diffusion pass.
             self.fsr
-                .process(&stored, &src, fw as f32 / sw as f32, 0.0, 0.0)?;
+                .process(&stored, &src, fw as f32 / sw as f32, &Filters::NONE)?;
         }
         let fsr_ms_in = t.elapsed().as_millis();
 
@@ -814,7 +826,8 @@ impl Engine {
         // 3) Sharpen for display. Dimensions come from here, not from `fit_to`:
         //    sd.cpp rounds an init image to the latent grid and only warns.
         let t = Instant::now();
-        let (png, w, h) = self.publish(&raw, &display, profile.sharpness, profile.clarity)?;
+        let filters = Filters::starting_at(profile.sharpness, profile.clarity);
+        let (png, w, h) = self.publish(&raw, &display, &filters)?;
         let fsr_ms = fsr_ms_in + t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -854,8 +867,7 @@ impl Engine {
             raw_w: w,
             raw_h: h,
             display,
-            sharpness: profile.sharpness,
-            clarity: profile.clarity,
+            filters,
             profile,
             prompt: req.prompt.clone(),
             negative: req.negative.clone(),
@@ -1031,14 +1043,13 @@ impl Engine {
         &mut self,
         id: &str,
         factor: f32,
-        sharpness: f32,
-        clarity: f32,
+        filters: &Filters,
     ) -> Result<EnlargeResult> {
         let clip = self.videos.load(id)?;
         if !(1.0..=MAX_UPSCALE).contains(&factor) {
             bail!("upscale factor must be between 1.0 and {MAX_UPSCALE}");
         }
-        crate::config::validate_filters(&clip.id, sharpness, clarity)?;
+        filters.validate(&clip.id)?;
         let frames = self.videos.frames(id);
         if frames.is_empty() {
             bail!("clip '{id}' has no frames on disk");
@@ -1053,7 +1064,7 @@ impl Engine {
         let mut size = (0, 0);
         for (i, frame) in frames.iter().enumerate() {
             let dest = out_dir.join(format!("frame_{i:03}.png"));
-            size = self.fsr.process(frame, &dest, factor, sharpness, clarity)?;
+            size = self.fsr.process(frame, &dest, factor, filters)?;
         }
         Ok(EnlargeResult {
             dir: out_dir,
@@ -1112,7 +1123,8 @@ impl Engine {
         // Dimensions come back from here rather than carrying over: sd.cpp
         // rounds an init image to what the latent grid allows, so the pass can
         // return a slightly different size than it was given.
-        let (png, w, h) = self.publish(&raw, &display, p.profile.sharpness, p.profile.clarity)?;
+        let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
+        let (png, w, h) = self.publish(&raw, &display, &filters)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -1126,9 +1138,9 @@ impl Engine {
             raw_w: w,
             raw_h: h,
             display,
-            // Back to the model's starting point — see `Pending::sharpness`.
-            sharpness: p.profile.sharpness,
-            clarity: p.profile.clarity,
+            // Detail back to the model's starting point, the grade kept — see
+            // `Filters::restart`.
+            filters,
             refine_passes: p.refine_passes + 1,
             step,
             ..p
@@ -1196,8 +1208,7 @@ impl Engine {
                 &p.raw,
                 &upscaled,
                 diff_w as f32 / p.raw_w as f32,
-                0.0,
-                0.0,
+                &Filters::NONE,
             )?;
             fsr_ms += t.elapsed().as_millis();
             upscaled.clone()
@@ -1233,13 +1244,14 @@ impl Engine {
         } else {
             1.0
         };
-        self.fsr.process(&hires, &raw, scale, 0.0, 0.0)?;
+        self.fsr.process(&hires, &raw, scale, &Filters::NONE)?;
         // `hires` and `upscaled` have both been consumed; the guard drops them
         // on the way out, and would have dropped them just the same had the
         // pass died between here and the top of the function.
 
         // 4) Sharpen for display.
-        let (png, w, h) = self.publish(&raw, &display, p.profile.sharpness, p.profile.clarity)?;
+        let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
+        let (png, w, h) = self.publish(&raw, &display, &filters)?;
         fsr_ms += t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -1250,9 +1262,9 @@ impl Engine {
             raw_w: w,
             raw_h: h,
             display,
-            // Back to the model's starting point — see `Pending::sharpness`.
-            sharpness: p.profile.sharpness,
-            clarity: p.profile.clarity,
+            // Detail back to the model's starting point, the grade kept — see
+            // `Filters::restart`.
+            filters,
             hires_passes: p.hires_passes + 1,
             step,
             ..p
@@ -1271,20 +1283,15 @@ impl Engine {
     /// pixels — `raw` is still exactly what the last diffusion produced, so
     /// re-filtering it is lossless no matter how many times it is done.
     ///
-    /// `None` keeps the current value, matching how overrides work everywhere
-    /// else here. The change applies to this image only, and only until the next
-    /// pass — see [`Pending::sharpness`].
-    pub fn adjust(
-        &mut self,
-        id: u64,
-        sharpness: Option<f32>,
-        clarity: Option<f32>,
-    ) -> Result<GenResult> {
+    /// A [`FiltersPatch`], so an absent knob keeps its current value — matching
+    /// how overrides work everywhere else here, and keeping a one-filter request
+    /// a one-field body. The change applies to this image only, and only until
+    /// the next pass — see [`Pending::filters`].
+    pub fn adjust(&mut self, id: u64, patch: &FiltersPatch) -> Result<GenResult> {
         let mut p = self.lookup(id, "adjust")?;
-        p.sharpness = sharpness.unwrap_or(p.sharpness);
-        p.clarity = clarity.unwrap_or(p.clarity);
+        patch.apply(&mut p.filters);
         // Same bounds the config goes through, from the same place.
-        crate::config::validate_filters(&p.profile.name, p.sharpness, p.clarity)?;
+        p.filters.validate(&p.profile.name)?;
 
         let t = Instant::now();
         // Straight back over the same `display` path, and `step` doesn't move:
@@ -1295,7 +1302,7 @@ impl Engine {
         // Deliberately no `Scratch` here, unlike the three passes above. This
         // writes over a file the retained `Pending` already owns, so putting it
         // under the guard would mean a failed drag deleting a live image.
-        let (png, w, h) = self.publish(&p.raw, &p.display, p.sharpness, p.clarity)?;
+        let (png, w, h) = self.publish(&p.raw, &p.display, &p.filters)?;
         let fsr_ms = t.elapsed().as_millis();
 
         let entry = Pending {
@@ -1334,12 +1341,8 @@ impl Engine {
             .with_context(|| format!("reopening {}", stored.display()))?;
         // Filters start where the model says again, exactly as a fresh generate
         // does — the archived image is unsharpened, so there is nothing to undo.
-        let (png, w, h) = self.publish(
-            &raw,
-            &display,
-            item.profile.sharpness,
-            item.profile.clarity,
-        )?;
+        let filters = Filters::starting_at(item.profile.sharpness, item.profile.clarity);
+        let (png, w, h) = self.publish(&raw, &display, &filters)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -1350,8 +1353,7 @@ impl Engine {
             raw_w: w,
             raw_h: h,
             display,
-            sharpness: item.profile.sharpness,
-            clarity: item.profile.clarity,
+            filters,
             profile: item.profile,
             prompt: item.prompt,
             negative: item.negative,
@@ -1395,20 +1397,21 @@ impl Engine {
             refine_passes: p.refine_passes,
             hires_passes: p.hires_passes,
             step: p.step,
-            sharpness: p.sharpness,
-            clarity: p.clarity,
+            sharpness: p.filters.sharpness,
+            clarity: p.filters.clarity,
             source: p.source.clone(),
             profile: p.profile.clone(),
         };
         self.items.save_output(&p.display, &item)
     }
 
-    /// The one place RCAS is applied. Sharpens the retained raw image into
-    /// `display` and returns the PNG bytes for the response.
+    /// The one place the display filters are applied. Puts the retained raw
+    /// image through the grade, clarity and RCAS passes into `display` and
+    /// returns the PNG bytes for the response.
     ///
-    /// Scale 1.0, so [`Fsr::process`] skips EASU and this is a sharpen-only
-    /// pass — two compute passes plus a PNG round-trip, microseconds against the
-    /// diffusion it follows. At `sharpness` 0.0 it is an exact identity.
+    /// Scale 1.0, so [`Fsr::process`] skips EASU, and each of the other three is
+    /// skipped when its knobs are neutral — microseconds against the diffusion
+    /// it follows. At [`Filters::NONE`] it is a byte-exact copy.
     ///
     /// It also reports the true dimensions, which is how each pass learns what
     /// sd.cpp actually produced rather than what it was asked for.
@@ -1416,10 +1419,9 @@ impl Engine {
         &self,
         raw: &Path,
         display: &Path,
-        sharpness: f32,
-        clarity: f32,
+        filters: &Filters,
     ) -> Result<(Vec<u8>, u32, u32)> {
-        let (w, h) = self.fsr.process(raw, display, 1.0, sharpness, clarity)?;
+        let (w, h) = self.fsr.process(raw, display, 1.0, filters)?;
         let png = std::fs::read(display)?;
         Ok((png, w, h))
     }
@@ -1459,8 +1461,8 @@ impl Engine {
             work_id: entry.work_id.clone(),
             can_refine: entry.can_refine(),
             can_hires: entry.can_hires(),
-            sharpness: entry.sharpness,
-            clarity: entry.clarity,
+            filters: entry.filters,
+            start: Filters::starting_at(entry.profile.sharpness, entry.profile.clarity),
         }
     }
 }

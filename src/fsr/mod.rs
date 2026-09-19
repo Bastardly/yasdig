@@ -3,18 +3,22 @@
 //! (sharpen). No model weights, no Python — just compute shaders on the same
 //! AMD GPU sd.cpp uses.
 //!
-//! Plus one pass FSR doesn't specify: a local-contrast ("clarity") unsharp
+//! Plus two passes FSR doesn't specify. A local-contrast ("clarity") unsharp
 //! between the two, for the mid-frequency depth a diffusion refine can't reach
-//! without re-composing the image. Its knob is signed: negative softens that
-//! band rather than boosting it. See `contrast.wgsl`.
+//! without re-composing the image — its knob is signed, so negative softens that
+//! band rather than boosting it (`contrast.wgsl`). And a colour grade ahead of
+//! both, eight per-pixel knobs in one dispatch (`grade.wgsl`).
 //!
-//! Every stage is skipped when it would be a no-op — EASU at scale 1.0, contrast
-//! at clarity 0.0 — so `process(.., 1.0, s, 0.0)` is an exact sharpen-only pass.
+//! Every stage is skipped when it would be a no-op — EASU at scale 1.0, the
+//! grade when all eight of its knobs are 0, contrast at clarity 0.0 — so
+//! `process(.., 1.0, &Filters { sharpness, ..Filters::NONE })` is an exact
+//! sharpen-only pass, and `Filters::NONE` at scale 1.0 is byte-exact.
 //!
 //! Both filters scale their working band with the image rather than with the
 //! pixel grid ([`clarity_sigmas`], [`rcas_radius`]), so a setting means the same
 //! thing before and after a hi-res pass.
 
+use crate::config::Filters;
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
 use std::path::Path;
@@ -33,6 +37,25 @@ struct SharpenParams {
     size: [u32; 2],
     sharpness: f32,
     radius: i32,
+}
+
+/// The eight grading knobs, plus the hue rotation already turned into a matrix.
+/// Field order and padding must match `Params` in `grade.wgsl`: 2 u32 + 9 f32 +
+/// one pad word = 48 bytes, which is the 16-byte multiple a uniform needs.
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct GradeParams {
+    size: [u32; 2],
+    lightness: f32,
+    contrast: f32,
+    highlights: f32,
+    shadows: f32,
+    saturation: f32,
+    temperature: f32,
+    tint: f32,
+    hue_sin: f32,
+    hue_cos: f32,
+    _pad: f32,
 }
 
 #[repr(C)]
@@ -54,6 +77,10 @@ pub struct Fsr {
     upscale_bgl: wgpu::BindGroupLayout,
     sharpen_pipeline: wgpu::ComputePipeline,
     sharpen_bgl: wgpu::BindGroupLayout,
+    /// Colour grading. One in, one out, one uniform — the same layout shape as
+    /// sharpen, so it needs no layout of its own.
+    grade_pipeline: wgpu::ComputePipeline,
+    grade_bgl: wgpu::BindGroupLayout,
     /// Shared by the three passes that write the 1/8 luma plane: downsample,
     /// blur_h, blur_v. Same bind group shape, different entry points.
     plane_bgl: wgpu::BindGroupLayout,
@@ -149,8 +176,14 @@ impl Fsr {
             source: wgpu::ShaderSource::Wgsl(include_str!("contrast.wgsl").into()),
         });
 
+        let grade_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("grade"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("grade.wgsl").into()),
+        });
+
         let upscale_bgl = Self::make_bgl(&device, "upscale-bgl", wgpu::TextureFormat::Rgba8Unorm);
         let sharpen_bgl = Self::make_bgl(&device, "sharpen-bgl", wgpu::TextureFormat::Rgba8Unorm);
+        let grade_bgl = Self::make_bgl(&device, "grade-bgl", wgpu::TextureFormat::Rgba8Unorm);
         // The luma plane is 16-bit: an 8-bit low-pass bands visibly once the
         // difference between two of them is amplified.
         let plane_bgl = Self::make_bgl(&device, "plane-bgl", wgpu::TextureFormat::Rgba16Float);
@@ -160,6 +193,8 @@ impl Fsr {
             Self::make_pipeline(&device, "upscale", &upscale_bgl, &upscale_shader, "main");
         let sharpen_pipeline =
             Self::make_pipeline(&device, "sharpen", &sharpen_bgl, &sharpen_shader, "main");
+        let grade_pipeline =
+            Self::make_pipeline(&device, "grade", &grade_bgl, &grade_shader, "main");
         let plane_pass = |name: &str, entry: &str| {
             Self::make_pipeline(&device, name, &plane_bgl, &contrast_shader, entry)
         };
@@ -182,6 +217,8 @@ impl Fsr {
             upscale_bgl,
             sharpen_pipeline,
             sharpen_bgl,
+            grade_pipeline,
+            grade_bgl,
             plane_bgl,
             downsample_pipeline,
             blur_h_pipeline,
@@ -345,8 +382,7 @@ impl Fsr {
         in_png: &Path,
         out_png: &Path,
         upscale_factor: f32,
-        sharpness: f32,
-        clarity: f32,
+        filters: &Filters,
     ) -> Result<(u32, u32)> {
         let img = image::open(in_png)
             .with_context(|| format!("loading {}", in_png.display()))?
@@ -417,7 +453,7 @@ impl Fsr {
             });
         let sharpen_params = SharpenParams {
             size: [out_w, out_h],
-            sharpness,
+            sharpness: filters.sharpness,
             radius: rcas_radius(out_w, out_h),
         };
         let sharpen_buf = self
@@ -451,11 +487,76 @@ impl Fsr {
         let upscaling = out_w != in_w || out_h != in_h;
         let easu_out = if upscaling { &mid_view } else { &src_view };
 
+        // Colour grading, before the two detail filters. A photo editor's order,
+        // and load-bearing for both of them: clarity's band and RCAS's limiter
+        // both act on contrast this pass has just changed, and grading *after* a
+        // sharpen amplifies its halos and then clips them.
+        //
+        // Allocated only when it will run, like the clarity chain below. At
+        // neutral the shader is an identity in intent but not to the bit — the
+        // sRGB/OKLab round trip loses a least-significant bit here and there —
+        // so skipping it is what keeps a neutral `process` byte-exact.
+        let grading = filters.grades();
+        let grade_tex = grading.then(|| {
+            self.make_texture(
+                out_w,
+                out_h,
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+                wgpu::TextureFormat::Rgba8Unorm,
+                "graded",
+            )
+        });
+        let grade_view = grade_tex
+            .as_ref()
+            .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
+        let (hue_sin, hue_cos) = (filters.hue * std::f32::consts::PI).sin_cos();
+        let grade_params = GradeParams {
+            size: [out_w, out_h],
+            lightness: filters.lightness,
+            contrast: filters.contrast,
+            highlights: filters.highlights,
+            shadows: filters.shadows,
+            saturation: filters.saturation,
+            temperature: filters.temperature,
+            tint: filters.tint,
+            hue_sin,
+            hue_cos,
+            _pad: 0.0,
+        };
+        let grade_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("grade-params"),
+                contents: bytemuck::bytes_of(&grade_params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let grade_bg = grade_view.as_ref().map(|out| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("grade-bg"),
+                layout: &self.grade_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(easu_out),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(out),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: grade_buf.as_entire_binding(),
+                    },
+                ],
+            })
+        });
+        let grade_out = grade_view.as_ref().unwrap_or(easu_out);
+
         // Local contrast, between the two FSR passes. Allocated only when it
         // will actually run: at clarity 0.0 the shader is an exact identity, so
         // there's no reason to pay for two dispatches and two textures. Either
         // sign is work — negative softens the band instead of boosting it.
-        let contrasting = clarity != 0.0;
+        let contrasting = filters.clarity != 0.0;
         let (low_w, low_h) = (div_ceil(out_w, DOWNSCALE), div_ceil(out_h, DOWNSCALE));
         let plane = |label| {
             self.make_texture(
@@ -489,7 +590,7 @@ impl Fsr {
         let contrast_params = ContrastParams {
             size: [out_w, out_h],
             low_size: [low_w, low_h],
-            amount: clarity,
+            amount: filters.clarity,
             sigma_wide,
             sigma_narrow,
             _pad: 0.0,
@@ -524,7 +625,7 @@ impl Fsr {
         };
         let clarity_bgs = match (&a_view, &b_view, &clarity_view) {
             (Some(a), Some(b), Some(out)) => Some((
-                plane_bg("clarity-downsample-bg", easu_out, a),
+                plane_bg("clarity-downsample-bg", grade_out, a),
                 plane_bg("clarity-blur-h-bg", a, b),
                 plane_bg("clarity-blur-v-bg", b, a),
                 self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -533,7 +634,7 @@ impl Fsr {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(easu_out),
+                            resource: wgpu::BindingResource::TextureView(grade_out),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
@@ -553,7 +654,7 @@ impl Fsr {
             _ => None,
         };
 
-        let sharpen_in = clarity_view.as_ref().unwrap_or(easu_out);
+        let sharpen_in = clarity_view.as_ref().unwrap_or(grade_out);
 
         let sharpen_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sharpen-bg"),
@@ -596,6 +697,15 @@ impl Fsr {
             });
             pass.set_pipeline(&self.upscale_pipeline);
             pass.set_bind_group(0, &upscale_bg, &[]);
+            pass.dispatch_workgroups(div_ceil(out_w, WG), div_ceil(out_h, WG), 1);
+        }
+        if let Some(bg) = &grade_bg {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("grade-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.grade_pipeline);
+            pass.set_bind_group(0, bg, &[]);
             pass.dispatch_workgroups(div_ceil(out_w, WG), div_ceil(out_h, WG), 1);
         }
         if let Some((down_bg, h_bg, v_bg, combine_bg)) = &clarity_bgs {
@@ -716,5 +826,6 @@ mod tests {
         check("easu", include_str!("upscale.wgsl"));
         check("rcas", include_str!("sharpen.wgsl"));
         check("clarity", include_str!("contrast.wgsl"));
+        check("grade", include_str!("grade.wgsl"));
     }
 }
