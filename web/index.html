@@ -14,6 +14,7 @@
     margin: 0; font: 15px/1.5 system-ui, sans-serif;
     background: #0e1116; color: #e6edf3;
     display: flex; padding: 16px;
+    flex-direction: column;
   }
   .app { width: 100%; }
   h1 { font-size: 20px; margin: 0 0 4px; }
@@ -256,7 +257,6 @@
 <body>
 <div class="app">
   <h1>rustimage</h1>
-  <p class="sub">Vulkan · stable-diffusion.cpp + native FSR upscale — no Python.</p>
 
   <div class="tabs">
     <button type="button" class="tab active" data-tab="image">Image</button>
@@ -737,6 +737,8 @@
   </div>
 </div>
 
+  <p class="sub">Vulkan · stable-diffusion.cpp + native FSR upscale — no Python.</p>
+
 <!-- The viewer, and the only place the display filters can be judged: a
      sharpness setting read off a 400 px preview is a guess. Panel on the left,
      viewport on the right, and the image the sliders act on is the big one.
@@ -781,6 +783,8 @@
   </div>
   <div id="pickgrid" class="wigrid"></div>
 </dialog>
+
+
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -1069,14 +1073,16 @@ function render(data) {
   currentSrc = `data:image/png;base64,${data.image_base64}`;
 
   P('result').innerHTML = `
+
+    ${actions ? `<div class="actions">${actions}</div>` : ''}
+    <div id="saved" class="meta"></div>
+    <div id="rerr" class="err"></div>
+    <img src="${currentSrc}" alt="result" title="Click to open the viewer and post-process">
     <div class="meta"><b>${data.width}×${data.height}</b> · seed
       <b id="seedval" class="pin" title="Put this seed in the box, to generate it again">${data.seed}</b>
       · total <b>${total} ms</b>${tags}</div>
     <div class="bars">${bars}</div>
-    ${actions ? `<div class="actions">${actions}</div>` : ''}
-    <div id="saved" class="meta"></div>
-    <div id="rerr" class="err"></div>
-    <img src="${currentSrc}" alt="result" title="Click to open the viewer and post-process">`;
+    `;
 
   P('result').querySelector('img').addEventListener('click', () => showFullSize(currentSrc));
   $('viewadjust').addEventListener('click', () => showFullSize(currentSrc));
