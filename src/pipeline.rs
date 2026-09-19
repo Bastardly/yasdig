@@ -1372,6 +1372,86 @@ impl Engine {
         Ok(result)
     }
 
+    /// Bring a finished image in `work/output/` back as a live result, so the
+    /// viewer's sliders can work on it. The Outputs tab's one route.
+    ///
+    /// A near-twin of [`Engine::open`] — copy in, `publish`, mint a `Pending` —
+    /// and it is copied into scratch for exactly the same reason: that file
+    /// belongs to the user, and a `Pending` pointing at it would have
+    /// `remove_files` delete it. Invariant 8, in the third place it applies.
+    ///
+    /// Three things differ from reopening a work item, and all three come from
+    /// the same fact: **`work/output/` holds `display`, not `raw`.** A saved
+    /// image already has its grade and its RCAS baked in.
+    ///
+    /// 1. The filters start at [`Filters::NONE`], not at the model's values.
+    ///    The picture already carries whatever was applied when it was saved, so
+    ///    0 means "as saved" — starting at `profile.sharpness` would sharpen an
+    ///    already sharpened image the moment it appeared.
+    /// 2. The retained profile's `sharpness`/`clarity` are zeroed for the same
+    ///    reason, because [`Engine::result`] derives `start` — where **Reset**
+    ///    goes — from them. They look like values worth keeping and are the one
+    ///    pair that must not be.
+    /// 3. This is therefore *not* the lossless re-filter the sliders are
+    ///    elsewhere (invariant 1): `raw` here is a filtered image, so a drag
+    ///    stacks on what is already there. That is inherent to editing a
+    ///    finished file, and it is why the tab offers no escalation — a
+    ///    diffusion over these pixels is the thing invariant 1 exists to
+    ///    prevent.
+    ///
+    /// A missing sidecar is not an error: `list_outputs` lists a PNG dropped in
+    /// by hand, so this has to be able to open one. It gets `Profile::default()`
+    /// and no prompt, which is all the sliders need.
+    pub fn open_output(&mut self, stem: &str) -> Result<GenResult> {
+        let stored = self.output_source(stem)?;
+        let item = self.items.load_output(stem);
+
+        let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut scratch = Scratch::default();
+        let raw = scratch.path(self.work_dir.join(format!("{id}-0-raw.png")));
+        let display = scratch.path(self.work_dir.join(format!("{id}-0-full.png")));
+
+        let t = Instant::now();
+        std::fs::copy(&stored, &raw)
+            .with_context(|| format!("opening {}", stored.display()))?;
+        let filters = Filters::NONE;
+        let (png, w, h) = self.publish(&raw, &display, &filters)?;
+        let fsr_ms = t.elapsed().as_millis();
+
+        scratch.keep(&raw);
+        scratch.keep(&display);
+
+        let mut profile = item.as_ref().map(|i| i.profile.clone()).unwrap_or_default();
+        // See (2) above: these two are where the sliders start, and for this one
+        // image "where they start" is off.
+        profile.sharpness = 0.0;
+        profile.clarity = 0.0;
+
+        let entry = Pending {
+            raw,
+            raw_w: w,
+            raw_h: h,
+            display,
+            filters,
+            profile,
+            prompt: item.as_ref().map(|i| i.prompt.clone()).unwrap_or_default(),
+            negative: item.as_ref().and_then(|i| i.negative.clone()),
+            seed: item.as_ref().map(|i| i.seed).unwrap_or(-1),
+            // Kept so a save out of this tab lands as `{id}-s{step}-2.png`,
+            // grouped with the generation it came from — which is what
+            // `save_output` means by naming a file after its origin. `free_stem`
+            // is what stops it overwriting the image being edited.
+            work_id: item.as_ref().map(|i| i.id.clone()),
+            source: item.as_ref().and_then(|i| i.source.clone()),
+            refine_passes: item.as_ref().map(|i| i.refine_passes).unwrap_or(0),
+            hires_passes: item.as_ref().map(|i| i.hires_passes).unwrap_or(0),
+            step: item.as_ref().map(|i| i.step).unwrap_or(0),
+        };
+        let result = self.result(id, &entry, png, Timings { fsr_ms, ..Default::default() });
+        self.store(id, entry);
+        Ok(result)
+    }
+
     /// Copy the image currently on screen into `work/output/`, and return where
     /// it landed so the UI can say so.
     ///

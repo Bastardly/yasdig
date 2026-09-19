@@ -3,15 +3,28 @@ import { S } from './state.js';
 import { setBusy } from './busy.js';
 import { models, render, syncIcfgPlaceholder } from './image.js';
 import { setI2Source, syncI2Note } from './img2img.js';
+import { gridDelete } from './griddelete.js';
 
-// The last /workitems listing, and which of them are marked for deletion. The
-// listing carries each item's full settings, so opening one needs no second
-// request.
+// The last /workitems listing. It carries each item's full settings, so opening
+// one needs no second request.
 let workItems = [];
-const selected = new Set();
 
-const deleteMode = () =>
-  document.querySelector('input[name=wimode]:checked').value === 'delete';
+// Marking, the two buttons above the grid and the delete request all live in
+// `griddelete.js`, shared with the Outputs gallery — the two places on the page
+// that remove a file, and so the two that must not drift apart.
+const del = gridDelete({
+  grid: 'wigrid',
+  mode: 'wimode',
+  button: 'widelete',
+  all: 'wideleteall',
+  route: '/workitems/delete',
+  key: 'ids',
+  noun: 'work item',
+  ids: () => workItems.map((w) => w.id),
+  reload: loadWorkItems,
+  err: (msg) => { $('err').textContent = msg; },
+  onMode: () => markGrid(),
+});
 
 export async function loadWorkItems() {
   try {
@@ -24,11 +37,7 @@ export async function loadWorkItems() {
     workItems = [];
     $('err').textContent = 'Could not load work items: ' + (e.message || e);
   }
-  // Drop marks on items that are no longer there, so a stale id can't ride along
-  // in the next delete request.
-  for (const id of [...selected]) {
-    if (!workItems.some((w) => w.id === id)) selected.delete(id);
-  }
+  del.prune(workItems.map((w) => w.id));
   renderWorkItems();
 }
 
@@ -36,7 +45,7 @@ function renderWorkItems() {
   const grid = $('wigrid');
   if (!workItems.length) {
     grid.innerHTML = '<p class="sub">No work items yet — generate something.</p>';
-    syncDeleteButton();
+    del.sync();
     return;
   }
   // width/height on every thumbnail so the strip reserves its space up front and
@@ -57,16 +66,10 @@ function renderWorkItems() {
 
 export function markGrid() {
   for (const b of $('wigrid').querySelectorAll('button')) {
-    b.classList.toggle('sel', selected.has(b.dataset.id));
+    b.classList.toggle('sel', del.has(b.dataset.id));
     b.classList.toggle('active', b.dataset.id === S.workId);
   }
-  syncDeleteButton();
-}
-
-function syncDeleteButton() {
-  const n = selected.size;
-  $('widelete').hidden = n === 0;
-  $('widelete').textContent = `Delete ${n} selected`;
+  del.sync();
 }
 
 // In delete mode a click only *marks*: nothing is destroyed until the button
@@ -74,8 +77,7 @@ function syncDeleteButton() {
 // one at the end, with the marks visible the whole time — rather than a
 // confirmation dialog per image, or a single misclick that can't be taken back.
 async function clickWorkItem(id) {
-  if (deleteMode()) {
-    if (!selected.delete(id)) selected.add(id);
+  if (del.toggle(id)) {
     markGrid();
     return;
   }
@@ -144,36 +146,8 @@ function applyWorkItem(item) {
   syncIcfgPlaceholder();
 }
 
-async function deleteSelected() {
-  const ids = [...selected];
-  if (!ids.length) return;
-  $('widelete').disabled = true;
-  try {
-    await post('/workitems/delete', { ids });
-    selected.clear();
-    // The image on screen is deliberately left alone if it was one of them: the
-    // server still holds its intermediates, so refine and the sliders keep
-    // working. It just has no archive entry to go back to any more.
-    await loadWorkItems();
-  } catch (e) {
-    $('err').textContent = String(e.message || e);
-  } finally {
-    $('widelete').disabled = false;
-  }
-}
-
 export function initWorkItems() {
-  $('widelete').addEventListener('click', deleteSelected);
-  for (const r of document.querySelectorAll('input[name=wimode]')) {
-    r.addEventListener('change', () => {
-      // Leaving delete mode clears the marks. A selection you can't see is one you
-      // could act on later without meaning to.
-      if (!deleteMode()) selected.clear();
-      $('wigrid').classList.toggle('deleting', deleteMode());
-      markGrid();
-    });
-  }
-
+  del.init();
   // Independent of the model list: the grid is what survived the last restart.
   loadWorkItems();
 }

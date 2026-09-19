@@ -44,13 +44,19 @@ export const S = {
   // loop mode, `stop` is set by the Stop button and read between images. It is
   // also the flag everything else reads to know the GPU is spoken for.
   run: null,
-  // Which of the two image tabs is showing.
+  // Which of the three image tabs is showing.
   pane: 'image',
 };
 
 export const PANES = {
   image:   { result: 'result',   err: 'err',   escmodel: 'escmodel' },
   img2img: { result: 'i2result', err: 'i2err', escmodel: 'i2escmodel' },
+  // Three tabs now, and the third has neither of the other two keys. It has no
+  // result block because its image only ever exists in the viewer, and no
+  // escalation select because it deliberately offers no escalation — an output
+  // is already-filtered pixels, and diffusing over those is invariant 1. The two
+  // places that read `result` reach it with `?.` for exactly this row.
+  outputs: { err: 'oerr' },
 };
 export const P = (k) => $(PANES[S.pane][k]);
 
@@ -61,7 +67,8 @@ export const P = (k) => $(PANES[S.pane][k]);
 // there beside Refine and Hi-res buttons that now address a different image. The
 // viewer goes with it for the same reason — it shows the image just forgotten.
 export function clearPane(which) {
-  $(PANES[which].result).innerHTML = '';
+  const result = $(PANES[which].result);
+  if (result) result.innerHTML = '';
   if ($('lightbox').open) $('lightbox').close();
 }
 

@@ -167,7 +167,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .btn-run:hover { background: var(--accent-hi); }
 .btn-danger { background: var(--danger); color: #fff; border-color: transparent; }
 .btn-danger:hover { background: var(--danger-hi); }
-/* `.tab` on the four tab buttons is a JS hook — it is how `showTab` finds them —
+/* `.tab` on the five tab buttons is a JS hook — it is how `showTab` finds them —
    and deliberately has no rule here. Don't delete it for looking unused.
 
    A choice, not an action: the tab row and the viewer's Fit / 1:1 / Reset are
@@ -219,6 +219,11 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .col-controls { flex: 1 1 var(--col-controls); max-width: var(--col-controls-max); }
 .col-result { flex: 3 1 var(--col-result); max-width: var(--col-result-max); }
 .workitems { flex: 2 1 var(--col-items); max-width: var(--col-items-max); }
+/* A pane that is one panel and wants the whole row: the Outputs gallery. The
+   caps above exist so a column sits beside two others; a gallery has nothing to
+   sit beside, and capping it would strand thumbnails on a second line while the
+   right half of the page stayed empty. */
+.col-full { flex: 1 1 100%; }
 
 /* ============================ Forms ============================ */
 
@@ -330,6 +335,10 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 }
 .lbzoom { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); }
 .lbzoom .btn { flex: 1; padding-left: 0; padding-right: 0; }
+/* Save, on the Outputs tab only. Full width, because it is the one action in a
+   panel that is otherwise all sliders. */
+#lbsave { width: 100%; margin-top: var(--sp-3); }
+#lbsaved:not(:empty) { margin-top: var(--sp-2); word-break: break-all; }
 /* min-width:0 because a flex item's default min-width is its content: a 3072 px
    image would otherwise refuse to let its pane shrink and shove the panel off
    the left edge of the screen. */

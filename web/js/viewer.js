@@ -90,7 +90,9 @@ export function setResultImage(src) {
   // decode to consume, and the next decode is this one.
   lbCentre = false;
   S.currentSrc = src;
-  const thumb = P('result').querySelector('img');
+  // `?.`, because the Outputs tab is a pane with no result block at all — its
+  // image only ever exists in the viewer. The other two always have one.
+  const thumb = P('result')?.querySelector('img');
   if (thumb) thumb.src = src;
   $('lbimg').src = src;
 }
@@ -153,6 +155,11 @@ let postTimer = null;
 // filters currently applied either, since after a Refine those carry the grade
 // from the previous edit.
 let postStart = {};
+// Bumped by `cancelPost`, and compared across `runPost`'s await. A re-filter of
+// the image you just navigated away from is already in flight by the time the
+// next one is asked for, and it would otherwise land on top of the new picture —
+// which reads as the arrow key having done nothing.
+let postEpoch = 0;
 
 // Debounce, then *coalesce*: while a request is out, later moves collapse into
 // one follow-up with the latest values. The GPU worker is serialized, so a
@@ -176,10 +183,13 @@ async function runPost() {
     // one that moved, but the panel is the state of the image and sending it
     // whole is what makes a coalesced drag — where two sliders moved and only
     // the last request survives — land both of them.
+    const epoch = postEpoch;
     const data = await post('/adjust', {
       image_id: S.imageId,
       ...Object.fromEntries(FILTERS.map((f) => [f.id, parseFloat($(f.id).value)])),
     });
+    // The image this was filtering is no longer the one on screen.
+    if (epoch !== postEpoch) return;
     setResultImage(`data:image/png;base64,${data.image_base64}`);
     $('postms').textContent =
       `${Math.round(performance.now() - t0)} ms · gpu ${data.timings.fsr_ms} ms`;
@@ -199,6 +209,15 @@ async function runPost() {
 // Read-only imported bindings again: only this module's own wiring reads
 // `postStart`, so only the write crosses a file boundary.
 export const setPostStart = (v) => { postStart = v; };
+
+// Drop a debounced re-filter and disown one already in flight. Called when the
+// image under the sliders is being replaced by a different one — the Outputs
+// tab's arrow keys — rather than re-filtered.
+export function cancelPost() {
+  clearTimeout(postTimer);
+  postAgain = false;
+  postEpoch++;
+}
 
 // The viewer can already be open when render() runs — a modal dialog stops
 // clicks, not a batch that was started before it was opened. So the big copy is

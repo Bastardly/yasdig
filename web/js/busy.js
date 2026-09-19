@@ -6,7 +6,7 @@ import { setFiltersBusy } from './viewer.js';
 // Generate as surely as it locks its own.
 export const IDLE_LABELS = {
   go: 'Generate', refine: 'Refine image', hires: 'Hi-res pass',
-  saveout: 'Save to output',
+  saveout: 'Save to output', lbsave: 'Save as new output',
   i2go: 'Run img2img',
   vgo: 'Generate clip', venlarge: 'Enlarge frames',
   cgo: 'Convert',

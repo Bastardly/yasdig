@@ -13,6 +13,7 @@ import { initHints } from './hints.js';
 import { initImage } from './image.js';
 import { initWorkItems, markGrid } from './workitems.js';
 import { initI2, loadI2Outputs } from './img2img.js';
+import { initOutputs, loadOutputs } from './outputs.js';
 import { initVideo } from './video.js';
 import { initConvert } from './convert.js';
 import { stopPlayback } from './player.js';
@@ -26,17 +27,25 @@ function showTab(name) {
   }
   $('tab-image').hidden = name !== 'image';
   $('tab-img2img').hidden = name !== 'img2img';
+  $('tab-outputs').hidden = name !== 'outputs';
   $('tab-video').hidden = name !== 'video';
   $('tab-convert').hidden = name !== 'convert';
   // Nothing is playing on a tab nobody is looking at. A 24 fps canvas timer is
   // cheap but it is not free, and it would go on redrawing all night.
   if (name !== 'video') stopPlayback();
 
-  // The two image panes share one `imageId`, so leaving one has to empty it.
+  // Save lives in the viewer's panel for the Outputs tab, because that tab has
+  // no result column to put it above. It is hidden elsewhere rather than being
+  // a second copy of `#saveout`: the other two panes already have that button
+  // in their action row, and two ids doing one job is two things to keep in
+  // step.
+  $('lbsave').hidden = name !== 'outputs';
+
+  // The three image panes share one `imageId`, so leaving one has to empty it.
   // Otherwise the picture stays on screen beside Refine and Hi-res buttons that
   // now address whatever the other tab produces next — which would work, and
   // would apply the pass to an image other than the one being looked at.
-  if (name === 'image' || name === 'img2img') {
+  if (name === 'image' || name === 'img2img' || name === 'outputs') {
     if (S.pane !== name) {
       clearPane(S.pane);
       S.imageId = null;
@@ -46,6 +55,9 @@ function showTab(name) {
       S.pane = name;
     }
     if (name === 'img2img') loadI2Outputs();
+    // Re-read on entry: the Image tab's Save writes into this directory, so the
+    // grid is stale the moment you come back from having used it.
+    if (name === 'outputs') loadOutputs();
   }
 }
 
@@ -63,6 +75,7 @@ initHints();
 initImage();
 initWorkItems();
 initI2();
+initOutputs();
 initVideo();
 initConvert();
 initTabs();

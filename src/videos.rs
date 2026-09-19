@@ -159,8 +159,7 @@ impl VideoStore {
         clip.frames = frames.len() as u32;
 
         // Width from the height, as on the image side: the grid fixes height.
-        let tw = ((first.width() as f32) * (THUMB_HEIGHT as f32)
-            / (first.height().max(1) as f32))
+        let tw = ((first.width() as f32) * (THUMB_HEIGHT as f32) / (first.height().max(1) as f32))
             .round() as u32;
         let thumb = first.thumbnail(tw.max(1), THUMB_HEIGHT);
         clip.thumb_width = thumb.width();
@@ -275,7 +274,7 @@ t5xxl = "t.gguf"
         Clip {
             id: id.to_string(),
             created_ms,
-            prompt: "a lovely robot crab, walking".to_string(),
+            prompt: "a lovely fluffy crab, walking".to_string(),
             negative: String::new(),
             seed: 7,
             model: "5b".to_string(),
@@ -389,7 +388,10 @@ t5xxl = "t.gguf"
             write_frames(&store.dir("100-7"), 3, 8, 8);
             assert_eq!(store.frames("100-7").len(), 3);
         }
-        assert!(!store.dir("100-7").exists(), "the guard should have swept it");
+        assert!(
+            !store.dir("100-7").exists(),
+            "the guard should have swept it"
+        );
         assert!(store.list().is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -402,7 +404,10 @@ t5xxl = "t.gguf"
         let dir = std::env::temp_dir().join(format!("rustimage-vid4-{}", std::process::id()));
         let store = VideoStore::new(&dir);
         let (_, _guard) = store.prepare("100-7").unwrap();
-        let err = store.finish(&mut clip("100-7", 100)).unwrap_err().to_string();
+        let err = store
+            .finish(&mut clip("100-7", 100))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("no frames"), "{err}");
         std::fs::remove_dir_all(&dir).ok();
     }

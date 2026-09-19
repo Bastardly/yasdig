@@ -1,8 +1,9 @@
-import { $, esc, post, numOr } from './dom.js';
+import { $, post, numOr } from './dom.js';
 import { S } from './state.js';
 import { setBusy, cancelRun, onIdle } from './busy.js';
 import { models, effectiveSteps, render, escalateSettings } from './image.js';
 import { loadWorkItems } from './workitems.js';
+import { fetchOutputs, outputGrid } from './outputs.js';
 
 // ---- Image to image ---------------------------------------------------------
 //
@@ -93,24 +94,16 @@ export function setI2Source(stem) {
 }
 
 export async function loadI2Outputs() {
-  try {
-    const list = await (await fetch('/outputs')).json();
-    i2outputs = Array.isArray(list) ? list : [];
-  } catch {
-    i2outputs = [];
-  }
-  // The same tile as the work-items strip — `.wigrid` styles both, and the
-  // declared height has to match what that rule draws or the strip reflows as
-  // the images decode.
-  $('i2grid').innerHTML = i2outputs.map((o) => `
-    <button type="button" data-stem="${esc(o.stem)}"
-      title="${esc(o.prompt || o.stem)}&#10;${o.width}×${o.height} · ${esc(o.template)}">
-      <img src="/outputs/${esc(o.stem)}/thumb.png" alt="" loading="lazy"
-        width="${o.height ? Math.round(200 * o.width / o.height) : 200}" height="200"></button>`).join('')
-    || '<p class="sub">Nothing in work/output/ yet — drop an image above, or save one from the Image tab.</p>';
-  for (const b of $('i2grid').querySelectorAll('button')) {
-    b.addEventListener('click', () => setI2Source(b.dataset.stem));
-  }
+  i2outputs = await fetchOutputs();
+  // The tile itself comes from `outputs.js`, which is the one place it is
+  // written now — this grid, the Outputs tab and the video tab's picker all draw
+  // the same thing, and the declared height has to match what `.wigrid` draws or
+  // the strip reflows as the images decode.
+  outputGrid($('i2grid'), i2outputs, {
+    empty: '<p class="sub">Nothing in work/output/ yet — drop an image above, '
+         + 'or save one from the Image tab.</p>',
+    onPick: setI2Source,
+  });
   markI2Grid();
 }
 

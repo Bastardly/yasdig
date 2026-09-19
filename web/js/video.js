@@ -2,6 +2,7 @@ import { $, esc, post, numOr } from './dom.js';
 import { S } from './state.js';
 import { setBusy, cancelRun } from './busy.js';
 import { clip, renderClip } from './player.js';
+import { fetchOutputs, outputGrid } from './outputs.js';
 
 // ---- Video ------------------------------------------------------------------
 //
@@ -324,37 +325,17 @@ async function openPicker() {
   const grid = $('pickgrid');
   grid.innerHTML = '<p class="sub">Loading…</p>';
   $('picker').showModal();
-  let outputs = [];
-  try {
-    const data = await (await fetch('/outputs')).json();
-    if (!Array.isArray(data)) throw new Error(data.error || 'unexpected response');
-    outputs = data;
-  } catch (e) {
-    grid.innerHTML = `<p class="err">${esc(e.message || e)}</p>`;
-    return;
-  }
-  if (!outputs.length) {
-    grid.innerHTML = '<p class="sub">Nothing in work/output/ yet — '
-      + 'press "Save to output" under an image on the Image tab.</p>';
-    return;
-  }
-  // No declared width/height here, unlike the work item grid: an output's
-  // thumbnail is generated on first request, so the server has nothing to tell
-  // us about its size until it exists. The aspect from the sidecar is enough to
-  // reserve the space.
-  grid.innerHTML = outputs.map((o) => {
-    const w = o.height ? Math.round(140 * o.width / o.height) : 140;
-    return `<button type="button" data-stem="${esc(o.stem)}"
-      title="${esc(o.prompt)}&#10;${o.width}×${o.height} · seed ${o.seed}">
-      <img src="/outputs/${esc(o.stem)}/thumb.png" alt="" loading="lazy"
-        width="${w}" height="140"></button>`;
-  }).join('');
-  for (const b of grid.querySelectorAll('button')) {
-    b.addEventListener('click', () => {
-      setSource(b.dataset.stem);
+  // The same tile as the other two output grids, from the same function — only
+  // the height differs, because this one is a dialog rather than a panel.
+  outputGrid(grid, await fetchOutputs(), {
+    height: 140,
+    empty: '<p class="sub">Nothing in work/output/ yet — '
+         + 'press "Save to output" under an image on the Image tab.</p>',
+    onPick: (stem) => {
+      setSource(stem);
       $('picker').close();
-    });
-  }
+    },
+  });
 }
 
 export function initVideo() {

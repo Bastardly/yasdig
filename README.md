@@ -414,6 +414,10 @@ removed until you press it, so culling twenty images from a batch is twenty clic
 one confirmation rather than twenty confirmations. Switching back to **Click to open**
 clears the marks.
 
+**Delete all N** appears beside it, in delete mode only, and is the one button on the
+page that asks first: marking is visible and reversible, and emptying the directory is
+neither. The Outputs tab has the same two controls, working the same way.
+
 Refined and hi-res results are deliberately **not** archived: those are the expensive
 rungs and most of them are experiments. **Save to output**, above the image, writes the
 picture currently on screen — filters and all — to `work/output/`, with its own sidecar.
@@ -447,6 +451,32 @@ The result then joins the ordinary ladder. Refine, Hi-res, the viewer's sliders
 and Save to output all work on it exactly as they do on a generation, and it is archived
 as a work item like one — so it comes back from the grid on the Image tab, source
 image and all.
+
+### Outputs
+
+The third tab is `work/output/` as a gallery: everything you have saved, and everything
+you have dropped in, at whatever size it was saved at. It is the one tab with no
+controls — click a thumbnail and the **viewer** opens on it full size with the ten
+sliders live, and **←** / **→** step to the previous and next image with the dialog
+left up. A focused slider keeps its own arrow keys, so click the picture to hand them
+back to the gallery.
+
+**Save as new output**, in the viewer's panel, keeps the edit as a new file beside the
+original. It never overwrites: an output can descend from a refine, and those aren't
+archived, so the pixels you started from exist nowhere else.
+
+The same **Click to open / Click to delete** toggle the work-item grid has is above
+this one, and behaves identically: a click marks, `Delete N selected` removes the set,
+and **Delete all N** empties `work/output/` behind a confirmation. Deleting the image
+the viewer is showing is safe — the server is holding a copy of it in its scratch dir,
+so the sliders and Save keep working; it just has nothing to go back to.
+
+There is no Refine and no Hi-res here, on purpose. A saved image already has its grade
+and its sharpening in the pixels, and everything else in this program is built so that
+nothing ever diffuses over filtered pixels. If you want to take a saved image further,
+the **Image to image** tab is the way — that starts a real pass from it, at a strength
+you choose. Grading it further is exactly what this tab is for; re-rendering it is a
+different question, asked in a different place.
 
 ### Escalating with a different model
 
@@ -660,6 +690,16 @@ three times finer, relative to the subject, than the same kernel at 1024.
 default to off, so the first image you see is what the model and the upscaler actually
 produced — everything on top of it is a choice you made and can take back.
 
+**The Outputs tab is the exception to all of this, and it is worth knowing which way.**
+Everywhere else the sliders re-filter an unfiltered image the server kept, so they are
+lossless however many times you drag them, and they start at the model's values. On the
+Outputs tab the file *is* the filtered image — it is what you saved — so all ten start
+at 0, which there means "as saved", and **Reset** goes back to the file on disk rather
+than to a model's numbers. What you drag stacks on what was baked in. That is inherent
+to editing a finished picture, and it is why that tab offers no re-render: a second
+grade on top of a first is a look, while a diffusion over a sharpened image is a
+mistake.
+
 Clarity and Sharpness reset to the model's values on every new image, including after a
 **Refine** or **Hi-res**. That is deliberate: an escalation replaces the pixels, so
 whatever sharpening looked right a moment ago is stale by definition, and inheriting it
@@ -863,6 +903,18 @@ needs a Vulkan device and nothing else.
 - `GET /outputs/{stem}/thumb.png` — generated on the first request and cached, because
   output PNGs are full resolution and everything saved before thumbnails existed has to
   appear too.
+- `POST /outputs/delete` — `{ "stems": ["…", "…"] }`. Returns `{ "deleted": 2 }`.
+  Removes each PNG with its sidecar and thumbnail. A list rather than a single stem
+  for the reason the work-item delete is one, and "delete all" is this request with
+  every stem in it rather than a route of its own — which is what keeps the id
+  whitelist the only guard the route needs.
+- `POST /outputs/open` — `{ "stem": "1758104523000-12345-s0" }`. Copies a saved image
+  back into the working set and returns the `/generate` shape with a fresh `image_id`,
+  so the viewer's sliders work on it — the Outputs tab's one route. No diffusion runs.
+  Unlike the other `/outputs` routes this one goes through the GPU queue, because it
+  ends in a filter pass. `filters` and `filters_start` both come back neutral: the file
+  already carries whatever was applied when it was saved, so 0 means "as saved". A PNG
+  with no sidecar opens too, with default settings.
 - `GET /video-models` — every video model: the ones found by scanning `models/video/`
   plus the `[[video]]` table, built fresh per call so a finished download shows up
   without a restart. Each entry is the config verbatim plus what the

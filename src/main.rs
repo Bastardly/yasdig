@@ -28,6 +28,9 @@
 //!   POST /workitems/open   -> {id}       reopen one as a live image_id
 //!   POST /workitems/delete -> {ids:[..]} remove them from disk
 //!   GET  /outputs     -> every image in work/output/, newest first
+//!   POST /outputs/open -> {stem}     open a saved image as a live image_id,
+//!                        so the viewer's sliders can work on it
+//!   POST /outputs/delete -> {stems:[..]} remove them from work/output/
 //!   GET  /video-models -> the [[video]] table, with each family's grid rules
 //!   POST /video       -> generate a clip (minutes; watch GET /progress)
 //!   GET  /videos      -> every archived clip, newest first
@@ -99,6 +102,10 @@ enum JobKind {
     /// Reopen an archived generation as a live result. Needs the worker because
     /// it ends in a `publish`, and because the new `Pending` lives there.
     Open(String),
+    /// Reopen a finished image from `work/output/` as a live result — the
+    /// Outputs tab. Through the queue for the same two reasons as `Open`, and
+    /// unlike every other `/outputs` route, which only reads the filesystem.
+    OpenOutput(String),
     /// Copy the image on screen into `work/output/`. No GPU, but the only copy
     /// of which file that is lives in the engine's `pending` map.
     SaveOutput(u64),
@@ -184,6 +191,9 @@ fn main() -> Result<()> {
                             engine.adjust(id, &patch).map(|r| result_json(&r))
                         }
                         JobKind::Open(work_id) => engine.open(&work_id).map(|r| result_json(&r)),
+                        JobKind::OpenOutput(stem) => {
+                            engine.open_output(&stem).map(|r| result_json(&r))
+                        }
                         JobKind::SaveOutput(id) => engine.save_output(id).map(|p| saved_json(&p)),
                         JobKind::Video(req) => engine.video(&req).and_then(|r| json_body(&r)),
                         JobKind::Convert(plan) => {
@@ -351,6 +361,8 @@ fn handle_conn(
         }
         ("POST", "/videos/delete") => handle_delete_clips(&mut conn, cfg, &req.body),
         ("GET", "/outputs") => handle_list_outputs(&mut conn, cfg),
+        ("POST", "/outputs/open") => handle_open_output(&mut conn, job_tx, &req.body),
+        ("POST", "/outputs/delete") => handle_delete_outputs(&mut conn, cfg, &req.body),
         ("GET", p) if p.starts_with("/outputs/") && p.ends_with("/thumb.png") => {
             let stem = p
                 .trim_start_matches("/outputs/")
@@ -729,6 +741,30 @@ fn handle_open_workitem(
     }
 }
 
+/// Open a saved image so the viewer can filter it. A `work/output/` stem rather
+/// than a path, the same contract the img2img source and the video first frame
+/// use: the client picks from what `GET /outputs` published, and
+/// `workitems::valid_id` — reached through `Engine::output_source` — is the
+/// whitelist that makes that safe.
+///
+/// 400 for a stem that isn't there, matching the rest: it means the page's copy
+/// of the grid is stale, not that we broke.
+fn handle_open_output(
+    conn: &mut http::Connection,
+    job_tx: &Sender<Job>,
+    body: &[u8],
+) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        stem: String,
+    }
+
+    match parse_json::<Dto>(conn, body)? {
+        Some(dto) => submit(conn, job_tx, JobKind::OpenOutput(dto.stem), 400),
+        None => Ok(()),
+    }
+}
+
 /// Delete is a list, not a single id: the UI selects a set and then deletes it in
 /// one go, which is what keeps culling a batch render from being a click per
 /// image with a confirmation on each.
@@ -745,6 +781,39 @@ fn handle_delete_workitems(conn: &mut http::Connection, cfg: &Config, body: &[u8
     let mut deleted = 0usize;
     for id in &dto.ids {
         match store.delete(id) {
+            Ok(()) => deleted += 1,
+            Err(e) => eprintln!("[rustimage] {e:#}"),
+        }
+    }
+    conn.respond(
+        200,
+        "application/json",
+        format!("{{\"deleted\":{deleted}}}").as_bytes(),
+    )
+}
+
+/// Remove saved images. The filesystem half of the Outputs tab, and so answered
+/// on the connection thread beside `/workitems/delete` rather than through the
+/// queue — the worker only ever *writes* to that directory.
+///
+/// A list, not a single stem, for the reason the work-item delete is one: the
+/// page marks a set and then removes it in one go. "Delete all" is that same
+/// request with every stem in it rather than a route of its own, which is what
+/// keeps `valid_id` the only guard there is — a route that deleted a directory
+/// wholesale would need a different kind of check entirely.
+fn handle_delete_outputs(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        stems: Vec<String>,
+    }
+
+    let Some(dto) = parse_json::<Dto>(conn, body)? else {
+        return Ok(());
+    };
+    let store = store(cfg);
+    let mut deleted = 0usize;
+    for stem in &dto.stems {
+        match store.delete_output(stem) {
             Ok(()) => deleted += 1,
             Err(e) => eprintln!("[rustimage] {e:#}"),
         }

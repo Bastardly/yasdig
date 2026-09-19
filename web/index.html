@@ -15,6 +15,7 @@
     <h1>rustimage</h1>
     <button type="button" class="btn btn-choice tab active" data-tab="image">Image</button>
     <button type="button" class="btn btn-choice tab" data-tab="img2img">Image to image</button>
+    <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
     <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
     <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
   </div>
@@ -23,7 +24,7 @@
   <div class="card col-controls">
     <label for="prompt">Prompt</label>
     <prompt-box>
-      <textarea id="prompt" placeholder="a lovely robot crab, cinematic lighting, sharp, in focus">a lovely robot crab, cinematic lighting, sharp, in focus</textarea>
+      <textarea id="prompt" placeholder="a lovely fluffy crab, cinematic lighting, sharp, in focus">a lovely fluffy crab, cinematic lighting, sharp, in focus</textarea>
     </prompt-box>
 
     <label for="negative">Negative prompt (optional)</label>
@@ -171,6 +172,9 @@
         <label><input type="radio" name="wimode" value="delete"> Click to delete</label>
       </span>
       <button id="widelete" class="btn btn-danger" hidden></button>
+      <!-- Only in delete mode, and behind a confirm box: marking is visible and
+           reversible, "all" is neither. -->
+      <button id="wideleteall" class="btn btn-danger" hidden></button>
     </div>
     <div id="wigrid" class="wigrid"></div>
   </div>
@@ -319,6 +323,35 @@
       <button type="button" id="i2refresh" class="btn">Refresh</button>
     </div>
     <div id="i2grid" class="wigrid"></div>
+  </div>
+  </div>
+
+  <!-- ==================== Outputs ====================
+       Everything in work/output/, as a gallery rather than as a picker. The
+       whole tab is the grid: clicking a tile opens the viewer on it full size
+       with the sliders live, and the arrow keys walk the gallery from there.
+
+       No result column and no Refine or Hi-res, on purpose. A saved output is
+       the *filtered* image — grade and sharpening already in the pixels — so a
+       diffusion over one is what invariant 1 exists to prevent. Grading it
+       further is fine and is what this tab is for. -->
+  <div class="layout" id="tab-outputs" hidden>
+  <div class="card col-full">
+    <div class="wihead">
+      <b>Outputs</b>
+      <!-- The same two modes the work-item grid has, and the same rule: in
+           delete mode a click marks, and nothing goes until the button says so. -->
+      <span class="wimodes">
+        <label><input type="radio" name="omode" value="open" checked> Click to open</label>
+        <label><input type="radio" name="omode" value="delete"> Click to delete</label>
+      </span>
+      <button type="button" id="orefresh" class="btn">Refresh</button>
+      <button id="odelete" class="btn btn-danger" hidden></button>
+      <button id="odeleteall" class="btn btn-danger" hidden></button>
+    </div>
+    <div class="sub">work/output/ — click one to open it in the viewer, then ← / → to step</div>
+    <div id="oerr" class="err"></div>
+    <div id="ogrid" class="wigrid"></div>
   </div>
   </div>
 
@@ -526,6 +559,11 @@
     <!-- The sliders are built from the FILTERS table below rather than written
          out here: adding one is meant to be a row in a list, not a block of
          markup plus a matching entry in five functions. -->
+    <!-- The Outputs tab's Save, hidden on the other two: those have `#saveout`
+         in their action row, and the gallery has no action row to put one in.
+         Neutral rather than amber — this spends no GPU time to speak of. -->
+    <button type="button" id="lbsave" class="btn" hidden>Save as new output</button>
+    <div id="lbsaved" class="meta"></div>
     <div id="lbsliders"></div>
     <!-- In the panel rather than in the result block, because while this dialog
          is modal the result block is behind it and an error written there is an

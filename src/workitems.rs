@@ -166,8 +166,8 @@ impl Store {
         std::fs::create_dir_all(&self.items)
             .with_context(|| format!("creating {}", self.items.display()))?;
 
-        let img = image::open(raw)
-            .with_context(|| format!("loading {} for archiving", raw.display()))?;
+        let img =
+            image::open(raw).with_context(|| format!("loading {} for archiving", raw.display()))?;
         let (w, h) = (img.width(), img.height());
         // Width from the height, not the other way round: the grid fixes height
         // and lets width fall where it may, so that's the axis to be exact on.
@@ -244,6 +244,33 @@ impl Store {
         Ok(())
     }
 
+    /// Remove a saved image from `work/output/`: the PNG, its sidecar and its
+    /// thumbnail. The same shape as [`Store::delete`] and for the same reason —
+    /// a leftover sidecar or thumbnail resurrects the entry as a broken tile on
+    /// the next refresh.
+    ///
+    /// Nothing else is touched. A live `Pending` opened from this image holds a
+    /// *copy* in the scratch dir (invariant 8), so deleting the file out from
+    /// under the viewer leaves the picture on screen working — it just has
+    /// nowhere to go back to.
+    pub fn delete_output(&self, stem: &str) -> Result<()> {
+        if !valid_id(stem) {
+            bail!("'{stem}' is not an output name");
+        }
+        for p in [
+            self.output_path(stem),
+            self.output_thumb_path(stem),
+            self.output_sidecar_path(stem),
+        ] {
+            match std::fs::remove_file(&p) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e).with_context(|| format!("deleting {}", p.display())),
+            }
+        }
+        Ok(())
+    }
+
     /// Keep the image currently on screen. Saves `display` rather than the
     /// unsharpened `raw`: this is the "I want this one" button, and what the user
     /// means by *this one* includes wherever they left the two sliders.
@@ -259,8 +286,7 @@ impl Store {
             .with_context(|| format!("creating {}", self.output.display()))?;
         let stem = self.free_stem(&format!("{}-s{}", item.id, item.step));
         let png = self.output.join(format!("{stem}.png"));
-        std::fs::copy(display, &png)
-            .with_context(|| format!("saving to {}", png.display()))?;
+        std::fs::copy(display, &png).with_context(|| format!("saving to {}", png.display()))?;
         write_sidecar(&self.output.join(format!("{stem}.json")), item)?;
         // Best-effort: a save that produced the PNG the user asked for has done
         // its job, and a missing thumbnail is something `ensure_output_thumb`
@@ -360,6 +386,18 @@ impl Store {
         self.output.join(format!("{stem}.json"))
     }
 
+    /// The sidecar beside an output PNG, or `None`.
+    ///
+    /// `None` is a normal answer, not a failure: a PNG copied into
+    /// `work/output/` by hand has no sidecar, and `list_outputs` deliberately
+    /// lists it anyway — the file on disk is the thing the user saved, and a
+    /// listing that hid it would be lying. Callers supply their own defaults.
+    pub fn load_output(&self, stem: &str) -> Option<WorkItem> {
+        std::fs::read(self.output_sidecar_path(stem))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+    }
+
     /// Make sure `{stem}-thumb.png` exists, and return it.
     ///
     /// Generate-on-first-request rather than only-on-save, because the whole
@@ -441,9 +479,7 @@ impl Store {
     }
 
     fn output_entry(&self, stem: &str, png: &Path) -> Output {
-        let item: Option<WorkItem> = std::fs::read(self.output_sidecar_path(stem))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok());
+        let item = self.load_output(stem);
         let created_ms = std::fs::metadata(png)
             .and_then(|m| m.modified())
             .ok()
@@ -457,7 +493,10 @@ impl Store {
             height: item.as_ref().map(|i| i.height).unwrap_or(0),
             prompt: item.as_ref().map(|i| i.prompt.clone()).unwrap_or_default(),
             seed: item.as_ref().map(|i| i.seed).unwrap_or(0),
-            template: item.as_ref().map(|i| i.template.clone()).unwrap_or_default(),
+            template: item
+                .as_ref()
+                .map(|i| i.template.clone())
+                .unwrap_or_default(),
         }
     }
 }
@@ -532,7 +571,7 @@ mod tests {
         WorkItem {
             id: id.to_string(),
             created_ms,
-            prompt: "a lovely robot crab".to_string(),
+            prompt: "a lovely fluffy crab".to_string(),
             negative: None,
             seed: 7,
             template: "test".to_string(),
@@ -694,13 +733,86 @@ mod tests {
         let again = store.ensure_output_thumb("100-7-s2").unwrap();
         assert_eq!(thumb, again);
         // No temp file left behind by the rename.
-        assert!(!store
-            .list_outputs()
-            .iter()
-            .any(|o| o.stem.contains(".tmp")));
+        assert!(!store.list_outputs().iter().any(|o| o.stem.contains(".tmp")));
 
         assert!(store.ensure_output_thumb("../etc").is_err());
         assert!(store.ensure_output_thumb("nope-s0").is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Deleting a saved image has to take all three files with it. A sidecar or
+    /// a thumbnail left behind is the same failure the work-item delete guards
+    /// against — `list_outputs` keys on the PNG, so a leftover companion is
+    /// invisible until `ensure_output_thumb` serves a stale picture for the next
+    /// image that mints the same stem.
+    #[test]
+    fn deleting_an_output_takes_its_companions() {
+        let dir = std::env::temp_dir().join(format!("rustimage-del-{}", new_id(6)));
+        let store = Store::new(&dir);
+        let src = dir.join("src.png");
+        image::RgbaImage::from_pixel(64, 32, image::Rgba([4, 5, 6, 255]))
+            .save(&src)
+            .unwrap();
+
+        let it = item("600-7", 600);
+        store.save_output(&src, &it).unwrap();
+        assert!(store.output_path("600-7-s0").is_file());
+        assert!(store.output_thumb_path("600-7-s0").is_file());
+
+        store.delete_output("600-7-s0").unwrap();
+        assert!(!store.output_path("600-7-s0").exists());
+        assert!(!store.output_thumb_path("600-7-s0").exists());
+        assert!(store.load_output("600-7-s0").is_none());
+        assert!(store.list_outputs().is_empty());
+
+        // Deleting what is already gone is how "delete all" behaves when two
+        // tabs are open on the same directory, so it is not an error.
+        store.delete_output("600-7-s0").unwrap();
+        // The traversal guard is the same whitelist as everywhere else.
+        assert!(store.delete_output("../models.toml").is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// What the Outputs tab reopens an image *with*. `list_outputs` drops the
+    /// profile on the way into an `Output`, so the sidecar has to be readable
+    /// whole — `Engine::open_output` restores the settings from it, and a
+    /// sidecar that came back empty would silently reopen every saved image as
+    /// `Profile::default()`.
+    ///
+    /// The `None` half matters just as much: a PNG dropped into the directory by
+    /// hand is listed and therefore openable, so that path has to be an answer
+    /// rather than an error.
+    #[test]
+    fn an_output_sidecar_comes_back_whole() {
+        let dir = std::env::temp_dir().join(format!("rustimage-side-{}", new_id(5)));
+        let store = Store::new(&dir);
+        let src = dir.join("src.png");
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([1, 2, 3, 255]))
+            .save(&src)
+            .unwrap();
+
+        let mut it = item("500-7", 500);
+        it.step = 2;
+        it.refine_passes = 1;
+        it.sharpness = 0.4;
+        it.profile.name = "someturbo".to_string();
+        store.save_output(&src, &it).unwrap();
+
+        let back = store
+            .load_output("500-7-s2")
+            .expect("the sidecar it just wrote");
+        assert_eq!(back.id, "500-7");
+        assert_eq!(back.step, 2);
+        assert_eq!(back.refine_passes, 1);
+        assert_eq!(back.sharpness, 0.4);
+        assert_eq!(back.profile.name, "someturbo");
+        assert_eq!(back.prompt, it.prompt);
+
+        // Dropped in by hand: listed, openable, and with nothing to say.
+        std::fs::copy(&src, store.output_path("888-1-s0")).unwrap();
+        assert!(store.load_output("888-1-s0").is_none());
 
         std::fs::remove_dir_all(&dir).ok();
     }

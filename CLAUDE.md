@@ -119,6 +119,75 @@ of bailing, which used to close the socket with no response at all. **PNG only i
 Rust, on purpose**: the page re-encodes through a `<canvas>` first, so JPEG/WebP/AVIF
 all work and `image` stays compiled `features = ["png"]`.
 
+## The Outputs tab
+
+`work/output/` as a gallery rather than as a picker. `web/js/outputs.js` and
+`Engine::open_output` (`src/pipeline.rs`), and the whole tab is the grid: clicking a
+tile opens the **viewer** on it full size with the ten sliders live, and ← / → step
+through the gallery with the dialog left up.
+
+**There is no result column, no Refine and no Hi-res, and that is the design.** A
+saved output is `display`, not `raw` — its grade and its RCAS are already in the
+pixels — so diffusing over one is precisely what invariant 1 exists to prevent.
+Grading it *further* is fine and is what the tab is for; escalating it is not, and
+the way to escalate a saved image is the Image-to-image tab, which starts a real
+pass from it.
+
+That also makes this the one place the sliders are **not** the lossless re-filter
+they are everywhere else. `/adjust` elsewhere re-runs the passes over a retained
+unfiltered `raw`; here `raw` *is* the filtered file, so a drag stacks on what is
+already baked in. Three things follow, and all three are in `open_output`:
+
+- **The filters start at `Filters::NONE`**, not at the model's values. 0 means "as
+  saved". Starting at `profile.sharpness` would sharpen an already sharpened picture
+  the instant it appeared.
+- **The retained profile's `sharpness`/`clarity` are zeroed too**, because
+  `Engine::result` derives `start` — where **Reset** goes — from them. They are the
+  one pair on a restored profile that must not be kept, and they look exactly like a
+  pair worth keeping.
+- **A missing sidecar is an answer, not an error.** `list_outputs` deliberately lists
+  a PNG dropped into the directory by hand, so this has to be able to open one:
+  `Profile::default()`, no prompt, and the sliders work the same.
+
+The image is copied into scratch like every other reopen — invariant 8, in its third
+place. `work_id` and `step` come back from the sidecar so a save lands as
+`{id}-s{step}-2.png`, grouped with the generation it came from; `free_stem` is what
+stops that name being the file being edited. **Save is never an overwrite**: the
+pre-edit pixels exist nowhere else, since an output can descend from a refine and
+those are not archived.
+
+Four things in it break silently:
+
+- **Deleting is `griddelete.js`, shared with the work-item grid.** Those are the
+  two places on the page that remove a file, and a fix to one that missed the other
+  would be a fix that only half worked — on the half nobody was looking at. The
+  factory owns the mode radios, the marked set, both buttons and both requests; each
+  tab still draws its own tiles and calls `has()` while marking them, because the two
+  carry different data attributes and mean different things by `active`. It builds a
+  closure and a `Set` and nothing else, so calling it at module top level keeps the
+  declare-only rule.
+
+  **`Delete all` is the same request with every id in it**, not a route of its own —
+  which is what keeps `valid_id` the only guard there is. A route that emptied a
+  directory wholesale would need a different kind of check entirely. It is also the
+  one `confirm()` on the page, and it only appears in delete mode: marking is visible
+  and reversible, "all" is neither.
+- **`outputGrid` is the one tile.** It was written out three times — this grid, the
+  img2img source strip, the video tab's first-frame picker — and the declared height
+  has to match what `.wigrid` draws or the strip reflows as the thumbnails decode.
+  One function with a `height`, an `empty` and an `onPick`.
+- **The arrow keys yield to a focused range input.** An `<input type=range>` consumes
+  Left and Right natively and should: the key handler checks
+  `e.target.tagName` and returns for one. So a focused slider keeps its arrows, and
+  clicking the picture is how you hand them back. The listener is on `document`
+  because a modal `<dialog>`'s keydown bubbles out of it.
+- **An open is a job on the serialized worker, so a held arrow key coalesces** the
+  way a slider drag does — one in flight, the latest target remembered, fired once.
+  Without that a two-second key repeat queues a slideshow that plays back after you
+  let go. `cancelPost` (`viewer.js`) is the other half: it bumps an epoch that
+  `runPost` compares across its `await`, so the re-filter of the image you just left
+  can't land on top of the one that replaced it.
+
 ## The stylesheet
 
 `web/style.css`, served through `web::WEB_FILES` like everything else the page
@@ -158,7 +227,7 @@ Three things in it break silently:
 - **`--col-*` cannot be used in the media query.** Custom properties aren't allowed
   there, so the 899 px breakpoint is a literal that has to be kept in step by hand.
 
-`.tab` carries no style at all — it is how `showTab` finds the four tab buttons, and
+`.tab` carries no style at all — it is how `showTab` finds the five tab buttons, and
 a rule with no declarations would be worse than none. Don't delete it for looking
 unused. And `doctor` checks for both files under `web/`, because an unstyled page
 reads as a broken one rather than as a missing one.
@@ -178,7 +247,9 @@ resolves the imports itself. `index.html` loads exactly one of them:
 | `viewer.js` | `FILTERS`, the sliders, `/adjust`, fit/1:1, panning |
 | `image.js` | the Image tab: models, Advanced, `render`, escalations, runs, Save |
 | `workitems.js` | the work-item grid and reopening one |
+| `griddelete.js` | click-to-delete: the marks, the two buttons, the request |
 | `img2img.js` | the Image-to-image tab, including the upload |
+| `outputs.js` | `fetchOutputs`, `outputGrid`, and the Outputs tab |
 | `video.js` | the Video tab: models, generate, the clip grid, the first-frame picker |
 | `player.js` | the canvas frame player and `renderClip` |
 | `convert.js` | the Convert tab |
@@ -198,12 +269,12 @@ Four things in it break silently:
 - **The six shared values live on one object, `S`.** Not six exported `let`s: an
   imported binding is read-only at the importer, so `imageId = null` in another
   file is a `TypeError` rather than an assignment. The single-state rule under
-  *The two image panes* is unchanged; this is only how it is spelled now. Anything
+  *The three image panes* is unchanged; this is only how it is spelled now. Anything
   only one module writes stays a plain `let` in that module and is exported if
   others read it (`models`, `clip`).
 - **`setBusy` reaches every tab, and gets there through `onIdle`.** It disables
-  `#go`, `#i2go`, `#vgo`, `#cgo`, all ten sliders and three upscale selects at
-  once, because there is one GPU queue. What a button says at rest is the owning
+  `#go`, `#i2go`, `#vgo`, `#cgo`, `#lbsave`, all ten sliders and three upscale
+  selects at once, because there is one GPU queue. What a button says at rest is the owning
   tab's to decide, so `image.js` and `img2img.js` register a callback rather than
   `busy.js` importing them back — which is also what keeps that module importable
   from everywhere.
@@ -223,17 +294,25 @@ purpose.
 
 **The tabs are deliberately *not* components.** Shadow DOM is the only thing a
 custom element offers that a module doesn't, and `setBusy` above is why this page
-can't have it — four shadow roots would turn one function into a broadcast plus a
+can't have it — five shadow roots would turn one function into a broadcast plus a
 registry, and `style.css` would need re-plumbing into each root. Without a shadow
 root a custom element is an `init()` with ceremony. `showTab` clearing the pane it
-leaves is the same argument from the other end: these tabs are one app with four
-faces, not four independent things.
+leaves is the same argument from the other end: these tabs are one app with five
+faces, not five independent things.
 
-## The two image panes
+## The three image panes
 
-The page has two tabs that put an image on screen, and everything around the
+The page has three tabs that put an image on screen, and everything around the
 image — the action row, Save, the viewer — is one set of functions pointed at whichever
 is showing. That is `PANES` and `P(k)`.
+
+**The third row is shorter than the other two, and deliberately.** `outputs` carries
+an `err` and nothing else: that tab has no result block, because its image only ever
+exists in the viewer, and no escalation select, because it offers no escalation. The
+two places that read `result` reach it with `?.` for exactly that row —
+`setResultImage` in `viewer.js` and `clearPane` here. Giving the tab an empty hidden
+`<div id="oresult">` to keep the shape square was the other option and is worse: a
+pane key that exists so a lookup won't throw is a key that says nothing true.
 
 The module state (`imageId`, `currentSrc`, `workId`) stays **single**, because only one
 tab is visible and the worker is serialized, so there is only ever one live result to
@@ -308,7 +387,7 @@ The label sits **above** its track rather than beside it. Beside was right when 
 were two of these under a full-width image; in a 300 px column a 72 px label was a
 quarter of the travel.
 
-Four more decisions in it are load-bearing:
+Five more decisions in it are load-bearing:
 
 - **Closing is the `×` and Escape, nothing else.** The old viewer dismissed on any
   click, which is right for something you only look at and hostile for something you
@@ -329,7 +408,13 @@ Four more decisions in it are load-bearing:
   leaves it under the cursor.
 - **`setResultImage` writes both copies.** The image is on screen twice while the
   dialog is open, and `render()` keeps the big one in step too: a modal dialog stops
-  clicks, not a batch run that was already in flight.
+  clicks, not a batch run that was already in flight. Its write to the small copy is
+  `P('result')?.`, because the Outputs pane has no small copy at all.
+- **`cancelPost` is what makes a *different* image safe to put under the sliders.**
+  It clears the debounce and bumps an epoch that `runPost` compares across its
+  `await`, so a re-filter of the image being left can't land on the one replacing
+  it. The Outputs tab's arrow keys are the only caller, and without it letting go of
+  a slider and pressing → immediately reads as the arrow key having done nothing.
 
 Panning is scroll offsets, not a transform, so the wheel, a trackpad and the scrollbars
 keep working with no code. `.lbview` needs `min-width: 0` — a flex item's default
