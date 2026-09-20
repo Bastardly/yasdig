@@ -1,9 +1,10 @@
-# Feature 1 - Prompt strength keyboard short cuts
-In apps like ComfyUI and Forge, we are able to increase the strength of a given part of the prompt.
-I don't remember the format completely. I think it is something like "A lovely [cat:1,2] sitting in a window" where the power of the word "cat" is increased to 120%. Whatever it is, it should follow the same format that Comfy and Forge uses.
-
-The way it works in forge, is that I can either select a part of the text with my mouse, or I can have the mouse curser inside a word.
-Then I can hold down ctrl and either use the mouse wheel or up and down key to modify the word's or selection's strength by 0.1. If the strength is 1, then the format wrapper disappear, and the normal text is shown.
+# ~~Feature 1 - Prompt strength keyboard short cuts~~ — DONE
+Ctrl+↑/↓ and Ctrl+wheel on any of the six prompt boxes, in steps of 0.1, with the
+wrapper removed again at 1.0. The syntax is `(cat:1.2)` — round parens, dot decimal —
+which is what Comfy, Forge *and* sd.cpp's own parser use; `[cat:1,2]` would not have
+errored, it would have been conditioned as literal text at weight 0.909.
+`web/js/prompt-weight.js` + `web/js/prompt-box.js`; see *## The prompt box* in
+CLAUDE.md and *### Prompt weighting* in README.md.
 
 # Change request 1 - Move generate button
 Currently, the generate button and associated status info and stop buttons are at the bottom of the menu. I would like to move it to the top, so that it's always the first item in the "card col-control" for all tabs. Reason is that if I generate multiple images, I'll have to scroll up and down, and I even have a large screen. So moving it to the top will be very helpful.
@@ -12,6 +13,7 @@ Currently, the generate button and associated status info and stop buttons are a
 Currently we have the models.toml where we set the default settings. Instead, it would be nice to have a ./user/settings.json (A pattern I intend on expanding) and a settings tab.
 
 Currently, I think the settings could be boiled down to:
+- Default prompt
 - Default CFG scale
 - Default Steps
 - Default width and height
@@ -30,3 +32,20 @@ There are two parts to this.
 And all that really should do, is to toggle between the two souce folders. Only difference, is that while on the Favorites folder, we should not show the "Click to favorite", since adding favorites to favorites wouldn't make sense. Also the delete all button shouldn't be shown either in favorite mode.
 
 Of course, the delete and delete all should only influence the selected source folder.
+
+# Feature 4 - User defined prompt variables.
+I would like to create a new section under the settings tab called variables.
+
+Here we should be able to add, edit and remove words, with words attached. E.g.
+"animal": ["crab", "horse", "dog", "cat"],
+"color": ["red", "blue", "yellow"],
+
+The variables should be saved like any other setting.
+The array could be defined as a simple like of text. e.g. "red, blue, yellow" or "glorious gopher, pretty python, creative crab" - allowing for spaces
+
+If people write jibberish, e.g. ",,,,," that's their problem. But do add validation on save if needed, if it can break the app.
+
+
+Goal is to be able to use this in a prompt using a format - I don't know if there is a standard for this. But here is an example:
+"A lovely [animal] wearing a [color] hat"
+So that every time I run the prompt, a random generation is made. E.g. "A lovely crab wearing a blue hat"

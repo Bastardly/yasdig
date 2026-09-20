@@ -10,19 +10,30 @@ import { FILTERS } from './viewer.js';
 // that a number is a property of the model and not of image generation is the
 // single thing the panel was failing to tell anyone. A few sentences each: this
 // is a tooltip, not the README.
+// The weighting shortcut belongs to the prompt *box*, not to any one of the six
+// controls in one, so it is a string spliced into all three entries rather than
+// three sentences free to drift apart — the same rule the comment above states,
+// applied one level down.
+const WEIGHTING =
+  ' Put the caret in a word or select a phrase and press Ctrl+↑ / Ctrl+↓ (or '
+  + 'hold Ctrl and roll the wheel) to weight it in steps of 0.1: the text '
+  + 'rewrites itself as (word:1.2), and it disappears again at 1.0.';
+
 const HELP = [
   { ids: ['prompt', 'i2prompt', 'vprompt'],
     text: 'What you want to see. Subject first, then style, lighting and lens; '
         + 'commas separate ideas and the earlier words carry more weight. A list '
-        + 'of tags works as well as a sentence — these models were trained on both.' },
+        + 'of tags works as well as a sentence — these models were trained on both.'
+        + WEIGHTING },
   { ids: ['negative', 'i2negative'],
     text: 'What to steer away from. It works on flaws that keep turning up — '
         + 'watermark, extra fingers, blurry — rather than on objects you simply '
-        + 'did not ask for, which are already absent.' },
+        + 'did not ask for, which are already absent.' + WEIGHTING },
   { ids: ['vnegative'],
     text: 'What to steer away from. Pre-filled with the model’s own published '
         + 'negative prompt, which for Wan is 400 characters of Chinese nobody '
-        + 'should have to retype. Emptying the box means no negative at all.' },
+        + 'should have to retype. Emptying the box means no negative at all.'
+        + WEIGHTING },
   { ids: ['template', 'i2template', 'vmodel'],
     text: 'Which checkpoint does the work. Every model has its own house style '
         + 'and its own sensible steps, CFG and size — picking one refills the '

@@ -19,6 +19,10 @@ cargo run --release                         # server on 127.0.0.1:8080
 cargo run --release -- doctor               # preflight only: binary, checkpoints, web UI
 cargo run --release -- fsr-selftest         # full wgpu path; no sd.cpp or checkpoint needed
 cargo run --release -- fsr in.png out.png [scale] [sharpness] [clarity]
+
+node --test 'web/js/*.test.js'              # the one JS unit test: the prompt-weighting string maths.
+                                            #   Node's built-in runner — no npm, no package.json, no
+                                            #   build step, and nothing at runtime needs Node.
 ```
 
 The shaders otherwise only compile at GPU device creation, so `cargo test` is what
@@ -326,7 +330,8 @@ resolves the imports itself. `index.html` loads exactly one of them:
 | `video.js` | the Video tab: models, generate, the clip grid, the first-frame picker |
 | `player.js` | the canvas frame player and `renderClip` |
 | `convert.js` | the Convert tab |
-| `prompt-box.js` | the one custom element |
+| `prompt-box.js` | the one custom element, and the weighting shortcut on it |
+| `prompt-weight.js` | `adjust`: the string maths behind Ctrl+↑/↓. Pure, and the one file with a test |
 | `app.js` | `showTab`, and the boot order |
 
 Four things in it break silently:
@@ -363,7 +368,7 @@ Four things in it break silently:
 keeps the id, so `$('prompt').value`, `<label for>` and `wireHints` need nothing
 forwarded. It is where the features around a prompt go, and there are six of them
 on the page, so writing one three times is what it exists to prevent. Light DOM on
-purpose.
+purpose. See *## The prompt box* below for the one feature on it.
 
 **The tabs are deliberately *not* components.** Shadow DOM is the only thing a
 custom element offers that a module doesn't, and `setBusy` above is why this page
@@ -372,6 +377,68 @@ registry, and `style.css` would need re-plumbing into each root. Without a shado
 root a custom element is an `init()` with ceremony. `showTab` clearing the pane it
 leaves is the same argument from the other end: these tabs are one app with five
 faces, not five independent things.
+
+## The prompt box
+
+Ctrl+↑ / Ctrl+↓ and Ctrl+wheel weight the word under the caret or the selected
+phrase, rewriting the text as `(word:1.2)` — ComfyUI's and Forge's syntax, and the
+one `stable-diffusion.cpp` actually parses. It is on `<prompt-box>`
+(`web/js/prompt-box.js`), which is why it lands on all six prompt controls across
+three tabs with no markup change and no per-tab code, and it is **the whole
+feature** — nothing on the Rust side knows about it. A prompt already travels
+verbatim from `$('prompt').value` to `cmd.args(["-p", …])` with no shell in
+between, so parens and colons were always inert on the way out, and a weighted
+prompt round-trips through a sidecar as the text it is.
+
+The string maths is `web/js/prompt-weight.js`, split out and **pure** — no DOM, no
+imports, the same contract as `dom.js`. That split is what buys the test:
+`web/js/prompt-weight.test.js` runs under `node --test 'web/js/*.test.js'` with no
+npm, no `package.json` and no build step, and it is deliberately *not* in
+`WEB_FILES`, so the browser can't fetch it. `the_table_lists_every_file_under_web`
+skips `*.test.js` for that reason rather than the table listing it.
+
+**Everything here is shaped by `parse_prompt_attention`**
+(`stable-diffusion.cpp src/core/util.cpp:816`), which is a port of A1111's:
+
+- **Nesting multiplies, it does not replace** (`util.cpp:806-815`:
+  `(((house:1.3)))` is 1.573). So when the target *is* an existing group, `adjust`
+  retunes that group's number; wrapping a second one round it would silently push a
+  1.2 to 1.32. The rule deciding which is one line — the group's inner text, minus
+  any `:w` tail, must equal the target exactly — and it is what correctly makes
+  Ctrl+↑ on one word of `(a red crab:1.2)` nest, because pointing at one word of
+  three is a request to weight that word.
+- **`(x)` is ×1.1 and `[x]` is ×1/1.1** (`util.cpp:821-822`), so a hand-typed
+  `[cat]` has to be *recognised*. Nesting it into `([cat]:1.1)` cancels to exactly
+  1.0 and reads as the key having done nothing. It is read as 0.9, snapped to the
+  step grid — a tenth of one step, in a number being dragged.
+- **`\(` is the only escape that works** (`util.cpp:892`; `\)` and `\]` leak the
+  backslash into the tokens, upstream's bug). So `escaped()` must be consulted
+  before treating a paren as a bracket, and we never emit an escape ourselves.
+
+Four things break silently:
+
+- **`{ passive: false }` on the wheel listener.** Without it `preventDefault()` may
+  be ignored and Ctrl+wheel zooms the page instead of weighting the word.
+- **The wheel yields when the field isn't focused.** An unfocused field has a stale
+  `selectionStart`, usually 0, so rolling over a box you aren't editing would weight
+  its first word. Unfocused, the gesture stays browser zoom — the same shape as the
+  Outputs tab's arrow keys yielding to a focused range input.
+- **The write goes through `document.execCommand('insertText', …)`, not
+  `field.value =`.** Assigning `value` wipes the field's native undo stack, so one
+  Ctrl+Z after a few nudges throws the whole prompt away. `insertText` records one
+  undo entry per adjustment and fires `input` on its own. `setRangeText` is the
+  fallback for the day it stops working, and loses only the history.
+- **`adjust` returns `null`, and the caller must then not `preventDefault()`.** A
+  caret with a delimiter on both sides has no word to weight, and Ctrl+↑ there
+  should do whatever the browser does with it rather than being swallowed.
+
+Two smaller ones, both pinned by tests: the weight is snapped with
+`Math.round(w * 10) / 10` because `1.1 + 0.1` is `1.2000000000000002`, and `|| 0`
+after it kills the negative zero that prints as `-0.0`. It is **unclamped** by
+choice — 0 and negatives are reachable, as in ComfyUI. And the returned selection is
+the group's *inner* text, never the brackets, which is what makes a held key
+idempotent: every step leaves the selection equal to the inner text again, so the
+edit branch keeps being the one taken.
 
 ## The three image panes
 

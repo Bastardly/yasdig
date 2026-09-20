@@ -71,6 +71,12 @@ All four run on the same AMD GPU sd.cpp uses, with no model weights. `cargo test
 validates the WGSL through naga, since it would otherwise only compile at GPU device
 creation — a shader typo would surface as a startup failure on the worker thread.
 
+The one piece of JavaScript with logic worth pinning — the prompt-weighting string
+maths — has its own test, run by Node's built-in runner with
+`node --test 'web/js/*.test.js'`. That is optional and dev-only: there is no
+`package.json`, no npm, no build step, and nothing about running the server needs
+Node installed.
+
 Each stage is skipped when it would be a no-op — EASU at scale 1.0, the grade with all
 eight knobs at 0, contrast at clarity 0.0 — so `rustimage fsr in.png out.png 1.0 0.5`
 is an exact sharpen-only pass, and `rustimage fsr in.png out.png 1.0 0.0 0.0` is a
@@ -394,6 +400,44 @@ through the VAE, which costs fine detail no matter how low the strength; paying 
 base resolution and then stretching the result 2× spends the loss on detail while only
 the structural gain survives the upscale. That is what made the old refine pass read as
 soft. At output resolution there is nothing downstream to smear what it adds.
+
+### Prompt weighting
+
+Any prompt box takes the weighting syntax ComfyUI and Forge use, and will write it
+for you. Put the caret in a word — or select a phrase with the mouse — and press
+**Ctrl+↑** or **Ctrl+↓**, or hold Ctrl and roll the wheel:
+
+```
+a lovely fluffy crab           Ctrl+↑ on "crab"  →  a lovely fluffy (crab:1.1)
+a lovely fluffy (crab:1.1)     Ctrl+↑            →  a lovely fluffy (crab:1.2)
+a lovely fluffy (crab:1.1)     Ctrl+↓            →  a lovely fluffy crab
+```
+
+Each step is 0.1, and **1.0 removes the wrapper** rather than writing `(crab:1.0)`,
+so the round trip always ends back at the words you typed. The number is unclamped —
+0 and negatives are reachable, as in ComfyUI — and it is snapped to a tenth, so a
+weight hand-typed as `1.25` lands on `1.4` the first time you nudge it.
+
+It works on positive and negative prompts, on all three tabs that have one, and on
+video prompts too: Wan's text encoder runs the same parser. A weighted prompt is
+stored verbatim with the image, so reopening a work item brings the weights back.
+
+Three things worth knowing, all of them properties of sd.cpp's parser rather than of
+this UI:
+
+- **Nesting multiplies.** `(((house:1.3)))` conditions at 1.573. So pointing at one
+  word of a weighted phrase nests deliberately — Ctrl+↑ on `crab` inside
+  `(a red crab:1.2)` gives `(a red (crab:1.1):1.2)`, which is 1.32 on the crab and
+  1.2 on the rest. Pointing at the whole phrase retunes the 1.2 instead.
+- **`(word)` is ×1.1 and `[word]` is ×1/1.1**, the A1111 shorthands. Both are
+  recognised, so a hand-typed `[word]` is retuned rather than wrapped; it reads as
+  0.9, since 0.909 is not a number to show someone mid-drag.
+- **`[from:to:when]` prompt scheduling is not supported by sd.cpp at all**, and fails
+  quietly rather than loudly — the whole thing is conditioned as literal text at 0.909.
+  Don't reach for it.
+
+Ctrl+Z walks the edits back one nudge at a time; the shortcut writes through the
+field's own undo stack rather than replacing its contents.
 
 ### Work items
 
