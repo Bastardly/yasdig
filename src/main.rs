@@ -27,6 +27,9 @@
 //!   GET  /workitems/{id}/thumb.png
 //!   POST /workitems/open   -> {id}       reopen one as a live image_id
 //!   POST /workitems/delete -> {ids:[..]} remove them from disk
+//!   GET  /loras       -> every file in the LoRA dir, with why an unusable one
+//!                        can't be picked. Attach them per request with a
+//!                        `loras: [{name, strength}]` on /generate or /img2img
 //!   GET  /outputs     -> every image in work/output/, newest first
 //!   POST /outputs/open -> {stem}     open a saved image as a live image_id,
 //!                        so the viewer's sliders can work on it
@@ -64,7 +67,7 @@ mod workitems;
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
-use config::{Config, Filters, FiltersPatch};
+use config::{Config, Filters, FiltersPatch, LoraRef};
 use pipeline::{Engine, EscalateRequest, GenRequest, GenResult, Img2ImgRequest, VideoRequest};
 use sd::Monitor;
 use std::net::TcpListener;
@@ -341,6 +344,11 @@ fn handle_conn(
         // without a restart.
         ("GET", "/convert-models") => handle_convert_models(&mut conn, cfg),
         ("POST", "/convert") => handle_convert(&mut conn, cfg, job_tx, &req.body),
+        // Filesystem only — one header seek per file in the LoRA dir — so it
+        // answers here rather than queueing behind whatever is rendering. Built
+        // live for the reason `/models` is: dropping a file into a folder should
+        // not need a restart to be noticed.
+        ("GET", "/loras") => handle_list_loras(&mut conn, cfg),
         ("GET", "/video-models") => handle_video_models(&mut conn, cfg),
         ("POST", "/video") => handle_video(&mut conn, job_tx, &req.body),
         ("POST", "/videos/enlarge") => handle_enlarge_clip(&mut conn, job_tx, &req.body),
@@ -455,6 +463,23 @@ struct VideoModelDto {
     /// Seconds, from the rounded frame count and the fps that will really be
     /// used — the number the page shows before anything has run.
     duration: f32,
+}
+
+/// Everything in the LoRA dir, usable or not.
+///
+/// The unusable ones are listed with their reason rather than filtered out, the
+/// same call `doctor` makes for a half-downloaded video model: "my LoRA isn't in
+/// the list" is a much worse thing to debug than "my LoRA is in the list and
+/// says why".
+fn handle_list_loras(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
+    match serde_json::to_vec(&cfg.list_loras()) {
+        Ok(body) => conn.respond(200, "application/json", &body),
+        Err(e) => conn.respond(
+            500,
+            "application/json",
+            error_json(&format!("listing LoRAs: {e}")).as_bytes(),
+        ),
+    }
 }
 
 fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
@@ -874,6 +899,11 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         sharpness: Option<f32>,
         #[serde(default)]
         clarity: Option<f32>,
+        /// Absent keeps the profile's list, `[]` clears it. The page always
+        /// sends the picker's full contents, so in practice it is always one or
+        /// the other and never a merge.
+        #[serde(default)]
+        loras: Option<Vec<LoraRef>>,
     }
 
     let dto: Dto = match parse_json::<Dto>(conn, body)? {
@@ -898,6 +928,7 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         hires_strength: dto.hires_strength,
         sharpness: dto.sharpness,
         clarity: dto.clarity,
+        loras: dto.loras,
     };
 
     submit(conn, job_tx, JobKind::Generate(req), 500)
@@ -952,6 +983,9 @@ fn handle_img2img(
         sharpness: Option<f32>,
         #[serde(default)]
         clarity: Option<f32>,
+        /// See `/generate`'s.
+        #[serde(default)]
+        loras: Option<Vec<LoraRef>>,
     }
 
     let dto: Dto = match parse_json::<Dto>(conn, body)? {
@@ -991,6 +1025,7 @@ fn handle_img2img(
         hires_strength: dto.hires_strength,
         sharpness: dto.sharpness,
         clarity: dto.clarity,
+        loras: dto.loras,
     };
 
     submit(conn, job_tx, JobKind::Img2Img(req), 500)

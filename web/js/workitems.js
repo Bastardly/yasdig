@@ -1,8 +1,8 @@
 import { $, esc, post } from './dom.js';
 import { S } from './state.js';
 import { setBusy } from './busy.js';
-import { models, render, syncIcfgPlaceholder } from './image.js';
-import { setI2Source, syncI2Note } from './img2img.js';
+import { imageLoras, models, render, syncIcfgPlaceholder } from './image.js';
+import { i2Loras, setI2Source, syncI2Note } from './img2img.js';
 import { gridDelete } from './griddelete.js';
 
 // The last /workitems listing. It carries each item's full settings, so opening
@@ -125,6 +125,11 @@ function applyWorkItem(item) {
   $('rstrength').value = p.refine_strength;
   $('hsteps').value = p.hires_steps;
   $('hstrength').value = p.hires_strength;
+  // What the image was actually diffused with. The server restores these onto
+  // the reopened image independently, so this is only about what the picker
+  // says — but a picker that disagreed would send the wrong set on the next
+  // Generate, which is the same trap the boxes above are in.
+  imageLoras.set(p.loras ?? []);
   // An image-to-image generation remembers what it was diffused from, so
   // reopening one puts the source back rather than quietly forgetting where the
   // picture came from. Only the img2img panel is restored — the model and
@@ -139,6 +144,7 @@ function applyWorkItem(item) {
     $('i2cfg').value = p.cfg_scale;
     $('i2icfg').value = p.img2img_cfg_scale ?? '';
     $('i2sampler').value = p.sampler;
+    i2Loras.set(p.loras ?? []);
     setI2Source(item.source);
     syncI2Note();
   }

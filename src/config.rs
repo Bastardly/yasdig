@@ -61,6 +61,15 @@ pub struct SdConfig {
     /// be true of the same `models/`.
     #[serde(default)]
     pub video_dir: Option<String>,
+    /// Directory scanned for LoRAs. Defaults to `loras/` inside
+    /// [`SdConfig::models_dir`], so moving the models dir moves this too.
+    ///
+    /// Its own directory rather than the models dir because the checkpoint scan
+    /// there is non-recursive and file-only — which is what makes a `loras/`
+    /// subdirectory invisible to it, and what keeps a 200 MB adapter out of the
+    /// model select. Same split, same reason, as [`SdConfig::video_dir`].
+    #[serde(default)]
+    pub lora_dir: Option<String>,
 }
 
 fn default_mode() -> String {
@@ -288,6 +297,85 @@ pub const MIN_STRENGTH: f32 = 0.05;
 /// plain txt2img, which is never what either escalation button wants.
 pub const MAX_STRENGTH: f32 = 0.95;
 
+/// One LoRA applied to one generation.
+///
+/// A struct rather than the video side's `"name:1"` string, and the difference
+/// is what the two are for: a `[[video]]` entry *pins* its LoRAs in
+/// `models.toml`, so a single string a human types is the right shape there.
+/// These are picked per picture in the UI and round-trip through a work item's
+/// sidecar, so two fields the page can bind to beat one it would have to split
+/// on a colon — a colon the name is forbidden to contain anyway, see
+/// [`valid_lora_name`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoraRef {
+    /// Path relative to [`Config::lora_dir`], **extension included** —
+    /// `detail.safetensors`, or `sdxl/detail.safetensors`.
+    ///
+    /// The extension is in it so resolution is one `join` and one `exists`.
+    /// sd.cpp will happily take a bare stem and try four extensions
+    /// (`common.cpp:2280`), but then the name in a sidecar no longer identifies
+    /// a file, and a `.gguf` quietly standing in for a deleted `.safetensors`
+    /// is not something a record of what generated an image should allow.
+    pub name: String,
+    /// Multiplier. 1.0 is the weight the adapter was trained at.
+    pub strength: f32,
+}
+
+/// Lowest and highest LoRA multiplier accepted.
+///
+/// The floor is negative on purpose: subtracting a LoRA is a real technique, and
+/// sd.cpp parses the number with `stof` and applies whatever it gets. The
+/// ceiling is where an adapter stops adding its subject and starts tearing the
+/// image apart — there is no hard limit in the format, so this is a guard
+/// against a typo (a stray `10`), not a claim about the math.
+pub const LORA_STRENGTH_MIN: f32 = -2.0;
+pub const LORA_STRENGTH_MAX: f32 = 2.0;
+
+/// Is this a name [`Config::lora_path`] may join onto the LoRA directory?
+///
+/// A whitelist, the same principle as `workitems::valid_id` — but a separate
+/// function rather than a widened one, because the two guard different
+/// alphabets for different reasons. An id is minted by us and so can be digits
+/// and `-`; a LoRA name is a *filename the user chose*, so it has to allow `.`,
+/// spaces, and `/` for the `sdxl/`, `flux/` subfolders people actually keep
+/// these in. Widening `valid_id` to cover this would quietly widen the archive
+/// routes with it.
+///
+/// So the check is structural instead of alphabetic: every path component must
+/// be `Component::Normal`, which rejects `..`, a leading `/` and a bare `.` in
+/// one test. On top of that, `:` `<` `>` are rejected because sd.cpp's tag regex
+/// is `<lora:([^:>]+):([^>]+)>` (`common.cpp:2248`) — a name containing one
+/// wouldn't be escaped, it would silently re-cut the tag somewhere else.
+pub fn valid_lora_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 200 {
+        return false;
+    }
+    if name.contains([':', '<', '>']) {
+        return false;
+    }
+    let p = Path::new(name);
+    p.components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// One file in the LoRA directory, as `GET /loras` publishes it.
+///
+/// Unusable entries are listed rather than dropped, for the reason `doctor`
+/// greys out a half-downloaded video model instead of hiding it: "my LoRA isn't
+/// in the list" is a much worse thing to debug than "my LoRA is in the list and
+/// says why it can't be used".
+#[derive(Debug, Clone, Serialize)]
+pub struct LoraFile {
+    /// What a [`LoraRef`] puts in `name`.
+    pub name: String,
+    /// What the picker shows: the same path without its extension.
+    pub label: String,
+    pub bytes: u64,
+    pub usable: bool,
+    /// Empty when `usable`; otherwise why not, in one phrase.
+    pub note: String,
+}
+
 /// A fully-resolved, ready-to-run model entry (from a template or discovery).
 ///
 /// Serializable because a work item stores its profile verbatim (see
@@ -331,6 +419,20 @@ pub struct Profile {
     pub hires_flash_attn: bool,
     pub weight_type: Option<String>,
     pub extra_args: Vec<String>,
+    /// LoRAs this generation runs with. Applied by [`crate::sd::SdRunner`]'s
+    /// `base_cmd`, so the refine and hi-res passes over the same image inherit
+    /// them — which is the point: a finishing pass that dropped the LoRA would
+    /// redraw the surface in the base model's idiom and undo the look.
+    ///
+    /// **Request-only.** Unlike every other field here there is no `loras` key
+    /// on `Defaults` or `Template`, so both arms of [`Config::registry`] build
+    /// this empty and it is only ever filled from a `/generate` or `/img2img`
+    /// body. That is what keeps this knob clear of the `Defaults`/`Template`
+    /// trap at the top of `CLAUDE.md` — there is no second struct to forget.
+    /// It is on `Profile` anyway because the profile is what a `Pending`
+    /// retains and what a sidecar stores, and an image whose record doesn't
+    /// name its LoRAs isn't reproducible.
+    pub loras: Vec<LoraRef>,
     /// True if this came from a folder scan rather than an explicit template.
     pub discovered: bool,
     /// True if the checkpoint file actually exists on disk.
@@ -367,6 +469,7 @@ impl Default for Profile {
             hires_flash_attn: d.hires_flash_attn,
             weight_type: d.weight_type,
             extra_args: d.extra_args,
+            loras: Vec::new(),
             discovered: false,
             exists: false,
         }
@@ -410,6 +513,25 @@ impl Profile {
         ] {
             if !v.is_finite() || v < 0.0 {
                 bail!("'{}': {field} is {v}, must be 0 or greater", self.name);
+            }
+        }
+        // The name guard is here as well as at the route because this profile is
+        // about to become a command line: a name that re-cuts sd.cpp's tag regex
+        // would not fail, it would apply some *other* file.
+        for l in &self.loras {
+            if !valid_lora_name(&l.name) {
+                bail!("'{}': '{}' is not a LoRA name", self.name, l.name);
+            }
+            if !l.strength.is_finite()
+                || !(LORA_STRENGTH_MIN..=LORA_STRENGTH_MAX).contains(&l.strength)
+            {
+                bail!(
+                    "'{}': LoRA '{}' has strength {}, must be between \
+                     {LORA_STRENGTH_MIN} and {LORA_STRENGTH_MAX}",
+                    self.name,
+                    l.name,
+                    l.strength
+                );
             }
         }
         Filters::starting_at(self.sharpness, self.clarity).validate(&self.name)
@@ -1261,6 +1383,103 @@ impl Config {
         }
     }
 
+    /// Directory holding LoRAs, for both image tabs.
+    pub fn lora_dir(&self) -> PathBuf {
+        match &self.sd.lora_dir {
+            Some(d) => self.resolve(d),
+            None => self.models_dir().join("loras"),
+        }
+    }
+
+    /// Everything in the LoRA dir, for `GET /loras` and for `doctor`.
+    ///
+    /// Recursive and header-read, through the same [`crate::discover::scan`] the
+    /// video dir uses — so `loras/sdxl/`, `loras/flux/` work, and a checkpoint
+    /// dropped in here by mistake is identified as one rather than offered as an
+    /// adapter. Recomputed per call, like [`Config::registry`]: a file appearing
+    /// in a folder is not worth a restart to notice.
+    pub fn list_loras(&self) -> Vec<LoraFile> {
+        let dir = self.lora_dir();
+        crate::discover::scan(&dir)
+            .into_iter()
+            .map(|f| {
+                let name = f
+                    .path
+                    .strip_prefix(&dir)
+                    .unwrap_or(&f.path)
+                    .to_string_lossy()
+                    .into_owned();
+                let label = match name.rsplit_once('.') {
+                    Some((stem, _)) => stem.to_string(),
+                    None => name.clone(),
+                };
+                let bytes = std::fs::metadata(&f.path).map(|m| m.len()).unwrap_or(0);
+                let note = if !valid_lora_name(&name) {
+                    // Only reachable by a filename containing ':' '<' or '>',
+                    // since everything else here came off a directory walk.
+                    "the name has a character sd.cpp's <lora:…> tag can't carry".to_string()
+                } else {
+                    match &f.role {
+                        crate::discover::Role::Lora => String::new(),
+                        crate::discover::Role::Unknown(why) => why.clone(),
+                        other => format!("looks like a {}, not a LoRA", other.describe()),
+                    }
+                };
+                LoraFile {
+                    name,
+                    label,
+                    bytes,
+                    usable: note.is_empty(),
+                    note,
+                }
+            })
+            .collect()
+    }
+
+    /// Resolve every LoRA a profile names, or say which one is missing.
+    ///
+    /// This exists because of what sd.cpp does without it: a `<lora:…>` tag
+    /// whose file it can't find is a `LOG_WARN` and a *dropped tag*
+    /// (`examples/common/common.cpp:2289`). The render then succeeds, takes the
+    /// usual two minutes, and comes back as a picture that simply doesn't have
+    /// the LoRA in it — with nothing on the wire saying so. Failing here instead
+    /// costs a millisecond and turns a silent wrong answer into a message that
+    /// names what is actually on disk.
+    ///
+    /// Called from every entry point that is about to hand a profile to
+    /// `SdRunner`, escalations included: a file deleted between the generate and
+    /// the Refine is the same failure arriving later.
+    pub fn check_loras(&self, refs: &[LoraRef]) -> Result<()> {
+        if refs.is_empty() {
+            return Ok(());
+        }
+        let dir = self.lora_dir();
+        for l in refs {
+            if !valid_lora_name(&l.name) {
+                bail!("'{}' is not a LoRA name", l.name);
+            }
+            if !dir.join(&l.name).exists() {
+                let known: Vec<String> = self
+                    .list_loras()
+                    .into_iter()
+                    .filter(|f| f.usable)
+                    .map(|f| f.name)
+                    .collect();
+                bail!(
+                    "no LoRA named '{}' in {} — available: {}",
+                    l.name,
+                    dir.display(),
+                    if known.is_empty() {
+                        "nothing (the folder is empty)".to_string()
+                    } else {
+                        known.join(", ")
+                    }
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Identify everything in the video dir. See [`crate::discover`].
     pub fn discover_video(&self) -> crate::discover::Discovery {
         let dir = self.video_dir();
@@ -1379,6 +1598,11 @@ impl Config {
                     hires_flash_attn: t.hires_flash_attn,
                     weight_type: t.weight_type.clone(),
                     extra_args: t.extra_args.clone(),
+                    // Request-only; see the field's doc comment. Spelled out in
+                    // both arms rather than left to a `..Default::default()`,
+                    // so a field added here is a compile error and not a knob
+                    // that silently works for half the models.
+                    loras: Vec::new(),
                     discovered: false,
                 },
             );
@@ -1427,6 +1651,7 @@ impl Config {
                     hires_flash_attn: d.hires_flash_attn,
                     weight_type: d.weight_type.clone(),
                     extra_args: d.extra_args.clone(),
+                    loras: Vec::new(),
                     discovered: true,
                     exists: true,
                 },
@@ -1562,6 +1787,90 @@ t5xxl = "v/umt5.gguf"
         assert_eq!(found[0].steps, 4);
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The guard is structural, so these are the shapes that would otherwise be
+    /// joined onto the LoRA directory or re-cut sd.cpp's tag regex.
+    #[test]
+    fn a_lora_name_cannot_escape_its_directory() {
+        for bad in [
+            "",
+            "../secrets.safetensors",
+            "sdxl/../../etc/passwd",
+            "/etc/passwd",
+            "./detail.safetensors",
+            "de:tail.safetensors",
+            "detail>.safetensors",
+            "<detail.safetensors",
+        ] {
+            assert!(!valid_lora_name(bad), "{bad:?} should be rejected");
+        }
+        for good in [
+            "detail.safetensors",
+            "sdxl/style.safetensors",
+            "a b c.gguf",
+            "sdxl/character/someone-v2.safetensors",
+        ] {
+            assert!(valid_lora_name(good), "{good:?} should be accepted");
+        }
+    }
+
+    /// A strength is range-checked on the profile, because by then it has come
+    /// off the wire and is one step from being a command line.
+    #[test]
+    fn a_lora_strength_is_range_checked() {
+        let mut p = Profile {
+            name: "t".into(),
+            ..Default::default()
+        };
+        p.loras = vec![LoraRef {
+            name: "detail.safetensors".into(),
+            strength: 1.0,
+        }];
+        assert!(p.validate().is_ok());
+
+        // Negative is legal — subtracting a LoRA is a real technique.
+        p.loras[0].strength = -0.75;
+        assert!(p.validate().is_ok());
+
+        for bad in [3.0, -9.0, f32::NAN] {
+            p.loras[0].strength = bad;
+            assert!(p.validate().is_err(), "{bad} should be rejected");
+        }
+
+        p.loras[0].strength = 1.0;
+        p.loras[0].name = "../elsewhere.safetensors".into();
+        assert!(p.validate().is_err());
+    }
+
+    /// Moving the models dir moves the LoRAs with it, and an explicit
+    /// `lora_dir` resolves against the config's directory like every other path.
+    #[test]
+    fn the_lora_dir_defaults_inside_the_models_dir() {
+        let cfg = parse(MINIMAL).expect("minimal config should parse");
+        assert_eq!(cfg.lora_dir(), cfg.models_dir().join("loras"));
+
+        let cfg = parse(
+            r#"
+[sd]
+binary = "sd-cli"
+models_dir = "weights"
+lora_dir = "adapters"
+"#,
+        )
+        .expect("config should parse");
+        assert_eq!(cfg.lora_dir(), PathBuf::from("/tmp/adapters"));
+    }
+
+    /// A registry entry never carries LoRAs: they only ever arrive on a request.
+    /// If this ever fails, a `loras` key has been added to `[defaults]` or
+    /// `[templates.*]` and the note on [`Profile::loras`] has stopped being true.
+    #[test]
+    fn a_model_brings_no_loras_of_its_own() {
+        let cfg = parse(MINIMAL).expect("minimal config should parse");
+        for p in cfg.registry().values() {
+            assert!(p.loras.is_empty(), "'{}' arrived with LoRAs", p.name);
+        }
     }
 
     #[test]

@@ -43,6 +43,13 @@
       </div>
     </div>
 
+    <!-- Adapters that patch the checkpoint's weights, picked from
+         models/loras/. Not in the Advanced rows below: unlike Steps or CFG,
+         which model *is* and how it is tuned, this changes the subject of the
+         picture, so it belongs next to the prompt. -->
+    <label data-help="loras">LoRAs</label>
+    <div id="loras"></div>
+    <button type="button" id="loraadd" class="btn spaced">+ Add LoRA</button>
 
       <div class="row">
         <div>
@@ -230,6 +237,10 @@
         <input id="i2seed" type="number" value="-1">
       </div>
     </div>
+
+    <label data-help="loras">LoRAs</label>
+    <div id="i2loras"></div>
+    <button type="button" id="i2loraadd" class="btn spaced">+ Add LoRA</button>
 
     <div class="row">
       <div>

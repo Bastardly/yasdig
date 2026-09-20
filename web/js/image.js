@@ -4,10 +4,16 @@ import { setBusy, onIdle } from './busy.js';
 import { setPost, setPostStart, setViewerImage, showFullSize } from './viewer.js';
 import { loadWorkItems, markGrid } from './workitems.js';
 import { loadI2Outputs, syncI2 } from './img2img.js';
+import { loraPicker } from './loras.js';
 
 // The checkpoint list the server published. Exported because the img2img tab and
 // the work-item grid both look a name up in it; only this module refills it.
 export let models = [];
+
+// This tab's attached LoRAs. Exported because `applyWorkItem` has to put a
+// reopened generation's back: the grid restores what made an image, and the
+// adapters are as much a part of that as the steps and the seed.
+export const imageLoras = loraPicker({ rows: 'loras', add: 'loraadd' });
 
 function currentModel() {
   return models.find((m) => m.name === $('template').value);
@@ -331,6 +337,12 @@ function genPayload(index) {
     // generation's. Sent as-is it would arrive at /generate as a stray key —
     // harmless today, and a name collision waiting to be renamed into a bug.
     ...(({ model, ...rest }) => rest)(escalateSettings()),
+    // Always sent, including empty — the server reads `[]` as "none" and a
+    // missing key as "keep whatever the profile has", and the picker on screen
+    // is the complete answer to the question, so it must be able to say none.
+    // Retained on the image, so a later Refine or Hi-res runs with the same
+    // adapters without a second picker to set them in.
+    loras: imageLoras.get(),
     // Not sharpness/clarity: those are post-process, not generation settings,
     // so a new image starts from the model's values rather than inheriting
     // wherever the last one's sliders were left.
@@ -435,6 +447,7 @@ async function saveOutput() {
 }
 
 export function initImage() {
+  imageLoras.init();
   $('go').addEventListener('click', startRun);
   $('stop').addEventListener('click', stopRun);
   // The run panel's view of the shared upscale factor. Built here rather than in

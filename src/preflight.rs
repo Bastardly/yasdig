@@ -4,22 +4,18 @@
 //! fix instructions for anything missing.
 
 use crate::config::Config;
-use crate::discover::{DitKind, Role, VaeKind};
+use crate::discover::Role;
 
 /// One line naming what a shared component is, for the `doctor` listing.
+///
+/// A LoRA gets an extra clause here that [`Role::describe`] deliberately
+/// doesn't: this listing is the video dir's, where a LoRA is only reachable by
+/// being named in config. The image side picks them from a folder instead, so
+/// the same sentence would be wrong there.
 fn describe_role(role: &Role) -> String {
     match role {
-        Role::Umt5 => "umt5-xxl text encoder (shared by every Wan family)".into(),
-        Role::QwenVl => "Qwen3-VL text encoder (MiniMax H3 only)".into(),
-        Role::ClipVision => "CLIP-Vision tower (Wan 2.1 I2V/FLF2V)".into(),
-        Role::Vae(VaeKind::Wan21) => "wan_2.1 VAE — every Wan except the TI2V-5B".into(),
-        Role::Vae(VaeKind::Wan22) => "wan2.2 VAE — TI2V-5B only".into(),
         Role::Lora => "LoRA (name it in a [[video]] entry's `loras` to use it)".into(),
-        Role::Dit(DitKind::WanOther { dim }) => {
-            format!("a Wan transformer of width {dim}, which is not a family this build runs")
-        }
-        Role::Dit(_) => "transformer".into(),
-        Role::Unknown(why) => why.clone(),
+        other => other.describe(),
     }
 }
 
@@ -148,6 +144,29 @@ pub fn check(cfg: &Config) -> Report {
             "template '{}' references a checkpoint that doesn't exist:\n  {}",
             p.name,
             p.model.display()
+        ));
+    }
+
+    // 2b) LoRAs. Never an error and never a warning: an empty folder is the
+    // normal state of one, and the reason this is printed at all is that "the
+    // picker is empty" and "the picker is looking somewhere else" are
+    // indistinguishable from the browser. The path is the answer to both.
+    let loras = cfg.list_loras();
+    let usable_loras = loras.iter().filter(|l| l.usable).count();
+    info.push(format!(
+        "{usable_loras} LoRA(s) in {}",
+        cfg.lora_dir().display()
+    ));
+    for l in &loras {
+        info.push(format!(
+            "  {} {:<44} {}",
+            if l.usable { "·" } else { "○" },
+            l.name,
+            if l.usable {
+                human_size(l.bytes)
+            } else {
+                l.note.clone()
+            },
         ));
     }
 

@@ -22,7 +22,7 @@
 //! re-run on it for free: that is `adjust`, and it is why they are a slider
 //! rather than a reason to regenerate.
 
-use crate::config::{Config, Filters, FiltersPatch, Profile};
+use crate::config::{Config, Filters, FiltersPatch, LoraRef, Profile};
 use crate::fsr::Fsr;
 use crate::sd::{Monitor, SdRunner, VideoIo};
 use crate::videos::{Clip, VideoStore};
@@ -81,6 +81,15 @@ pub struct GenRequest {
     /// Cheap enough to tune freely.
     pub sharpness: Option<f32>,
     pub clarity: Option<f32>,
+    /// LoRAs for this generation. `None` is "the field wasn't sent", which keeps
+    /// whatever the profile has; `Some(vec![])` is "none, explicitly". No
+    /// `double_option` needed here, unlike `img2img_cfg_scale` — an empty list
+    /// is spellable, so the two states don't collide the way absent and `null`
+    /// do for a number.
+    ///
+    /// Retained on the profile, so a later refine or hi-res runs with the same
+    /// adapters. See [`Profile::loras`].
+    pub loras: Option<Vec<LoraRef>>,
 }
 
 /// One image-to-image generation: a source image the user supplied instead of a
@@ -119,6 +128,8 @@ pub struct Img2ImgRequest {
     pub hires_strength: Option<f32>,
     pub sharpness: Option<f32>,
     pub clarity: Option<f32>,
+    /// See [`GenRequest::loras`].
+    pub loras: Option<Vec<LoraRef>>,
 }
 
 /// One clip to generate.
@@ -581,10 +592,19 @@ impl Engine {
         if let Some(v) = req.clarity {
             profile.clarity = v;
         }
+        // Whole-list replacement rather than a merge: the picker on the page is
+        // the complete answer to "what is attached", so an empty list has to be
+        // able to mean none. See [`GenRequest::loras`].
+        if let Some(v) = &req.loras {
+            profile.loras = v.clone();
+        }
         // The overrides can push the denoise strengths out of range even though
         // the profile was fine at load, and this profile is what the later
         // refine/hi-res passes run with.
         profile.validate()?;
+        // Before anything expensive: sd.cpp would warn and carry on without a
+        // LoRA it can't find, which is two minutes spent on the wrong picture.
+        self.cfg.check_loras(&profile.loras)?;
         let tpl = &profile;
 
         if !profile.exists {
@@ -753,7 +773,11 @@ impl Engine {
         if let Some(v) = req.clarity {
             profile.clarity = v;
         }
+        if let Some(v) = &req.loras {
+            profile.loras = v.clone();
+        }
         profile.validate()?;
+        self.cfg.check_loras(&profile.loras)?;
 
         if !profile.exists {
             bail!(
@@ -1094,6 +1118,12 @@ impl Engine {
         // this pass will actually run with rather than the ones it inherited.
         self.swap_model(&mut p, over)?;
         over.apply(&mut p.profile)?;
+        // The generate checked these, but that was possibly hours ago on a
+        // `Pending` that has been sitting in the cache since. A file deleted in
+        // between is the same silent drop arriving late. Note a model swap has
+        // already emptied the list by this point, since it replaces the whole
+        // profile — correct, because a LoRA is trained against one base.
+        self.cfg.check_loras(&p.profile.loras)?;
         if !p.can_refine() {
             bail!("'{}' has no refine pass configured (refine_steps = 0)", p.profile.name);
         }
@@ -1168,6 +1198,8 @@ impl Engine {
         // that will run it.
         self.swap_model(&mut p, over)?;
         over.apply(&mut p.profile)?;
+        // See `refine`.
+        self.cfg.check_loras(&p.profile.loras)?;
         if p.profile.hires_steps == 0 {
             bail!("'{}' has no hi-res pass configured (hires_steps = 0)", p.profile.name);
         }

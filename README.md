@@ -146,7 +146,10 @@ Edit `models.toml`:
 
 - `[sd].binary` — path to your `sd-cli` (or `sd`) binary.
 - `[sd].mode` — `img_gen` for recent sd.cpp; `txt2img` for older builds.
-- `[sd].models_dir` — folder scanned for checkpoints (default `models`).
+- `[sd].models_dir` — folder scanned for checkpoints (default `models`). Not
+  recursive, and files only, which is what lets the two folders below live inside it.
+- `[sd].lora_dir` — folder scanned for LoRAs (default `loras/` inside the models dir).
+  This one *is* recursive, so `models/loras/sdxl/` works. See [LoRAs](#loras).
 - `[server].host` / `[server].port` — default `127.0.0.1` and `8080`.
 - `[defaults]` — the generation + FSR settings applied to every **discovered**
   checkpoint. Tuned for standard (non-distilled) SDXL.
@@ -451,6 +454,39 @@ The result then joins the ordinary ladder. Refine, Hi-res, the viewer's sliders
 and Save to output all work on it exactly as they do on a generation, and it is archived
 as a work item like one — so it comes back from the grid on the Image tab, source
 image and all.
+
+### LoRAs
+
+A LoRA is a small file that patches a checkpoint's weights: a style, a character, a
+4-step distillation. Drop them in `models/loras/` — subfolders are fine and are
+scanned, so `models/loras/sdxl/` and `models/loras/flux/` work — and they appear in
+the **LoRAs** block under the model select on both image tabs. Press **+ Add LoRA**,
+pick one, set a strength, add another if you want. `doctor` prints the folder it is
+looking in and what it found there, which is the first thing to check if the list is
+empty.
+
+**Strength** is the multiplier. 1 is the weight the adapter was trained at, 0.5 is a
+hint of it, and negative subtracts — a real technique, so the range is -2 to 2. The
+one rule that isn't on screen: a LoRA has to match the *base* your checkpoint is
+built on. An SDXL LoRA does nothing to an SD1.5 model. It won't error; the picture
+just comes back as though you hadn't attached it.
+
+What you pick travels with the image. **Refine** and **Hi-res** run the same
+adapters, because they are passes over that picture and one that dropped the LoRA
+would redraw the surface in the base model's idiom and undo the look — so there is
+one picker, not one per pass. Choosing a different **Refine/hi-res model** does clear
+them, which is also right: a LoRA belongs to the base it was trained against.
+Reopening a generation from the work-item grid puts its LoRAs back with the rest of
+its settings, and they are in its sidecar, so what made an image stays readable.
+
+A LoRA you name but that isn't on disk is an **error**, not a silent omission. That
+is a deliberate difference from stable-diffusion.cpp, which warns on its own stdout
+and renders happily without it — two minutes spent on a picture that isn't the one
+you asked for, with nothing saying so.
+
+You can also still type `<lora:name:0.8>` into the prompt box by hand; it resolves
+against the same folder. That route keeps sd.cpp's silent-drop behaviour, since
+nothing on this side is looking at it.
 
 ### Outputs
 
@@ -765,8 +801,16 @@ needs a Vulkan device and nothing else.
   { "steps": 20, "cfg_scale": 5.0, "img2img_cfg_scale": 2.5, "sampler": "euler",
     "width": 768, "height": 768,
     "refine_steps": 2, "refine_strength": 0.3, "hires_steps": 8, "hires_strength": 0.3,
-    "sharpness": 0.35, "clarity": 0.0 }
+    "sharpness": 0.35, "clarity": 0.0,
+    "loras": [{ "name": "detail.safetensors", "strength": 0.8 }] }
   ```
+  `loras` is the one list here, and absent is not the same as empty: omitting the key
+  keeps whatever the profile has, `[]` clears it. `name` is the path relative to the
+  LoRA dir, extension included; `strength` is -2 to 2. A name that isn't on disk is a
+  `500` with the available names in it rather than a render that quietly lacks it. They
+  are retained with the image, so `/refine` and `/hires` run the same adapters — and
+  they are *not* an escalation knob, so a `model` swap in one of those bodies replaces
+  them along with the rest of the profile.
   The overrides are applied to the profile *before* it is retained with the image, so a
   later `/refine` or `/hires` starts from the settings that generated it — the four
   escalation knobs can then be moved per pass, see below. Omitting
@@ -892,6 +936,12 @@ needs a Vulkan device and nothing else.
   the pass was writing to a scratch file that is cleaned up on failure either way, so
   the image on screen is never a half-written one. The cancelled request itself comes
   back as an error whose message ends in `cancelled by request`.
+- `GET /loras` — every file in the LoRA dir, recursive: `name` (what a request puts in
+  `loras[].name`), `label` (the same without its extension, for a picker), `bytes`,
+  `usable`, and `note` — why not, when `usable` is false. Unusable entries are listed
+  rather than filtered out, because "my LoRA isn't in the list" is a much worse thing to
+  debug than "my LoRA is in the list and says why". Filesystem only: it answers on the
+  connection thread, and costs one header read per file.
 - `GET /outputs` — every image in `work/output/`, newest first: `stem`, `created_ms`,
   `width` / `height`, `prompt`, `seed`, `template`. Uploads are in here too, with an
   empty prompt and `template: "(imported)"` — one pool, because at the moment you are

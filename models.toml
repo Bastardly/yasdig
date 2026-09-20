@@ -14,6 +14,16 @@ mode = "img_gen"
 # Folder scanned for checkpoints (.safetensors / .ckpt / .gguf). Every file here
 # is auto-listed in the UI. Point it elsewhere, or symlink models in, if you like.
 models_dir = "models"
+# Folder scanned for LoRAs. Defaults to `loras/` inside the models dir above, so
+# moving one moves both. It is a separate folder because the checkpoint scan
+# doesn't recurse — which is what keeps a 200 MB adapter out of the model select.
+# Subfolders are fine and are scanned: models/loras/sdxl/, models/loras/flux/.
+#
+# Image LoRAs are *picked in the UI*, per generation, from whatever is in here —
+# there is no `loras` key on [defaults] or [templates.*]. (The `loras` you'll see
+# on a [[video]] entry further down is a different thing: a video LoRA is pinned
+# in config because it's a property of the model, like the lightx2v 4-step pair.)
+# lora_dir = "models/loras"
 
 [server]
 host = "127.0.0.1"

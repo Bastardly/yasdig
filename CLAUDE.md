@@ -119,6 +119,78 @@ of bailing, which used to close the socket with no response at all. **PNG only i
 Rust, on purpose**: the page re-encodes through a `<canvas>` first, so JPEG/WebP/AVIF
 all work and `image` stays compiled `features = ["png"]`.
 
+## LoRAs
+
+`models/loras/` (`Config::lora_dir`, an `SdConfig` option defaulting inside the
+models dir — the same shape as `video_dir`, and for the same reason: the
+checkpoint scan there is non-recursive and file-only, so a subdirectory is
+already invisible to it). `GET /loras` lists it through `discover::scan`, and
+`base_cmd` is where a picked one becomes a command line.
+
+**Everything here is shaped by three facts about `extract_and_remove_lora`**
+(`stable-diffusion.cpp examples/common/common.cpp:2243`), which is sd.cpp's own
+tag parser:
+
+- **An empty `--lora-model-dir` skips tag extraction entirely** (line 2245). The
+  `<lora:…>` text then stays in the prompt and is conditioned as words. So
+  `base_cmd` emits the flag **unconditionally**, not only when something is
+  attached — which also means a tag typed into the prompt box by hand resolves
+  against the folder the picker offers rather than against the process CWD,
+  which is sd.cpp's `"."` default.
+- **A LoRA it can't find is a `LOG_WARN` and a dropped tag** (line 2289). The
+  render succeeds, takes its usual two minutes, and comes back as a picture that
+  simply doesn't have the adapter in it. `Config::check_loras` is the answer, and
+  it is called from all four places a profile reaches `SdRunner` — `run`,
+  `img2img`, `refine` and `hires` — because a file deleted between the generate
+  and the Refine is the same failure arriving later.
+- **The tag regex is `<lora:([^:>]+):([^>]+)>`** (line 2248), so `:` `<` `>` in a
+  name don't get escaped, they silently re-cut the tag somewhere else.
+  `valid_lora_name` rejects them, and is a **second whitelist beside
+  `workitems::valid_id` rather than a widening of it**: an id is minted by us and
+  so can be digits and `-`, while this is a filename the user chose and has to
+  allow `.`, spaces and `/`. Widening `valid_id` would quietly widen the archive
+  routes with it. The path half of the check is structural — every
+  `Path::components()` must be `Component::Normal`, which rejects `..`, a leading
+  `/` and a bare `.` in one test.
+
+**`Profile.loras` is the only knob on `Profile` with no `Defaults`/`Template`
+pair**, and that is deliberate: a LoRA is reached for per picture, so it arrives
+on the request and both arms of `registry()` build the field empty. That is what
+keeps this change clear of the trap at the top of this file — there is no second
+struct to forget. `a_model_brings_no_loras_of_its_own` pins it, and is the test
+that fails if somebody adds the config key later without reading this.
+
+It is on `Profile` at all for two reasons, and both are load-bearing:
+
+- **`base_cmd` is shared by `txt2img` and `img2img`**, so refine and hi-res
+  inherit the adapters with no code. That is the correct default rather than a
+  convenience: a finishing pass that dropped the LoRA would redraw the surface in
+  the base model's idiom and undo the look.
+- **The profile is what a `Pending` retains and what a sidecar stores**, so
+  reopening a work item restores the picker and an image's record names what
+  actually made it.
+
+The consequence to keep in mind is that `swap_model` replaces the profile
+**wholesale**, so choosing a different *Refine/hi-res model* clears the LoRAs.
+That is right — a LoRA is trained against one base — and it is why `loras` is
+deliberately *not* on `EscalateRequest`: the boundary test in "Adding a per-model
+knob" would let it in, but a second picker on the page would then need its own
+rule for how a `Vec` interacts with a wholesale swap.
+
+On the page, `loras.js` is a factory in `griddelete.js`'s shape and for the same
+reason — two copies of a control that builds a request body is two chances for
+one of them to send a different one. Two things in it break silently:
+
+- **The module-level `available` list is shared; the picked rows are not.** One
+  fetch feeds both tabs (`loading` memoizes the in-flight promise so two `init()`
+  calls in one tick don't race two requests), but a LoRA chosen for a txt2img has
+  no business riding along on a pass over somebody's photograph, so each instance
+  owns its own `picked`.
+- **`loras` is always sent, including empty.** The server reads `[]` as "none,
+  explicitly" and a missing key as "keep whatever the profile has"; the picker on
+  screen is the complete answer to the question, so it must be able to say none.
+  Dropping the key when the list is empty would make a removed row unremovable.
+
 ## The Outputs tab
 
 `work/output/` as a gallery rather than as a picker. `web/js/outputs.js` and
@@ -249,6 +321,7 @@ resolves the imports itself. `index.html` loads exactly one of them:
 | `workitems.js` | the work-item grid and reopening one |
 | `griddelete.js` | click-to-delete: the marks, the two buttons, the request |
 | `img2img.js` | the Image-to-image tab, including the upload |
+| `loras.js` | the LoRA picker, one instance per image tab |
 | `outputs.js` | `fetchOutputs`, `outputGrid`, and the Outputs tab |
 | `video.js` | the Video tab: models, generate, the clip grid, the first-frame picker |
 | `player.js` | the canvas frame player and `renderClip` |
@@ -634,6 +707,11 @@ and `run`/`img2img`/`open` reset it from the first — so every new image arrive
 unfiltered. Putting a live value back on the profile would compile fine and silently
 restore the old inherit-forever behaviour. (`refine`/`hires` are the half-exception:
 `Filters::restart`, invariant 1.)
+
+**`loras` is not per-model either**, and for a different reason than the grading
+knobs below: it *could* have been, and was deliberately left off `Defaults` and
+`Template` because a LoRA is chosen per picture rather than being a property of a
+checkpoint. It lands on `Profile` straight from the request. See *## LoRAs*.
 
 **The eight grading knobs are not per-model at all**, and that is the reason the table
 above doesn't apply to them: they live only on `Filters`, so adding the eleventh is a

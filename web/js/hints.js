@@ -46,6 +46,15 @@ const HELP = [
         + 'quickly they settle: euler is the safe default, dpm++2m converges in '
         + 'fewer steps, and lcm belongs to LCM and turbo checkpoints and looks '
         + 'wrong on anything else.' },
+  { ids: ['loras'],
+    text: 'Small files that patch the checkpoint’s weights — a style, a '
+        + 'character, a 4-step distillation. They come from models/loras/, and '
+        + 'each one has to have been trained for the base model you picked above '
+        + '(an SDXL LoRA does nothing to an SD1.5) — if it doesn’t match, the '
+        + 'image just comes back unchanged. Strength is the multiplier: 1 is what '
+        + 'it was trained at, 0.5 is a hint of it, and negative subtracts. They '
+        + 'carry into Refine and Hi-res, and a different Refine/hi-res model '
+        + 'clears them, since a LoRA belongs to one base.' },
   { ids: ['w', 'h'],
     text: 'The size the model actually paints at, before any upscale. Diffusion '
         + 'models only compose correctly near the size they were trained on — '

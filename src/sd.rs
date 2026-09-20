@@ -378,7 +378,26 @@ impl<'a> SdRunner<'a> {
         let mut cmd = Command::new(self.binary());
         cmd.args(["-M", &self.cfg.sd.mode]);
         cmd.args(["-m", &path_str(&p.model)]);
-        cmd.args(["-p", prompt]);
+        // LoRAs ride inline in the prompt, which is sd.cpp's own spelling for
+        // them — the same shape `video_cmd` uses below. The tags are pulled back
+        // out before the text is conditioned (`extract_and_remove_lora`,
+        // `examples/common/common.cpp:2243`), so this does not reach the text
+        // encoder as words. Only the positive prompt is scanned, which is why
+        // `-n` below is left alone.
+        let mut prompt = prompt.to_string();
+        for l in &p.loras {
+            prompt.push_str(&format!("<lora:{}:{}>", l.name, l.strength));
+        }
+        cmd.args(["-p", &prompt]);
+        // Unconditional, not just when there are tags to resolve, and both
+        // halves of that matter. An *empty* `--lora-model-dir` makes sd.cpp skip
+        // tag extraction entirely (`common.cpp:2245`) — the `<lora:…>` text then
+        // stays in the prompt and is conditioned as literal words — and its
+        // default is `"."`, the process CWD. Sending it always means a
+        // `<lora:name:1>` typed by hand into the prompt box resolves against the
+        // same folder the picker offers, rather than against wherever the server
+        // happens to have been started from.
+        cmd.args(["--lora-model-dir", &path_str(&self.cfg.lora_dir())]);
         if let Some(neg) = negative {
             if !neg.is_empty() {
                 cmd.args(["-n", neg]);
@@ -898,6 +917,62 @@ flow_shift = 3.0
         ));
         assert_eq!(flag(&a, "--fps"), Some("24"));
         assert_eq!(flag(&a, "--video-frames"), Some("22"));
+    }
+
+    /// The image path's half of the same thing, through `base_cmd` — so it also
+    /// covers the refine and hi-res passes, which build their command there.
+    ///
+    /// The second assertion is the one worth having: `--lora-model-dir` goes out
+    /// even with nothing attached, because an *empty* one makes sd.cpp skip tag
+    /// extraction altogether and a `<lora:…>` typed into the prompt box would
+    /// then be conditioned as words.
+    #[test]
+    fn image_loras_ride_in_the_prompt() {
+        let cfg: Config = toml::from_str(
+            r#"
+[sd]
+binary = "/opt/sd-cli"
+"#,
+        )
+        .expect("fixture should parse");
+        let mut p = Profile {
+            model: PathBuf::from("/models/sdxl.safetensors"),
+            ..Default::default()
+        };
+
+        let bare = argv(&SdRunner::new(&cfg).base_cmd(
+            &p,
+            "a lovely cat",
+            None,
+            1,
+            Path::new("out.png"),
+            6.0,
+        ));
+        assert_eq!(flag(&bare, "-p"), Some("a lovely cat"));
+        assert!(bare.iter().any(|a| a == "--lora-model-dir"));
+
+        p.loras = vec![
+            crate::config::LoraRef {
+                name: "detail.safetensors".into(),
+                strength: 0.8,
+            },
+            crate::config::LoraRef {
+                name: "sdxl/style.safetensors".into(),
+                strength: -0.5,
+            },
+        ];
+        let a = argv(&SdRunner::new(&cfg).base_cmd(
+            &p,
+            "a lovely cat",
+            None,
+            1,
+            Path::new("out.png"),
+            6.0,
+        ));
+        assert_eq!(
+            flag(&a, "-p"),
+            Some("a lovely cat<lora:detail.safetensors:0.8><lora:sdxl/style.safetensors:-0.5>")
+        );
     }
 
     /// LoRAs are inline in the prompt, which is sd.cpp's spelling — and the

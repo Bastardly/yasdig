@@ -204,6 +204,29 @@ pub enum VaeKind {
     Wan22,
 }
 
+impl Role {
+    /// One phrase naming what this is, for `doctor` and for the LoRA listing.
+    ///
+    /// On the enum rather than in `preflight.rs`, where it started, because two
+    /// listings now print it and the descriptions are properties of the role
+    /// rather than of either listing.
+    pub fn describe(&self) -> String {
+        match self {
+            Role::Umt5 => "umt5-xxl text encoder (shared by every Wan family)".into(),
+            Role::QwenVl => "Qwen3-VL text encoder (MiniMax H3 only)".into(),
+            Role::ClipVision => "CLIP-Vision tower (Wan 2.1 I2V/FLF2V)".into(),
+            Role::Vae(VaeKind::Wan21) => "wan_2.1 VAE — every Wan except the TI2V-5B".into(),
+            Role::Vae(VaeKind::Wan22) => "wan2.2 VAE — TI2V-5B only".into(),
+            Role::Lora => "LoRA".into(),
+            Role::Dit(DitKind::WanOther { dim }) => {
+                format!("a Wan transformer of width {dim}, which is not a family this build runs")
+            }
+            Role::Dit(_) => "transformer".into(),
+            Role::Unknown(why) => why.clone(),
+        }
+    }
+}
+
 /// A file on disk and what it turned out to be.
 #[derive(Debug, Clone)]
 pub struct Found {
@@ -443,7 +466,19 @@ pub fn classify(t: &Tensors) -> Role {
     }
     // A LoRA before anything else: it carries the base model's tensor names with
     // a suffix, so it would otherwise classify as whatever it patches.
-    if t.has("lora_down") || t.has("lora_up") || t.has(".lora_A") || t.has(".lora_B") {
+    //
+    // The last two are LyCORIS — LoHa's `hada_w1_a` and LoKr's `lokr_w1`, both
+    // of which sd.cpp's own adapter loads (`src/model/adapter/lora.hpp`). They
+    // are here because without them a LoHa file matches none of the `lora_*`
+    // markers and falls through to whatever architecture it patches, so `doctor`
+    // reports a 200 MB adapter as a transformer and the LoRA listing hides it.
+    if t.has("lora_down")
+        || t.has("lora_up")
+        || t.has(".lora_A")
+        || t.has(".lora_B")
+        || t.has(".hada_w1_a")
+        || t.has(".lokr_w1")
+    {
         return Role::Lora;
     }
     // Wan's marker, `model_loader.cpp:524`.
@@ -987,6 +1022,26 @@ mod tests {
             ("blocks.0.cross_attn.norm_k.weight.lora_up.weight", &[5120, 32]),
         ]);
         assert_eq!(classify(&lora), Role::Lora);
+    }
+
+    /// LyCORIS carries the base model's tensor names exactly as a LoRA does, so
+    /// this one would classify as a Wan transformer without its own marker — and
+    /// then be offered for conversion and counted as a model.
+    #[test]
+    fn a_lycoris_is_still_a_lora() {
+        let loha = t(&[
+            ("blocks.0.cross_attn.norm_k.weight", &[5120, 5120]),
+            ("blocks.0.cross_attn.norm_k.hada_w1_a", &[32, 5120]),
+            ("blocks.0.cross_attn.norm_k.hada_w1_b", &[5120, 32]),
+        ]);
+        assert_eq!(classify(&loha), Role::Lora);
+
+        let lokr = t(&[
+            ("blocks.0.cross_attn.norm_k.weight", &[5120, 5120]),
+            ("blocks.0.cross_attn.norm_k.lokr_w1", &[64, 64]),
+            ("blocks.0.cross_attn.norm_k.lokr_w2", &[80, 80]),
+        ]);
+        assert_eq!(classify(&lokr), Role::Lora);
     }
 
     #[test]

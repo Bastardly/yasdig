@@ -4,6 +4,7 @@ import { setBusy, cancelRun, onIdle } from './busy.js';
 import { models, effectiveSteps, render, escalateSettings } from './image.js';
 import { loadWorkItems } from './workitems.js';
 import { fetchOutputs, outputGrid } from './outputs.js';
+import { loraPicker } from './loras.js';
 
 // ---- Image to image ---------------------------------------------------------
 //
@@ -17,6 +18,11 @@ import { fetchOutputs, outputGrid } from './outputs.js';
 // published, it never names a file.
 let i2source = null;
 let i2outputs = [];
+
+// This tab's own picker. A second instance rather than a shared one: the two
+// tabs are separate requests with separate model selects, and a LoRA chosen for
+// a txt2img has no business riding along on a pass over somebody's photograph.
+export const i2Loras = loraPicker({ rows: 'i2loras', add: 'i2loraadd' });
 
 // The long side an upload is capped at before it leaves the browser. Bigger than
 // anything worth diffusing (the working-size select tops out at 3072), and
@@ -187,6 +193,8 @@ async function startI2() {
       // Refine starts from what this panel says rather than from the model's
       // defaults — and `model` is dropped for the reason genPayload drops it.
       ...(({ model, ...rest }) => rest)(escalateSettings()),
+      // See genPayload: always sent, so an empty picker means none.
+      loras: i2Loras.get(),
     }));
     // The result is archived like any other generation, so it belongs in the
     // other tab's grid immediately.
@@ -205,6 +213,7 @@ async function startI2() {
 
 export function initI2() {
   // ---- Image to image wiring --------------------------------------------------
+  i2Loras.init();
   $('i2go').addEventListener('click', startI2);
   $('i2stop').addEventListener('click', () => cancelRun('i2stop', 'i2err'));
   $('i2browse').addEventListener('click', () => $('i2file').click());
