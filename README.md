@@ -138,17 +138,30 @@ Before involving Rust, confirm generation works:
 
 ## Configure
 
-There are two ways to get a selectable model, and the first needs no config at all:
+**Two files, and the difference between them is who writes them.**
 
-- **Discovery** — any checkpoint in the models dir is auto-listed and runs with the
-  `[defaults]` profile. Nothing to edit.
-- **Templates** — a `[templates.<name>]` block is a tuned preset that overrides the
-  defaults for one specific checkpoint (matched by its `model` path). Use it for models
-  that need non-default settings, e.g. a Turbo checkpoint at 4 steps and CFG 1.
+| file | holds | written by |
+|---|---|---|
+| `models.toml` | what the program needs in order to start: the sd.cpp binary, the directories, the port, per-checkpoint presets, video models | you, by hand |
+| `user/settings.toml` | your defaults: steps, CFG, size, the refine and hi-res settings, the default prompt | the **Settings tab**, on every save |
+
+The second is created on first run, seeded from a `[defaults]` block in
+`models.toml` if you still have one. It is rewritten in full every time you press
+Save, so it carries no comments — which is exactly why it is a separate file from
+the one above, where the comments are most of the content.
+
+There are two ways to get a selectable model, and the first needs no config at
+all:
+
+- **Discovery** — any checkpoint in the models dir is auto-listed and runs on
+  your settings. Nothing to edit.
+- **Templates** — a `[templates.<name>]` block says what is *different* about
+  one specific checkpoint (matched by its `model` path) and inherits everything
+  it doesn't name. A Turbo preset is three lines: 4 steps, CFG 1, and the file.
 
 Either way, **adding a model never needs a code change.**
 
-Edit `models.toml`:
+### `models.toml`
 
 - `[sd].binary` — path to your `sd-cli` (or `sd`) binary.
 - `[sd].mode` — `img_gen` for recent sd.cpp; `txt2img` for older builds.
@@ -157,27 +170,31 @@ Edit `models.toml`:
 - `[sd].lora_dir` — folder scanned for LoRAs (default `loras/` inside the models dir).
   This one *is* recursive, so `models/loras/sdxl/` works. See [LoRAs](#loras).
 - `[server].host` / `[server].port` — default `127.0.0.1` and `8080`.
-- `[defaults]` — the generation + FSR settings applied to every **discovered**
-  checkpoint. Tuned for standard (non-distilled) SDXL.
-- `[templates.<name>]` — a tuned preset, as above. Takes the same fields as
-  `[defaults]`, plus `model` and an optional `description`.
+- `[templates.<name>]` — a preset for one checkpoint. `model` is the only
+  required field; everything else is any of the settings below except
+  `prompt`, `negative` and `hires_scale`, which are not properties of a
+  checkpoint. `description` sets the label in the UI.
 
-Settings fields, shared between `[defaults]` and `[templates.*]` except where noted:
+### `user/settings.toml`
+
+Edited from the Settings tab, or by hand. These are the values every
+**discovered** checkpoint starts from, and what a template inherits whatever it
+doesn't name. Tuned for standard (non-distilled) SDXL.
 
 | field | meaning |
 |-------|---------|
-| `model` | path to the checkpoint, relative to project root (**templates only**; a discovered model is its own file) |
-| `description` | optional label shown in the UI (templates only) |
+| `prompt` / `negative` | what the prompt boxes contain when the page loads. Not per-model — a checkpoint has a house step count, none has an opinion about what you usually want to draw |
 | `width` / `height` | base generation size, default `768` each (small = fast) |
-| `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `20`, `5.0`, `euler` (Turbo → few steps, cfg 1) |
+| `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `30`, `6.0`, `euler` (Turbo → few steps, cfg 1) |
 | `img2img_cfg_scale` *(opt)* | CFG for the refine and hi-res passes only; unset (the default) follows `cfg_scale`. `0` is legal and means guidance off |
-| `upscale_factor` | FSR upscale, default `2.0` (768 → 1536) |
+| `upscale_factor` | FSR upscale, default `2.0` (768 → 1536) — the enlarge every base render goes through, not a diffusion pass |
+| `hires_scale` | where the hi-res pass's enlarge factor starts, default `2.0`. The select above a finished image and the one in the run panel are the same setting |
 | `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the viewer's slider starts. The only display filter here besides `clarity`: the eight colour knobs are not per-model and always start neutral |
 | `clarity` | local contrast, -1..1, default `0.0` = off — positive adds mid-frequency depth, negative softens; likewise the slider's starting value |
-| `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size (0 steps = disabled, and `refine_steps` defaults to 0) |
+| `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size (0 steps = disabled) |
 | `source_steps` / `source_strength` | the **Image to image** tab's one pass over a source image you supply. Defaults `12` and `0.55` — far higher than the two escalations, because this one is asked to make a picture *out of* one rather than to finish one it made |
-| `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, after an enlarge (0 steps = disabled, and `hires_steps` defaults to 0) |
-| `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job. Does not limit refine |
+| `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, after an enlarge (0 steps = disabled) |
+| `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job. Does not limit refine. Also where the Image-to-image tab's working size starts |
 | `hires_flash_attn` | `--diffusion-fa` for the img2img passes when they run large (default true; worth 6× at 2048²) |
 | `weight_type` *(opt)* | on-the-fly quantization, e.g. `q8_0`, via sd-cli `--type` |
 | `extra_args` *(opt)* | arbitrary flags passed verbatim to sd-cli |
@@ -185,7 +202,11 @@ Settings fields, shared between `[defaults]` and `[templates.*]` except where no
 All three denoise strengths must be between **0.05 and 0.95** — a
 strength of 0 makes the pass a silent no-op, and at exactly 1.0 sd.cpp discards the
 init image and the pass degenerates into a plain txt2img. Out-of-range values are
-rejected at startup rather than at the first refine.
+rejected before they are written, so a bad number in the form leaves the file as
+it was.
+
+Nothing here is retroactive: an image already made keeps the settings it was made
+with, which is what lets reopening a work item restore it faithfully.
 
 ### Video models
 
@@ -317,16 +338,19 @@ experts and a smaller encoder, in that order.
 
 ```sh
 cargo run --release
+# [rustimage] settings: /home/you/rustimage/user/settings.toml
 # [rustimage] 2 model(s) available in /home/you/rustimage/models:
-# [rustimage]   • samExtTURBO_v10   [discovered, 6.5 GB]  768x768 → 1536x1536
-# [rustimage]   • sd_xl_base_1.0    [discovered, 6.5 GB]  768x768 → 1536x1536
+# [rustimage]   • samExtTURBO_v10   [discovered, 6.5 GB]  768x768 → 1536x1536  · 30 steps, cfg 6
+# [rustimage]   • sd_xl_base_1.0    [discovered, 6.5 GB]  768x768 → 1536x1536  · 30 steps, cfg 6
 # [rustimage] GPU worker ready on adapter: AMD Radeon RX 7900 XTX (RADV NAVI31)
 # [rustimage] GPU post-process: upscale=easu, grade=oklab, contrast=clarity, sharpen=rcas
 # [rustimage] listening on http://127.0.0.1:8080
 ```
 
-Startup runs a preflight first: it checks the sd.cpp binary, lists the checkpoints it
-found, and warns about templates pointing at files that aren't there. If something is
+Startup runs a preflight first: it checks the sd.cpp binary, creates
+`user/settings.toml` if it isn't there yet, lists the checkpoints it found with the
+steps and CFG they resolve to — which is how you see what a template inherited —
+and warns about templates pointing at files that aren't there. If something is
 missing it prints copy-pasteable fix instructions and exits rather than failing later,
 mid-request — `doctor` below runs the same checks without starting the server.
 
@@ -400,6 +424,41 @@ through the VAE, which costs fine detail no matter how low the strength; paying 
 base resolution and then stretching the result 2× spends the loss on detail while only
 the structural gain survives the upscale. That is what made the old refine pass read as
 soft. At output resolution there is nothing downstream to smear what it adds.
+
+### Settings
+
+The **Settings** tab is `user/settings.toml` as a form: the values every
+checkpoint starts from, and what the prompt boxes contain when the page loads.
+Press **Save settings** and it is written and takes effect immediately — the
+model list and the Advanced panel refill themselves, with no restart and no
+reload.
+
+Every field is the default for a control on one of the other tabs, and carries
+that control's own label and its own **(i)**, so "Refine strength" here is the
+same words and the same explanation as "Refine strength" there. The sections are
+named after the tabs they belong to, which is why *Steps* appears twice — once
+for the Image tab and once for Image-to-image, where it is a different pass. The
+four under **Advanced** are the ones with no control anywhere else: the output
+upscale, flash attention, the weight type and extra sd-cli arguments.
+
+Edits you haven't saved are marked on the Settings tab itself, so walking away
+mid-change says so from wherever you walked to, and reloading the page asks
+first.
+
+`sharpness` and `clarity` are in the file but **not** in the form. They are only
+where the viewer's sliders start, which is a live per-image control everywhere
+else — and the Outputs tab starts them at zero whatever they say, because a
+saved output already has its grade in the pixels. Edit them by hand if you want
+a different starting point.
+
+A bad value is rejected before anything is written, so the file is never left
+worse than it was found; the reason appears under the Save button. If you break
+the file by hand, the tab says what is wrong and fills the form with the
+built-in defaults — saving it is the repair. Generation meanwhile falls back to
+those same built-ins rather than refusing to run.
+
+Nothing here is retroactive. An image already made keeps the settings it was
+made with, which is what lets reopening a work item restore it faithfully.
 
 ### Prompt weighting
 

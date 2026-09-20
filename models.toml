@@ -1,7 +1,18 @@
-# rustimage configuration.
+# rustimage configuration — what the program needs in order to start.
 #
-# You usually don't need to touch [defaults] or [templates] — just drop model
-# files into the models dir and they're auto-detected. See below for tuning.
+# Your *defaults* are not in here. Steps, CFG, size, the refine and hi-res
+# settings and the default prompt live in `user/settings.toml`, which the
+# Settings tab in the UI writes. This file is read-only to the app, which is
+# what lets these comments survive.
+#
+# You usually don't need to touch [templates] either — just drop model files
+# into the models dir and they're auto-detected.
+
+[templates.foo]
+model = "Foo"
+steps = 22
+
+
 
 [sd]
 # Path to the compiled stable-diffusion.cpp CLI. Newer builds name it `sd-cli`;
@@ -20,9 +31,10 @@ models_dir = "models"
 # Subfolders are fine and are scanned: models/loras/sdxl/, models/loras/flux/.
 #
 # Image LoRAs are *picked in the UI*, per generation, from whatever is in here —
-# there is no `loras` key on [defaults] or [templates.*]. (The `loras` you'll see
-# on a [[video]] entry further down is a different thing: a video LoRA is pinned
-# in config because it's a property of the model, like the lightx2v 4-step pair.)
+# there is no `loras` key in the settings or on a [templates.*]. (The `loras`
+# you'll see on a [[video]] entry further down is a different thing: a video LoRA
+# is pinned in config because it's a property of the model, like the lightx2v
+# 4-step pair.)
 # lora_dir = "models/loras"
 
 [server]
@@ -30,131 +42,31 @@ host = "127.0.0.1"
 port = 8080
 
 # ---------------------------------------------------------------------------
-# [defaults] — settings applied to every auto-discovered checkpoint. Tuned for
-# standard (non-distilled) SDXL. You can override any of these per-generation
-# from the UI's Advanced panel (handy for Turbo/LCM models that want few steps
-# and cfg 1). FSR upscale/sharpen + the optional refine pass live here too.
-# ---------------------------------------------------------------------------
-[defaults]
-width          = 768
-height         = 768
-steps          = 30
-cfg_scale      = 6.0
-# CFG for the refine and hi-res passes only. Unset = use cfg_scale above, which is
-# what it does today, so leaving this commented changes nothing.
-# Worth trying, though: the CFG that suits a 768² base render over-guides at output
-# resolution — the pass has little freedom left to start with, and pushing it hard
-# against the prompt spends that freedom on high-frequency artifacts. That reads as
-# the same crunch under-stepping produces, from the other direction. ~2-3 is the
-# conventional cure. 0 is legal and means guidance off.
-# img2img_cfg_scale = 2.5
-sampler        = "euler"
-upscale_factor = 2.0          # FSR: 768 -> 1536
-# RCAS sharpness: 0.0 = off (the pass is an exact identity), 1.0 = RCAS at full
-# strength — literally, since FSR parameterizes sharpness as exp2(-stops) and 1.0
-# is 0 stops. There is nothing above it: a bigger lobe than the limiter allows
-# doesn't sharpen harder, it inverts the filter. What 1.0 *does* now scales with
-# the image (the cross is sampled further out on a large one), because a filter
-# with a fixed 3x3 footprint quietly loses its grip as the picture grows.
-# RCAS's limiter rules out ringing, so the top of the range is usable — unlike
-# the CAS pass this replaced, where high values haloed. Applied once, to the
-# finished image — each pass keeps an unsharpened copy for the next one to work
-# from, so sharpening can't stack up over a long escalation chain.
+# [templates.<name>] — OPTIONAL tuned presets for one specific checkpoint,
+# matched by `model` path.
 #
-# Defaults to off. This and `clarity` below are only where the sliders under the
-# image *start*, and starting at zero means the first thing on screen is what the
-# model and the upscaler actually produced. Both are re-tunable live, since that
-# unsharpened copy makes re-filtering cost milliseconds and lose nothing.
-sharpness      = 0.0
-# Local contrast, -1.0 to 1.0, 0.0 = off. A wide unsharp mask on brightness only:
-# it moves the mid frequencies that read as contrast and depth and leaves the fine
-# band alone, which is the opposite end of the spectrum from sharpness above.
-# Reach for it when an image looks flat. Negative runs it backwards — the band is
-# subtracted rather than added, flattening mid-scale structure into something
-# softer and dreamier, the same trick as negative Clarity in a photo editor.
-# Worth knowing why it exists: a low-strength img2img
-# enters the schedule at low sigma and so only ever rebuilds fine texture — depth
-# is the one thing the refine pass structurally cannot give you, and raising
-# strength to reach it re-composes the picture instead. This is deterministic and
-# invents nothing, so it has neither problem.
-clarity        = 0.0
-# "Refine image": a low-denoise img2img pass over the current image, at whatever
-# size it currently is and with no rescale (0 steps = disabled). That makes it
-# the finishing rung — it can follow a hi-res pass, and it can repeat. At output
-# resolution this is a hires-fix-style pass, so strengths in the 0.20..0.35 range
-# are conventional; it used to run at base resolution, where a much lighter touch
-# was right because the upscale afterwards smeared most of it away anyway.
-# Steps are a *floor* on effective denoising steps, not an exact count: strength
-# decides how far up the noise schedule the pass starts, and starting higher
-# needs proportionally more steps to resolve, so the count is raised to at least
-# `steps * strength`. Too few steps for the strength leaves un-removed noise
-# behind, which reads as grit. rustimage also scales the schedule it hands sd.cpp
-# by 1/strength, since sd.cpp trims img2img schedules rather than scaling them.
-# Strength must be 0.05..0.95 — at exactly 1.0 sd.cpp skips the trim and discards
-# the init image, which makes the pass a plain txt2img.
-refine_steps    = 2
-refine_strength = 0.05
-# "Hi-res pass": a second img2img at the OUTPUT resolution, which is what adds
-# detail the FSR upscale can't invent. Optionally enlarges first (the UI picks a
-# factor up to 4×). 0 steps = disabled, and no button appears. Effective steps,
-# same as refine_steps above — this is the pass that decides how sharp the
-# result looks, so raise it before reaching for sharpness.
-hires_steps     = 8
-hires_strength  = 0.30
-# The Image-to-image tab's one pass: a source image you supply, put through this
-# checkpoint once, after which the Refine and Hi-res buttons work on the result
-# exactly as they do on a generation.
+# The generation defaults are NOT here any more — they live in
+# `user/settings.toml`, which the Settings tab writes. This file is the one the
+# program needs in order to start, and the app only ever reads it, which is what
+# lets these comments survive.
 #
-# Much higher than either escalation above, and that is the point rather than an
-# oversight. Those two finish a picture this program already made; this one is
-# asked to make a picture *out of* one it didn't. At 0.30 a source comes back
-# essentially unchanged and the tab looks broken; 0.55 keeps the composition, the
-# pose and the palette and re-draws the surface in the model's own idiom. Go
-# lower for a retouch, higher (0.7+) to treat the source as a rough sketch.
+# A template states what is *different* about one checkpoint and inherits
+# everything it doesn't name from your settings. So a Turbo entry is three lines
+# rather than a copy of the whole list, and raising your default refine strength
+# still reaches it. `model` is the one required field.
 #
-# Steps are a floor here too, and strength raises it — at 0.55 the effective
-# count is what `steps * 0.55` gives if that is more than this. CFG comes from
-# img2img_cfg_scale above, like the other two img2img passes.
-source_steps    = 12
-source_strength = 0.55
-# Longest side the HI-RES pass may diffuse at. Anything beyond it is reached with
-# a final FSR upscale instead — past ~2048 SDXL's quality drops and the cost
-# climbs quadratically. Measured on a 7900 XTX at 8 steps: 1536² ≈ 12 s,
-# 2048² ≈ 20 s (both ~10 GB VRAM, with flash attention below).
-# Refine is NOT under this ceiling: it doesn't rescale, so it has nowhere to fall
-# back to, and an image FSR has stretched past its last diffusion is exactly the
-# one worth refining. It will happily run at 3072² if you ask it to — watch VRAM.
-hires_max_side  = 2048
-# Flash attention for the img2img passes, whenever they run large enough to need
-# the memory flags. Worth 6× at 2048² (122 s -> 20 s); turn it off only if your
-# GPU/driver can't do it.
-hires_flash_attn = true
-# weight_type  = "q8_0"       # optional on-the-fly quantization
-# extra_args   = ["--diffusion-fa"]
-
-# ---------------------------------------------------------------------------
-# [templates.<name>] — OPTIONAL tuned presets that override the defaults for one
-# specific checkpoint (matched by `model` path). Use these for models that need
-# non-default settings, e.g. a Turbo checkpoint:
+# Every field `user/settings.toml` takes is accepted here except the three that
+# are not properties of a checkpoint (`prompt`, `negative`, `hires_scale`).
+# README.md has the table.
 # ---------------------------------------------------------------------------
 # [templates.sdxl-turbo]
-# description    = "SDXL-Turbo — fast draft (512 → 1024)"
-# model          = "models/sdxl-turbo.safetensors"
-# width          = 512
-# height         = 512
-# steps          = 30
-# cfg_scale      = 6.0          # Turbo models want CFG 1
-# img2img_cfg_scale = 2.5       # optional; omit to follow cfg_scale
-# sampler        = "euler"
-# upscale_factor = 2.0
-# sharpness      = 0.35         # a template may start the slider somewhere else
-# clarity        = -0.2         # negative softens; positive adds depth
-# refine_steps    = 2
-# refine_strength = 0.30
-# hires_steps     = 6           # Turbo models need fewer steps here too
-# hires_strength  = 0.30
-# source_steps    = 8           # the Image-to-image tab's pass
-# source_strength = 0.55
+# description = "SDXL-Turbo — fast draft (512 → 1024)"
+# model       = "models/sdxl-turbo.safetensors"
+# width       = 512
+# height      = 512
+# steps       = 4              # Turbo models land in 1-4
+# cfg_scale   = 1.0            # and want CFG 1
+# hires_steps = 6              # fewer here too
 
 # ---------------------------------------------------------------------------
 # [[video]] — video models.
@@ -289,3 +201,4 @@ flow_shift = 3.0
 #
 # Further OOM escalations, in the order worth trying:
 # extra_args = ["--auto-fit", "off"]
+#

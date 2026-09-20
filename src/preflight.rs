@@ -5,6 +5,7 @@
 
 use crate::config::Config;
 use crate::discover::Role;
+use crate::settings::Settings;
 
 /// One line naming what a shared component is, for the `doctor` listing.
 ///
@@ -99,6 +100,34 @@ pub fn check(cfg: &Config) -> Report {
         ));
     }
 
+    // 1b) The settings file. `Config::load` creates it if it is missing, so by
+    // the time this runs the only interesting cases are "it is there" and "it is
+    // there and unreadable" — and the second has to be loud, because generation
+    // silently falls back to the built-ins when it happens (see
+    // `Settings::load_or_default`) and the symptom is otherwise just numbers
+    // that aren't the ones you set.
+    let settings_path = Settings::path(&cfg.user_dir());
+    match Settings::load(&cfg.user_dir()) {
+        Ok(_) => info.push(format!("settings: {}", settings_path.display())),
+        Err(e) => warnings.push(format!(
+            "{e:#}\n\n\
+             The built-in defaults are in use until it is fixed. Saving from the\n\
+             Settings tab rewrites the file and repairs it."
+        )),
+    }
+    // The old block is read exactly once, to seed that file on a first run. If
+    // both exist it is dead weight, and saying nothing would leave two files
+    // that look like they disagree.
+    if cfg.legacy_defaults.is_some() && settings_path.exists() {
+        warnings.push(format!(
+            "models.toml still has a [defaults] block, and it is now ignored.\n\
+             Those settings live in\n  {}\n\
+             and are edited from the Settings tab. Delete the block so the two\n\
+             can't look like they disagree.",
+            settings_path.display()
+        ));
+    }
+
     // 2) Model registry (explicit templates + discovered checkpoints).
     let registry = cfg.registry();
     let usable: Vec<_> = registry.values().filter(|p| p.exists).collect();
@@ -125,8 +154,11 @@ pub fn check(cfg: &Config) -> Report {
                 .map(|m| human_size(m.len()))
                 .unwrap_or_else(|_| "?".into());
             let tag = if p.discovered { "discovered" } else { "preset" };
+            // Steps and CFG are printed because a template now *inherits* what
+            // it doesn't name: these are the resolved numbers, so a preset that
+            // states only `steps` still shows what it will actually run with.
             info.push(format!(
-                "  • {:<28} [{}, {}]  {}x{} → {}x{}",
+                "  • {:<28} [{}, {}]  {}x{} → {}x{}  · {} steps, cfg {}",
                 p.name,
                 tag,
                 size,
@@ -134,6 +166,8 @@ pub fn check(cfg: &Config) -> Report {
                 p.height,
                 (p.width as f32 * p.upscale_factor) as u32,
                 (p.height as f32 * p.upscale_factor) as u32,
+                p.steps,
+                p.cfg_scale,
             ));
         }
     }

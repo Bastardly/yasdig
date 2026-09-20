@@ -1,0 +1,306 @@
+import { $, post } from './dom.js';
+import { UPSCALES, setUpFactor, loadModels } from './image.js';
+import { wireHints } from './hints.js';
+
+// The Settings tab: `user/settings.toml` as an ordinary form.
+//
+// Every field here is the default for a control that already exists on another
+// tab, so the one thing this module must not do is invent a second vocabulary
+// for them. A row names the control it is the default *for*, and both the label
+// text and the tooltip are taken from that control — the label is read out of
+// its `<label>` at build time, and `data-help` hands `wireHints` the same key
+// the real control uses. Neither can drift, because neither is written twice.
+//
+// The four at the bottom have no control to point at: they were only ever
+// settable by editing config, and removing `[defaults]` from models.toml is what
+// gave them a home. Those carry their own label and their own `HELP` entry.
+//
+// `sharpness` and `clarity` are in the file and deliberately *not* in this form.
+// They are where the viewer's two sliders start, which is a per-image live
+// control everywhere else on the page — and the Outputs tab starts them at zero
+// whatever they say, because a saved output has its grade already in the pixels
+// (invariant 1). A default for them reads as a setting that doesn't take, so
+// they stay hand-editable and documented in the README instead.
+
+// Blank means "not set", which is a different thing from zero for both of these
+// — an empty img2img CFG follows the base CFG, an empty weight type means no
+// `--type` flag at all — so the field has to be able to say nothing.
+const BLANK = true;
+
+// Where a section starts. Named after the tab whose controls it holds the
+// defaults for, which is what makes "why is Strength in here twice" answer
+// itself. `fold` opens a <details> that runs to the end of the form.
+const SECTION = (title, fold = false) => ({ title, fold });
+
+const FIELDS = [
+  SECTION('Prompts'),
+  { key: 'prompt', from: 'prompt', kind: 'textarea' },
+  { key: 'negative', from: 'negative', kind: 'text' },
+
+  SECTION('Image'),
+  { key: 'steps', from: 'steps', kind: 'int', min: 1, max: 100 },
+  { key: 'cfg_scale', from: 'cfg', kind: 'num', min: 0, step: 0.1 },
+  { key: 'sampler', from: 'sampler', kind: 'mirror' },
+  { key: 'width', from: 'w', kind: 'int', min: 64, step: 64 },
+  { key: 'height', from: 'h', kind: 'int', min: 64, step: 64 },
+  { key: 'refine_steps', from: 'rsteps', kind: 'int', min: 0, max: 100 },
+  { key: 'refine_strength', from: 'rstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
+  { key: 'hires_steps', from: 'hsteps', kind: 'int', min: 0, max: 100 },
+  { key: 'hires_strength', from: 'hstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
+  { key: 'hires_scale', from: 'runscale', kind: 'upscale' },
+  { key: 'img2img_cfg_scale', from: 'icfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
+
+  SECTION('Image to image'),
+  { key: 'source_steps', from: 'i2steps', kind: 'int', min: 1, max: 100 },
+  { key: 'source_strength', from: 'i2strength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
+  { key: 'hires_max_side', from: 'i2maxside', kind: 'int', min: 64, step: 64 },
+
+  SECTION('Advanced', true),
+  // Not on any tab: the FSR enlarge every base render goes through on its way to
+  // the output size. It is why a 768 model is listed as 768×768 → 1536×1536.
+  { key: 'upscale_factor', label: 'Output upscale', help: 'setupscale',
+    kind: 'num', min: 1, max: 4, step: 0.1 },
+  { key: 'hires_flash_attn', label: 'Flash attention', help: 'setflash', kind: 'check' },
+  { key: 'weight_type', label: 'Weight type', help: 'setwtype', kind: 'text', blank: BLANK },
+  { key: 'extra_args', label: 'Extra sd-cli arguments', help: 'setargs', kind: 'lines' },
+];
+
+// The label of the control this is the default for, without the (i) `wireHints`
+// puts inside it. Text nodes only, so it reads the same whether this runs before
+// or after that pass.
+function labelOf(id) {
+  const el = document.querySelector(`label[for="${id}"]`);
+  if (!el) return id;
+  return [...el.childNodes]
+    .filter((n) => n.nodeType === Node.TEXT_NODE)
+    .map((n) => n.textContent)
+    .join('')
+    .trim();
+}
+
+const fieldId = (f) => `set-${f.key}`;
+
+function control(f) {
+  const id = fieldId(f);
+  const attrs = ['min', 'max', 'step']
+    .filter((a) => f[a] !== undefined)
+    .map((a) => ` ${a}="${f[a]}"`)
+    .join('');
+  switch (f.kind) {
+    case 'textarea':
+      return `<prompt-box><textarea id="${id}"></textarea></prompt-box>`;
+    case 'text':
+      // The prompt defaults get the weighting shortcut too — they are the text
+      // that lands in a prompt box, so `(cat:1.2)` has to be typeable here.
+      return f.key === 'negative'
+        ? `<prompt-box><input id="${id}"></prompt-box>`
+        : `<input id="${id}">`;
+    case 'lines':
+      return `<textarea id="${id}" class="short" placeholder="one argument per line"></textarea>`;
+    case 'check':
+      return `<input type="checkbox" id="${id}">`;
+    case 'upscale':
+      return `<select id="${id}">${UPSCALES.map(([v, label]) =>
+        `<option value="${v}">${label}</option>`).join('')}</select>`;
+    // The real control's own options, cloned rather than listed again — the
+    // sampler list is declared in the markup and this is a view of it.
+    case 'mirror':
+      return `<select id="${id}">${$(f.from).innerHTML}</select>`;
+    default:
+      return `<input type="number" id="${id}"${attrs}>`;
+  }
+}
+
+function markup() {
+  const out = [];
+  let folded = false;
+  for (const f of FIELDS) {
+    if (f.title) {
+      if (f.fold) {
+        folded = true;
+        out.push(`<details class="spaced"><summary>${f.title}</summary>`);
+      } else {
+        out.push(`<label class="grouphead">${f.title}</label>`);
+      }
+      continue;
+    }
+    const label = f.label ?? labelOf(f.from);
+    const help = f.help ?? f.from;
+    if (f.kind === 'check') {
+      // A checkbox labels itself from the right, like every other one on the
+      // page — `.checks` is the rule that stops `label` being a block here.
+      out.push(`<div class="checks"><label data-help="${help}">`
+        + `${control(f)} ${label}</label></div>`);
+    } else {
+      out.push(`<label for="${fieldId(f)}" data-help="${help}">${label}</label>`);
+      out.push(control(f));
+    }
+  }
+  if (folded) out.push('</details>');
+  return out.join('\n');
+}
+
+// ---- Reading and writing the form ------------------------------------------
+
+function put(f, v) {
+  const el = $(fieldId(f));
+  if (f.kind === 'check') {
+    el.checked = !!v;
+    return;
+  }
+  if (f.kind === 'lines') {
+    el.value = (v ?? []).join('\n');
+    return;
+  }
+  // A select silently falls back to its first option when the stored value
+  // isn't one of them — so a hand-edited `hires_scale = 2.5`, or a sampler this
+  // build doesn't list, would be displayed as something else and then *saved*
+  // as it. Carry the stray value as an option of its own instead: the form then
+  // shows what is really stored, and changing it is a deliberate act.
+  if (el.tagName === 'SELECT' && v != null
+      && ![...el.options].some((o) => o.value === String(v))) {
+    el.add(new Option(`${v} (from the file)`, String(v)));
+  }
+  el.value = v ?? '';
+}
+
+function take(f) {
+  const el = $(fieldId(f));
+  if (f.kind === 'check') return el.checked;
+  if (f.kind === 'lines') {
+    return el.value.split('\n').map((s) => s.trim()).filter(Boolean);
+  }
+  if (f.kind === 'textarea' || f.kind === 'text' || f.kind === 'mirror') {
+    const s = el.value;
+    return f.blank ? (s.trim() || null) : s;
+  }
+  const raw = el.value.trim();
+  // An empty number box is `null` where the field admits one and the stored
+  // value where it doesn't, because sending `0` for an emptied Steps box would
+  // be the form inventing an answer the user didn't give.
+  if (!raw) return f.blank ? null : undefined;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+const rows = () => FIELDS.filter((f) => !f.title);
+
+function fill(s) {
+  for (const f of rows()) put(f, s[f.key]);
+}
+
+function body() {
+  const out = {};
+  for (const f of rows()) {
+    const v = take(f);
+    // `undefined` is "the box says nothing usable"; leaving the key out lets the
+    // server keep what it has rather than writing a guess over it.
+    if (v !== undefined) out[f.key] = v;
+  }
+  return out;
+}
+
+// ---- What the rest of the page does with them -------------------------------
+
+// The three settings that are not per-model. They seed controls on other tabs,
+// so they are applied once at load and again after a save.
+//
+// The prompt boxes are only written while they still hold what the last apply
+// put there — which at boot is the empty string, since the markup no longer
+// ships a default in a `value=`. The fetch is async, and a default arriving
+// after someone has started typing must not take the sentence away from them.
+const SEEDS = [['prompt', ['prompt']], ['negative', ['negative', 'i2negative']]];
+const applied = { prompt: '', negative: '' };
+
+function applyPageDefaults(s) {
+  for (const [key, ids] of SEEDS) {
+    for (const id of ids) {
+      if ($(id).value === applied[key]) $(id).value = s[key] ?? '';
+    }
+    applied[key] = s[key] ?? '';
+  }
+  // Only the select's starting point, so it is safe to reapply after a save: the
+  // factor the user picked for the image in hand is the same control.
+  if (s.hires_scale) setUpFactor(s.hires_scale);
+}
+
+// ---- Unsaved changes --------------------------------------------------------
+
+// What the form looked like the last time it agreed with the file. Compared as
+// JSON rather than field by field because `body()` already reduces the form to
+// exactly the values that would be sent — so this asks the only question worth
+// asking: would saving now change anything?
+let saved = null;
+
+// Settings are the one form on the page you can walk away from mid-edit: every
+// other panel either acts immediately or is consumed by the button next to it.
+// So the mark goes on the tab as well as under the button — a note visible only
+// on the tab you have left is not a note.
+function markDirty() {
+  const dirty = saved !== null && JSON.stringify(body()) !== saved;
+  $('setmsg').textContent = dirty ? 'Unsaved changes' : '';
+  $('setmsg').classList.toggle('unsaved', dirty);
+  document.querySelector('.tab[data-tab="settings"]').classList.toggle('unsaved', dirty);
+  return dirty;
+}
+
+function settle(s) {
+  fill(s);
+  applyPageDefaults(s);
+  saved = JSON.stringify(body());
+  markDirty();
+}
+
+// ---- Load and save ----------------------------------------------------------
+
+async function load() {
+  try {
+    const s = await (await fetch('/settings')).json();
+    settle(s);
+    // A file that won't parse still answers 200 with the built-ins, so the form
+    // is editable and saving it is the repair. See `handle_get_settings`.
+    $('seterr').textContent = s.error ?? '';
+  } catch (e) {
+    $('seterr').textContent = 'Could not read settings: ' + e;
+  }
+}
+
+async function save() {
+  $('seterr').textContent = '';
+  $('setmsg').classList.remove('unsaved');
+  $('setmsg').textContent = 'Saving…';
+  try {
+    // Filled from what came *back*, not from what went out: the server is what
+    // decides what is stored, and a field it normalised has to show up here.
+    settle(await post('/settings', body()));
+    $('setmsg').textContent = 'Saved.';
+    // The Advanced panel on the Image tab is filled from the model list, and the
+    // model list is built from these numbers — so it is stale the moment this
+    // returns. Rebuilt rather than reloaded: `/models` is served live.
+    loadModels();
+  } catch (e) {
+    $('setmsg').textContent = '';
+    markDirty();
+    $('seterr').textContent = String(e.message || e);
+  }
+}
+
+export function initSettings() {
+  // Built synchronously so `wireHints` finds these labels in its first pass;
+  // the values arrive from the fetch below, which cannot land before boot ends.
+  $('setform').innerHTML = markup();
+  wireHints($('setform'));
+  $('setsave').addEventListener('click', save);
+  // Delegated to the form, so a field added to FIELDS is watched with no second
+  // edit here. `input` covers typing and the checkbox; `change` catches a select
+  // in the browsers that don't fire `input` for one.
+  for (const ev of ['input', 'change']) {
+    $('setform').addEventListener(ev, markDirty);
+  }
+  // The page holds the only copy of an unsaved edit, so a reload would take it
+  // with no way back. Only armed while there is something to lose.
+  window.addEventListener('beforeunload', (e) => {
+    if (markDirty()) e.preventDefault();
+  });
+  load();
+}

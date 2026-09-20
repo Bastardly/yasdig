@@ -59,7 +59,7 @@ export function syncIcfgPlaceholder() {
   $('icfg').placeholder = Number.isFinite(base) ? base : '';
 }
 
-async function loadModels() {
+export async function loadModels() {
   try {
     models = await (await fetch('/models')).json();
     // Four selects off one list: the two that choose what generates, and the two
@@ -99,7 +99,7 @@ async function loadModels() {
   }
 }
 
-const UPSCALES = [[1, '1× (same size)'], [1.5, '1.5×'], [2, '2×'], [3, '3×'], [4, '4×']];
+export const UPSCALES = [[1, '1× (same size)'], [1.5, '1.5×'], [2, '2×'], [3, '3×'], [4, '4×']];
 
 // One factor, three places to set it: the select above the image, the one in the
 // run panel — which has to exist too, because the first is rebuilt by every

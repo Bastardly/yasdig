@@ -139,7 +139,9 @@ const HELP = [
   { ids: ['i2maxside'],
     text: 'The longest side the source is scaled to before diffusing. A phone '
         + 'photo is 4032 px wide and would run out of VRAM at full size. Images '
-        + 'are only ever shrunk, never enlarged, and the aspect ratio is kept.' },
+        + 'are only ever shrunk, never enlarged, and the aspect ratio is kept. '
+        + 'It is the same budget the hi-res pass works to: that pass diffuses no '
+        + 'larger than this and covers anything beyond it with an FSR upscale.' },
   { ids: ['vfirstframe'],
     text: 'The still the clip animates, chosen from work/output/. Leave it empty '
         + 'and the same model runs as plain text-to-video; set it and the first '
@@ -195,6 +197,32 @@ const HELP = [
         + 'multiply fp8 at all, so an fp8 file is cast to BF16 while it runs and '
         + 'needs about twice its size in memory. q4_K is the first type on this '
         + 'list the GPU can use directly.' },
+
+  // The four settings with no control anywhere else to be the default *for*.
+  // They were only ever reachable by editing models.toml by hand, which is what
+  // moving `[defaults]` into a form had to stop being the answer to.
+  { ids: ['setupscale'],
+    text: 'How much every base render is enlarged by FSR on its way to the '
+        + 'output size — it is why a 768 model is listed as 768×768 → 1536×1536. '
+        + 'This is not a diffusion pass and invents nothing; it is fast and '
+        + 'lossless-looking up to about 2×. To add real detail at the larger '
+        + 'size, use the hi-res pass instead.' },
+  { ids: ['setflash'],
+    text: 'Pass --diffusion-fa to the refine and hi-res passes when they run '
+        + 'large. Worth about 6× at 2048² on this card (122 s → 20 s), so leave '
+        + 'it on unless your GPU or driver cannot do it.' },
+  { ids: ['setwtype'],
+    text: 'Quantize the weights as they load, e.g. q8_0 or q4_K — sd-cli’s '
+        + '--type. It trades a little quality for memory and, on a backend that '
+        + 'cannot multiply the stored type, for speed. Leave it empty to run the '
+        + 'file as it is on disk. The Convert tab does the same thing once, '
+        + 'permanently, instead of on every load.' },
+  { ids: ['setargs'],
+    text: 'Flags passed straight to sd-cli, one per line, after everything '
+        + 'rustimage sets. The escape hatch for a model that needs something '
+        + 'this page has no box for — and the place a wrong flag shows up as a '
+        + 'failed render rather than as a message, since nothing here checks '
+        + 'them.' },
 ];
 
 // id → text. Two tables declare a control — `HELP` for the form fields, and

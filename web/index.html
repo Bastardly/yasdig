@@ -18,6 +18,7 @@
     <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
     <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
     <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
+    <button type="button" class="btn btn-choice tab" data-tab="settings">Settings</button>
   </div>
 
   <div class="layout" id="tab-image">
@@ -41,12 +42,15 @@
 
     <label for="prompt">Prompt</label>
     <prompt-box>
-      <textarea id="prompt" placeholder="a lovely fluffy crab, cinematic lighting, sharp, in focus">a lovely fluffy crab, cinematic lighting, sharp, in focus</textarea>
+      <!-- Empty, and filled from user/settings.toml once `/settings` answers.
+           The default used to be written here twice, which meant the one place
+           you could change it was this file. -->
+      <textarea id="prompt" placeholder="a lovely fluffy crab, cinematic lighting, sharp, in focus"></textarea>
     </prompt-box>
 
     <label for="negative">Negative prompt (optional)</label>
     <prompt-box>
-      <input id="negative" placeholder="blurry, low quality" value="watermark, worst quality, low quality">
+      <input id="negative" placeholder="blurry, low quality">
     </prompt-box>
 
     <div class="row">
@@ -247,7 +251,7 @@
 
     <label for="i2negative">Negative prompt (optional)</label>
     <prompt-box>
-      <input id="i2negative" placeholder="blurry, low quality" value="watermark, worst quality, low quality">
+      <input id="i2negative" placeholder="blurry, low quality">
     </prompt-box>
 
     <div class="row">
@@ -560,6 +564,45 @@
       discovered on the next start with no config edit. Nothing is deleted — the
       original stays where it is.</p>
       <div id="cresult"></div>
+    </div>
+  </div>
+  </div>
+
+  <!-- ==================== Settings ====================
+       `user/settings.toml`, as a form. Every field in it is the default for a
+       control on one of the tabs above, so the form is *generated* from a table
+       in `settings.js` that names the control each one belongs to and takes its
+       label and its tooltip from it — see that module's header. Writing the
+       fields out here would be a second set of words for the same knobs, free
+       to disagree with the first.
+
+       No video section: those settings are per-model and live on a [[video]]
+       entry, which has no defaults layer under it. -->
+  <div class="layout" id="tab-settings" hidden>
+  <div class="card col-controls">
+    <div class="gohead">
+      <button id="setsave" class="btn btn-run btn-block">Save settings</button>
+      <p class="sub" id="setmsg"></p>
+      <div id="seterr" class="err"></div>
+    </div>
+    <div id="setform"></div>
+  </div>
+
+  <div class="col-result">
+    <div class="card">
+      <b>What these are</b>
+      <p class="sub">The values every checkpoint starts from, and what the
+      prompt boxes contain when the page loads. They are stored in
+      <code>user/settings.toml</code>, which this form owns — it is rewritten in
+      full on every save.</p>
+      <p class="sub">A <code>[templates.&lt;name&gt;]</code> block in
+      <code>models.toml</code> is how one checkpoint says what is
+      <em>different</em> about it. It overrides whichever of these it names and
+      inherits the rest from here, so a preset for a Turbo model is three lines
+      rather than a copy of this page.</p>
+      <p class="sub">Nothing here is retroactive: an image already made keeps
+      the settings it was made with, which is what lets reopening a work item
+      restore it faithfully.</p>
     </div>
   </div>
   </div>

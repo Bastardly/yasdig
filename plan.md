@@ -12,18 +12,13 @@ block that is the first child of `card col-controls` on all four tabs. The image
 tab's *run* panel (Images, the checkboxes) deliberately stayed at the foot: those
 are set once a session and the prompt is what belongs under the button.
 
-# Feature 2 - User settings
-Currently we have the models.toml where we set the default settings. Instead, it would be nice to have a ./user/settings.json (A pattern I intend on expanding) and a settings tab.
-
-Currently, I think the settings could be boiled down to:
-- Default prompt
-- Default CFG scale
-- Default Steps
-- Default width and height
-- Default refine steps and strength
-- Default high-res scale, steps and strength
-
-Changing the setting should simply work like a normal form, with a save button instead of a generate.
+# ~~Feature 2 - User settings~~ — DONE
+`user/settings.toml` (TOML, not JSON — one parser, and it sits beside models.toml)
+plus a Settings tab that edits it as a form. `[defaults]` is gone from models.toml,
+which is now bootstrap config only; a `[templates.*]` block became a *partial*
+override, so it states what is different about one checkpoint and inherits the
+rest from your settings. Includes the default prompt. Video deliberately left out.
+See *## Settings* in CLAUDE.md and *### Settings* in README.md.
 
 # Feature 3 - Favorite work items
 Under the image tab, we have the work items section which lists all our current work items. Problem is that this quickly becomes very large, which means that I often use the "delete all" function.

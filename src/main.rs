@@ -61,6 +61,7 @@ mod http;
 mod pipeline;
 mod preflight;
 mod sd;
+mod settings;
 mod videos;
 mod web;
 mod workitems;
@@ -70,6 +71,7 @@ use base64::Engine as _;
 use config::{Config, Filters, FiltersPatch, LoraRef};
 use pipeline::{Engine, EscalateRequest, GenRequest, GenResult, Img2ImgRequest, VideoRequest};
 use sd::Monitor;
+use settings::Settings;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
@@ -293,6 +295,11 @@ fn handle_conn(
         ("GET", "/templates") | ("GET", "/models") => {
             conn.respond(200, "application/json", build_models_json(cfg).as_bytes())
         }
+        // Filesystem-only, so they answer here rather than through the job
+        // queue — the worker is serialized, and a form submit queued behind a
+        // render would appear to hang for the length of the render.
+        ("GET", "/settings") => handle_get_settings(&mut conn, cfg),
+        ("POST", "/settings") => handle_save_settings(&mut conn, cfg, &req.body),
         ("POST", "/generate") => handle_generate(&mut conn, job_tx, &req.body),
         ("POST", "/img2img") => handle_img2img(&mut conn, cfg, job_tx, &req.body),
         // The one route with a binary body, and the one `http.rs` gives a large
@@ -470,6 +477,63 @@ struct VideoModelDto {
 /// The unusable ones are listed with their reason rather than filtered out, the
 /// same call `doctor` makes for a half-downloaded video model: "my LoRA isn't in
 /// the list" is a much worse thing to debug than "my LoRA is in the list and
+/// The Settings tab's two routes.
+///
+/// A *broken* `user/settings.toml` answers 200 with the built-in settings and an
+/// `error` beside them rather than a 500, because the page has two jobs here and
+/// only one of them has failed: it still has to fill the form with something
+/// editable, and saving that form is how the file gets repaired. A 500 would
+/// leave an empty form and no way out but a text editor. Generation meanwhile
+/// falls back the same way — see `Settings::load_or_default`.
+fn handle_get_settings(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
+    let (settings, note) = match Settings::load(&cfg.user_dir()) {
+        Ok(s) => (s, None),
+        Err(e) => (Settings::default(), Some(format!("{e:#}"))),
+    };
+    match settings::to_json(&settings, note.as_deref()) {
+        Ok(body) => conn.respond(200, "application/json", body.as_bytes()),
+        Err(e) => conn.respond(
+            500,
+            "application/json",
+            error_json(&format!("{e:#}")).as_bytes(),
+        ),
+    }
+}
+
+/// Validate, then write. In that order, so a form with a bad number in it leaves
+/// the file exactly as it found it — the error comes back as text the tab shows
+/// beside the Save button.
+fn handle_save_settings(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    // Over what is stored, not over the built-ins — see `settings::patch`. A
+    // file that won't parse patches the built-ins instead, which is the only
+    // thing a repair could sensibly start from.
+    let stored = Settings::load(&cfg.user_dir()).unwrap_or_default();
+    let result = settings::patch(&stored, body)
+        .and_then(|s| {
+            s.validate()?;
+            Ok(s)
+        })
+        .and_then(|s| {
+            s.save(&cfg.user_dir())?;
+            Ok(s)
+        });
+    match result {
+        Ok(s) => match settings::to_json(&s, None) {
+            Ok(b) => conn.respond(200, "application/json", b.as_bytes()),
+            Err(e) => conn.respond(
+                500,
+                "application/json",
+                error_json(&format!("{e:#}")).as_bytes(),
+            ),
+        },
+        Err(e) => conn.respond(
+            400,
+            "application/json",
+            error_json(&format!("{e:#}")).as_bytes(),
+        ),
+    }
+}
+
 /// says why".
 fn handle_list_loras(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
     match serde_json::to_vec(&cfg.list_loras()) {

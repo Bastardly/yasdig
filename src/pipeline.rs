@@ -45,7 +45,7 @@ static JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_PENDING: usize = 8;
 
 /// Hard limit on the hi-res upscale factor a request may ask for.
-const MAX_UPSCALE: f32 = 4.0;
+pub const MAX_UPSCALE: f32 = 4.0;
 
 /// Above this longest side an img2img pass gets `--vae-tiling` (and flash
 /// attention), which is what keeps a large pass inside VRAM. Below it the

@@ -1,14 +1,21 @@
 //! Loads `models.toml` into strongly-typed config.
 //!
+//! The *defaults* a model runs with are not in here — they live in
+//! `user/settings.toml` ([`crate::settings`]), because that is the file the
+//! Settings tab writes. This file is what the program needs in order to start,
+//! and is read-only to the app so its comments survive.
+//!
 //! Two ways to get a selectable model:
 //!   * **Discovery** — any checkpoint dropped in the models dir is auto-listed
-//!     and runs with the `[defaults]` profile. Zero config.
-//!   * **Templates** — an explicit `[templates.<name>]` block is a tuned preset
-//!     (e.g. Turbo settings) that overrides the defaults for one checkpoint.
+//!     and runs on the settings alone. Zero config.
+//!   * **Templates** — an explicit `[templates.<name>]` block states what is
+//!     *different* about one checkpoint (a Turbo model's 4 steps and CFG 1) and
+//!     inherits everything it doesn't name from the settings.
 //!
 //! Both are merged into a single name→[`Profile`] registry the rest of the app
-//! uses.
+//! uses, through one code path: settings → the template's overlay → `Profile`.
 
+use crate::settings::{PartialSettings, Settings};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -25,9 +32,13 @@ pub struct Config {
     /// common case.
     #[serde(default)]
     pub templates: BTreeMap<String, Template>,
-    /// Generation/FSR settings applied to auto-discovered checkpoints.
-    #[serde(default)]
-    pub defaults: Defaults,
+    /// The old `[defaults]` block, kept for one job only: seeding
+    /// `user/settings.toml` on a first run so an install that had tuned it
+    /// doesn't quietly revert to the built-ins. Once that file exists this is
+    /// ignored entirely, and `preflight` says so rather than leaving the two to
+    /// disagree in silence.
+    #[serde(default, rename = "defaults")]
+    pub legacy_defaults: Option<PartialSettings>,
     /// Video model *overrides*. Most models come from scanning the video dir
     /// (see [`crate::discover`]); an entry here names components that haven't
     /// been downloaded yet, pins measured settings, or answers the one question
@@ -103,186 +114,26 @@ fn default_port() -> u16 {
     8080
 }
 
-/// Tunable generation + FSR settings. Shared shape between `[defaults]` and each
-/// `[templates.*]` block (a template just also carries a model + description).
-#[derive(Debug, Clone, Deserialize)]
-pub struct Defaults {
-    #[serde(default = "default_width")]
-    pub width: u32,
-    #[serde(default = "default_height")]
-    pub height: u32,
-    #[serde(default = "default_steps")]
-    pub steps: u32,
-    #[serde(default = "default_cfg")]
-    pub cfg_scale: f32,
-    /// CFG scale for the refine and hi-res passes. `None` = use `cfg_scale`.
-    /// Lower is usually right: the base render's CFG over-guides at output
-    /// resolution, and over-guidance reads as high-frequency crunch.
-    #[serde(default)]
-    pub img2img_cfg_scale: Option<f32>,
-    #[serde(default = "default_sampler")]
-    pub sampler: String,
-    #[serde(default = "default_upscale")]
-    pub upscale_factor: f32,
-    #[serde(default = "default_sharpness")]
-    pub sharpness: f32,
-    #[serde(default)]
-    pub clarity: f32,
-    #[serde(default)]
-    pub refine_steps: u32,
-    #[serde(default = "default_refine_strength")]
-    pub refine_strength: f32,
-    #[serde(default)]
-    pub hires_steps: u32,
-    #[serde(default = "default_hires_strength")]
-    pub hires_strength: f32,
-    /// The Image-to-image tab's one pass. Unlike the two above it is not an
-    /// escalation — there is nothing to escalate from — so it has no 0-disables
-    /// rule and no ceiling: it *is* the generation on that tab.
-    #[serde(default = "default_source_steps")]
-    pub source_steps: u32,
-    #[serde(default = "default_source_strength")]
-    pub source_strength: f32,
-    #[serde(default = "default_hires_max_side")]
-    pub hires_max_side: u32,
-    #[serde(default = "default_true")]
-    pub hires_flash_attn: bool,
-    #[serde(default)]
-    pub weight_type: Option<String>,
-    #[serde(default)]
-    pub extra_args: Vec<String>,
-}
-
-impl Default for Defaults {
-    fn default() -> Self {
-        Defaults {
-            width: default_width(),
-            height: default_height(),
-            steps: default_steps(),
-            cfg_scale: default_cfg(),
-            img2img_cfg_scale: None,
-            sampler: default_sampler(),
-            upscale_factor: default_upscale(),
-            sharpness: default_sharpness(),
-            clarity: 0.0,
-            refine_steps: 0,
-            refine_strength: default_refine_strength(),
-            hires_steps: 0,
-            hires_strength: default_hires_strength(),
-            source_steps: default_source_steps(),
-            source_strength: default_source_strength(),
-            hires_max_side: default_hires_max_side(),
-            hires_flash_attn: true,
-            weight_type: None,
-            extra_args: Vec::new(),
-        }
-    }
-}
-
+/// A tuned preset for one checkpoint: which file it is, and what is different
+/// about it.
+///
+/// **It overrides only what it names.** Everything else comes from
+/// `user/settings.toml`, which is what makes the Settings tab mean something
+/// for a templated model too — and what a preset for a new architecture wants
+/// to be, since a zImage or Krea entry has opinions about steps and CFG and
+/// none at all about your hi-res strength. [`Settings::merged_with`] is the one
+/// place that merge happens.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Template {
     #[serde(default)]
     pub description: Option<String>,
+    /// The one field a template must state, because it is the only thing
+    /// discovery cannot work out for itself: which file this preset is *for*.
     pub model: String,
-    pub width: u32,
-    pub height: u32,
-    pub steps: u32,
-    pub cfg_scale: f32,
-    /// See [`Defaults::img2img_cfg_scale`]. Optional here too, so a template can
-    /// tune the base CFG without being forced to name a second one.
-    #[serde(default)]
-    pub img2img_cfg_scale: Option<f32>,
-    #[serde(default = "default_sampler")]
-    pub sampler: String,
-    #[serde(default = "default_upscale")]
-    pub upscale_factor: f32,
-    #[serde(default = "default_sharpness")]
-    pub sharpness: f32,
-    #[serde(default)]
-    pub clarity: f32,
-    #[serde(default)]
-    pub refine_steps: u32,
-    #[serde(default = "default_refine_strength")]
-    pub refine_strength: f32,
-    #[serde(default)]
-    pub hires_steps: u32,
-    #[serde(default = "default_hires_strength")]
-    pub hires_strength: f32,
-    /// See [`Defaults::source_steps`].
-    #[serde(default = "default_source_steps")]
-    pub source_steps: u32,
-    #[serde(default = "default_source_strength")]
-    pub source_strength: f32,
-    #[serde(default = "default_hires_max_side")]
-    pub hires_max_side: u32,
-    #[serde(default = "default_true")]
-    pub hires_flash_attn: bool,
-    #[serde(default)]
-    pub weight_type: Option<String>,
-    #[serde(default)]
-    pub extra_args: Vec<String>,
-}
-
-// Defaults tuned for standard (non-distilled) SDXL, since that's the common
-// discovered checkpoint. Turbo/LCM models want a template override (few steps,
-// cfg 1) — or use the per-request overrides in the UI.
-fn default_width() -> u32 {
-    768
-}
-fn default_height() -> u32 {
-    768
-}
-fn default_steps() -> u32 {
-    30
-}
-fn default_cfg() -> f32 {
-    6.0
-}
-fn default_sampler() -> String {
-    "euler".to_string()
-}
-fn default_upscale() -> f32 {
-    1.5
-}
-/// Off. Sharpening is a live slider under the image now, not something a render
-/// arrives pre-seasoned with — so the first thing you see is what the model and
-/// the upscaler actually produced, and anything on top of it is a choice you
-/// made and can undo.
-fn default_sharpness() -> f32 {
-    0.0
-}
-fn default_refine_strength() -> f32 {
-    0.30
-}
-// Same denoise as the base-res refine: enough to resolve real detail at the
-// larger size, low enough that the composition doesn't drift.
-fn default_hires_strength() -> f32 {
-    0.30
-}
-/// Longest side the hi-res diffusion pass may run at. SDXL's quality falls off
-/// past this, and the cost climbs quadratically; anything beyond it is reached
-/// with a final (cheap) FSR upscale instead.
-fn default_hires_max_side() -> u32 {
-    2048
-}
-fn default_true() -> bool {
-    true
-}
-
-/// The Image-to-image tab's pass is a *transform*, not a finish, so it starts
-/// far higher than either escalation: at 0.30 a source image comes back
-/// essentially unchanged and the tab looks broken. 0.55 keeps the composition,
-/// the pose and the palette while re-drawing the surface in the new model's
-/// idiom, which is what "run this picture through that checkpoint" means.
-fn default_source_strength() -> f32 {
-    0.55
-}
-/// A floor, like the other two step counts, and `SdRunner::img2img` raises it to
-/// `steps * strength` anyway — at 0.55 that is what most of these 12 are for.
-/// Higher than the escalations because the pass starts much further up the sigma
-/// schedule and so has correspondingly more to resolve.
-fn default_source_steps() -> u32 {
-    12
+    /// Everything else, all optional. Flattened, so the block stays flat in
+    /// TOML and reads exactly as `[defaults]` used to.
+    #[serde(flatten)]
+    pub over: PartialSettings,
 }
 
 /// Lowest img2img denoise strength we accept. sd.cpp trims an img2img schedule
@@ -441,38 +292,16 @@ pub struct Profile {
 
 /// Only reachable through `#[serde(default)]` on the struct above — nothing
 /// builds a `Profile` from nothing, since a real one always comes from
-/// `Config::registry()`. It exists so a work item's sidecar survives a knob being
-/// added, and it mirrors [`Defaults`] field for field for that reason.
+/// `Config::registry()`. It exists so a work item's sidecar survives a knob
+/// being added.
+///
+/// The **built-in** settings, deliberately, not the user's: this fills the gaps
+/// in a sidecar written before a field existed, and that record has to describe
+/// the image it belongs to. Reading `user/settings.toml` here would let a
+/// setting changed today rewrite what an old generation claims it ran with.
 impl Default for Profile {
     fn default() -> Self {
-        let d = Defaults::default();
-        Profile {
-            name: String::new(),
-            description: String::new(),
-            model: PathBuf::new(),
-            width: d.width,
-            height: d.height,
-            steps: d.steps,
-            cfg_scale: d.cfg_scale,
-            img2img_cfg_scale: d.img2img_cfg_scale,
-            sampler: d.sampler,
-            upscale_factor: d.upscale_factor,
-            sharpness: d.sharpness,
-            clarity: d.clarity,
-            refine_steps: d.refine_steps,
-            refine_strength: d.refine_strength,
-            hires_steps: d.hires_steps,
-            hires_strength: d.hires_strength,
-            source_steps: d.source_steps,
-            source_strength: d.source_strength,
-            hires_max_side: d.hires_max_side,
-            hires_flash_attn: d.hires_flash_attn,
-            weight_type: d.weight_type,
-            extra_args: d.extra_args,
-            loras: Vec::new(),
-            discovered: false,
-            exists: false,
-        }
+        Settings::default().as_profile("")
     }
 }
 
@@ -875,7 +704,8 @@ impl VideoFamily {
     /// `docs/wan.md` uses, and they exist as code because a *discovered* model
     /// has no `models.toml` entry to read them from. The table in `models.toml`
     /// now overrides these rather than restating them, which is the same
-    /// relationship `[templates.<name>]` has to `[defaults]` on the image side.
+    /// relationship `[templates.<name>]` has to `user/settings.toml` on the image
+    /// side.
     ///
     /// They are a documented starting point, not a measurement on any
     /// particular card — the thing to change once a run has been timed.
@@ -970,7 +800,7 @@ pub struct FrameGrid {
 /// One `[[video]]` entry: a named set of component files plus the settings it
 /// runs at.
 ///
-/// There is no `[defaults]`/`[templates]` split here, and so no second struct to
+/// There is no settings/`[templates]` split here, and so no second struct to
 /// keep in step — the trap described under "Adding a per-model knob" in
 /// `CLAUDE.md` doesn't apply to this table. A video model is three to five files
 /// whose roles can't be read off a filename, so there is nothing to discover,
@@ -1089,6 +919,17 @@ pub struct VideoModel {
     /// someone can go and edit.
     #[serde(default)]
     pub discovered: bool,
+}
+
+// The two the video table shares with the image side's settings. They stayed
+// here when the rest moved to `settings.rs` because a `[[video]]` entry has no
+// `user/settings.toml` layer under it — there is one struct, so an omitted key
+// falls to a built-in rather than to something the user set.
+fn default_sampler() -> String {
+    "euler".to_string()
+}
+fn default_true() -> bool {
+    true
 }
 
 fn default_video_width() -> u32 {
@@ -1314,6 +1155,12 @@ impl Config {
         };
         cfg.base_dir = std::fs::canonicalize(&dir).unwrap_or(dir);
 
+        // Before the registry, because the registry reads it. A first run seeds
+        // it from the old `[defaults]` block so an install that had tuned that
+        // doesn't silently revert — the shipped file set `upscale_factor = 2.0`
+        // where the built-in is 1.5.
+        Settings::ensure(&cfg.user_dir(), cfg.legacy_defaults.as_ref())?;
+
         // Catch unusable denoise settings at startup rather than on the first
         // refine, where they'd surface as a pass that silently does nothing.
         for p in cfg.registry().values() {
@@ -1353,6 +1200,17 @@ impl Config {
 
     pub fn models_dir(&self) -> PathBuf {
         self.resolve(&self.sd.models_dir)
+    }
+
+    /// Everything that belongs to the person rather than to the install:
+    /// `user/settings.toml` today, favourites next.
+    ///
+    /// Not configurable, and beside `work/` rather than inside it on purpose —
+    /// `work/` is scratch this program deletes from (`purge_pngs`, `Delete
+    /// all`), and nothing that took a decision to create may live somewhere
+    /// with a sweeper pointed at it.
+    pub fn user_dir(&self) -> PathBuf {
+        self.base_dir.join("user")
     }
 
     /// Scan the models dir for checkpoint files (non-recursive), sorted by name.
@@ -1564,47 +1422,23 @@ impl Config {
     /// Build the name→Profile registry: explicit templates first, then any
     /// discovered checkpoint not already referenced by a template.
     pub fn registry(&self) -> BTreeMap<String, Profile> {
+        let settings = Settings::load_or_default(&self.user_dir());
         let mut reg: BTreeMap<String, Profile> = BTreeMap::new();
 
         for (name, t) in &self.templates {
             let model = self.resolve(&t.model);
-            let exists = model.exists();
             reg.insert(
                 name.clone(),
-                Profile {
-                    name: name.clone(),
-                    description: t
-                        .description
+                self.profile(
+                    &settings,
+                    &t.over,
+                    name.clone(),
+                    t.description
                         .clone()
                         .unwrap_or_else(|| format!("preset for {}", t.model)),
-                    exists,
                     model,
-                    width: t.width,
-                    height: t.height,
-                    steps: t.steps,
-                    cfg_scale: t.cfg_scale,
-                    img2img_cfg_scale: t.img2img_cfg_scale,
-                    sampler: t.sampler.clone(),
-                    upscale_factor: t.upscale_factor,
-                    sharpness: t.sharpness,
-                    clarity: t.clarity,
-                    refine_steps: t.refine_steps,
-                    refine_strength: t.refine_strength,
-                    hires_steps: t.hires_steps,
-                    hires_strength: t.hires_strength,
-                    source_steps: t.source_steps,
-                    source_strength: t.source_strength,
-                    hires_max_side: t.hires_max_side,
-                    hires_flash_attn: t.hires_flash_attn,
-                    weight_type: t.weight_type.clone(),
-                    extra_args: t.extra_args.clone(),
-                    // Request-only; see the field's doc comment. Spelled out in
-                    // both arms rather than left to a `..Default::default()`,
-                    // so a field added here is a compile error and not a knob
-                    // that silently works for half the models.
-                    loras: Vec::new(),
-                    discovered: false,
-                },
+                    false,
+                ),
             );
         }
 
@@ -1612,7 +1446,12 @@ impl Config {
         let covered: std::collections::HashSet<PathBuf> =
             reg.values().map(|p| p.model.clone()).collect();
 
-        let d = &self.defaults;
+        // The same call with nothing laid over it. A discovered checkpoint is
+        // not a second kind of model, it is a template that states only where
+        // the file is — which is why there is one `profile()` below and not an
+        // arm each. Two arms is how the `[defaults]`/`[templates]` pair used to
+        // drift.
+        let empty = PartialSettings::default();
         for file in self.discover_files() {
             if covered.contains(&file) {
                 continue;
@@ -1623,42 +1462,44 @@ impl Config {
                 .unwrap_or("model")
                 .to_string();
             let name = unique_key(&reg, stem);
+            let description = format!(
+                "discovered: {}",
+                file.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+            );
             reg.insert(
                 name.clone(),
-                Profile {
-                    description: format!(
-                        "discovered: {}",
-                        file.file_name().and_then(|n| n.to_str()).unwrap_or("?")
-                    ),
-                    name,
-                    model: file,
-                    width: d.width,
-                    height: d.height,
-                    steps: d.steps,
-                    cfg_scale: d.cfg_scale,
-                    img2img_cfg_scale: d.img2img_cfg_scale,
-                    sampler: d.sampler.clone(),
-                    upscale_factor: d.upscale_factor,
-                    sharpness: d.sharpness,
-                    clarity: d.clarity,
-                    refine_steps: d.refine_steps,
-                    refine_strength: d.refine_strength,
-                    hires_steps: d.hires_steps,
-                    hires_strength: d.hires_strength,
-                    source_steps: d.source_steps,
-                    source_strength: d.source_strength,
-                    hires_max_side: d.hires_max_side,
-                    hires_flash_attn: d.hires_flash_attn,
-                    weight_type: d.weight_type.clone(),
-                    extra_args: d.extra_args.clone(),
-                    loras: Vec::new(),
-                    discovered: true,
-                    exists: true,
-                },
+                self.profile(&settings, &empty, name, description, file, true),
             );
         }
 
         reg
+    }
+
+    /// One resolved model: the settings, the template's overlay, and the three
+    /// things that are the model's own identity.
+    ///
+    /// `exists` is read off the disk here rather than passed in, because a
+    /// discovered file exists by definition and a templated one may name a
+    /// checkpoint that was never downloaded — which the UI greys out rather
+    /// than hiding, the same rule `doctor` follows for a half-downloaded video
+    /// model.
+    fn profile(
+        &self,
+        settings: &Settings,
+        over: &PartialSettings,
+        name: String,
+        description: String,
+        model: PathBuf,
+        discovered: bool,
+    ) -> Profile {
+        let exists = model.exists();
+        Profile {
+            description,
+            model,
+            discovered,
+            exists,
+            ..settings.merged_with(over).as_profile(&name)
+        }
     }
 }
 
@@ -1863,7 +1704,7 @@ lora_dir = "adapters"
     }
 
     /// A registry entry never carries LoRAs: they only ever arrive on a request.
-    /// If this ever fails, a `loras` key has been added to `[defaults]` or
+    /// If this ever fails, a `loras` key has been added to the settings or
     /// `[templates.*]` and the note on [`Profile::loras`] has stopped being true.
     #[test]
     fn a_model_brings_no_loras_of_its_own() {

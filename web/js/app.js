@@ -16,6 +16,7 @@ import { initI2, loadI2Outputs } from './img2img.js';
 import { initOutputs, loadOutputs } from './outputs.js';
 import { initVideo } from './video.js';
 import { initConvert } from './convert.js';
+import { initSettings } from './settings.js';
 import { stopPlayback } from './player.js';
 import './prompt-box.js';
 
@@ -30,6 +31,7 @@ function showTab(name) {
   $('tab-outputs').hidden = name !== 'outputs';
   $('tab-video').hidden = name !== 'video';
   $('tab-convert').hidden = name !== 'convert';
+  $('tab-settings').hidden = name !== 'settings';
   // Nothing is playing on a tab nobody is looking at. A 24 fps canvas timer is
   // cheap but it is not free, and it would go on redrawing all night.
   if (name !== 'video') stopPlayback();
@@ -78,4 +80,10 @@ initI2();
 initOutputs();
 initVideo();
 initConvert();
+// After initImage(), because it applies the stored hi-res scale through
+// `setUpFactor`, which addresses a select initImage() fills the options of.
+// That puts it after initHints(), so it wires its own generated labels — the
+// one module that does, and the reason `wireHints` takes a root.
+// Its form is built synchronously here; only the values wait on the fetch.
+initSettings();
 initTabs();

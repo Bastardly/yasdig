@@ -6,7 +6,7 @@ use std::path::Path;
 
 /// Every file the browser fetches, by exact name, with what to answer it with.
 ///
-/// A table rather than a match arm each, because there are nineteen of them now —
+/// A table rather than a match arm each, because there are twenty of them now —
 /// but it is still a whitelist. A request names something that is in this list or
 /// gets a 404: the name is compared whole, never joined from what was asked for
 /// beyond this, so there is nothing to traverse out of. Same rule as
@@ -35,6 +35,7 @@ pub const WEB_FILES: &[(&str, &str)] = &[
     ("js/player.js", "text/javascript; charset=utf-8"),
     ("js/prompt-box.js", "text/javascript; charset=utf-8"),
     ("js/prompt-weight.js", "text/javascript; charset=utf-8"),
+    ("js/settings.js", "text/javascript; charset=utf-8"),
     ("js/state.js", "text/javascript; charset=utf-8"),
     ("js/video.js", "text/javascript; charset=utf-8"),
     ("js/viewer.js", "text/javascript; charset=utf-8"),

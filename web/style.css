@@ -31,10 +31,12 @@
      those all land on or beside an image, so that is the one that has to be
      achromatic. It is also the selection mark every photo tool uses.
 
-     Amber carries one piece of information and it is worth keeping: **it means
-     this button spends GPU time.** Neutral means the click is free, red means it
-     stops or destroys something. In an app where a click can cost minutes, the
-     colour is telling you what you are about to spend. ---- */
+     Amber marks **the one action a controls panel exists to perform** — the
+     button at the head of the column. Neutral is everything else, red stops or
+     destroys something. On four of the five panels that action spends GPU time
+     and the colour doubles as a warning about it; on the Settings tab it costs
+     nothing, and consistency across the panels won that argument. Nothing but
+     the head of a controls column should wear it. ---- */
   --accent:      #e0912b;
   --accent-hi:   #f0a643;
   --on-accent:   #100c05;
@@ -167,7 +169,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .btn-run:hover { background: var(--accent-hi); }
 .btn-danger { background: var(--danger); color: #fff; border-color: transparent; }
 .btn-danger:hover { background: var(--danger-hi); }
-/* `.tab` on the five tab buttons is a JS hook — it is how `showTab` finds them —
+/* `.tab` on the six tab buttons is a JS hook — it is how `showTab` finds them —
    and deliberately has no rule here. Don't delete it for looking unused.
 
    A choice, not an action: the tab row and the viewer's Fit / 1:1 / Reset are
@@ -191,10 +193,10 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 
 /* ============================ Layout ============================ */
 
-/* Image | Image to image | Video | Convert. Workflows that share one GPU and
-   almost no controls — a clip has frames, fps and a flow shift and no upscale
-   ladder at all — so they are separate panels rather than one panel with half
-   its fields hidden. */
+/* Image | Image to image | Outputs | Video | Convert | Settings. Workflows that
+   share one GPU and almost no controls — a clip has frames, fps and a flow
+   shift and no upscale ladder at all — so they are separate panels rather than
+   one panel with half its fields hidden. */
 .tabs {
   display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1);
   margin: 0 0 var(--sp-4); border-bottom: var(--line); padding-bottom: var(--sp-2);
@@ -236,6 +238,12 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
    head rather than as the first of the settings. */
 .gohead { border-bottom: var(--line); padding-bottom: var(--sp-3); margin-bottom: var(--sp-1); }
 .gohead > .btn-block:first-child { margin-top: 0; }
+/* Edits in a form that are not on disk yet. Amber rather than red: nothing is
+   wrong, there is just something left to do — and it is the same colour as the
+   button that finishes it. The dot is on the tab too (below), because the whole
+   point is to be visible from a tab you have walked away to. */
+.sub.unsaved { color: var(--accent); }
+.tab.unsaved::after { content: "•"; margin-left: var(--sp-1); color: var(--accent); }
 .col-result { flex: 3 1 var(--col-result); max-width: var(--col-result-max); }
 .workitems { flex: 2 1 var(--col-items); max-width: var(--col-items-max); }
 /* A pane that is one panel and wants the whole row: the Outputs gallery. The
@@ -282,7 +290,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    to each one — as opposed to what any single image is made of. Hence the rule
    above it: these are settings of a *run*. */
 .run { border-top: var(--line); margin-top: var(--sp-4); padding-top: var(--sp-1); }
-.grouphead { display: block; font-size: var(--fs-sm); color: var(--text-dim); margin: var(--sp-3) 0 0; }
+.grouphead { display: block; font-size: var(--fs-sm); color: var(--text); font-weight: bold; margin: var(--sp-3) 0 0; }
 .checks { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-top: var(--sp-2); }
 /* `label` is a block with margins by default here — that's for the form column,
    not for a pair of radios, or a row of checkboxes, sitting on one line. */

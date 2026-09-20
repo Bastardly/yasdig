@@ -284,10 +284,14 @@ active tab, active thumbnail, every `accent-color`, the progress fill and the fo
 ring are bone rather than a hue, because every one of those marks lands on or beside
 an image. A photo tool's selection border is light grey for this reason.
 
-**The action colour carries information: amber means this button spends GPU time.**
-Neutral means the click is free; red means it stops or destroys something. `Enlarge
-frames` and `Close` used to be the same blue, and a click here can cost minutes — so
-the colour says which kind it is. That is `.btn-run`, `.btn` and `.btn-danger`, plus
+**The action colour marks the one thing a controls panel is for: amber is the
+button at the head of the column, and nothing else.** Neutral is every other
+click; red stops or destroys something. On four of the five panels that button
+also spends GPU time, and the colour doubles as a warning about it — `Enlarge
+frames` and `Close` used to be the same blue, and a click here can cost minutes.
+Settings' Save costs nothing and is amber anyway, because one panel wearing a
+different colour for its primary action reads as a different *kind* of control
+rather than as a cheaper one. That is `.btn-run`, `.btn` and `.btn-danger`, plus
 `.btn-choice` for a set where the highlighted one is where you are.
 
 Three things in it break silently:
@@ -332,6 +336,7 @@ resolves the imports itself. `index.html` loads exactly one of them:
 | `convert.js` | the Convert tab |
 | `prompt-box.js` | the one custom element, and the weighting shortcut on it |
 | `prompt-weight.js` | `adjust`: the string maths behind Ctrl+↑/↓. Pure, and the one file with a test |
+| `settings.js` | the Settings tab: the field table, and the form generated from it |
 | `app.js` | `showTab`, and the boot order |
 
 Four things in it break silently:
@@ -377,6 +382,95 @@ registry, and `style.css` would need re-plumbing into each root. Without a shado
 root a custom element is an `init()` with ceremony. `showTab` clearing the pane it
 leaves is the same argument from the other end: these tabs are one app with five
 faces, not five independent things.
+
+## Settings
+
+`user/settings.toml` is the defaults every generation starts from, and
+`src/settings.rs` owns it. The split from `models.toml` is **who writes the
+file**, not the format — both are TOML, one parser:
+
+- `models.toml` is hand-written and mostly comments (the `[[video]]` block alone
+  is 80 lines of them). The app only ever reads it, which is what lets those
+  survive. It holds what the program needs in order to *start*: the binary, the
+  directories, the port, `[templates.*]`, `[[video]]`.
+- `user/settings.toml` is regenerated in full on every Save, so it carries one
+  fixed header and nothing else. A settings *form* that deleted the explanation
+  of what it just changed would be worse than no form.
+
+It is `user/` and not `work/` because `work/` is scratch this program deletes
+from — `purge_pngs`, `Delete all` — and nothing that took a decision to create
+may live under a sweeper. Favourites land there next.
+
+Five things break silently:
+
+- **`registry()` re-reads the file on every call**, and must keep doing so.
+  `Config` is an `Arc` and the GPU worker holds its *own* clone (`main.rs`), so a
+  value cached at load could only be changed by restarting the server — which is
+  not what a Save button means. A ~1 KB parse against a multi-second diffusion,
+  the same rule the LoRA scan already follows.
+- **`Settings::merged_with` and `as_profile` have no `..rest`**, on purpose. See
+  *Adding a per-model knob* — that is what makes the two-struct pair safe.
+- **`POST /settings` is a patch over what is stored, not a whole document**
+  (`settings::patch`). The form leaves out any box it can't read a number from,
+  so absent has to mean *keep*; deserializing the body on its own would make it
+  mean *reset to the built-in*, and an emptied Steps box would quietly put 30
+  back. An explicit `null` still clears a field — that is how the Refine/hi-res
+  CFG box says "unset" rather than "unchanged".
+- **A broken file answers 200, not 500.** `GET /settings` returns the built-ins
+  with an `error` spliced in beside them, because the tab has two jobs and only
+  one has failed: it still has to fill an editable form, and saving that form is
+  the repair. A 500 would leave an empty form and no way out but a text editor.
+  `Settings::load_or_default` is the same decision for generation.
+- **`Profile::default()` reads the *built-in* settings, never the user's.** It
+  fills the gaps in a work-item sidecar written before a field existed, and that
+  record has to describe the image it belongs to — reading the live file would
+  let a setting changed today rewrite what an old generation claims it ran with.
+
+On the page, `web/js/settings.js` generates the form from one table, the way
+`viewer.js` builds ten sliders from `FILTERS`. A row names the *control it is the
+default for*, and takes both the label text and the tooltip from it —
+`labelOf()` reads the real `<label>`, and `data-help="<that id>"` hands
+`wireHints` the key the real control uses. So there is no second vocabulary for
+the same knobs and no second copy of any sentence, which is the rule `HELP`
+already states seen from the other end. Only the four with no control anywhere
+else (`upscale_factor`, `hires_flash_attn`, `weight_type`, `extra_args`) carry
+their own label and their own `HELP` entry.
+
+**`sharpness` and `clarity` are in the file and deliberately not in the form.**
+They are where the viewer's two sliders *start*, and that is a live per-image
+control everywhere else on the page — the Outputs tab starts them at zero
+whatever the settings say, because a saved output has its grade already in the
+pixels (invariant 1). So a default for them is a setting that appears not to
+take, which is worse than not offering it. Hand-editable, and in the README
+table. The eight grading knobs were never per-model at all.
+
+**Unsaved edits are marked on the tab, not just under the button.** This is the
+one form on the page you can walk away from mid-edit — every other panel either
+acts immediately or is consumed by the button beside it — so `markDirty()`
+toggles `.unsaved` on the Settings tab button as well as on `#setmsg`, and arms
+a `beforeunload` while there is something to lose. It compares
+`JSON.stringify(body())` against the last settled snapshot rather than watching
+fields, which asks the only question worth asking: would saving now change
+anything? `settle()` is the one place that snapshot is taken, and it takes it
+from what the *server* returned, so a value it normalised doesn't read as a
+pending edit.
+
+Three more on that module, all about order and timing:
+
+- **It is last in `boot()`.** After `initImage()`, because it applies the stored
+  hi-res scale through `setUpFactor`, which addresses a select that fills the
+  options of — and therefore after `initHints()`, which is why it is the one
+  caller that passes a root to `wireHints`.
+- **The prompt and negative defaults are only written into a box that still
+  holds what the last apply put there.** The fetch is async, and a default
+  arriving after someone has started typing must not take the sentence away from
+  them. That is also why `index.html` no longer ships those two strings in a
+  `value=`: the box starts empty, so "untouched" is a state the module can
+  recognise.
+- **A stored value a `<select>` doesn't offer is added as an option rather than
+  ignored.** A select silently shows its first option when nothing matches, so a
+  hand-edited `hires_scale = 2.5` would be displayed as 1× and then *saved* as
+  1 by the next press of the button.
 
 ## The prompt box
 
@@ -684,20 +778,33 @@ the note below the table.
 
 | # | file | what |
 |---|------|------|
-| 1 | `src/config.rs` | field on **both** `Defaults` and `Template`, then on `Profile`, then wired in **both** arms of `Config::registry()` |
-| 2 | `src/config.rs` | range-check in `Profile::validate()` |
+| 1 | `src/settings.rs` | field on **both** `Settings` and `PartialSettings`, then a line in `Settings::merged_with` and one in `Settings::as_profile` — both are struct literals with no `..rest`, so a miss here is a compile error |
+| 1b | `src/config.rs` | field on `Profile` (what `as_profile` above fills) |
+| 2 | `src/config.rs` | range-check in `Profile::validate()`, or in `Settings::validate` for a bound only the defaults have |
 | 3 | `src/sd.rs` | consume it in `base_cmd` / `txt2img` / `img2img` |
 | 4 | `src/pipeline.rs` | `Option<T>` on `GenRequest`, applied onto the profile in `Engine::run()` **before** `profile.validate()` — and, for an *escalation* knob, on `EscalateRequest` + its `apply()` as well |
 | 5 | `src/main.rs` | field on the `/generate` `Dto`, plus `build_models_json` so the UI can pre-fill it — and, for a *display* knob, the `/adjust` `Dto` and `result_json` too; for an escalation knob, `EscalateDto` and `overrides()` |
 | 6 | `web/index.html` + `web/js/image.js` (or `img2img.js`, `video.js`) | input in the Advanced panel; `syncAdvanced()` and `applyWorkItem()` pre-fill it, `generate()` reads it — an escalation knob goes in `escalateSettings()`, which `generate()` spreads, so it is read once and sent by all three routes |
-| 7 | `models.toml` + `README.md` | commented default, and a row in the field table |
+| 7 | `src/settings.rs` + `web/js/settings.js` + `README.md` | default in `Settings::default()`, a row in `FIELDS` so it is editable, and a row in the `user/settings.toml` field table |
 
-The trap: **`Defaults` and `Template` are two separate structs with the same field
-list**, and `registry()` builds each in its own arm. Adding to one and not the other
-compiles cleanly and silently ignores the knob for half the models.
+The trap this used to have — two structs with one field list, built in two arms of
+`registry()`, so adding to one and not the other compiled cleanly and ignored the
+knob for half the models — **is now a build failure**, and that is the only reason
+the pair is still two structs. `Settings` and `PartialSettings` are joined by
+`Settings::merged_with`, and `Settings`/`Profile` by `Settings::as_profile`; both
+are spelled-out literals with no `..rest`, so a field added to one end and not the
+other has nowhere to hide. Don't "tidy" either into a `..Default::default()` — that
+is exactly the tidy-up that puts the trap back. `registry()` now has one arm, not
+two: a discovered checkpoint is a template that states only where the file is.
+
+Step 7 is also different now: a new knob's default goes in `Settings::default()`
+and its documentation in the `user/settings.toml` table, **not** in `models.toml`
+— that file no longer carries defaults at all. A knob that should be editable
+rather than only hand-typed needs a row in `web/js/settings.js`'s `FIELDS`, which
+is one line if a control for it already exists on another tab.
 
 **A *video* knob is a shorter path and the trap doesn't apply**: there is one struct,
-`VideoModel`, because a `[[video]]` entry has no `[defaults]`/`[templates]` split to keep
+`VideoModel`, because a `[[video]]` entry has no settings/`[templates]` split to keep
 in step. Video *is* discovered, but an explicit entry replaces a discovered model rather
 than merging with it, so there is still only one place a field lives. Add the field there
 (with `#[serde(default)]` unless it is genuinely required), give it a value in
