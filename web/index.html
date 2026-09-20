@@ -22,6 +22,23 @@
 
   <div class="layout" id="tab-image">
   <div class="card col-controls">
+    <!-- The action block is the *first* thing in a controls column, not the
+         last, and that is worth stating because it reads backwards: a form's
+         submit button belongs at its end. This is not a form that is filled in
+         and sent — the button is pressed once per image while everything under
+         it is set once a session, so ending the panel with it means scrolling
+         back up the column after every render. The stylesheet's `.gohead` rule
+         is the other half. -->
+    <div class="gohead">
+      <button id="go" class="btn btn-run btn-block">Generate</button>
+      <!-- Deliberately not in IDLE_LABELS, so setBusy never touches it: a stop
+           button that greys out for the length of the thing it stops is
+           furniture. It hides itself again when the run ends. -->
+      <button id="stop" class="btn btn-danger btn-block" hidden>Stop</button>
+      <p class="sub" id="prog"></p>
+      <div id="err" class="err"></div>
+    </div>
+
     <label for="prompt">Prompt</label>
     <prompt-box>
       <textarea id="prompt" placeholder="a lovely fluffy crab, cinematic lighting, sharp, in focus">a lovely fluffy crab, cinematic lighting, sharp, in focus</textarea>
@@ -121,7 +138,13 @@
       <!-- What the button does, as opposed to what the image is made of. Every
            image in a run is a separate request from this page, which is what
            lets results appear as they land and Stop wait only for the one in
-           flight — see the comment over startRun(). -->
+           flight — see the comment over startRun().
+
+           It stays at the foot of the panel although the button it describes is
+           now at the head, and that is the deliberate half of the split: a count
+           and three checkboxes are set once a session, the button is pressed
+           once an image. Only what is clicked every time is worth the top of
+           the column. -->
       <div class="run">
         <div class="row">
           <div>
@@ -149,13 +172,6 @@
         </div>
         <p class="sub" id="runnote"></p>
       </div>
-    <button id="go" class="btn btn-run btn-block">Generate</button>
-    <!-- Deliberately not in IDLE_LABELS, so setBusy never touches it: a stop
-         button that greys out for the length of the thing it stops is
-         furniture. It hides itself again when the run ends. -->
-    <button id="stop" class="btn btn-danger btn-block" hidden>Stop</button>
-    <p class="sub" id="prog"></p>
-    <div id="err" class="err"></div>
   </div>
 
   <!-- The sliders that act on this image are in the viewer, not here: see the
@@ -197,6 +213,13 @@
        PANES in the script. -->
   <div class="layout" id="tab-img2img" hidden>
   <div class="card col-controls">
+    <div class="gohead">
+      <button id="i2go" class="btn btn-run btn-block">Run img2img</button>
+      <button id="i2stop" class="btn btn-danger btn-block" hidden>Stop</button>
+      <p class="sub" id="i2prog"></p>
+      <div id="i2err" class="err"></div>
+    </div>
+
     <label data-help="i2source">Source image</label>
     <!-- The drop target is the whole zone, not just the button: dragging a file
          onto a 90×30 button is a game of skill. Paste is bound to the document
@@ -312,11 +335,6 @@
       </div>
       <p class="sub" id="i2note"></p>
     </details>
-
-    <button id="i2go" class="btn btn-run btn-block">Run img2img</button>
-    <button id="i2stop" class="btn btn-danger btn-block" hidden>Stop</button>
-    <p class="sub" id="i2prog"></p>
-    <div id="i2err" class="err"></div>
   </div>
 
   <!-- No slider card here either, and no second copy of one: the viewer is a
@@ -369,6 +387,16 @@
   <!-- ==================== Video ==================== -->
   <div class="layout" id="tab-video" hidden>
   <div class="card col-controls">
+    <div class="gohead">
+      <button id="vgo" class="btn btn-run btn-block">Generate clip</button>
+      <!-- Not the image tab's Stop, which finishes the image in flight and then
+           ends the run. There is only ever one clip in flight, so stopping it
+           means killing it — POST /cancel. -->
+      <button id="vstop" class="btn btn-danger btn-block" hidden>Stop</button>
+      <p class="sub" id="vprog"></p>
+      <div id="verr" class="err"></div>
+    </div>
+
     <label for="vprompt">Prompt</label>
     <prompt-box>
       <textarea id="vprompt" placeholder="the crab lifts a claw, slow camera push in"></textarea>
@@ -469,14 +497,6 @@
            tiling it costs time rather than quality. -->
       <label><input type="checkbox" id="vtiling"> VAE tiling (if the decode runs out of VRAM)</label>
     </div>
-
-    <button id="vgo" class="btn btn-run btn-block">Generate clip</button>
-    <!-- Not the image tab's Stop, which finishes the image in flight and then
-         ends the run. There is only ever one clip in flight, so stopping it
-         means killing it — POST /cancel. -->
-    <button id="vstop" class="btn btn-danger btn-block" hidden>Stop</button>
-    <p class="sub" id="vprog"></p>
-    <div id="verr" class="err"></div>
   </div>
 
   <div class="col-result">
@@ -504,6 +524,16 @@
        chooses from what /convert-models offered. -->
   <div class="layout" id="tab-convert" hidden>
   <div class="card col-controls">
+    <div class="gohead">
+      <button id="cgo" class="btn btn-run btn-block">Convert</button>
+      <!-- Same Stop as the video tab and for the same reason: there is one child
+           process, so stopping it means killing it. A half-written GGUF is
+           removed by Engine::convert rather than left for discovery to find. -->
+      <button id="cstop" class="btn btn-danger btn-block" hidden>Stop</button>
+      <p class="sub" id="cprog"></p>
+      <div id="cerr" class="err"></div>
+    </div>
+
     <label for="csource">Model file</label>
     <select id="csource"></select>
     <p class="sub" id="crole"></p>
@@ -515,14 +545,6 @@
 
     <p class="sub" id="csize"></p>
     <p class="sub" id="cdest"></p>
-
-    <button id="cgo" class="btn btn-run btn-block">Convert</button>
-    <!-- Same Stop as the video tab and for the same reason: there is one child
-         process, so stopping it means killing it. A half-written GGUF is
-         removed by Engine::convert rather than left for discovery to find. -->
-    <button id="cstop" class="btn btn-danger btn-block" hidden>Stop</button>
-    <p class="sub" id="cprog"></p>
-    <div id="cerr" class="err"></div>
   </div>
 
   <div class="col-result">

@@ -580,10 +580,12 @@ smaller `hires_max_side` may say the image is already past its budget.
 
 ### Batch and loop
 
-The panel above the Generate button is about the *run* rather than the image. Set
-**Images** to a number and the button says `Generate 4`; the images are produced one at
-a time and each appears as it lands, so you can watch the batch fill the work items
-strip rather than waiting for the lot. Tick **Keep going until stopped** and the button
+The panel at the foot of the controls column is about the *run* rather than the
+image — the Generate button itself is at the top of that column, where it is in
+reach however far you have scrolled the settings. Set **Images** to a number and
+the button says `Generate 4`; the images are produced one at a time and each
+appears as it lands, so you can watch the batch fill the work items strip rather
+than waiting for the lot. Tick **Keep going until stopped** and the button
 becomes `Start loop generation`: it ignores the count and keeps going until you press
 **Stop**, which finishes the image in flight and then ends the run. Stop stays clickable
 the whole time — it is the one control a busy run doesn't disable.

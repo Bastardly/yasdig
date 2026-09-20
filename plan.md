@@ -6,8 +6,11 @@ errored, it would have been conditioned as literal text at weight 0.909.
 `web/js/prompt-weight.js` + `web/js/prompt-box.js`; see *## The prompt box* in
 CLAUDE.md and *### Prompt weighting* in README.md.
 
-# Change request 1 - Move generate button
-Currently, the generate button and associated status info and stop buttons are at the bottom of the menu. I would like to move it to the top, so that it's always the first item in the "card col-control" for all tabs. Reason is that if I generate multiple images, I'll have to scroll up and down, and I even have a large screen. So moving it to the top will be very helpful.
+# ~~Change request 1 - Move generate button~~ — DONE
+The button, its Stop, the progress line and the panel's errors are now a `.gohead`
+block that is the first child of `card col-controls` on all four tabs. The image
+tab's *run* panel (Images, the checkboxes) deliberately stayed at the foot: those
+are set once a session and the prompt is what belongs under the button.
 
 # Feature 2 - User settings
 Currently we have the models.toml where we set the default settings. Instead, it would be nice to have a ./user/settings.json (A pattern I intend on expanding) and a settings tab.

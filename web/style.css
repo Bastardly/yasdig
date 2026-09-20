@@ -176,8 +176,9 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .btn-choice { background: var(--ink-700); color: var(--text-dim); padding: var(--sp-2) var(--sp-5); }
 .btn-choice:hover { color: var(--text); }
 .btn-choice.active { background: var(--state); color: var(--on-state); border-color: var(--state); }
-/* The one button per panel that starts the work, under the controls that
-   describe it. */
+/* The one button per panel that starts the work. It sits at the *head* of its
+   controls column — see `.gohead` — so the top margin is what parts it from the
+   Stop under it rather than from the controls above it. */
 .btn-block { display: flex; width: 100%; margin-top: var(--sp-4); padding: var(--sp-3); font-size: var(--fs-body); }
 /* Last, and deliberately: :disabled and :hover are the same specificity, so
    source order is what decides which a greyed-out button under the pointer
@@ -217,6 +218,24 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 /* Its own class, not `.layout > .card`: the work items panel is a `.card` and
    a direct child too, and would take the controls' cap. */
 .col-controls { flex: 1 1 var(--col-controls); max-width: var(--col-controls-max); }
+/* The first child of every controls column: the button that starts the work,
+   its Stop, the progress line and that panel's errors. Four ids per tab, one
+   rule, because the four panels differ in everything except this.
+
+   At the head rather than at the foot, which reads backwards for anything
+   shaped like a form — a submit button belongs at the end of one. This is not a
+   form: it is filled in once and then pressed over and over, so the button is
+   the most-clicked thing in a column that is two screens tall, and ending the
+   column with it meant scrolling back up after every render. The prompt is the
+   other thing edited per image, which is why it stays directly under this and
+   the run settings did not come up with it.
+
+   The rules are only the seams that move with it: no top margin on the button
+   that is now first (`.btn-block`'s exists to part it from the controls that
+   used to be above), and a hairline under the block so it reads as the panel's
+   head rather than as the first of the settings. */
+.gohead { border-bottom: var(--line); padding-bottom: var(--sp-3); margin-bottom: var(--sp-1); }
+.gohead > .btn-block:first-child { margin-top: 0; }
 .col-result { flex: 3 1 var(--col-result); max-width: var(--col-result-max); }
 .workitems { flex: 2 1 var(--col-items); max-width: var(--col-items-max); }
 /* A pane that is one panel and wants the whole row: the Outputs gallery. The
