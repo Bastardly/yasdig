@@ -448,7 +448,10 @@ table. The eight grading knobs were never per-model at all.
 one form on the page you can walk away from mid-edit — every other panel either
 acts immediately or is consumed by the button beside it — so `markDirty()`
 toggles `.unsaved` on the Settings tab button as well as on `#setmsg`, and arms
-a `beforeunload` while there is something to lose. It compares
+a `beforeunload` while there is something to lose. The tab's mark is the words
+"Unsaved changes" through a `::after`, not a dot: it has to be readable from
+whichever tab you walked away to, and a symbol you must already know the meaning
+of isn't. The tab row wraps, so the width is free. It compares
 `JSON.stringify(body())` against the last settled snapshot rather than watching
 fields, which asks the only question worth asking: would saving now change
 anything? `settle()` is the one place that snapshot is taken, and it takes it

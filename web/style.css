@@ -240,10 +240,14 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .gohead > .btn-block:first-child { margin-top: 0; }
 /* Edits in a form that are not on disk yet. Amber rather than red: nothing is
    wrong, there is just something left to do — and it is the same colour as the
-   button that finishes it. The dot is on the tab too (below), because the whole
-   point is to be visible from a tab you have walked away to. */
+   button that finishes it.
+
+   The tab says it in words rather than carrying a dot, which is the whole
+   reason this is on the tab at all: it has to be readable from the tab you
+   walked away to, and a mark you have to already know the meaning of isn't.
+   The tab row wraps, so the extra width costs nothing. */
 .sub.unsaved { color: var(--accent); }
-.tab.unsaved::after { content: "•"; margin-left: var(--sp-1); color: var(--accent); }
+.tab.unsaved::after { content: " — Unsaved changes"; color: var(--accent); }
 .col-result { flex: 3 1 var(--col-result); max-width: var(--col-result-max); }
 .workitems { flex: 2 1 var(--col-items); max-width: var(--col-items-max); }
 /* A pane that is one panel and wants the whole row: the Outputs gallery. The

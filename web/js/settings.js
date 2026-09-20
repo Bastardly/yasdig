@@ -235,7 +235,8 @@ let saved = null;
 // Settings are the one form on the page you can walk away from mid-edit: every
 // other panel either acts immediately or is consumed by the button next to it.
 // So the mark goes on the tab as well as under the button — a note visible only
-// on the tab you have left is not a note.
+// on the tab you have left is not a note. The tab spells it out rather than
+// carrying a dot; the stylesheet's `.tab.unsaved` rule is that half.
 function markDirty() {
   const dirty = saved !== null && JSON.stringify(body()) !== saved;
   $('setmsg').textContent = dirty ? 'Unsaved changes' : '';
