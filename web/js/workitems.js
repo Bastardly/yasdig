@@ -106,8 +106,14 @@ async function clickWorkItem(id) {
 // differ from the image beside it.
 function applyWorkItem(item) {
   const p = item.profile;
-  $('prompt').value = item.prompt;
-  $('negative').value = item.negative ?? '';
+  // The prompt as it was typed, where the roll made those two different things:
+  // `{animal}` goes back in the box, not the crab it drew. Lossless because the
+  // seed goes back with it two lines down — same seed, same roll — so pressing
+  // Generate reproduces this image and clearing the seed re-rolls it. A sidecar
+  // written before variables existed has no typed copy, and neither has a prompt
+  // with nothing in it to roll; both mean "the stored one is what was typed".
+  $('prompt').value = item.typed_prompt ?? item.prompt;
+  $('negative').value = item.typed_negative ?? item.negative ?? '';
   $('seed').value = item.seed;
   // Assigned directly, and deliberately without firing `change`: that listener
   // is syncAdvanced, which would overwrite every field below with the model's
@@ -135,8 +141,8 @@ function applyWorkItem(item) {
   // picture came from. Only the img2img panel is restored — the model and
   // strength that made it live there, not in this tab's boxes.
   if (item.source) {
-    $('i2prompt').value = item.prompt;
-    $('i2negative').value = item.negative ?? '';
+    $('i2prompt').value = item.typed_prompt ?? item.prompt;
+    $('i2negative').value = item.typed_negative ?? item.negative ?? '';
     $('i2seed').value = item.seed;
     if (models.some((m) => m.name === item.template)) $('i2template').value = item.template;
     $('i2steps').value = p.source_steps;

@@ -25,6 +25,7 @@
 use crate::config::{Config, Filters, FiltersPatch, LoraRef, Profile};
 use crate::fsr::Fsr;
 use crate::sd::{Monitor, SdRunner, VideoIo};
+use crate::variables;
 use crate::videos::{Clip, VideoStore};
 use crate::workitems::{self, WorkItem};
 use anyhow::{bail, Context, Result};
@@ -296,6 +297,11 @@ pub struct GenResult {
     /// still describes the model that actually ran even when the escalation
     /// named a different checkpoint.
     pub start: Filters,
+    /// The prompt as it was actually conditioned — with every `{variable}`
+    /// already drawn. It is the retained one, so a refine or a hi-res reports
+    /// the sentence that made the image rather than whatever is in the box now,
+    /// and the page can show the roll without hovering the work-item grid.
+    pub prompt: String,
 }
 
 /// The intermediates of one result, kept on disk so quality can be escalated
@@ -333,6 +339,16 @@ struct Pending {
     filters: Filters,
     prompt: String,
     negative: Option<String>,
+    /// The prompt and negative as they were typed, before `variables::expand`
+    /// rolled them. `None` when there was nothing to roll.
+    ///
+    /// Carried through every escalation so that `save_output` — which builds
+    /// its sidecar out of this struct, not out of the request — can record what
+    /// a refined and enlarged image was asked for as well as what it was
+    /// conditioned with. `prompt` above stays the resolved sentence, because
+    /// that is what every pass re-conditions.
+    typed_prompt: Option<String>,
+    typed_negative: Option<String>,
     seed: i64,
     /// The archived generation this result descends from, if it has one — set by
     /// `run` and by `open`, and carried through every escalation. Only used for
@@ -619,6 +635,29 @@ impl Engine {
         }
 
         let seed = if req.seed < 0 { random_seed() } else { req.seed };
+        // Variables are drawn here rather than in the page: the prompt box has to
+        // keep `{animal}` for the next image of a run, so what ran and what was
+        // typed are different strings — and this is the side that records what
+        // ran, into the work item and into the `Pending` every escalation reads.
+        // The roll follows `seed`, so the promise the seed box makes still holds.
+        // See [`crate::variables`].
+        let vars = self.cfg.settings().variables;
+        let prompt = variables::expand(&req.prompt, &vars, seed)?;
+        let negative = req
+            .negative
+            .as_deref()
+            .map(|n| variables::expand(n, &vars, seed))
+            .transpose()?;
+        // The other half of what this image is: the sentence as typed, kept
+        // only where the roll changed it. Reopening the work item puts this one
+        // back in the box rather than the animal it drew, and the seed beside it
+        // makes that lossless — see [`crate::variables::typed`].
+        let typed_prompt = variables::typed(&req.prompt, &prompt);
+        let typed_negative = req
+            .negative
+            .as_deref()
+            .zip(negative.as_deref())
+            .and_then(|(src, out)| variables::typed(src, out));
         let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();
         let lowres = scratch.path(self.work_dir.join(format!("{id}-0-base.png")));
@@ -626,11 +665,11 @@ impl Engine {
         let display = scratch.path(self.work_dir.join(format!("{id}-0-full.png")));
 
         let sd = self.sd();
-        let neg = req.negative.as_deref();
+        let neg = negative.as_deref();
 
         // 1) Distilled generation at base resolution.
         let t = Instant::now();
-        sd.txt2img(tpl, &req.prompt, neg, seed, &lowres)?;
+        sd.txt2img(tpl, &prompt, neg, seed, &lowres)?;
         let gen_ms = t.elapsed().as_millis();
 
         // 2) EASU upscale, unsharpened — cheap, and enough on its own for a
@@ -665,8 +704,10 @@ impl Engine {
         let mut item = WorkItem {
             id: workitems::new_id(seed),
             created_ms: now_ms(),
-            prompt: req.prompt.clone(),
-            negative: req.negative.clone(),
+            prompt: prompt.clone(),
+            negative: negative.clone(),
+            typed_prompt: typed_prompt.clone(),
+            typed_negative: typed_negative.clone(),
             seed,
             template: req.template.clone(),
             width: w,
@@ -699,8 +740,10 @@ impl Engine {
             display,
             filters,
             profile: profile.clone(),
-            prompt: req.prompt.clone(),
-            negative: req.negative.clone(),
+            prompt: prompt.clone(),
+            negative: negative.clone(),
+            typed_prompt,
+            typed_negative,
             seed,
             work_id,
             source: None,
@@ -792,6 +835,22 @@ impl Engine {
 
         let stored = self.output_source(&req.source)?;
         let seed = if req.seed < 0 { random_seed() } else { req.seed };
+        // The same roll as a txt2img's, and for the same reasons — see `run`.
+        let vars = self.cfg.settings().variables;
+        let prompt = variables::expand(&req.prompt, &vars, seed)?;
+        let negative = req
+            .negative
+            .as_deref()
+            .map(|n| variables::expand(n, &vars, seed))
+            .transpose()?;
+        // The typed pair, exactly as in `run` — and it matters here too, because
+        // an img2img generation is reopened through the same grid.
+        let typed_prompt = variables::typed(&req.prompt, &prompt);
+        let typed_negative = req
+            .negative
+            .as_deref()
+            .zip(negative.as_deref())
+            .and_then(|(src, out)| variables::typed(src, out));
         let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();
         let src = scratch.path(self.work_dir.join(format!("{id}-0-src.png")));
@@ -835,8 +894,8 @@ impl Engine {
         let t = Instant::now();
         self.sd().img2img(
             &profile,
-            &req.prompt,
-            req.negative.as_deref(),
+            &prompt,
+            negative.as_deref(),
             seed,
             &src,
             &raw,
@@ -862,8 +921,10 @@ impl Engine {
         let mut item = WorkItem {
             id: workitems::new_id(seed),
             created_ms: now_ms(),
-            prompt: req.prompt.clone(),
-            negative: req.negative.clone(),
+            prompt: prompt.clone(),
+            negative: negative.clone(),
+            typed_prompt: typed_prompt.clone(),
+            typed_negative: typed_negative.clone(),
             seed,
             template: req.template.clone(),
             width: w,
@@ -893,8 +954,10 @@ impl Engine {
             display,
             filters,
             profile,
-            prompt: req.prompt.clone(),
-            negative: req.negative.clone(),
+            prompt: prompt.clone(),
+            negative: negative.clone(),
+            typed_prompt,
+            typed_negative,
             seed,
             work_id,
             source: Some(req.source.clone()),
@@ -992,13 +1055,24 @@ impl Engine {
             .unwrap_or_else(|| m.negative_prompt.clone());
 
         let seed = if req.seed < 0 { random_seed() } else { req.seed };
+        // The same roll as a still's, over both prompts — see `run`. The
+        // negative has already picked up the model's published one by here, and
+        // that is plain text with no braces in it.
+        let vars = self.cfg.settings().variables;
+        let prompt = variables::expand(&req.prompt, &vars, seed)?;
+        let rolled = variables::expand(&negative, &vars, seed)?;
+        // Both typed halves are taken before the shadowing below, which is the
+        // whole reason the rolled negative gets a name of its own here.
+        let typed_prompt = variables::typed(&req.prompt, &prompt);
+        let typed_negative = variables::typed(&negative, &rolled);
+        let negative = rolled;
         let id = workitems::new_id(seed);
         let (pattern, mut dir) = self.videos.prepare(&id)?;
 
         let t = Instant::now();
         self.sd().video(
             &m,
-            &req.prompt,
+            &prompt,
             &negative,
             seed,
             &VideoIo {
@@ -1013,8 +1087,10 @@ impl Engine {
         let mut clip = Clip {
             id,
             created_ms: now_ms(),
-            prompt: req.prompt.clone(),
+            prompt,
             negative,
+            typed_prompt,
+            typed_negative,
             seed,
             model: req.model.clone(),
             // Placeholders: `finish` replaces all three from the frames on disk,
@@ -1389,6 +1465,8 @@ impl Engine {
             profile: item.profile,
             prompt: item.prompt,
             negative: item.negative,
+            typed_prompt: item.typed_prompt,
+            typed_negative: item.typed_negative,
             seed: item.seed,
             work_id: Some(item.id),
             // Restored from the sidecar, so reopening an image-to-image
@@ -1468,6 +1546,8 @@ impl Engine {
             profile,
             prompt: item.as_ref().map(|i| i.prompt.clone()).unwrap_or_default(),
             negative: item.as_ref().and_then(|i| i.negative.clone()),
+            typed_prompt: item.as_ref().and_then(|i| i.typed_prompt.clone()),
+            typed_negative: item.as_ref().and_then(|i| i.typed_negative.clone()),
             seed: item.as_ref().map(|i| i.seed).unwrap_or(-1),
             // Kept so a save out of this tab lands as `{id}-s{step}-2.png`,
             // grouped with the generation it came from — which is what
@@ -1500,6 +1580,8 @@ impl Engine {
             created_ms: now_ms(),
             prompt: p.prompt.clone(),
             negative: p.negative.clone(),
+            typed_prompt: p.typed_prompt.clone(),
+            typed_negative: p.typed_negative.clone(),
             seed: p.seed,
             template: p.profile.name.clone(),
             width: p.raw_w,
@@ -1575,6 +1657,7 @@ impl Engine {
             can_hires: entry.can_hires(),
             filters: entry.filters,
             start: Filters::starting_at(entry.profile.sharpness, entry.profile.clarity),
+            prompt: entry.prompt.clone(),
         }
     }
 }

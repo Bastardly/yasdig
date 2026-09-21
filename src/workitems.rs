@@ -59,6 +59,20 @@ pub struct WorkItem {
     pub created_ms: u128,
     pub prompt: String,
     pub negative: Option<String>,
+    /// The prompt as it was *typed*, with its `{variables}` still in it —
+    /// `None` when there was nothing to roll, which is also what a sidecar
+    /// written before variables existed says. Reopening restores this one where
+    /// it exists (`crate::variables::typed`), and the stored `seed` is what
+    /// makes that lossless: same seed, same roll, same picture.
+    ///
+    /// `typed_` rather than the three obvious names, all of which are taken and
+    /// mean something else here: `template` is the checkpoint, `raw` is the
+    /// unfiltered image, and `source` is the output stem an image was diffused
+    /// *from*.
+    #[serde(default)]
+    pub typed_prompt: Option<String>,
+    #[serde(default)]
+    pub typed_negative: Option<String>,
     pub seed: i64,
     /// Registry key the image was generated from. Kept beside `profile.name` so
     /// the UI can re-select the model without reaching into the profile.
@@ -343,6 +357,9 @@ impl Store {
                 .unwrap_or(0),
             prompt: String::new(),
             negative: None,
+            // An import has no prompt at all, so it has no typed one either.
+            typed_prompt: None,
+            typed_negative: None,
             seed: -1,
             // Not a registry key, and deliberately not one that could ever be
             // mistaken for one — the parentheses aren't in any model name. The
@@ -573,6 +590,9 @@ mod tests {
             created_ms,
             prompt: "a lovely fluffy crab".to_string(),
             negative: None,
+            // Rolled, so every round-trip below carries the typed half too.
+            typed_prompt: Some("a lovely fluffy {animal}".to_string()),
+            typed_negative: None,
             seed: 7,
             template: "test".to_string(),
             width: 320,
@@ -809,12 +829,41 @@ mod tests {
         assert_eq!(back.sharpness, 0.4);
         assert_eq!(back.profile.name, "someturbo");
         assert_eq!(back.prompt, it.prompt);
+        // The prompt as typed rides along, so a save out of a rolled generation
+        // records what was asked for as well as what was conditioned.
+        assert_eq!(back.typed_prompt, it.typed_prompt);
 
         // Dropped in by hand: listed, openable, and with nothing to say.
         std::fs::copy(&src, store.output_path("888-1-s0")).unwrap();
         assert!(store.load_output("888-1-s0").is_none());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+
+    /// Every sidecar on disk before variables existed has no `typed_prompt` key
+    /// in it, and there are hundreds of them in a real `work/workitems/`. The
+    /// field is `#[serde(default)]` for exactly that, and `None` there means the
+    /// same thing it means for a prompt with nothing to roll — the stored prompt
+    /// *is* what was typed — which is why the page needs no version check, only
+    /// `typed_prompt ?? prompt`.
+    #[test]
+    fn a_sidecar_written_before_variables_still_loads() {
+        let json = r#"{
+            "id": "500-7", "created_ms": 500,
+            "prompt": "a lovely fluffy crab", "negative": null, "seed": 7,
+            "template": "test", "width": 320, "height": 160,
+            "thumb_width": 0, "thumb_height": 0,
+            "profile": null
+        }"#
+        .replace("\"profile\": null", &format!(
+            "\"profile\": {}",
+            serde_json::to_string(&Profile::default()).unwrap()
+        ));
+        let back: WorkItem = serde_json::from_str(&json).expect("an old sidecar");
+        assert_eq!(back.prompt, "a lovely fluffy crab");
+        assert_eq!(back.typed_prompt, None);
+        assert_eq!(back.typed_negative, None);
     }
 
     /// An import is the one image whose name the *user* chose, and the answer is

@@ -600,6 +600,16 @@
       <em>different</em> about it. It overrides whichever of these it names and
       inherits the rest from here, so a preset for a Turbo model is three lines
       rather than a copy of this page.</p>
+      <p class="sub"><b>Prompt variables</b> are word lists a prompt can draw
+      from. Name one <code>animal</code>, give it
+      <code>crab, horse, dog</code>, and <code>{animal}</code> anywhere in a
+      prompt becomes one of them — a different one per image, so
+      <b>Generate 20</b> is twenty subjects rather than twenty seeds of one
+      picture. Braces rather than <code>[brackets]</code> because
+      <code>[cat]</code> already means something to the sampler: it
+      de-emphasises the word. Case is ignored, and a name nothing answers to is
+      reported rather than quietly drawn into the image as text.</p>
+
       <p class="sub">Nothing here is retroactive: an image already made keeps
       the settings it was made with, which is what lets reopening a work item
       restore it faithfully.</p>

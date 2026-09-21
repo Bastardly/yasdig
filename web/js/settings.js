@@ -1,4 +1,4 @@
-import { $, post } from './dom.js';
+import { $, esc, post } from './dom.js';
 import { UPSCALES, setUpFactor, loadModels } from './image.js';
 import { wireHints } from './hints.js';
 
@@ -30,12 +30,19 @@ const BLANK = true;
 // Where a section starts. Named after the tab whose controls it holds the
 // defaults for, which is what makes "why is Strength in here twice" answer
 // itself. `fold` opens a <details> that runs to the end of the form.
-const SECTION = (title, fold = false) => ({ title, fold });
+const SECTION = (title, fold = false, help = null) => ({ title, fold, help });
 
 const FIELDS = [
   SECTION('Prompts'),
   { key: 'prompt', from: 'prompt', kind: 'textarea' },
   { key: 'negative', from: 'negative', kind: 'text' },
+
+  // Not a default for any control: the word lists behind `{animal}` in a
+  // prompt. It is here rather than on a tab of its own because it is read at
+  // the same moment as the default prompt above it — and because it is stored
+  // in the same file, so it saves with the same button.
+  SECTION('Prompt variables', false, 'setvars'),
+  { key: 'variables', kind: 'vars' },
 
   SECTION('Image'),
   { key: 'steps', from: 'steps', kind: 'int', min: 1, max: 100 },
@@ -80,6 +87,20 @@ function labelOf(id) {
 
 const fieldId = (f) => `set-${f.key}`;
 
+// One variable: its name, its words as a comma-separated line, and a way to
+// remove it. The words are one text box rather than a list of them because that
+// is how the list is read as well as written — "crab, horse, dog" is the whole
+// UI, and spaces inside a word are free.
+const varRow = (name = '', words = []) => `
+  <div class="varrow">
+    <input class="varname" value="${esc(name)}" placeholder="animal"
+      aria-label="Variable name">
+    <button type="button" class="btn btn-danger" data-vardel
+      title="Remove this variable">&times;</button>
+    <input class="varwords" value="${esc(words.join(', '))}"
+      placeholder="crab, horse, dog, cat" aria-label="Words, comma separated">
+  </div>`;
+
 function control(f) {
   const id = fieldId(f);
   const attrs = ['min', 'max', 'step']
@@ -99,6 +120,13 @@ function control(f) {
       return `<textarea id="${id}" class="short" placeholder="one argument per line"></textarea>`;
     case 'check':
       return `<input type="checkbox" id="${id}">`;
+    // The rows are drawn by `put` from what the server sent, and read back out
+    // of the DOM by `take` — no shadow copy, because nothing here re-renders
+    // while you are typing in it. Add and remove are one delegated listener in
+    // `initSettings`, for the same reason the dirty check is.
+    case 'vars':
+      return `<div id="${id}" class="vars"></div>
+        <button type="button" class="btn" data-varadd>Add variable</button>`;
     case 'upscale':
       return `<select id="${id}">${UPSCALES.map(([v, label]) =>
         `<option value="${v}">${label}</option>`).join('')}</select>`;
@@ -120,8 +148,16 @@ function markup() {
         folded = true;
         out.push(`<details class="spaced"><summary>${f.title}</summary>`);
       } else {
-        out.push(`<label class="grouphead">${f.title}</label>`);
+        out.push(`<label class="grouphead"${
+          f.help ? ` data-help="${f.help}"` : ''}>${f.title}</label>`);
       }
+      continue;
+    }
+    // The only field with no label of its own: the section heading above it is
+    // the label, there being exactly one field under it, and "Prompt variables"
+    // followed by "Variables" says it twice.
+    if (f.kind === 'vars') {
+      out.push(control(f));
       continue;
     }
     const label = f.label ?? labelOf(f.from);
@@ -148,6 +184,15 @@ function put(f, v) {
     el.checked = !!v;
     return;
   }
+  if (f.kind === 'vars') {
+    // In the order the server sent them, which is alphabetical: the table is a
+    // `BTreeMap`, so the file has a stable order and a save that changed
+    // nothing produces no diff. A row added at the bottom therefore moves to
+    // where its name belongs on the next save.
+    el.innerHTML = Object.entries(v ?? {}).map(([name, words]) =>
+      varRow(name, words)).join('');
+    return;
+  }
   if (f.kind === 'lines') {
     el.value = (v ?? []).join('\n');
     return;
@@ -167,6 +212,20 @@ function put(f, v) {
 function take(f) {
   const el = $(fieldId(f));
   if (f.kind === 'check') return el.checked;
+  if (f.kind === 'vars') {
+    const out = {};
+    for (const row of el.querySelectorAll('.varrow')) {
+      // A row whose name is still empty is one that was just added, not an
+      // answer — skipping it is what stops a half-typed variable from blocking
+      // Save. The server normalises too; this is only so that what is sent and
+      // what comes back agree, and the dirty check compares them.
+      const name = row.querySelector('.varname').value.trim().toLowerCase();
+      if (!name) continue;
+      out[name] = row.querySelector('.varwords').value
+        .split(',').map((w) => w.trim()).filter(Boolean);
+    }
+    return out;
+  }
   if (f.kind === 'lines') {
     return el.value.split('\n').map((s) => s.trim()).filter(Boolean);
   }
@@ -266,7 +325,29 @@ async function load() {
   }
 }
 
+// Two rows with the same name, which is the one error the server cannot see:
+// `take` builds an object and JSON collapses duplicate keys silently, so by the
+// time the body is written one of the two rows has already been lost.
+// Everything else about the table is checked on the server as well, against the
+// file a text editor could have left.
+function duplicateName() {
+  const seen = new Set();
+  for (const box of $('set-variables').querySelectorAll('.varname')) {
+    const name = box.value.trim().toLowerCase();
+    if (!name) continue;
+    if (seen.has(name)) return name;
+    seen.add(name);
+  }
+  return null;
+}
+
 async function save() {
+  const dup = duplicateName();
+  if (dup) {
+    $('seterr').textContent = `'${dup}' is defined twice — variable names `
+      + 'ignore case, so two spellings of one name are one variable.';
+    return;
+  }
   $('seterr').textContent = '';
   $('setmsg').classList.remove('unsaved');
   $('setmsg').textContent = 'Saving…';
@@ -298,6 +379,22 @@ export function initSettings() {
   for (const ev of ['input', 'change']) {
     $('setform').addEventListener(ev, markDirty);
   }
+  // Adding and removing a variable row, delegated for the same reason: one
+  // listener that survives the rows being redrawn by a save. A row is appended
+  // or detached rather than the list being re-rendered, so every other row
+  // keeps exactly what is typed in it.
+  $('setform').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-vardel]');
+    const add = e.target.closest('[data-varadd]');
+    if (!del && !add) return;
+    if (del) {
+      del.closest('.varrow').remove();
+    } else {
+      $('set-variables').insertAdjacentHTML('beforeend', varRow());
+      $('set-variables').lastElementChild.querySelector('.varname').focus();
+    }
+    markDirty();
+  });
   // The page holds the only copy of an unsaved edit, so a reload would take it
   // with no way back. Only armed while there is something to lose.
   window.addEventListener('beforeunload', (e) => {

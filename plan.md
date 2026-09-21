@@ -20,18 +20,20 @@ override, so it states what is different about one checkpoint and inherits the
 rest from your settings. Includes the default prompt. Video deliberately left out.
 See *## Settings* in CLAUDE.md and *### Settings* in README.md.
 
-# Feature 3 - Favorite work items
-Under the image tab, we have the work items section which lists all our current work items. Problem is that this quickly becomes very large, which means that I often use the "delete all" function.
-But I would like to be able to save some work items as favorites that is saved under ./user/favorite (not created).
+# ~~Feature 3 - User defined prompt variables~~ — DONE
+`{animal}` rather than `[animal]`: `[x]` is sd.cpp's ÷1.1 down-weight, so with
+square brackets a mistyped name could never be reported — it would just be
+conditioned as literal text at 0.909. Braces mean nothing to that parser, so an
+unknown name is an error naming the variables that do exist. Case is ignored,
+the draw follows the seed (same seed, same picture, prompt included), and what
+actually ran is recorded with the image and re-used by a refine. Edited under
+*Prompt variables* on the Settings tab, stored as `[variables]` in
+`user/settings.toml`. See *## Prompt variables* in CLAUDE.md and *### Prompt
+variables* in README.md.
 
-There are two parts to this.
-1) Be able to mark a work item as a favorite. I think we could borrow the UX pattern from delete, where we choose a "Click to favorite" (Adjust grammer if needed) radio button. Click the work items we wish to save, highlight them green instead of red, and save to favorite. Once that happens, a copy is made under the ./user/favorite folder.
-2) We need to be able to show our favorites. So I was thinking two buttons at the top of the workitems card: "Current" and "Favorites". 
-And all that really should do, is to toggle between the two souce folders. Only difference, is that while on the Favorites folder, we should not show the "Click to favorite", since adding favorites to favorites wouldn't make sense. Also the delete all button shouldn't be shown either in favorite mode.
+<details><summary>original request</summary>
 
-Of course, the delete and delete all should only influence the selected source folder.
 
-# Feature 4 - User defined prompt variables.
 I would like to create a new section under the settings tab called variables.
 
 Here we should be able to add, edit and remove words, with words attached. E.g.
@@ -47,3 +49,43 @@ If people write jibberish, e.g. ",,,,," that's their problem. But do add validat
 Goal is to be able to use this in a prompt using a format - I don't know if there is a standard for this. But here is an example:
 "A lovely [animal] wearing a [color] hat"
 So that every time I run the prompt, a random generation is made. E.g. "A lovely crab wearing a blue hat"
+
+
+</details>
+
+# Feature 3 issues
+
+**1) Only ever picks the first word — withdrawn.** `variables::pick` is uniform;
+the seed box was pinned to one number, and the roll follows the seed by design.
+`the_same_seed_rolls_the_same_prompt` already pins that it varies.
+
+**4) A work item stored the rolled word, not the variable — DONE.** Both
+sentences are archived now: `WorkItem`/`Clip`/`Pending` carry
+`typed_prompt`/`typed_negative` beside the resolved pair, written by
+`variables::typed` and only where the roll changed the text — so `None` means
+"nothing was rolled" for a plain prompt and for every sidecar written before
+this, and the page reads `typed_prompt ?? prompt`. Reopening restores the
+braces; the seed comes back with them, so Generate reproduces the same picture
+and clearing the seed re-rolls it. See *## Prompt variables* in CLAUDE.md and
+*### Prompt variables* in README.md.
+
+Still open, both layout and independent of the above:
+
+2) Prompt variables wants its own segment on the Settings tab — many of them
+   push the rest of the form down. Its own card in that tab's right-hand column
+   is the shape to aim at: the column is wide enough for `name | words | ×` on
+   one row, and the prose explaining variables is already there. Needs
+   `markup()` to render into a second container and the delegated listeners
+   re-rooted from `#setform` to `#tab-settings`.
+3) The *Add variable* button belongs above the rows, not below them.
+
+# Feature 4 - Favorite work items
+Under the image tab, we have the work items section which lists all our current work items. Problem is that this quickly becomes very large, which means that I often use the "delete all" function.
+But I would like to be able to save some work items as favorites that is saved under ./user/favorite (not created).
+
+There are two parts to this.
+1) Be able to mark a work item as a favorite. I think we could borrow the UX pattern from delete, where we choose a "Click to favorite" (Adjust grammer if needed) radio button. Click the work items we wish to save, highlight them green instead of red, and save to favorite. Once that happens, a copy is made under the ./user/favorite folder.
+2) We need to be able to show our favorites. So I was thinking two buttons at the top of the workitems card: "Current" and "Favorites". 
+And all that really should do, is to toggle between the two souce folders. Only difference, is that while on the Favorites folder, we should not show the "Click to favorite", since adding favorites to favorites wouldn't make sense. Also the delete all button shouldn't be shown either in favorite mode.
+
+Of course, the delete and delete all should only influence the selected source folder.

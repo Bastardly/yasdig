@@ -198,6 +198,7 @@ doesn't name. Tuned for standard (non-distilled) SDXL.
 | `hires_flash_attn` | `--diffusion-fa` for the img2img passes when they run large (default true; worth 6× at 2048²) |
 | `weight_type` *(opt)* | on-the-fly quantization, e.g. `q8_0`, via sd-cli `--type` |
 | `extra_args` *(opt)* | arbitrary flags passed verbatim to sd-cli |
+| `[variables]` | named word lists a prompt draws from — `animal = ["crab", "horse"]` makes `{animal}` in any prompt one of them. See [Prompt variables](#prompt-variables) |
 
 All three denoise strengths must be between **0.05 and 0.95** — a
 strength of 0 makes the pass a silent no-op, and at exactly 1.0 sd.cpp discards the
@@ -433,7 +434,10 @@ Press **Save settings** and it is written and takes effect immediately — the
 model list and the Advanced panel refill themselves, with no restart and no
 reload.
 
-Every field is the default for a control on one of the other tabs, and carries
+*Prompt variables* is the one section that is not a set of defaults: it is the
+word lists behind `{animal}` in a prompt, and [Prompt
+variables](#prompt-variables) below says what they do. Everything else is the
+default for a control on one of the other tabs, and carries
 that control's own label and its own **(i)**, so "Refine strength" here is the
 same words and the same explanation as "Refine strength" there. The sections are
 named after the tabs they belong to, which is why *Steps* appears twice — once
@@ -459,6 +463,55 @@ those same built-ins rather than refusing to run.
 
 Nothing here is retroactive. An image already made keeps the settings it was
 made with, which is what lets reopening a work item restore it faithfully.
+
+### Prompt variables
+
+A **variable** is a name and a list of words, defined under *Prompt variables* on
+the Settings tab. Write it in braces anywhere in a prompt and each image draws
+one of the words:
+
+```
+animal = crab, horse, dog, cat
+color  = red, blue, yellow
+
+"A lovely {animal} wearing a {color} hat"   →   "A lovely crab wearing a blue hat"
+```
+
+Which makes a batch run vary its subject rather than only its seed: **Generate
+20** with `{animal}` in the box is twenty different pictures, not twenty seeds
+of one. Write the same variable twice and it is drawn twice — `a {color} hat and
+a {color} coat`.
+
+Separate the words with commas. Spaces inside a word are fine (`glorious gopher,
+pretty python`), and a variable is deleted by removing its row.
+
+Five things are worth knowing:
+
+* **Braces, not `[brackets]`.** `[cat]` already means something to the sampler —
+  it de-emphasises the word by 1.1× — so `[animal]` could never be told apart
+  from a typo. With braces a name nothing answers to is an error naming the
+  variables you *do* have, instead of the word `{animl}` quietly appearing in
+  the picture.
+* **Case is ignored.** `{Animal}`, `{ANIMAL}` and `{animal}` all find `animal`.
+* **The draw follows the seed.** The same seed and the same settings still give
+  the same image, prompt included — so pinning a seed and pressing Generate
+  twice gives the same words both times, and clicking a reported seed to
+  reproduce a picture still works. A batch walks the seed, so it still varies.
+* **The box keeps the braces.** What actually ran is recorded with the image —
+  it is in the work item, on its thumbnail's tooltip, and on the line under the
+  result — and a Refine or Hi-res of that image re-uses it rather than drawing a
+  different animal. Only a new generation rolls again.
+* **Reopening a work item puts the braces back.** Both sentences are kept, so
+  clicking a thumbnail restores `a lovely {animal}` rather than the crab it
+  drew — which is what makes a saved generation a workflow you can run again
+  instead of one picture. Nothing is lost by it: the seed comes back at the same
+  time and the roll follows the seed, so pressing **Generate** reproduces that
+  exact image, and clearing the seed to `-1` draws a new animal. The sentence
+  that actually ran stays on the line under the picture. The same is true of a
+  clip on the Video tab.
+
+Anything that is not a well-formed name is left alone, so `{a nice day}` and a
+stray `{` stay exactly as typed.
 
 ### Prompt weighting
 
@@ -936,6 +989,7 @@ needs a Vulkan device and nothing else.
                  "highlights": 0.0, "shadows": 0.0, "saturation": 0.0, "hue": 0.0,
                  "temperature": 0.0, "tint": 0.0 },
     "filters_start": { "sharpness": 0.35, "clarity": 0.0, "…": 0.0 },
+    "prompt": "A lovely crab wearing a blue hat",
     "timings": { "gen_ms": 0, "fsr_ms": 0, "refine_ms": 0, "hires_ms": 0 } }
   ```
   `image_id` addresses the retained intermediates; `can_refine` / `can_hires` say which
@@ -945,7 +999,10 @@ needs a Vulkan device and nothing else.
   escalation, which carries the colour grade across, and `filters_start` is what the
   viewer's **Reset** goes back to. `work_id` is the archived
   generation this descends from — it outlives the process, unlike `image_id`, and is
-  `null` only if the archive write failed.
+  `null` only if the archive write failed. `prompt` is the text that was actually
+  conditioned, with every [`{variable}`](#prompt-variables) already drawn — it is
+  what the work item records, and what a later `/refine` or `/hires` of this image
+  runs with.
 - `POST /upload` — the one route with a **binary body**: a PNG, sent as-is with
   `Content-Type: image/png`. No multipart, no base64 — `Request.body` is bytes
   already, and skipping the envelope is a third off the wire. It lands in

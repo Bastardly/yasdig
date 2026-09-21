@@ -14,6 +14,15 @@ import { FILTERS } from './viewer.js';
 // controls in one, so it is a string spliced into all three entries rather than
 // three sentences free to drift apart — the same rule the comment above states,
 // applied one level down.
+// The same sentence on both prompt boxes, for the same reason `HELP` is keyed
+// by what a control is: a variable works in either of them, and two copies of
+// this would be two chances to go stale.
+const VARIABLES =
+  ' A word in braces is a variable — {animal} draws one of the words you listed '
+  + 'for it in Settings, per image, so a batch run varies its subject and not '
+  + 'just its seed. Case is ignored, and a name nothing answers to is reported '
+  + 'rather than drawn as words.';
+
 const WEIGHTING =
   ' Put the caret in a word or select a phrase and press Ctrl+↑ / Ctrl+↓ (or '
   + 'hold Ctrl and roll the wheel) to weight it in steps of 0.1: the text '
@@ -24,11 +33,11 @@ const HELP = [
     text: 'What you want to see. Subject first, then style, lighting and lens; '
         + 'commas separate ideas and the earlier words carry more weight. A list '
         + 'of tags works as well as a sentence — these models were trained on both.'
-        + WEIGHTING },
+        + VARIABLES + WEIGHTING },
   { ids: ['negative', 'i2negative'],
     text: 'What to steer away from. It works on flaws that keep turning up — '
         + 'watermark, extra fingers, blurry — rather than on objects you simply '
-        + 'did not ask for, which are already absent.' + WEIGHTING },
+        + 'did not ask for, which are already absent.' + VARIABLES + WEIGHTING },
   { ids: ['vnegative'],
     text: 'What to steer away from. Pre-filled with the model’s own published '
         + 'negative prompt, which for Wan is 400 characters of Chinese nobody '
@@ -197,6 +206,15 @@ const HELP = [
         + 'multiply fp8 at all, so an fp8 file is cast to BF16 while it runs and '
         + 'needs about twice its size in memory. q4_K is the first type on this '
         + 'list the GPU can use directly.' },
+
+  { ids: ['setvars'],
+    text: 'Named lists of words that a prompt can draw from: call one "animal", '
+        + 'give it "crab, horse, dog", and {animal} in any prompt becomes one of '
+        + 'them — a different one per image, so Generate 20 is twenty subjects. '
+        + 'Separate the words with commas; spaces inside a word are fine. Braces '
+        + 'rather than [brackets] because [cat] already means something to the '
+        + 'sampler: it de-emphasises the word. The draw follows the seed, so the '
+        + 'same seed still gives the same picture.' },
 
   // The four settings with no control anywhere else to be the default *for*.
   // They were only ever reachable by editing models.toml by hand, which is what

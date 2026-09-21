@@ -108,7 +108,37 @@ pub fn check(cfg: &Config) -> Report {
     // that aren't the ones you set.
     let settings_path = Settings::path(&cfg.user_dir());
     match Settings::load(&cfg.user_dir()) {
-        Ok(_) => info.push(format!("settings: {}", settings_path.display())),
+        Ok(s) => {
+            info.push(format!("settings: {}", settings_path.display()));
+            // Named rather than counted: the one question this answers is "why
+            // does {animal} say it isn't a variable", and the answer is nearly
+            // always that it is saved under another name.
+            if !s.variables.is_empty() {
+                info.push(format!(
+                    "prompt variables: {}",
+                    s.variables
+                        .iter()
+                        .map(|(k, v)| {
+                            let n = v.len();
+                            format!("{{{k}}} ({n} word{})", if n == 1 { "" } else { "s" })
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            // A table a text editor put out of range is not fatal — everything
+            // without a `{}` in it still renders — but every prompt that names
+            // the broken variable fails, so it has to be said once at startup.
+            if let Err(e) = crate::variables::validate(&s.variables) {
+                warnings.push(format!(
+                    "the [variables] table in\n  {}\nis unusable: {e:#}\n\n\
+                     A prompt naming a broken variable will fail until it is\n\
+                     fixed; everything without a {{}} in it still renders.\n\
+                     The Settings tab edits the table and saving repairs it.",
+                    settings_path.display()
+                ));
+            }
+        }
         Err(e) => warnings.push(format!(
             "{e:#}\n\n\
              The built-in defaults are in use until it is fixed. Saving from the\n\

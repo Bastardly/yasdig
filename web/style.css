@@ -290,6 +290,18 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 }
 .lorarow .btn { padding: var(--sp-2); }
 
+/* One prompt variable: its name, and the words it can stand for. Two lines
+   rather than the three columns above, because this column is only --panel-w
+   wide and the two halves want very different amounts of it — "crab, horse,
+   dog, cat" needs all of it, "animal" never does. */
+.varrow {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-2); margin-top: var(--sp-2);
+}
+.varrow .varwords { grid-column: 1 / -1; }
+.varrow .btn { padding: var(--sp-2); }
+.vars + .btn { margin-top: var(--sp-3); }
+
 /* What pressing Generate will actually do — how many images, and what happens
    to each one — as opposed to what any single image is made of. Hence the rule
    above it: these are settings of a *run*. */

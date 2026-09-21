@@ -1213,6 +1213,18 @@ impl Config {
         self.base_dir.join("user")
     }
 
+    /// The user's settings, read from disk now.
+    ///
+    /// Read per call rather than held, and every caller must keep doing that:
+    /// this `Config` is inside an `Arc` that the GPU worker owns its own clone
+    /// of, so a value captured at startup could only be changed by restarting
+    /// the server — which is not what a Save button means. A ~1 KB parse
+    /// against a multi-second diffusion, the same rule `registry` and the LoRA
+    /// scan already follow.
+    pub fn settings(&self) -> Settings {
+        Settings::load_or_default(&self.user_dir())
+    }
+
     /// Scan the models dir for checkpoint files (non-recursive), sorted by name.
     pub fn discover_files(&self) -> Vec<PathBuf> {
         let dir = self.models_dir();
@@ -1422,7 +1434,7 @@ impl Config {
     /// Build the name→Profile registry: explicit templates first, then any
     /// discovered checkpoint not already referenced by a template.
     pub fn registry(&self) -> BTreeMap<String, Profile> {
-        let settings = Settings::load_or_default(&self.user_dir());
+        let settings = self.settings();
         let mut reg: BTreeMap<String, Profile> = BTreeMap::new();
 
         for (name, t) in &self.templates {

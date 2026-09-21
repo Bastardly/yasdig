@@ -436,6 +436,10 @@ already states seen from the other end. Only the four with no control anywhere
 else (`upscale_factor`, `hires_flash_attn`, `weight_type`, `extra_args`) carry
 their own label and their own `HELP` entry.
 
+The *Prompt variables* section is the one part of that form which is not a
+default for a control at all, and the one field with no label of its own — its
+section heading carries the `data-help`. See *## Prompt variables*.
+
 **`sharpness` and `clarity` are in the file and deliberately not in the form.**
 They are where the viewer's two sliders *start*, and that is a live per-image
 control everywhere else on the page — the Outputs tab starts them at zero
@@ -474,6 +478,91 @@ Three more on that module, all about order and timing:
   ignored.** A select silently shows its first option when nothing matches, so a
   hand-edited `hires_scale = 2.5` would be displayed as 1× and then *saved* as
   1 by the next press of the button.
+
+## Prompt variables
+
+`{animal}` in a prompt, the `[variables]` table in `user/settings.toml` behind
+it, and `src/variables.rs`. A variable is a name and a list of words; every
+placeholder is replaced by one of that variable's words on the way to sd.cpp,
+so a batch run varies its subject rather than only its seed.
+
+**Braces, not `[brackets]`, and that is the whole design.** `[x]` is sd.cpp's
+÷1.1 down-weight (`parse_prompt_attention`, `stable-diffusion.cpp
+src/core/util.cpp:816` — the same function *## The prompt box* below is built
+around), so with square brackets `[animl]` is a *legitimate* prompt meaning
+"the word animl, de-emphasised" and a typo could never be reported. `{` and `}`
+fall inside that parser's plain-text run (`[^\\()\[\]:B]{1,1024}`) and mean
+nothing to it, which is what lets an unknown name be a 400 naming the variables
+that do exist. `a_down_weighted_word_is_untouched` pins the other half.
+
+**Expansion is on the server, unlike the weighting shortcut.** That one is
+client-side because it *rewrites the box you are looking at*; this one must not,
+because the box has to keep `{animal}` for the next image of a run. So what ran
+and what was typed are different strings, and the server is the side that
+records what ran: `WorkItem.prompt`, `Clip.prompt` and `Pending.prompt` get the
+resolved sentence, and an escalation re-uses that retained prompt rather than
+rolling a different animal into a refine. `Engine::run`, `Engine::img2img` and
+`Engine::video` each call `variables::expand` once, right after the seed is
+drawn, over both the prompt and the negative.
+
+**Both strings are archived, which is what makes a work item a workflow rather
+than a picture.** `typed_prompt`/`typed_negative` sit beside them on `WorkItem`,
+`Clip` and `Pending`, and `variables::typed` is the one place that decides what
+goes in them: the original, and **only where the roll changed it**. So `None`
+means "there was nothing to roll" for a prompt with no braces in it *and* for
+every sidecar written before this existed — one meaning, no version check, and
+the page reads `typed_prompt ?? prompt` (`applyWorkItem`, `applyClip`).
+
+Reopening restores the typed one, and that is lossless rather than a trade:
+`applyWorkItem` puts the seed back on the next line, the roll follows the seed,
+so `{animal}` plus that seed *is* the picture you clicked — pressing Generate
+reproduces it and clearing the seed re-rolls it. The rolled sentence stays
+visible under the image, because `render()` already prints `data.prompt`
+whenever it differs from the box and now it does.
+
+They are on `Pending` — seven literals, none with a `..rest`, so the compiler
+names every site — for one reason: `Engine::save_output` builds its sidecar out
+of the `Pending`, not out of the request. Without them a refined and enlarged
+image saved to `work/output/` would record what it was conditioned with and lose
+what it was asked for.
+
+Five things break silently:
+
+- **The roll comes from the seed**, and must keep doing so. The seed box
+  promises that the same number gives the same picture and the reported seed is
+  clickable *because* of that promise; a roll off the clock would quietly end
+  it. `pick` mixes the seed with the occurrence's ordinal, so two writes of
+  `{color}` in one prompt disagree with each other while the whole prompt stays
+  reproducible, and a batch — which walks the seed, `genPayload(index)` — still
+  varies image to image.
+- **A replacement is never rescanned.** Words are appended to the output, so a
+  word containing `{color}` lands in the prompt as those characters. One pass,
+  no recursion, nothing that can loop.
+- **Only a well-formed name is a placeholder.** `{a nice day}`, an unclosed
+  brace and a bare `{}` are copied through, so braces stay typeable. What is
+  *not* copied through is a well-formed name nothing answers to — that is an
+  error, and it is the entire reason the syntax changed.
+- **`Settings.variables` is declared last on the struct and has to stay
+  there.** TOML has no way back out of a table and serde writes fields in
+  declaration order, so a scalar declared after it makes
+  `toml::to_string_pretty` fail with `ValueAfterTable` and Save stops working.
+  `variables_round_trip_through_the_file` is that constraint under test. It is
+  otherwise one of the page-level settings like `prompt` — not on
+  `PartialSettings`, not on `Profile`, since no checkpoint has an opinion about
+  your word lists.
+- **Two rows with the same name is the one error only the page can catch.**
+  `take()` builds an object and JSON collapses duplicate keys, so by the time
+  the body is written one row is already lost — hence `duplicateName()` in
+  `settings.js` *and* the case-collision check in `variables::normalize`, which
+  is what guards the file a text editor left.
+
+On the page it is one row in `settings.js`'s `FIELDS` with `kind: 'vars'`, so
+dirty tracking, the patch semantics and Save need no special case: `markDirty`
+already asks whether `body()` still matches the file. The rows hold their own
+state in the DOM — `put` draws them, `take` reads them back, and add/remove is
+a delegated listener that appends or detaches a single node — because nothing
+re-renders the list while you are typing in it. That is the opposite of
+`loras.js`, which keeps a shadow array precisely because it *does* re-render.
 
 ## The prompt box
 

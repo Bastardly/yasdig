@@ -62,6 +62,7 @@ mod pipeline;
 mod preflight;
 mod sd;
 mod settings;
+mod variables;
 mod videos;
 mod web;
 mod workitems;
@@ -1337,7 +1338,7 @@ fn result_json(res: &GenResult) -> String {
     format!(
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
          \"hires_passes\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\
-         \"filters\":{},\"filters_start\":{},\
+         \"filters\":{},\"filters_start\":{},\"prompt\":{},\
          \"timings\":{{\"gen_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{}}}}}",
         b64,
         res.width,
@@ -1356,6 +1357,9 @@ fn result_json(res: &GenResult) -> String {
         res.can_hires,
         filters,
         start,
+        // What was actually conditioned, so the page can show a `{variable}`
+        // prompt's roll under the image.
+        json_str(&res.prompt),
         res.timings.gen_ms,
         res.timings.fsr_ms,
         res.timings.refine_ms,

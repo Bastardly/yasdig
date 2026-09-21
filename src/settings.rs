@@ -22,6 +22,7 @@
 
 use crate::config::Profile;
 use crate::pipeline::MAX_UPSCALE;
+use crate::variables::{self, Variables};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -93,6 +94,17 @@ pub struct Settings {
     pub hires_flash_attn: bool,
     pub weight_type: Option<String>,
     pub extra_args: Vec<String>,
+
+    /// The `[variables]` table: `{animal}` in a prompt and the words it can
+    /// stand for. See [`crate::variables`].
+    ///
+    /// It belongs with the three page-level fields at the top — no checkpoint
+    /// has an opinion about your word lists, so it is not on
+    /// [`PartialSettings`] and not on [`Profile`] — and it is declared **last**
+    /// anyway because TOML has no way back out of a table. Serde writes fields
+    /// in declaration order, so a scalar after this one makes
+    /// `toml::to_string_pretty` fail with `ValueAfterTable`.
+    pub variables: Variables,
 }
 
 /// The same list as `Option`s: what a `[templates.<name>]` block states about
@@ -195,6 +207,7 @@ impl Default for Settings {
             hires_flash_attn: true,
             weight_type: None,
             extra_args: Vec::new(),
+            variables: Variables::new(),
         }
     }
 }
@@ -240,6 +253,7 @@ impl Settings {
                 .extra_args
                 .clone()
                 .unwrap_or_else(|| self.extra_args.clone()),
+            variables: self.variables.clone(),
         }
     }
 
@@ -343,6 +357,7 @@ impl Settings {
         if self.hires_max_side < 64 {
             bail!("hires_max_side is {}, must be 64 or more", self.hires_max_side);
         }
+        variables::validate(&self.variables)?;
         self.as_profile("settings").validate()
     }
 
@@ -429,8 +444,13 @@ pub fn patch(base: &Settings, body: &[u8]) -> Result<Settings> {
         other => bail!("settings are not an object: {other}"),
     };
     merged.extend(over);
-    serde_json::from_value(serde_json::Value::Object(merged))
-        .context("reading settings body")
+    let mut settings: Settings = serde_json::from_value(serde_json::Value::Object(merged))
+        .context("reading settings body")?;
+    // Canonicalised on the way in rather than on the way out, so what is
+    // validated, what is written and what the form gets back are the same
+    // thing: names lowercased, words trimmed, blanks dropped.
+    settings.variables = variables::normalize(&settings.variables)?;
+    Ok(settings)
 }
 
 #[cfg(test)]
@@ -544,6 +564,44 @@ mod tests {
         assert!(text.starts_with("# rustimage"));
         assert_eq!(Settings::load(&dir).unwrap(), Settings::default());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The `[variables]` table has to survive the trip, and this is also the
+    /// test that fails if a scalar field is ever declared after it: TOML has no
+    /// way back out of a table, so `to_string_pretty` would refuse to write the
+    /// file at all.
+    #[test]
+    fn variables_round_trip_through_the_file() {
+        let dir = tmpdir("variables");
+        let s = Settings {
+            steps: 9,
+            variables: Variables::from([
+                ("animal".to_string(), vec!["crab".to_string(), "horse".to_string()]),
+                ("color".to_string(), vec!["red".to_string()]),
+            ]),
+            ..Settings::default()
+        };
+        s.save(&dir).unwrap();
+        let text = std::fs::read_to_string(Settings::path(&dir)).unwrap();
+        assert!(text.contains("[variables]"), "{text}");
+        // Every value before the one table, which is the constraint above.
+        assert!(text.find("[variables]") > text.find("steps = 9"), "{text}");
+        assert_eq!(Settings::load(&dir).unwrap(), s);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A file written before the feature existed, and the common case anyway.
+    #[test]
+    fn a_missing_variables_table_is_an_empty_map() {
+        let s: Settings = toml::from_str("steps = 12\n").unwrap();
+        assert!(s.variables.is_empty());
+        // And a table the page sent as `{}` clears the one that was stored.
+        let stored = Settings {
+            variables: Variables::from([("animal".to_string(), vec!["crab".to_string()])]),
+            ..Settings::default()
+        };
+        let cleared = patch(&stored, br#"{"variables":{}}"#).unwrap();
+        assert!(cleared.variables.is_empty());
     }
 
     /// The page sends JSON; the disk holds TOML. Both have to describe the same

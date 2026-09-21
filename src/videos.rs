@@ -46,6 +46,14 @@ pub struct Clip {
     pub prompt: String,
     #[serde(default)]
     pub negative: String,
+    /// The prompt and negative as they were *typed*, with their `{variables}`
+    /// still in them. `None` when there was nothing to roll. The still side's
+    /// pair, for the same reason and read the same way — see
+    /// [`crate::workitems::WorkItem::typed_prompt`].
+    #[serde(default)]
+    pub typed_prompt: Option<String>,
+    #[serde(default)]
+    pub typed_negative: Option<String>,
     pub seed: i64,
     /// `[[video]]` entry name, beside `video.name` so the UI can re-select the
     /// model without reaching into the model.
@@ -276,6 +284,9 @@ t5xxl = "t.gguf"
             created_ms,
             prompt: "a lovely fluffy crab, walking".to_string(),
             negative: String::new(),
+            // Rolled, so the sidecar round-trip below carries the typed half.
+            typed_prompt: Some("a lovely fluffy {animal}, walking".to_string()),
+            typed_negative: None,
             seed: 7,
             model: "5b".to_string(),
             // Deliberately wrong: `finish` must replace these from the files.
@@ -320,6 +331,7 @@ t5xxl = "t.gguf"
 
         let loaded = store.load("100-7").unwrap();
         assert_eq!(loaded.prompt, c.prompt);
+        assert_eq!(loaded.typed_prompt, c.typed_prompt);
         assert_eq!(loaded.frames, 5);
         assert_eq!(loaded.source.as_deref(), Some("100-7-s0"));
         assert_eq!(loaded.video.family, VideoFamily::Wan22Ti2v5b);

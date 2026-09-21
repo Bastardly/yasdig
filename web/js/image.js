@@ -1,4 +1,4 @@
-import { $, bar, post, numOr } from './dom.js';
+import { $, bar, esc, post, numOr } from './dom.js';
 import { S, P, escErr } from './state.js';
 import { setBusy, onIdle } from './busy.js';
 import { setPost, setPostStart, setViewerImage, showFullSize } from './viewer.js';
@@ -155,6 +155,17 @@ export function render(data) {
   // nobody finds — and the sliders used to be visible furniture.
   actions += '<button id="viewadjust" class="btn">View &amp; adjust</button>';
 
+  // The prompt as it was actually conditioned. Shown only when it differs from
+  // the box, which happens for exactly three reasons: a `{variable}` was drawn —
+  // and the box has to keep the braces for the next image, so this is the only
+  // place the roll is visible without hovering the grid — or a work item was
+  // reopened, which puts those braces back in the box and so shows the roll here
+  // for as long as the image is up, or this is an escalation of an image made
+  // from a prompt that has since been retyped.
+  const box = $(S.pane === 'img2img' ? 'i2prompt' : 'prompt');
+  const rolled = data.prompt && data.prompt !== box.value
+    ? `<div class="meta">${esc(data.prompt)}</div>` : '';
+
   const times = n => n > 1 ? ` ×${n}` : '';
   const tags = (data.refine_passes ? ` · refined${times(data.refine_passes)}` : '')
     + (data.hires_passes ? ` · hi-res${times(data.hires_passes)}` : '');
@@ -169,6 +180,7 @@ export function render(data) {
     <div class="meta"><b>${data.width}×${data.height}</b> · seed
       <b id="seedval" class="pin" title="Put this seed in the box, to generate it again">${data.seed}</b>
       · total <b>${total} ms</b>${tags}</div>
+    ${rolled}
     <div class="bars">${bars}</div>
     `;
 

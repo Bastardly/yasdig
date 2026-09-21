@@ -274,8 +274,10 @@ function clickClip(id) {
 // from what made the clip on screen rather than from whatever was last typed.
 function applyClip(c) {
   const v = c.video;
-  $('vprompt').value = c.prompt;
-  $('vnegative').value = c.negative ?? '';
+  // The typed prompt where the roll made one — see `applyWorkItem`. The seed
+  // below restores the roll with it.
+  $('vprompt').value = c.typed_prompt ?? c.prompt;
+  $('vnegative').value = c.typed_negative ?? c.negative ?? '';
   $('vseed').value = c.seed;
   if (videoModels.some((m) => m.name === c.model)) $('vmodel').value = c.model;
   // Deliberately not firing `change`: that listener is syncVideo, which would
