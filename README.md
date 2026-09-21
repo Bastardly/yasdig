@@ -577,6 +577,32 @@ clears the marks.
 page that asks first: marking is visible and reversible, and emptying the directory is
 neither. The Outputs tab has the same two controls, working the same way.
 
+#### Favorites
+
+Which is the problem: a grid of every image you have ever made is used by emptying
+it, and that takes the good ones with the rest. So there is a third mode, **Click to
+favorite** — mark thumbnails green the same way, press `Favorite N selected`, and
+those work items are **copied** to `user/favorite/`. A copy, not a move: the
+originals stay in the grid, `Delete all` stays the blunt instrument it is, and what
+survives it is what you chose.
+
+`user/` rather than `work/` on purpose. `work/` is the directory this program
+deletes from — it is cleared of scratch at startup and emptied on request — and
+nothing that took a decision to create should live under a sweeper. The same reason
+`settings.toml` is there.
+
+**Current** and **Favorites** above the grid flip which directory it is showing.
+They hold the same thing, so a favourite opens exactly as a work item does: the
+controls repopulate, the picture comes back, Refine and Hi-res and the sliders work
+on it. With the prompt restored as you *typed* it — braces and all, see
+[Prompt variables](#prompt-variables) — that is a saved workflow rather than a saved
+picture.
+
+On the favourites shelf, **Click to favorite** is gone (favouriting a favourite means
+nothing) and so is **Delete all**, since emptying that directory in one press is the
+exact thing it exists to be safe from. **Click to delete** is still there, and is how
+you take one back out; it touches nothing under `work/`.
+
 Refined and hi-res results are deliberately **not** archived: those are the expensive
 rungs and most of them are experiments. **Save to output**, above the image, writes the
 picture currently on screen — filters and all — to `work/output/`, with its own sidecar.
@@ -1086,6 +1112,13 @@ needs a Vulkan device and nothing else.
   back into the working set and returns the `/generate` shape with a fresh `image_id`,
   so the escalations and the sliders work on it immediately. No diffusion runs.
 - `POST /workitems/delete` — `{ "ids": ["…", "…"] }`. Returns `{ "deleted": 2 }`.
+- `POST /favorites/add` — `{ "ids": ["…", "…"] }`. Copies those work items — image,
+  thumbnail and sidecar — into `user/favorite/`, out of reach of `Delete all`.
+  Returns `{ "favorited": 2 }`. A copy, not a move: the originals stay in the grid.
+- `GET /favorites`, `GET /favorites/{id}/thumb.png`, `POST /favorites/open`,
+  `POST /favorites/delete` — the four routes above, over `user/favorite/` instead.
+  Same shapes, same ids, same guard. There is no separate "unfavorite": deleting
+  from that shelf is one, and it touches nothing under `work/`.
 - `GET /progress` — what the worker is doing right now:
   `{ "busy": true, "label": "hi-res", "phase": "sampling", "step": 7, "steps": 20,
   "rate": "1.23s/it" }`, or `{ "busy": false }` when nothing is running. `phase` is
@@ -1228,6 +1261,8 @@ the GPU worker is gone.
   src/web.rs       the whitelist of files the page is made of, and the route
   models.toml      config + model profiles + the [[video]] overrides
   models/video/    video components, scanned recursively and identified by header
+  user/settings.toml  the defaults every generation starts from
+  user/favorite/   work items you kept — the one place nothing here sweeps
   work/            scratch, cleared at startup
   work/workitems/  every generation + its settings — kept
   work/output/     what you pressed "Save to output" on — kept

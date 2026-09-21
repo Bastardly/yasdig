@@ -27,7 +27,7 @@ use crate::fsr::Fsr;
 use crate::sd::{Monitor, SdRunner, VideoIo};
 use crate::variables;
 use crate::videos::{Clip, VideoStore};
-use crate::workitems::{self, WorkItem};
+use crate::workitems::{self, Shelf, WorkItem};
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -412,7 +412,9 @@ pub struct Engine {
     cfg: Config,
     fsr: Fsr,
     work_dir: PathBuf,
-    /// The durable half of `work/`. Written here on a generate, read on an open.
+    /// The durable half of `work/`, plus the favourites shelf under `user/`.
+    /// Written on a generate, read on an open; which shelf an open reads is a
+    /// [`workitems::Shelf`] the request carries.
     items: workitems::Store,
     /// The clip archive. Unlike `items` this is written *through* rather than
     /// copied into — a clip has no scratch stage; see [`crate::videos`].
@@ -434,7 +436,7 @@ impl Engine {
         // a `.png` extension, so `work/workitems/` and `work/output/` are not
         // reachable from it — only the scratch it was always meant to clear.
         purge_pngs(&work_dir);
-        let items = workitems::Store::new(&work_dir);
+        let items = workitems::Store::new(&work_dir, &cfg.user_dir());
         let videos = VideoStore::new(&work_dir);
         let fsr = Fsr::new()?;
         // Fail fast with a friendly message if the sd binary is missing.
@@ -1435,9 +1437,9 @@ impl Engine {
     /// The profile comes back verbatim from the sidecar, so the passes run with
     /// the settings that made the image rather than whatever the UI shows now —
     /// the same property a live `Pending` has, extended across a restart.
-    pub fn open(&mut self, work_id: &str) -> Result<GenResult> {
-        let item = self.items.load(work_id)?;
-        let stored = self.items.image_path(&item.id);
+    pub fn open(&mut self, work_id: &str, shelf: Shelf) -> Result<GenResult> {
+        let item = self.items.load(shelf, work_id)?;
+        let stored = self.items.image_path(shelf, &item.id);
 
         let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();

@@ -155,7 +155,7 @@ fn unknown(name: &str, vars: &Variables) -> String {
         );
     }
     let defined = vars.keys().cloned().collect::<Vec<_>>().join(", ");
-    format!("the prompt names {{{name}}}, which is not a variable. Defined: {defined}.")
+    format!("the prompt names {{{name}}}, which is not a variable. Defined: {defined}. Did you remember to save changes?")
 }
 
 /// What to record beside a resolved prompt: the original, and only when the
@@ -198,7 +198,10 @@ pub fn normalize(vars: &Variables) -> Result<Variables> {
 /// Reject what could be stored but could never work.
 pub fn validate(vars: &Variables) -> Result<()> {
     if vars.len() > MAX_VARIABLES {
-        bail!("{} variables defined, the limit is {MAX_VARIABLES}", vars.len());
+        bail!(
+            "{} variables defined, the limit is {MAX_VARIABLES}",
+            vars.len()
+        );
     }
     let mut seen: Vec<String> = Vec::new();
     for (name, words) in vars {
@@ -214,7 +217,9 @@ pub fn validate(vars: &Variables) -> Result<()> {
         }
         seen.push(lower);
         if words.is_empty() || words.iter().all(|w| w.trim().is_empty()) {
-            bail!("the variable '{name}' has no words. Give it a comma-separated list, or remove it.");
+            bail!(
+                "the variable '{name}' has no words. Give it a comma-separated list, or remove it."
+            );
         }
     }
     Ok(())
@@ -298,12 +303,16 @@ mod tests {
 
     #[test]
     fn an_unknown_name_is_an_error_naming_the_ones_that_exist() {
-        let e = expand("a lovely {animl}", &vars(), 1).unwrap_err().to_string();
+        let e = expand("a lovely {animl}", &vars(), 1)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("{animl}"), "{e}");
         assert!(e.contains("animal, color"), "{e}");
         // With nothing defined it says where to define one instead of
         // printing an empty list.
-        let e = expand("{animal}", &Variables::new(), 1).unwrap_err().to_string();
+        let e = expand("{animal}", &Variables::new(), 1)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("Settings"), "{e}");
     }
 
@@ -323,7 +332,10 @@ mod tests {
         // The outer candidate is not a name, so its brace is literal and the
         // inner one still resolves.
         let out = expand("{a nice {color} day}", &v, 5).unwrap();
-        assert!(out.starts_with("{a nice ") && out.ends_with(" day}"), "{out}");
+        assert!(
+            out.starts_with("{a nice ") && out.ends_with(" day}"),
+            "{out}"
+        );
         assert!(!out.contains("{color}"), "{out}");
     }
 
@@ -349,7 +361,10 @@ mod tests {
         assert_eq!(typed(plain, &expand(plain, &v, 5).unwrap()), None);
         // Braces that aren't a placeholder are copied through, so they are not
         // a roll either.
-        assert_eq!(typed("{a nice day}", &expand("{a nice day}", &v, 5).unwrap()), None);
+        assert_eq!(
+            typed("{a nice day}", &expand("{a nice day}", &v, 5).unwrap()),
+            None
+        );
 
         let src = "a lovely {animal}";
         let out = expand(src, &v, 5).unwrap();

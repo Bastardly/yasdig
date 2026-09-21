@@ -9,7 +9,7 @@ import { $, esc } from './dom.js';
 // `base_cmd` assemble it. See `Profile::loras`.
 //
 // Two tabs have a picker and they are instances of the same factory, in
-// `griddelete.js`'s shape and for the same reason — two copies of a control that
+// `gridmark.js`'s shape and for the same reason — two copies of a control that
 // builds a request body is two chances for one of them to send a subtly
 // different one.
 

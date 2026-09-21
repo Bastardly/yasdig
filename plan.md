@@ -79,7 +79,20 @@ Still open, both layout and independent of the above:
    re-rooted from `#setform` to `#tab-settings`.
 3) The *Add variable* button belongs above the rows, not below them.
 
-# Feature 4 - Favorite work items
+# ~~Feature 4 - Favorite work items~~ — DONE
+`user/favorite/` holds the same three files as `work/workitems/` under the same
+ids, read by the same code through `workitems::Shelf`, and **Current /
+Favorites** above the grid is nothing but which shelf its routes name. A
+favourite is a *copy*, never a move: the original stays in the grid, so
+`Delete all` stays the blunt instrument it is and what survives it is what you
+chose. `user/` rather than `work/` because `work/` is what this program sweeps.
+On the favourites shelf *Click to favorite* and *Delete all* are gone; *Click to
+delete* stays and is how you take one back out, touching nothing under `work/`.
+`griddelete.js` became `gridmark.js`, with the two actions as a table. See
+*## Favourites* in CLAUDE.md and *#### Favorites* in README.md.
+
+<details><summary>original request</summary>
+
 Under the image tab, we have the work items section which lists all our current work items. Problem is that this quickly becomes very large, which means that I often use the "delete all" function.
 But I would like to be able to save some work items as favorites that is saved under ./user/favorite (not created).
 
@@ -89,3 +102,5 @@ There are two parts to this.
 And all that really should do, is to toggle between the two souce folders. Only difference, is that while on the Favorites folder, we should not show the "Click to favorite", since adding favorites to favorites wouldn't make sense. Also the delete all button shouldn't be shown either in favorite mode.
 
 Of course, the delete and delete all should only influence the selected source folder.
+
+</details>

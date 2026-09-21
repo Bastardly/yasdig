@@ -354,7 +354,10 @@ export function initVideo() {
   for (const r of document.querySelectorAll('input[name=vmode]')) {
     r.addEventListener('change', () => {
       if (!vDeleteMode()) vselected.clear();
-      $('vgrid').classList.toggle('deleting', vDeleteMode());
+      // The mark the hover rule reads. `data-mark` rather than a class,
+      // because `gridmark.js` has two actions to name and one vocabulary for
+      // both grids is the point of it.
+      $('vgrid').dataset.mark = vDeleteMode() ? 'delete' : '';
       markClips();
     });
   }

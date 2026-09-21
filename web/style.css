@@ -45,6 +45,12 @@
   --danger:      #b8413a;
   --danger-hi:   #cc4c44;
   --danger-text: #ff9c8f;
+  /* The other mark. Red and green are the two things a click can be about to do
+     to a marked thumbnail — destroy it, or keep it — so this is a *mark*, not a
+     state, and the rule above about state being achromatic doesn't reach it.
+     Desaturated to roughly the red's weight, so neither shouts over the other
+     across a strip of pictures. */
+  --keep:        #3f8f5c;
 
   /* ---- Type. No webfont: the server is localhost and the project's pitch is
      that it fetches nothing, so a stylesheet that phones out for a face would be
@@ -311,6 +317,8 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* `label` is a block with margins by default here — that's for the form column,
    not for a pair of radios, or a row of checkboxes, sitting on one line. */
 .wimodes { display: flex; gap: var(--sp-3); }
+/* Current | Favorites. Tight, because the two are one control. */
+.wishelf { display: flex; gap: var(--sp-1); }
 .wimodes label, .checks label { display: inline-flex; align-items: center; gap: var(--sp-1); margin: 0; }
 .wimodes input, .checks input { width: auto; padding: 0; accent-color: var(--state); }
 
@@ -348,11 +356,21 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* The image currently on screen. Bone rather than a hue, so a mark that sits on
    a photograph doesn't tint the judgement of it. */
 .wigrid button.active { border-color: var(--state); }
-/* Marked for deletion: red frame + a red cast, so a selection is obvious at a
-   glance across a wide strip. Nothing is deleted until the button is pressed. */
+/* Marked: a frame and a cast, so a selection is obvious at a glance across a
+   wide strip. Nothing happens until the button above the grid is pressed.
+
+   The cast is built from `sepia`, which lands every pixel near hue 50deg
+   whatever it was, and `hue-rotate` then carries that one hue where it is
+   wanted — -40 for the red, +70 for the green. Hue-rotating the photograph
+   itself would leave a blue image marked a different colour from a red one. */
 .wigrid button.sel { border-color: var(--danger); }
 .wigrid button.sel img { filter: sepia(1) saturate(3) hue-rotate(-40deg) brightness(.85); }
-.wigrid.deleting button:hover { border-color: var(--danger); }
+.wigrid button.keep { border-color: var(--keep); }
+.wigrid button.keep img { filter: sepia(1) saturate(3) hue-rotate(70deg) brightness(.85); }
+/* Which action the mode radios have live, carried as data because there is one
+   hover colour per action and `gridmark.js` owns which one that is. */
+.wigrid[data-mark="delete"] button:hover { border-color: var(--danger); }
+.wigrid[data-mark="favorite"] button:hover { border-color: var(--keep); }
 
 /* The outputs picker. Same grid as the work items, in a dialog. */
 #picker {

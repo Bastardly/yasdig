@@ -194,13 +194,27 @@
   <div class="workitems card">
     <div class="wihead">
       <b>Work items</b>
+      <!-- Two shelves of the same thing: work/workitems/, which "Delete all"
+           empties, and user/favorite/, which nothing here touches unasked.
+           .btn-choice because this is a set where the highlighted one is where
+           you are — the class the tab row and the viewer's Fit/1:1 wear. -->
+      <span class="wishelf">
+        <button type="button" id="wicurrent" class="btn btn-choice active">Current</button>
+        <button type="button" id="wifavorites" class="btn btn-choice">Favorites</button>
+      </span>
       <span class="wimodes">
         <label><input type="radio" name="wimode" value="open" checked> Click to open</label>
+        <!-- Hidden on the favourites shelf: favouriting a favourite means
+             nothing, which is why the label carries an id. -->
+        <label id="wifavlabel"><input type="radio" name="wimode" value="favorite"> Click to favorite</label>
         <label><input type="radio" name="wimode" value="delete"> Click to delete</label>
       </span>
+      <!-- Neutral, not amber and not red: keeping an image neither spends GPU
+           time nor destroys anything. The green is on the marked thumbnails. -->
+      <button id="wifavorite" class="btn" hidden></button>
       <button id="widelete" class="btn btn-danger" hidden></button>
-      <!-- Only in delete mode, and behind a confirm box: marking is visible and
-           reversible, "all" is neither. -->
+      <!-- Only in delete mode, only on Current, and behind a confirm box:
+           marking is visible and reversible, "all" is neither. -->
       <button id="wideleteall" class="btn btn-danger" hidden></button>
     </div>
     <div id="wigrid" class="wigrid"></div>

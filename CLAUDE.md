@@ -181,7 +181,7 @@ deliberately *not* on `EscalateRequest`: the boundary test in "Adding a per-mode
 knob" would let it in, but a second picker on the page would then need its own
 rule for how a `Vec` interacts with a wholesale swap.
 
-On the page, `loras.js` is a factory in `griddelete.js`'s shape and for the same
+On the page, `loras.js` is a factory in `gridmark.js`'s shape and for the same
 reason — two copies of a control that builds a request body is two chances for
 one of them to send a different one. Two things in it break silently:
 
@@ -194,6 +194,73 @@ one of them to send a different one. Two things in it break silently:
   explicitly" and a missing key as "keep whatever the profile has"; the picker on
   screen is the complete answer to the question, so it must be able to say none.
   Dropping the key when the list is empty would make a removed row unremovable.
+
+## Favourites
+
+`user/favorite/` holds the same three files as `work/workitems/` — PNG,
+thumbnail, sidecar — under the same ids, read by the same code through
+`workitems::Shelf`. The Image tab's grid has a **Current / Favorites** toggle
+that is nothing but which shelf its routes name.
+
+**The point is `Delete all`.** A grid of every generation ever made grows
+without bound, so the way it actually gets used is to empty it, and that took
+the good ones with the rest. A favourite is therefore a **copy, never a move**
+(`Store::favorite`): the original stays in the grid, `Delete all` stays the
+blunt instrument it is, and what survives it is what was chosen. A move would
+make favouriting a way of *hiding* an image from the grid it was just found in,
+and would leave the same "empty it and lose things" problem one directory along.
+
+That is also why it is under `user/` — the directory nothing here sweeps, beside
+`settings.toml` — rather than a third directory under `work/`. `purge_pngs` is
+non-recursive over `work/` itself, so it could not reach a `work/favorite/`
+either; the argument is about what the rule *says*, not about what the current
+code happens to touch.
+
+Five things break silently:
+
+- **`Shelf` is the only place a shelf becomes a directory.** Every path goes
+  through `Store::shelf_dir`, and `image_path`, `thumb_path`, `sidecar_path`,
+  `load`, `list` and `delete` all take one — so a caller cannot forget which
+  archive it meant. `save` deliberately does not: a generation is archived, a
+  favourite is chosen.
+- **`delete` is one shelf, and that is the whole guarantee.** A delete that
+  reached both would destroy the favourites a moment after they were made,
+  which is the failure this feature exists to prevent and would look exactly
+  like it working. `a_favourite_survives_deleting_the_original` is that under
+  test, in both directions.
+- **The shelf is a path segment, not a query parameter.** `http.rs` strips the
+  query string before routing — the same constraint that already puts an id in
+  the path — so the routes are `/favorites`, `/favorites/{id}/thumb.png`,
+  `/favorites/open`, `/favorites/delete` and `/favorites/add`, each one line
+  delegating to the work-item handler with a different `Shelf`. `JobKind::Open`
+  carries one for the same reason: the two grids hold the same ids, so an id
+  alone doesn't say which file to read.
+- **There is no `unfavorite` route.** `POST /favorites/delete` already is one,
+  and a second name for removing a file is a second place to get `valid_id`
+  wrong. The page reaches it through the ordinary delete mode, which is why
+  *Click to delete* stays offered on the favourites shelf while *Delete all*
+  does not.
+- **Reopening a favourite is the same copy-in, copy-out.** `Engine::open` takes
+  a `Shelf` and changes nothing else, so invariant 8 holds unchanged — and more
+  sharply here, since a `Pending` pointing into `user/favorite/` would have
+  `remove_files` delete a file the user explicitly asked to keep.
+
+On the page, the shelf is one module-level string in `workitems.js` that is the
+first segment of every route the grid uses, so the toggle has almost nothing to
+do: `setShelf` lights the right `.btn-choice`, hides the *Click to favorite*
+radio (favouriting a favourite means nothing) and reloads. `loadWorkItems`
+captures the shelf across its `await` and drops a response that lost a race
+against a flip. A generate reloads the grid and deliberately does **not** switch
+back to Current — the toggle stays where it was put, which is the only rule that
+stays predictable.
+
+The two actions are a table in `gridmark.js` (`value`, `button`, `mark`,
+`label`, `route`, `key`, and an optional `all`), the way `FILTERS` and `FIELDS`
+are tables, because the second one arrived a feature after the first. One marked
+`Set` is shared between them rather than one each: a single radio group means
+exactly one action is live at a time, and changing mode already clears the marks.
+`route` is a thunk because the work-item grid's route moves with the shelf, and
+`all.when()` is what takes **Delete all** away on the favourites shelf.
 
 ## The Outputs tab
 
@@ -234,14 +301,15 @@ those are not archived.
 
 Four things in it break silently:
 
-- **Deleting is `griddelete.js`, shared with the work-item grid.** Those are the
+- **Deleting is `gridmark.js`, shared with the work-item grid.** Those are the
   two places on the page that remove a file, and a fix to one that missed the other
   would be a fix that only half worked — on the half nobody was looking at. The
-  factory owns the mode radios, the marked set, both buttons and both requests; each
-  tab still draws its own tiles and calls `has()` while marking them, because the two
-  carry different data attributes and mean different things by `active`. It builds a
+  factory owns the mode radios, the marked set, the buttons and the requests; each
+  tab still draws its own tiles and calls `mark()` on them, because the two carry
+  different data attributes and mean different things by `active`. It builds a
   closure and a `Set` and nothing else, so calling it at module top level keeps the
-  declare-only rule.
+  declare-only rule. This tab declares **one** action and the work-item grid two —
+  see *## Favourites*.
 
   **`Delete all` is the same request with every id in it**, not a route of its own —
   which is what keeps `valid_id` the only guard there is. A route that emptied a
@@ -327,7 +395,7 @@ resolves the imports itself. `index.html` loads exactly one of them:
 | `viewer.js` | `FILTERS`, the sliders, `/adjust`, fit/1:1, panning |
 | `image.js` | the Image tab: models, Advanced, `render`, escalations, runs, Save |
 | `workitems.js` | the work-item grid and reopening one |
-| `griddelete.js` | click-to-delete: the marks, the two buttons, the request |
+| `gridmark.js` | click-to-mark: the marks, the action table, the buttons, the requests |
 | `img2img.js` | the Image-to-image tab, including the upload |
 | `loras.js` | the LoRA picker, one instance per image tab |
 | `outputs.js` | `fetchOutputs`, `outputGrid`, and the Outputs tab |
@@ -399,7 +467,8 @@ file**, not the format — both are TOML, one parser:
 
 It is `user/` and not `work/` because `work/` is scratch this program deletes
 from — `purge_pngs`, `Delete all` — and nothing that took a decision to create
-may live under a sweeper. Favourites land there next.
+may live under a sweeper. `user/favorite/` is the other half of that rule; see
+*## Favourites*.
 
 Five things break silently:
 

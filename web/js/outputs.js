@@ -2,7 +2,7 @@ import { $, esc, post } from './dom.js';
 import { S, escErr } from './state.js';
 import { setBusy, onIdle } from './busy.js';
 import { setPost, setPostStart, showFullSize, setViewerImage, cancelPost } from './viewer.js';
-import { gridDelete } from './griddelete.js';
+import { gridMarks } from './gridmark.js';
 
 // ---- Outputs ----------------------------------------------------------------
 //
@@ -71,18 +71,29 @@ let queued = null;
 // Marking, the two buttons and the request, shared with the work-item grid.
 // These are the two places on the page that remove a file, and a fix to one that
 // missed the other would be a fix that only half worked.
-const del = gridDelete({
+// One action, because this gallery only destroys: a favourite is a *work item*
+// kept as a workflow, and an output is a finished picture with nowhere further
+// to go. See the Outputs section of CLAUDE.md for the same argument about Refine.
+const del = gridMarks({
   grid: 'ogrid',
   mode: 'omode',
-  button: 'odelete',
-  all: 'odeleteall',
-  route: '/outputs/delete',
-  key: 'stems',
-  noun: 'saved image',
   ids: () => outputs.map((o) => o.stem),
   reload: loadOutputs,
   err: (msg) => { $('oerr').textContent = msg; },
   onMode: () => markGrid(),
+  actions: [{
+    value: 'delete',
+    button: 'odelete',
+    mark: 'sel',
+    label: (n) => `Delete ${n} selected`,
+    route: () => '/outputs/delete',
+    key: 'stems',
+    all: {
+      button: 'odeleteall',
+      noun: 'saved image',
+      label: (n) => `Delete all ${n}`,
+    },
+  }],
 });
 
 export async function loadOutputs() {
@@ -114,7 +125,7 @@ function pick(stem) {
 function markGrid() {
   const stem = outputs[index]?.stem;
   for (const b of $('ogrid').querySelectorAll('button')) {
-    b.classList.toggle('sel', del.has(b.dataset.stem));
+    del.mark(b, b.dataset.stem);
     // The image the viewer is on. Bone rather than red — the two marks mean
     // opposite things and land on the same tiles.
     b.classList.toggle('active', b.dataset.stem === stem);

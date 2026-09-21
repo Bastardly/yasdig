@@ -4,10 +4,17 @@
 //!   work/workitems/{id}.png         raw, unsharpened, output-resolution
 //!   work/workitems/{id}-thumb.png   THUMB_HEIGHT tall, for the grid
 //!   work/workitems/{id}.json        the settings that produced it
+//!   user/favorite/{id}.png          the same three files, kept on purpose
+//!   user/favorite/{id}-thumb.png
+//!   user/favorite/{id}.json
 //!   work/output/{id}-s{step}.png    "Save to output": the filtered image on screen
 //!   work/output/{id}-s{step}.json   the same sidecar, with the pass counts filled in
 //!   work/output/{id}-s{step}-thumb.png   for the picker; see `ensure_output_thumb`
 //! ```
+//!
+//! The first two are the same shelf twice over — same trio, same ids, read by
+//! the same code through [`Shelf`] — and they differ only in who is allowed to
+//! sweep them. See that type.
 //!
 //! The output directory is the finished work, so it is also what the video tab
 //! animates from — hence the thumbnails. It is keyed by *filename stem* rather
@@ -47,6 +54,26 @@ pub const THUMB_HEIGHT: u32 = 400;
 /// Longest id we'll look at. Ids are `{unix_millis}-{seed}`, so ~25 characters;
 /// the cap is only here to bound what a bad request can make us allocate.
 const MAX_ID_LEN: usize = 64;
+
+/// Which shelf of archived generations a call is about.
+///
+/// The two hold the same three files under the same ids and are read by the
+/// same code; what separates them is **who is allowed to delete them**.
+/// `Work` is `work/workitems/`, under the directory this program sweeps —
+/// `purge_pngs` at startup, `Delete all` from the page — and a grid of every
+/// image ever made is used that way, which is what makes keeping one an
+/// explicit act. `Favorites` is `user/favorite/`, beside `user/settings.toml`
+/// and under the same rule: nothing that took a decision to create may live
+/// under a sweeper.
+///
+/// A favourite is a **copy**, not a move (see [`Store::favorite`]), so the
+/// original stays in the grid and `Delete all` stays the blunt instrument it
+/// is. That is the whole feature; a move would just relocate the problem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shelf {
+    Work,
+    Favorites,
+}
 
 /// Everything needed to put an image back on screen with the controls that made
 /// it. `profile` is the clone `Engine::run` retained — per-request overrides
@@ -142,30 +169,45 @@ pub fn new_id(seed: i64) -> String {
 /// listing that races a write just misses the newest item until the next refresh.
 pub struct Store {
     items: PathBuf,
+    favorites: PathBuf,
     output: PathBuf,
 }
 
 impl Store {
-    pub fn new(work_dir: &Path) -> Store {
+    /// Both roots, spelled out. `user/` is a *sibling* of `work/`, not a child,
+    /// so deriving one from the other would be a guess about the layout that
+    /// only `Config` actually knows.
+    pub fn new(work_dir: &Path, user_dir: &Path) -> Store {
         let store = Store {
             items: work_dir.join("workitems"),
+            favorites: user_dir.join("favorite"),
             output: work_dir.join("output"),
         };
         std::fs::create_dir_all(&store.items).ok();
+        std::fs::create_dir_all(&store.favorites).ok();
         std::fs::create_dir_all(&store.output).ok();
         store
     }
 
-    pub fn image_path(&self, id: &str) -> PathBuf {
-        self.items.join(format!("{id}.png"))
+    /// The one place a [`Shelf`] becomes a directory. Every path below goes
+    /// through it, so there is no second copy of that decision to disagree.
+    fn shelf_dir(&self, shelf: Shelf) -> &Path {
+        match shelf {
+            Shelf::Work => &self.items,
+            Shelf::Favorites => &self.favorites,
+        }
     }
 
-    pub fn thumb_path(&self, id: &str) -> PathBuf {
-        self.items.join(format!("{id}-thumb.png"))
+    pub fn image_path(&self, shelf: Shelf, id: &str) -> PathBuf {
+        self.shelf_dir(shelf).join(format!("{id}.png"))
     }
 
-    fn sidecar_path(&self, id: &str) -> PathBuf {
-        self.items.join(format!("{id}.json"))
+    pub fn thumb_path(&self, shelf: Shelf, id: &str) -> PathBuf {
+        self.shelf_dir(shelf).join(format!("{id}-thumb.png"))
+    }
+
+    fn sidecar_path(&self, shelf: Shelf, id: &str) -> PathBuf {
+        self.shelf_dir(shelf).join(format!("{id}.json"))
     }
 
     /// Archive a generation: the unsharpened image, a thumbnail, and the
@@ -173,6 +215,8 @@ impl Store {
     /// knows what the thumbnailer produced.
     ///
     /// `raw` is *copied*, not moved — the live `Pending` still owns it.
+    ///
+    /// Always [`Shelf::Work`]: a generation is archived, a favourite is chosen.
     pub fn save(&self, raw: &Path, item: &mut WorkItem) -> Result<()> {
         if !valid_id(&item.id) {
             bail!("refusing to save work item with invalid id '{}'", item.id);
@@ -190,19 +234,19 @@ impl Store {
         item.thumb_width = thumb.width();
         item.thumb_height = thumb.height();
 
-        std::fs::copy(raw, self.image_path(&item.id))
+        std::fs::copy(raw, self.image_path(Shelf::Work, &item.id))
             .with_context(|| format!("archiving {}", raw.display()))?;
         thumb
-            .save(self.thumb_path(&item.id))
+            .save(self.thumb_path(Shelf::Work, &item.id))
             .context("writing work item thumbnail")?;
-        write_sidecar(&self.sidecar_path(&item.id), item)
+        write_sidecar(&self.sidecar_path(Shelf::Work, &item.id), item)
     }
 
-    pub fn load(&self, id: &str) -> Result<WorkItem> {
+    pub fn load(&self, shelf: Shelf, id: &str) -> Result<WorkItem> {
         if !valid_id(id) {
             bail!("'{id}' is not a work item id");
         }
-        let path = self.sidecar_path(id);
+        let path = self.sidecar_path(shelf, id);
         let bytes = std::fs::read(&path)
             .with_context(|| format!("that work item is gone ({})", path.display()))?;
         let mut item: WorkItem = serde_json::from_slice(&bytes)
@@ -217,8 +261,8 @@ impl Store {
     /// Every archived item, newest first. Unreadable or unparseable sidecars are
     /// skipped rather than failing the listing: one bad file shouldn't cost the
     /// user the whole grid.
-    pub fn list(&self) -> Vec<WorkItem> {
-        let Ok(entries) = std::fs::read_dir(&self.items) else {
+    pub fn list(&self, shelf: Shelf) -> Vec<WorkItem> {
+        let Ok(entries) = std::fs::read_dir(self.shelf_dir(shelf)) else {
             return Vec::new();
         };
         let mut out: Vec<WorkItem> = entries
@@ -231,7 +275,7 @@ impl Store {
                 let item: WorkItem = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
                 // The image is the item; a sidecar without one is a half-written
                 // save and would render as a broken thumbnail.
-                self.image_path(&item.id).is_file().then_some(item)
+                self.image_path(shelf, &item.id).is_file().then_some(item)
             })
             .collect();
         out.sort_by(|a, b| b.created_ms.cmp(&a.created_ms));
@@ -240,20 +284,67 @@ impl Store {
 
     /// Remove an item and both of its companions. Missing files are not an
     /// error — the point is that afterwards it's gone.
-    pub fn delete(&self, id: &str) -> Result<()> {
+    /// One shelf only. `Delete all` on the grid is this in a loop, and the
+    /// favourites shelf has to be out of its reach or the feature does nothing.
+    pub fn delete(&self, shelf: Shelf, id: &str) -> Result<()> {
         if !valid_id(id) {
             bail!("'{id}' is not a work item id");
         }
         for p in [
-            self.image_path(id),
-            self.thumb_path(id),
-            self.sidecar_path(id),
+            self.image_path(shelf, id),
+            self.thumb_path(shelf, id),
+            self.sidecar_path(shelf, id),
         ] {
             match std::fs::remove_file(&p) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e).with_context(|| format!("deleting {}", p.display())),
             }
+        }
+        Ok(())
+    }
+
+    /// Keep a work item: copy its three files onto the favourites shelf.
+    ///
+    /// A **copy**, which is the entire point. The original stays in the grid,
+    /// so the answer to a directory of three hundred generations is still
+    /// `Delete all` — it just no longer takes the good ones with it. A move
+    /// would make favouriting a way of hiding an image from the grid it was
+    /// just found in.
+    ///
+    /// Overwriting is fine and needs no `free_stem`: an id is
+    /// `{unix_millis}-{seed}`, so the only thing that can land on a favourite
+    /// is that same favourite, and the bytes are identical.
+    ///
+    /// A missing image or sidecar is an error — there is nothing to keep, and a
+    /// silent success would leave a tile that never appears. A missing
+    /// *thumbnail* is not: `save` has written one since the beginning, and an
+    /// entry old enough to lack one is still worth keeping.
+    pub fn favorite(&self, id: &str) -> Result<()> {
+        if !valid_id(id) {
+            bail!("'{id}' is not a work item id");
+        }
+        std::fs::create_dir_all(&self.favorites)
+            .with_context(|| format!("creating {}", self.favorites.display()))?;
+        for (from, to) in [
+            (
+                self.image_path(Shelf::Work, id),
+                self.image_path(Shelf::Favorites, id),
+            ),
+            (
+                self.sidecar_path(Shelf::Work, id),
+                self.sidecar_path(Shelf::Favorites, id),
+            ),
+        ] {
+            std::fs::copy(&from, &to)
+                .with_context(|| format!("keeping {}", from.display()))?;
+        }
+        let (from, to) = (
+            self.thumb_path(Shelf::Work, id),
+            self.thumb_path(Shelf::Favorites, id),
+        );
+        if from.is_file() {
+            std::fs::copy(&from, &to).with_context(|| format!("keeping {}", from.display()))?;
         }
         Ok(())
     }
@@ -617,7 +708,7 @@ mod tests {
     #[test]
     fn save_list_reopen_delete() {
         let dir = std::env::temp_dir().join(format!("rustimage-wi-{}", new_id(0)));
-        let store = Store::new(&dir);
+        let store = Store::new(&dir, &dir.join("user"));
 
         // A 320x160 source, so a wrong-way-round thumbnail is obvious.
         let src = dir.join("src.png");
@@ -635,31 +726,31 @@ mod tests {
         assert_eq!(a.thumb_width, THUMB_HEIGHT * 2);
 
         // Newest first, and the two companion files are not mistaken for items.
-        let list = store.list();
+        let list = store.list(Shelf::Work);
         assert_eq!(
             list.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
             ["200-7", "100-7"]
         );
 
-        let loaded = store.load("100-7").unwrap();
+        let loaded = store.load(Shelf::Work, "100-7").unwrap();
         assert_eq!(loaded.prompt, a.prompt);
         assert_eq!(loaded.width, 320);
 
         // Reopening must not consume the archive — this is the invariant.
-        assert!(store.image_path("100-7").is_file());
+        assert!(store.image_path(Shelf::Work, "100-7").is_file());
 
-        store.delete("100-7").unwrap();
+        store.delete(Shelf::Work, "100-7").unwrap();
         for p in [
-            store.image_path("100-7"),
-            store.thumb_path("100-7"),
-            store.sidecar_path("100-7"),
+            store.image_path(Shelf::Work, "100-7"),
+            store.thumb_path(Shelf::Work, "100-7"),
+            store.sidecar_path(Shelf::Work, "100-7"),
         ] {
             assert!(!p.exists(), "{} survived the delete", p.display());
         }
-        assert_eq!(store.list().len(), 1);
+        assert_eq!(store.list(Shelf::Work).len(), 1);
         // Deleting what isn't there is a no-op, not an error.
-        store.delete("100-7").unwrap();
-        assert!(store.load("100-7").is_err());
+        store.delete(Shelf::Work, "100-7").unwrap();
+        assert!(store.load(Shelf::Work, "100-7").is_err());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -670,7 +761,7 @@ mod tests {
     #[test]
     fn save_output_never_overwrites() {
         let dir = std::env::temp_dir().join(format!("rustimage-out-{}", new_id(1)));
-        let store = Store::new(&dir);
+        let store = Store::new(&dir, &dir.join("user"));
         let src = dir.join("src.png");
         image::RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255]))
             .save(&src)
@@ -699,7 +790,7 @@ mod tests {
     #[test]
     fn outputs_list_by_stem_and_grow_thumbnails() {
         let dir = std::env::temp_dir().join(format!("rustimage-pick-{}", new_id(2)));
-        let store = Store::new(&dir);
+        let store = Store::new(&dir, &dir.join("user"));
         let src = dir.join("src.png");
         image::RgbaImage::from_pixel(300, 100, image::Rgba([9, 9, 9, 255]))
             .save(&src)
@@ -769,7 +860,7 @@ mod tests {
     #[test]
     fn deleting_an_output_takes_its_companions() {
         let dir = std::env::temp_dir().join(format!("rustimage-del-{}", new_id(6)));
-        let store = Store::new(&dir);
+        let store = Store::new(&dir, &dir.join("user"));
         let src = dir.join("src.png");
         image::RgbaImage::from_pixel(64, 32, image::Rgba([4, 5, 6, 255]))
             .save(&src)
@@ -807,7 +898,7 @@ mod tests {
     #[test]
     fn an_output_sidecar_comes_back_whole() {
         let dir = std::env::temp_dir().join(format!("rustimage-side-{}", new_id(5)));
-        let store = Store::new(&dir);
+        let store = Store::new(&dir, &dir.join("user"));
         let src = dir.join("src.png");
         image::RgbaImage::from_pixel(64, 64, image::Rgba([1, 2, 3, 255]))
             .save(&src)
@@ -866,6 +957,64 @@ mod tests {
         assert_eq!(back.typed_negative, None);
     }
 
+    /// The one thing this feature exists to make true: a favourite outlives
+    /// `Delete all`. Both halves are silent failures — a move rather than a
+    /// copy would empty the grid of the images just kept, and a `delete` that
+    /// reached both shelves would destroy them a moment later.
+    #[test]
+    fn a_favourite_survives_deleting_the_original() {
+        let dir = std::env::temp_dir().join(format!("rustimage-fav-{}", new_id(7)));
+        let store = Store::new(&dir, &dir.join("user"));
+        let src = dir.join("src.png");
+        image::RgbaImage::from_pixel(64, 32, image::Rgba([7, 7, 7, 255]))
+            .save(&src)
+            .unwrap();
+
+        let mut keep = item("700-7", 700);
+        let mut drop = item("800-7", 800);
+        store.save(&src, &mut keep).unwrap();
+        store.save(&src, &mut drop).unwrap();
+
+        store.favorite("700-7").unwrap();
+        for p in [
+            store.image_path(Shelf::Favorites, "700-7"),
+            store.thumb_path(Shelf::Favorites, "700-7"),
+            store.sidecar_path(Shelf::Favorites, "700-7"),
+        ] {
+            assert!(p.is_file(), "{} was not kept", p.display());
+        }
+        // A copy: the original is still in the grid it was picked from.
+        assert_eq!(store.list(Shelf::Work).len(), 2);
+        let favs = store.list(Shelf::Favorites);
+        assert_eq!(favs.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["700-7"]);
+
+        // Now the thing the feature is for.
+        for it in store.list(Shelf::Work) {
+            store.delete(Shelf::Work, &it.id).unwrap();
+        }
+        assert!(store.list(Shelf::Work).is_empty());
+        let back = store.load(Shelf::Favorites, "700-7").unwrap();
+        assert_eq!(back.prompt, keep.prompt);
+        // The sidecar came over whole, so a favourite reopens as the workflow
+        // it was — braces and all — rather than as a picture.
+        assert_eq!(back.typed_prompt, keep.typed_prompt);
+        assert_eq!(back.seed, keep.seed);
+
+        // And the other direction: deleting a favourite leaves `work/` alone.
+        store.save(&src, &mut drop).unwrap();
+        store.delete(Shelf::Favorites, "700-7").unwrap();
+        assert!(store.list(Shelf::Favorites).is_empty());
+        assert_eq!(store.list(Shelf::Work).len(), 1);
+
+        // Nothing to keep is an error, not a silent success that would leave a
+        // tile which never appears. The traversal guard is the same whitelist
+        // as everywhere else.
+        assert!(store.favorite("900-7").is_err());
+        assert!(store.favorite("../models.toml").is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// An import is the one image whose name the *user* chose, and the answer is
     /// that it doesn't get to: the stem is minted here, because `valid_id` is the
     /// whole traversal guard for `/outputs/{stem}/thumb.png` and a filename that
@@ -877,7 +1026,7 @@ mod tests {
     #[test]
     fn an_import_mints_its_own_name_and_never_overwrites() {
         let dir = std::env::temp_dir().join(format!("rustimage-imp-{}", new_id(3)));
-        let store = Store::new(&dir);
+        let store = Store::new(&dir, &dir.join("user"));
         let mut png = Vec::new();
         image::RgbaImage::from_pixel(120, 60, image::Rgba([3, 4, 5, 255]))
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)

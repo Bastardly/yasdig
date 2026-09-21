@@ -27,6 +27,12 @@
 //!   GET  /workitems/{id}/thumb.png
 //!   POST /workitems/open   -> {id}       reopen one as a live image_id
 //!   POST /workitems/delete -> {ids:[..]} remove them from disk
+//!   POST /favorites/add    -> {ids:[..]} copy them to user/favorite/, so
+//!                        "delete all" on the grid can't reach them
+//!   GET  /favorites   -> the same listing, read from user/favorite/
+//!   GET  /favorites/{id}/thumb.png
+//!   POST /favorites/open   -> {id}
+//!   POST /favorites/delete -> {ids:[..]}
 //!   GET  /loras       -> every file in the LoRA dir, with why an unusable one
 //!                        can't be picked. Attach them per request with a
 //!                        `loras: [{name, strength}]` on /generate or /img2img
@@ -77,6 +83,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
+use workitems::Shelf;
 
 /// A unit of GPU work plus a channel to send the result back to the HTTP thread.
 ///
@@ -106,8 +113,13 @@ enum JobKind {
     /// Re-filter an earlier result — display passes only, no diffusion.
     Adjust { id: u64, patch: FiltersPatch },
     /// Reopen an archived generation as a live result. Needs the worker because
-    /// it ends in a `publish`, and because the new `Pending` lives there.
-    Open(String),
+    /// it ends in a `publish`, and because the new `Pending` lives there. The
+    /// shelf rides along because the two grids — Current and Favorites — hold
+    /// the same ids, so the id alone doesn't say which file to read.
+    Open {
+        id: String,
+        shelf: Shelf,
+    },
     /// Reopen a finished image from `work/output/` as a live result — the
     /// Outputs tab. Through the queue for the same two reasons as `Open`, and
     /// unlike every other `/outputs` route, which only reads the filesystem.
@@ -196,7 +208,9 @@ fn main() -> Result<()> {
                         JobKind::Adjust { id, patch } => {
                             engine.adjust(id, &patch).map(|r| result_json(&r))
                         }
-                        JobKind::Open(work_id) => engine.open(&work_id).map(|r| result_json(&r)),
+                        JobKind::Open { id, shelf } => {
+                            engine.open(&id, shelf).map(|r| result_json(&r))
+                        }
                         JobKind::OpenOutput(stem) => {
                             engine.open_output(&stem).map(|r| result_json(&r))
                         }
@@ -332,17 +346,41 @@ fn handle_conn(
         // than through `submit` — they never touch the GPU, and the worker is
         // serialized, so going through it would leave the grid dead for the
         // length of whatever render is in flight.
-        ("GET", "/workitems") => handle_list_workitems(&mut conn, cfg),
+        ("GET", "/workitems") => handle_list_workitems(&mut conn, cfg, Shelf::Work),
         // `http.rs` strips the query string before routing, so the id has to be
         // a path segment — hence a guard arm rather than a literal.
         ("GET", p) if p.starts_with("/workitems/") && p.ends_with("/thumb.png") => {
             let id = p
                 .trim_start_matches("/workitems/")
                 .trim_end_matches("/thumb.png");
-            handle_thumb(&mut conn, cfg, id)
+            handle_thumb(&mut conn, cfg, Shelf::Work, id)
         }
-        ("POST", "/workitems/open") => handle_open_workitem(&mut conn, job_tx, &req.body),
-        ("POST", "/workitems/delete") => handle_delete_workitems(&mut conn, cfg, &req.body),
+        ("POST", "/workitems/open") => {
+            handle_open_workitem(&mut conn, job_tx, Shelf::Work, &req.body)
+        }
+        ("POST", "/workitems/delete") => {
+            handle_delete_workitems(&mut conn, cfg, Shelf::Work, &req.body)
+        }
+
+        // The same four routes over `user/favorite/`, which is the same three
+        // files under the same ids — so each one is the handler above with a
+        // different `Shelf`. The shelf is a *path segment* rather than a query
+        // parameter because `http.rs` strips the query string before routing,
+        // which is the same constraint that already puts an id in the path.
+        ("GET", "/favorites") => handle_list_workitems(&mut conn, cfg, Shelf::Favorites),
+        ("GET", p) if p.starts_with("/favorites/") && p.ends_with("/thumb.png") => {
+            let id = p
+                .trim_start_matches("/favorites/")
+                .trim_end_matches("/thumb.png");
+            handle_thumb(&mut conn, cfg, Shelf::Favorites, id)
+        }
+        ("POST", "/favorites/open") => {
+            handle_open_workitem(&mut conn, job_tx, Shelf::Favorites, &req.body)
+        }
+        ("POST", "/favorites/delete") => {
+            handle_delete_workitems(&mut conn, cfg, Shelf::Favorites, &req.body)
+        }
+        ("POST", "/favorites/add") => handle_favorite(&mut conn, cfg, &req.body),
 
         // `work/output/` — the finished images, which is what the video tab
         // animates from. Same connection-thread family as the archive above, and
@@ -394,11 +432,15 @@ fn handle_conn(
 /// and a `create_dir_all` — so each request makes its own rather than sharing
 /// the engine's behind a lock.
 fn store(cfg: &Config) -> workitems::Store {
-    workitems::Store::new(&cfg.base_dir.join("work"))
+    workitems::Store::new(&cfg.base_dir.join("work"), &cfg.user_dir())
 }
 
-fn handle_list_workitems(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
-    let items = store(cfg).list();
+fn handle_list_workitems(
+    conn: &mut http::Connection,
+    cfg: &Config,
+    shelf: Shelf,
+) -> Result<()> {
+    let items = store(cfg).list(shelf);
     match serde_json::to_vec(&items) {
         Ok(body) => conn.respond(200, "application/json", &body),
         Err(e) => conn.respond(
@@ -413,11 +455,11 @@ fn handle_list_workitems(conn: &mut http::Connection, cfg: &Config) -> Result<()
 /// the browser's side they are the same thing: a thumbnail that isn't there.
 /// [`workitems::valid_id`] is the traversal guard — it is a whitelist of digits
 /// and `-`, so nothing that reaches `read` can name a path outside the archive.
-fn handle_thumb(conn: &mut http::Connection, cfg: &Config, id: &str) -> Result<()> {
+fn handle_thumb(conn: &mut http::Connection, cfg: &Config, shelf: Shelf, id: &str) -> Result<()> {
     if !workitems::valid_id(id) {
         return conn.respond(404, "text/plain", b"not found");
     }
-    match std::fs::read(store(cfg).thumb_path(id)) {
+    match std::fs::read(store(cfg).thumb_path(shelf, id)) {
         Ok(body) => conn.respond(200, "image/png", &body),
         Err(_) => conn.respond(404, "text/plain", b"not found"),
     }
@@ -816,6 +858,7 @@ fn handle_output_thumb(conn: &mut http::Connection, cfg: &Config, stem: &str) ->
 fn handle_open_workitem(
     conn: &mut http::Connection,
     job_tx: &Sender<Job>,
+    shelf: Shelf,
     body: &[u8],
 ) -> Result<()> {
     #[derive(serde::Deserialize)]
@@ -826,7 +869,7 @@ fn handle_open_workitem(
     match parse_json::<Dto>(conn, body)? {
         // 400, same staleness contract as the escalations: an id that isn't
         // there means the UI's copy of the grid is stale, not that we broke.
-        Some(dto) => submit(conn, job_tx, JobKind::Open(dto.id), 400),
+        Some(dto) => submit(conn, job_tx, JobKind::Open { id: dto.id, shelf }, 400),
         None => Ok(()),
     }
 }
@@ -858,7 +901,12 @@ fn handle_open_output(
 /// Delete is a list, not a single id: the UI selects a set and then deletes it in
 /// one go, which is what keeps culling a batch render from being a click per
 /// image with a confirmation on each.
-fn handle_delete_workitems(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+fn handle_delete_workitems(
+    conn: &mut http::Connection,
+    cfg: &Config,
+    shelf: Shelf,
+    body: &[u8],
+) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
         ids: Vec<String>,
@@ -870,7 +918,7 @@ fn handle_delete_workitems(conn: &mut http::Connection, cfg: &Config, body: &[u8
     let store = store(cfg);
     let mut deleted = 0usize;
     for id in &dto.ids {
-        match store.delete(id) {
+        match store.delete(shelf, id) {
             Ok(()) => deleted += 1,
             Err(e) => eprintln!("[rustimage] {e:#}"),
         }
@@ -879,6 +927,44 @@ fn handle_delete_workitems(conn: &mut http::Connection, cfg: &Config, body: &[u8
         200,
         "application/json",
         format!("{{\"deleted\":{deleted}}}").as_bytes(),
+    )
+}
+
+/// Keep work items: copy them to `user/favorite/`.
+///
+/// A list rather than one id, for the reason `/workitems/delete` is one — the
+/// page marks a set and acts on it once — and answered on the connection thread
+/// beside it, because it is three `fs::copy`s and touches no GPU.
+///
+/// `add` rather than a verb on `/workitems`, because the route names the shelf
+/// it writes to and every other favourites route reads from that same prefix.
+/// There is no "unfavorite": `POST /favorites/delete` already is one, and a
+/// second name for removing a file is a second place to get the guard wrong.
+///
+/// Failures are logged and skipped, exactly as the delete loop does: an id the
+/// grid has that the disk hasn't means the page's copy is stale, and taking the
+/// whole request down over it would lose the ones that did work.
+fn handle_favorite(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        ids: Vec<String>,
+    }
+
+    let Some(dto) = parse_json::<Dto>(conn, body)? else {
+        return Ok(());
+    };
+    let store = store(cfg);
+    let mut favorited = 0usize;
+    for id in &dto.ids {
+        match store.favorite(id) {
+            Ok(()) => favorited += 1,
+            Err(e) => eprintln!("[rustimage] {e:#}"),
+        }
+    }
+    conn.respond(
+        200,
+        "application/json",
+        format!("{{\"favorited\":{favorited}}}").as_bytes(),
     )
 }
 
