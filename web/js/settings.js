@@ -30,7 +30,13 @@ const BLANK = true;
 // Where a section starts. Named after the tab whose controls it holds the
 // defaults for, which is what makes "why is Strength in here twice" answer
 // itself. `fold` opens a <details> that runs to the end of the form.
-const SECTION = (title, fold = false, help = null) => ({ title, fold, help });
+//
+// `pane` is the id of the container the rows under it are rendered into, and it
+// is why this table is still one table: `markup` is called once per pane and
+// skips what isn't in the one it is building, so a section changing column is
+// this one word rather than a second list and a second loop.
+const SECTION = (title, { fold = false, help = null, pane = 'setform' } = {}) =>
+  ({ title, fold, help, pane });
 
 const FIELDS = [
   SECTION('Prompts'),
@@ -38,10 +44,12 @@ const FIELDS = [
   { key: 'negative', from: 'negative', kind: 'text' },
 
   // Not a default for any control: the word lists behind `{animal}` in a
-  // prompt. It is here rather than on a tab of its own because it is read at
-  // the same moment as the default prompt above it — and because it is stored
-  // in the same file, so it saves with the same button.
-  SECTION('Prompt variables', false, 'setvars'),
+  // prompt. It is on this tab because it is stored in the same file and saves
+  // with the same button — but in the *other* column, because a list that grows
+  // without bound has no business between Negative prompt and Steps: twenty
+  // variables pushed the whole form off the screen. The right-hand column is
+  // also wide enough to put a name, its words and the × on one row.
+  SECTION('Prompt variables', { help: 'setvars', pane: 'setvarbox' }),
   { key: 'variables', kind: 'vars' },
 
   SECTION('Image'),
@@ -62,7 +70,7 @@ const FIELDS = [
   { key: 'source_strength', from: 'i2strength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
   { key: 'hires_max_side', from: 'i2maxside', kind: 'int', min: 64, step: 64 },
 
-  SECTION('Advanced', true),
+  SECTION('Advanced', { fold: true }),
   // Not on any tab: the FSR enlarge every base render goes through on its way to
   // the output size. It is why a 768 model is listed as 768×768 → 1536×1536.
   { key: 'upscale_factor', label: 'Output upscale', help: 'setupscale',
@@ -91,14 +99,18 @@ const fieldId = (f) => `set-${f.key}`;
 // remove it. The words are one text box rather than a list of them because that
 // is how the list is read as well as written — "crab, horse, dog" is the whole
 // UI, and spaces inside a word are free.
+//
+// Source order is the row's order, since `.varrow` places these three in three
+// grid columns and nothing is positioned by hand — so it is also the tab order,
+// and the × is after the fields it destroys rather than between them.
 const varRow = (name = '', words = []) => `
   <div class="varrow">
     <input class="varname" value="${esc(name)}" placeholder="animal"
       aria-label="Variable name">
-    <button type="button" class="btn btn-danger" data-vardel
-      title="Remove this variable">&times;</button>
     <input class="varwords" value="${esc(words.join(', '))}"
       placeholder="crab, horse, dog, cat" aria-label="Words, comma separated">
+    <button type="button" class="btn btn-danger" data-vardel
+      title="Remove this variable">&times;</button>
   </div>`;
 
 function control(f) {
@@ -124,9 +136,13 @@ function control(f) {
     // of the DOM by `take` — no shadow copy, because nothing here re-renders
     // while you are typing in it. Add and remove are one delegated listener in
     // `initSettings`, for the same reason the dirty check is.
+    //
+    // The button is above the rows, and a new row is prepended under it: the
+    // list is the thing that grows, so a button at its foot walks away from the
+    // pointer exactly as the list gets long enough for that to matter.
     case 'vars':
-      return `<div id="${id}" class="vars"></div>
-        <button type="button" class="btn" data-varadd>Add variable</button>`;
+      return `<button type="button" class="btn varadd" data-varadd>Add variable</button>
+        <div id="${id}" class="vars"></div>`;
     case 'upscale':
       return `<select id="${id}">${UPSCALES.map(([v, label]) =>
         `<option value="${v}">${label}</option>`).join('')}</select>`;
@@ -139,11 +155,18 @@ function control(f) {
   }
 }
 
-function markup() {
+// The markup for one container. Everything not in that pane is skipped, the
+// `<details>` bookkeeping included — `folded` is only ever set by a section this
+// pane actually drew, so the fold can't be opened in one container and closed in
+// the other.
+function markup(pane) {
   const out = [];
   let folded = false;
+  let active = 'setform';   // anything declared before the first section
   for (const f of FIELDS) {
     if (f.title) {
+      active = f.pane;
+      if (active !== pane) continue;
       if (f.fold) {
         folded = true;
         out.push(`<details class="spaced"><summary>${f.title}</summary>`);
@@ -153,6 +176,7 @@ function markup() {
       }
       continue;
     }
+    if (active !== pane) continue;
     // The only field with no label of its own: the section heading above it is
     // the label, there being exactly one field under it, and "Prompt variables"
     // followed by "Variables" says it twice.
@@ -187,8 +211,8 @@ function put(f, v) {
   if (f.kind === 'vars') {
     // In the order the server sent them, which is alphabetical: the table is a
     // `BTreeMap`, so the file has a stable order and a save that changed
-    // nothing produces no diff. A row added at the bottom therefore moves to
-    // where its name belongs on the next save.
+    // nothing produces no diff. A row added at the top therefore moves to where
+    // its name belongs on the next save.
     el.innerHTML = Object.entries(v ?? {}).map(([name, words]) =>
       varRow(name, words)).join('');
     return;
@@ -370,28 +394,37 @@ async function save() {
 export function initSettings() {
   // Built synchronously so `wireHints` finds these labels in its first pass;
   // the values arrive from the fetch below, which cannot land before boot ends.
-  $('setform').innerHTML = markup();
-  wireHints($('setform'));
+  //
+  // Two containers, one table: the variables are in the other column and
+  // everything else is the form. `fill`, `body` and the dirty check don't know
+  // that — they address a control by its id, which is unique to the document
+  // rather than to a pane.
+  $('setform').innerHTML = markup('setform');
+  $('setvarbox').innerHTML = markup('setvarbox');
+  wireHints($('tab-settings'));
   $('setsave').addEventListener('click', save);
-  // Delegated to the form, so a field added to FIELDS is watched with no second
-  // edit here. `input` covers typing and the checkbox; `change` catches a select
-  // in the browsers that don't fire `input` for one.
+  // Delegated to the *tab*, not to the form, because the panes are two elements
+  // and one listener on their common parent is the whole reason the split cost
+  // nothing here. A field added to FIELDS is still watched with no second edit,
+  // in whichever pane it lands. `input` covers typing and the checkbox;
+  // `change` catches a select in the browsers that don't fire `input` for one.
   for (const ev of ['input', 'change']) {
-    $('setform').addEventListener(ev, markDirty);
+    $('tab-settings').addEventListener(ev, markDirty);
   }
-  // Adding and removing a variable row, delegated for the same reason: one
-  // listener that survives the rows being redrawn by a save. A row is appended
-  // or detached rather than the list being re-rendered, so every other row
-  // keeps exactly what is typed in it.
-  $('setform').addEventListener('click', (e) => {
+  // Adding and removing a variable row, delegated for the same two reasons: one
+  // listener that survives the rows being redrawn by a save, and one that spans
+  // both panes. A row is inserted or detached rather than the list being
+  // re-rendered, so every other row keeps exactly what is typed in it.
+  $('tab-settings').addEventListener('click', (e) => {
     const del = e.target.closest('[data-vardel]');
     const add = e.target.closest('[data-varadd]');
     if (!del && !add) return;
     if (del) {
       del.closest('.varrow').remove();
     } else {
-      $('set-variables').insertAdjacentHTML('beforeend', varRow());
-      $('set-variables').lastElementChild.querySelector('.varname').focus();
+      // Under the button that was just pressed, which is above the list.
+      $('set-variables').insertAdjacentHTML('afterbegin', varRow());
+      $('set-variables').firstElementChild.querySelector('.varname').focus();
     }
     markDirty();
   });

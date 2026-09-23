@@ -434,16 +434,18 @@ Press **Save settings** and it is written and takes effect immediately — the
 model list and the Advanced panel refill themselves, with no restart and no
 reload.
 
-*Prompt variables* is the one section that is not a set of defaults: it is the
-word lists behind `{animal}` in a prompt, and [Prompt
-variables](#prompt-variables) below says what they do. Everything else is the
-default for a control on one of the other tabs, and carries
-that control's own label and its own **(i)**, so "Refine strength" here is the
-same words and the same explanation as "Refine strength" there. The sections are
-named after the tabs they belong to, which is why *Steps* appears twice — once
-for the Image tab and once for Image-to-image, where it is a different pass. The
-four under **Advanced** are the ones with no control anywhere else: the output
-upscale, flash attention, the weight type and extra sd-cli arguments.
+*Prompt variables* is the one section that is not a set of defaults, and it sits
+in its own card beside the form rather than in it — a list that grows without
+bound has no business in the middle of one. It is the word lists behind
+`{animal}` in a prompt, and [Prompt variables](#prompt-variables) below says what
+they do. Everything else is the default for a control on one of the other tabs,
+and carries that control's own label and its own **(i)**, so "Refine strength"
+here is the same words and the same explanation as "Refine strength" there. The
+sections are named after the tabs they belong to, which is why *Steps* appears
+twice — once for the Image tab and once for Image-to-image, where it is a
+different pass. The four under **Advanced** are the ones with no control
+anywhere else: the output upscale, flash attention, the weight type and extra
+sd-cli arguments.
 
 Edits you haven't saved are marked on the Settings tab itself, so walking away
 mid-change says so from wherever you walked to, and reloading the page asks

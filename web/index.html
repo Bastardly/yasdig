@@ -603,7 +603,25 @@
   </div>
 
   <div class="col-result">
+    <!-- The one thing on this side of the Settings tab you can act on, and the
+         reason it is not in the form: the list grows without bound, and in the
+         controls column it pushed everything under it off the screen. Here the
+         row fits `name | words | ×` on one line. Filled by `markup('setvarbox')`
+         — the heading, the button and the rows are all from that table. -->
     <div class="card">
+      <div id="setvarbox"></div>
+      <p class="sub">A variable is a name and a list of words. Name one
+      <code>animal</code>, give it <code>crab, horse, dog</code>, and
+      <code>{animal}</code> anywhere in a prompt becomes one of them — a
+      different one per image, so <b>Generate 20</b> is twenty subjects rather
+      than twenty seeds of one picture. Braces rather than
+      <code>[brackets]</code> because <code>[cat]</code> already means something
+      to the sampler: it de-emphasises the word. Case is ignored, and a name
+      nothing answers to is reported rather than quietly drawn into the image as
+      text.</p>
+    </div>
+
+    <div class="card spaced">
       <b>What these are</b>
       <p class="sub">The values every checkpoint starts from, and what the
       prompt boxes contain when the page loads. They are stored in
@@ -614,16 +632,6 @@
       <em>different</em> about it. It overrides whichever of these it names and
       inherits the rest from here, so a preset for a Turbo model is three lines
       rather than a copy of this page.</p>
-      <p class="sub"><b>Prompt variables</b> are word lists a prompt can draw
-      from. Name one <code>animal</code>, give it
-      <code>crab, horse, dog</code>, and <code>{animal}</code> anywhere in a
-      prompt becomes one of them — a different one per image, so
-      <b>Generate 20</b> is twenty subjects rather than twenty seeds of one
-      picture. Braces rather than <code>[brackets]</code> because
-      <code>[cat]</code> already means something to the sampler: it
-      de-emphasises the word. Case is ignored, and a name nothing answers to is
-      reported rather than quietly drawn into the image as text.</p>
-
       <p class="sub">Nothing here is retroactive: an image already made keeps
       the settings it was made with, which is what lets reopening a work item
       restore it faithfully.</p>

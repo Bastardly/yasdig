@@ -509,6 +509,19 @@ The *Prompt variables* section is the one part of that form which is not a
 default for a control at all, and the one field with no label of its own — its
 section heading carries the `data-help`. See *## Prompt variables*.
 
+It is also **the one section rendered into a different container**, `#setvarbox`
+in the tab's right-hand column, because the list grows without bound and in the
+controls column it pushed Steps, the sizes and the whole Advanced fold off the
+screen. That is one word on its `SECTION` row — `pane` — and `markup(pane)` is
+called once per container and skips what isn't in the one it is building, so
+`FIELDS` is still one table and `fill`/`body`/the dirty check are untouched: they
+address a control by an id that is unique to the *document*, not to a pane. The
+consequence to keep in mind is that **the delegated listeners are rooted at
+`#tab-settings`, not at `#setform`** — the add/remove clicks and the `input` that
+marks the form dirty both have to span two panes, and a listener left on the form
+would silently stop seeing half of them. The *Add variable* button is above the
+rows and prepends, for the reason the `vars` case says.
+
 **`sharpness` and `clarity` are in the file and deliberately not in the form.**
 They are where the viewer's two sliders *start*, and that is a live per-image
 control everywhere else on the page — the Outputs tab starts them at zero
