@@ -35,9 +35,9 @@ export function setBusy(active, label) {
   // to decide, so every path back to idle goes through one place: this one.
   if (!active) for (const fn of idleHooks) fn();
   // Both views of the upscale factor, not just the one above the image: they
-  // are one value, so leaving the run panel's copy live during a pass would let
-  // the pair disagree about a number the next image is about to read.
-  for (const id of ['upfactor', 'runscale', 'vfactor']) {
+  // are one value, so leaving the panel's copy live during a pass would let the
+  // pair disagree about a number the next image is about to read.
+  for (const id of ['upfactor', 'hiresscale', 'vfactor']) {
     if ($(id)) $(id).disabled = !!active;
   }
   setFiltersBusy(active);

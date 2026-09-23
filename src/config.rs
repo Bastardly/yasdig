@@ -255,8 +255,33 @@ pub struct Profile {
     pub clarity: f32,
     pub refine_steps: u32,
     pub refine_strength: f32,
+    /// CFG for the refine pass alone. `None` falls through to
+    /// `img2img_cfg_scale` and then to `cfg_scale`, so a pass with nothing set
+    /// runs exactly where it always did — read it through [`Profile::refine_cfg`]
+    /// rather than unwrapping it by hand.
+    pub refine_cfg_scale: Option<f32>,
     pub hires_steps: u32,
     pub hires_strength: f32,
+    /// The same, for the hi-res pass. Two knobs rather than one because the two
+    /// passes run at different sizes on different pixels: a hi-res enlarge is
+    /// inventing detail at the new resolution and a refine is tightening what is
+    /// already there, and the guidance that suits one over-pushes the other.
+    pub hires_cfg_scale: Option<f32>,
+    /// Which checkpoint the **Refine** button runs, instead of the one that made
+    /// the image: draft on a turbo model, finish on a detailed one. `None` is
+    /// "the one that made the image", which is what an unchosen select sends.
+    ///
+    /// **Request-only**, exactly like [`Profile::loras`] — there is no key for
+    /// it on `Defaults` or `Template`, so both arms of [`Config::registry`]
+    /// build it empty and the `Defaults`/`Template` trap at the top of
+    /// `CLAUDE.md` has no second struct to catch anyone with. It is on `Profile`
+    /// because the profile is what a `Pending` retains and what a sidecar
+    /// stores, and a work item that didn't name its finishing checkpoint
+    /// couldn't restore the picker when it was reopened.
+    pub refine_model: Option<String>,
+    /// The same, for **Hi-res**. Separate from `refine_model` because the whole
+    /// point of the pair is that the two passes need not agree.
+    pub hires_model: Option<String>,
     /// The Image-to-image tab's single pass over a source image. Not an
     /// escalation: nothing gates on it being 0, and `hires_max_side` doesn't
     /// bound it — it bounds an *enlarge*, and this pass never enlarges.
@@ -306,7 +331,8 @@ impl Default for Profile {
 }
 
 impl Profile {
-    /// The CFG the refine and hi-res passes run at.
+    /// The CFG an img2img pass runs at when nothing more specific is set: the
+    /// Image-to-image tab's own pass, and the floor of the two chains below.
     ///
     /// Unset follows `cfg_scale` rather than resolving to a number at load, so
     /// raising the base CFG on a discovered model doesn't quietly leave the
@@ -314,6 +340,22 @@ impl Profile {
     /// fallback lives — nothing else should unwrap the field itself.
     pub fn img2img_cfg(&self) -> f32 {
         self.img2img_cfg_scale.unwrap_or(self.cfg_scale)
+    }
+
+    /// The CFG the refine pass runs at.
+    ///
+    /// Three deep, and each level earns its place: the pass's own knob, then the
+    /// one that used to govern both passes, then the base CFG. That middle rung
+    /// is what makes the split cost nothing to upgrade into — a settings file or
+    /// a `[templates.*]` that already pins `img2img_cfg_scale` keeps running both
+    /// escalations at exactly that number until somebody sets one of these.
+    pub fn refine_cfg(&self) -> f32 {
+        self.refine_cfg_scale.unwrap_or_else(|| self.img2img_cfg())
+    }
+
+    /// The CFG the hi-res pass runs at. See [`Profile::refine_cfg`].
+    pub fn hires_cfg(&self) -> f32 {
+        self.hires_cfg_scale.unwrap_or_else(|| self.img2img_cfg())
     }
 
     /// Reject denoise strengths that would make a pass a no-op (or blow up the
@@ -339,6 +381,8 @@ impl Profile {
         for (field, v) in [
             ("cfg_scale", self.cfg_scale),
             ("img2img_cfg_scale", self.img2img_cfg()),
+            ("refine_cfg_scale", self.refine_cfg()),
+            ("hires_cfg_scale", self.hires_cfg()),
         ] {
             if !v.is_finite() || v < 0.0 {
                 bail!("'{}': {field} is {v}, must be 0 or greater", self.name);
@@ -1724,6 +1768,58 @@ lora_dir = "adapters"
         for p in cfg.registry().values() {
             assert!(p.loras.is_empty(), "'{}' arrived with LoRAs", p.name);
         }
+    }
+
+    /// Neither escalation checkpoint is ever a property of a model, for the same
+    /// reason a LoRA isn't: which one finishes a picture is chosen per picture.
+    /// This fails the day somebody adds a `refine_model` key to the settings or
+    /// to `[templates.*]`, which is exactly when the note on
+    /// [`Profile::refine_model`] would have stopped being true.
+    #[test]
+    fn a_model_brings_no_escalation_checkpoints_of_its_own() {
+        let cfg = parse(MINIMAL).expect("minimal config should parse");
+        for p in cfg.registry().values() {
+            assert_eq!(p.refine_model, None, "'{}' named a refine model", p.name);
+            assert_eq!(p.hires_model, None, "'{}' named a hi-res model", p.name);
+        }
+    }
+
+    /// The CFG chain, which is three deep and whose middle rung is the whole
+    /// upgrade path: a config that pins `img2img_cfg_scale` and knows nothing
+    /// about the split must keep running *both* escalations at that number.
+    /// Resolving either knob to a value at load, or skipping the middle rung,
+    /// compiles and quietly retunes every existing install.
+    #[test]
+    fn each_pass_falls_through_to_the_knob_below_it() {
+        let mut p = Profile {
+            cfg_scale: 6.0,
+            ..Profile::default()
+        };
+        // Nothing set: every pass follows the base CFG.
+        assert_eq!(p.img2img_cfg(), 6.0);
+        assert_eq!(p.refine_cfg(), 6.0);
+        assert_eq!(p.hires_cfg(), 6.0);
+
+        // The knob that used to govern both, and still does when nothing more
+        // specific is set.
+        p.img2img_cfg_scale = Some(2.5);
+        assert_eq!(p.refine_cfg(), 2.5);
+        assert_eq!(p.hires_cfg(), 2.5);
+
+        // One pass pinned; the other is untouched, which is the feature.
+        p.refine_cfg_scale = Some(3.0);
+        assert_eq!(p.refine_cfg(), 3.0);
+        assert_eq!(p.hires_cfg(), 2.5);
+        assert_eq!(p.img2img_cfg(), 2.5);
+
+        // 0 is guidance off, not "unset" — the one value an `unwrap_or` over a
+        // number rather than an `Option` would swallow.
+        p.hires_cfg_scale = Some(0.0);
+        assert_eq!(p.hires_cfg(), 0.0);
+        assert!(p.validate().is_ok(), "0 is a legal CFG");
+
+        p.refine_cfg_scale = Some(-1.0);
+        assert!(p.validate().is_err(), "a negative CFG must be rejected");
     }
 
     #[test]

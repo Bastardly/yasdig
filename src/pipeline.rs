@@ -65,19 +65,35 @@ pub struct GenRequest {
     /// Turbo and standard checkpoints without editing config).
     pub steps: Option<u32>,
     pub cfg_scale: Option<f32>,
-    /// CFG for the refine and hi-res passes. `None` keeps the profile's setting,
+    /// CFG for the Image-to-image pass, and the fallback the two escalations use
+    /// when neither of their own is set. `None` keeps the profile's setting,
     /// which is itself usually unset and so follows `cfg_scale`.
     pub img2img_cfg_scale: Option<f32>,
     pub sampler: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// The FSR (EASU) enlarge every base render goes through on its way to the
+    /// output size. `None` keeps the profile's. It is a per-request knob because
+    /// it is the one setting that decides what "the image" even is — and because
+    /// **1.0 is off**: `Fsr::process` skips EASU entirely there, which is how you
+    /// see what the checkpoint actually drew.
+    pub upscale_factor: Option<f32>,
     /// Where the escalation passes start. Applied to the profile before it's
     /// retained, so a later `refine`/`hires` uses what was set at generate time
     /// unless that pass is handed its own overrides — see [`EscalateRequest`].
     pub refine_steps: Option<u32>,
     pub refine_strength: Option<f32>,
+    pub refine_cfg_scale: Option<f32>,
     pub hires_steps: Option<u32>,
     pub hires_strength: Option<f32>,
+    pub hires_cfg_scale: Option<f32>,
+    /// The checkpoints the Refine and Hi-res buttons will run, chosen before the
+    /// picture exists. Applied onto the profile and therefore **archived with the
+    /// work item**, which is the whole reason they travel with a generate: the
+    /// two escalation routes take their own, so the pass itself needs nothing
+    /// from here. Reopening an item is what would otherwise lose them.
+    pub refine_model: Option<String>,
+    pub hires_model: Option<String>,
     /// Display-time post-process, applied once to the finished image.
     /// Cheap enough to tune freely.
     pub sharpness: Option<f32>,
@@ -125,8 +141,15 @@ pub struct Img2ImgRequest {
     pub sampler: Option<String>,
     pub refine_steps: Option<u32>,
     pub refine_strength: Option<f32>,
+    pub refine_cfg_scale: Option<f32>,
     pub hires_steps: Option<u32>,
     pub hires_strength: Option<f32>,
+    pub hires_cfg_scale: Option<f32>,
+    /// See [`GenRequest::refine_model`]. No `upscale_factor` beside them, unlike
+    /// that request: this pass has no EASU stage to scale — the pixels already
+    /// exist at whatever size they exist at.
+    pub refine_model: Option<String>,
+    pub hires_model: Option<String>,
     pub sharpness: Option<f32>,
     pub clarity: Option<f32>,
     /// See [`GenRequest::loras`].
@@ -231,10 +254,16 @@ pub struct EscalateRequest {
     pub hires_strength: Option<f32>,
     /// Two levels deep on purpose. The outer `None` means the field wasn't sent;
     /// `Some(None)` means it was sent empty, which *unsets* it so the pass
-    /// follows `cfg_scale` again. Collapsing the two would make the box
+    /// follows the knob below it again. Collapsing the two would make the box
     /// one-way — once a number had been typed there, clearing it could never
     /// restore the link the whole `Option` on `Profile` exists to preserve.
     pub img2img_cfg_scale: Option<Option<f32>>,
+    /// The pass's own CFG, doubly optional for the reason above. Only one of
+    /// these two is ever meaningful per route — `/refine` ignores the hi-res one
+    /// and vice versa — but they ride in one struct because the page sends one
+    /// panel and the boundary is the route, not the body.
+    pub refine_cfg_scale: Option<Option<f32>>,
+    pub hires_cfg_scale: Option<Option<f32>>,
 }
 
 impl EscalateRequest {
@@ -255,6 +284,12 @@ impl EscalateRequest {
         }
         if let Some(v) = self.img2img_cfg_scale {
             profile.img2img_cfg_scale = v;
+        }
+        if let Some(v) = self.refine_cfg_scale {
+            profile.refine_cfg_scale = v;
+        }
+        if let Some(v) = self.hires_cfg_scale {
+            profile.hires_cfg_scale = v;
         }
         profile.validate()
     }
@@ -555,7 +590,17 @@ impl Engine {
             "[rustimage] escalating with '{}' instead of '{}'",
             next.name, p.profile.name
         );
+        // The two escalation checkpoints survive the replace, and that is not the
+        // field-wise merge this doc comment just argued against: they are
+        // request-only, so `next` always has them `None` and there is nothing of
+        // the incoming checkpoint's to merge with. They say what the user means
+        // to finish with, which no checkpoint has an opinion about — and a saved
+        // output's sidecar has to keep saying it after the swap that used them.
+        let (refine_model, hires_model) =
+            (p.profile.refine_model.clone(), p.profile.hires_model.clone());
         p.profile = next.clone();
+        p.profile.refine_model = refine_model;
+        p.profile.hires_model = hires_model;
         Ok(())
     }
 
@@ -592,11 +637,20 @@ impl Engine {
         if let Some(v) = req.height {
             profile.height = v;
         }
+        // Bounded by `validate()` below, which already holds it to
+        // `1.0..=MAX_UPSCALE` — 1.0 being the legal bottom rather than a special
+        // case, because that is FSR skipped.
+        if let Some(v) = req.upscale_factor {
+            profile.upscale_factor = v;
+        }
         if let Some(v) = req.refine_steps {
             profile.refine_steps = v;
         }
         if let Some(v) = req.refine_strength {
             profile.refine_strength = v;
+        }
+        if let Some(v) = req.refine_cfg_scale {
+            profile.refine_cfg_scale = Some(v);
         }
         if let Some(v) = req.hires_steps {
             profile.hires_steps = v;
@@ -604,6 +658,16 @@ impl Engine {
         if let Some(v) = req.hires_strength {
             profile.hires_strength = v;
         }
+        if let Some(v) = req.hires_cfg_scale {
+            profile.hires_cfg_scale = Some(v);
+        }
+        // Retained rather than acted on: this generate runs neither pass. It is
+        // here so the archived work item names the checkpoints that were chosen
+        // to finish it, and reopening the item can put them back in the pickers.
+        // An empty string is what an unchosen select sends and means the same as
+        // not sending the field, the same rule `swap_model` applies.
+        profile.refine_model = named(&req.refine_model);
+        profile.hires_model = named(&req.hires_model);
         if let Some(v) = req.sharpness {
             profile.sharpness = v;
         }
@@ -806,12 +870,21 @@ impl Engine {
         if let Some(v) = req.refine_strength {
             profile.refine_strength = v;
         }
+        if let Some(v) = req.refine_cfg_scale {
+            profile.refine_cfg_scale = Some(v);
+        }
         if let Some(v) = req.hires_steps {
             profile.hires_steps = v;
         }
         if let Some(v) = req.hires_strength {
             profile.hires_strength = v;
         }
+        if let Some(v) = req.hires_cfg_scale {
+            profile.hires_cfg_scale = Some(v);
+        }
+        // See `run`: retained, not acted on.
+        profile.refine_model = named(&req.refine_model);
+        profile.hires_model = named(&req.hires_model);
         if let Some(v) = req.sharpness {
             profile.sharpness = v;
         }
@@ -903,6 +976,7 @@ impl Engine {
             &raw,
             profile.source_strength,
             profile.source_steps,
+            profile.img2img_cfg(),
             fw.max(fh) > BIG_IMAGE_SIDE,
             "img2img source",
         )?;
@@ -1196,6 +1270,13 @@ impl Engine {
         // this pass will actually run with rather than the ones it inherited.
         self.swap_model(&mut p, over)?;
         over.apply(&mut p.profile)?;
+        // What this pass is about to run, written back so a `save-output` sidecar
+        // records it. Only when the request names one: an unchosen select sends
+        // an empty string and changes nothing, which is the same rule
+        // `swap_model` applies to the swap itself.
+        if let Some(name) = named(&over.template) {
+            p.profile.refine_model = Some(name);
+        }
         // The generate checked these, but that was possibly hours ago on a
         // `Pending` that has been sitting in the cache since. A file deleted in
         // between is the same silent drop arriving late. Note a model swap has
@@ -1222,6 +1303,7 @@ impl Engine {
             &raw,
             p.profile.refine_strength,
             p.profile.refine_steps,
+            p.profile.refine_cfg(),
             p.big_image(),
             "img2img refine",
         )?;
@@ -1277,6 +1359,9 @@ impl Engine {
         self.swap_model(&mut p, over)?;
         over.apply(&mut p.profile)?;
         // See `refine`.
+        if let Some(name) = named(&over.template) {
+            p.profile.hires_model = Some(name);
+        }
         self.cfg.check_loras(&p.profile.loras)?;
         if p.profile.hires_steps == 0 {
             bail!("'{}' has no hi-res pass configured (hires_steps = 0)", p.profile.name);
@@ -1337,6 +1422,7 @@ impl Engine {
             &hires,
             p.profile.hires_strength,
             p.profile.hires_steps,
+            p.profile.hires_cfg(),
             // `budget` is the longest side the diffusion actually runs at, which
             // is what decides whether it needs the large-image flags — not the
             // size we started from.
@@ -1740,6 +1826,19 @@ fn fit_to(src: (u32, u32), max_side: u32) -> (u32, u32) {
 /// dimensions, and FSR's float scaling would otherwise hand it odd sizes.
 fn snap64(v: u32) -> u32 {
     (v / 64).max(1) * 64
+}
+
+/// A model name a request actually gave, or `None`.
+///
+/// An unchosen `<select>` posts the empty string, which means the same thing as
+/// leaving the field out — so the two collapse here, once, rather than at each of
+/// the four places that read one. Keeping them apart would give "" a meaning of
+/// its own that nothing on the page can express.
+fn named(v: &Option<String>) -> Option<String> {
+    v.as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Best-effort removal of every PNG in `dir` (leftovers from a previous run).

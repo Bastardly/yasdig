@@ -89,6 +89,15 @@ impl<'a> SdRunner<'a> {
     /// floor, not an exact count: a pass that starts high up the sigma schedule
     /// needs proportionally more steps to resolve, so `strength` can raise it.
     ///
+    /// `cfg` is the guidance this pass runs at, and it is the caller's rather
+    /// than `p.img2img_cfg()` because the three passes through here resolve it
+    /// differently — [`crate::config::Profile::refine_cfg`],
+    /// `hires_cfg` and `img2img_cfg`. The base render's CFG over-guides at
+    /// output resolution whichever pass it is: a low-strength pass has little
+    /// freedom to begin with, and pushing it hard against the prompt spends that
+    /// freedom on high-frequency artifacts — the same crunch the step floor
+    /// attacks from the other side.
+    ///
     /// `big_image` adds `--vae-tiling` and (unless the profile disables it)
     /// `--diffusion-fa`. Both matter above ~1536²: measured on a 7900 XTX, a
     /// 2048² pass takes 122 s without flash attention and 20 s with it.
@@ -102,15 +111,10 @@ impl<'a> SdRunner<'a> {
         out: &Path,
         strength: f32,
         steps: u32,
+        cfg: f32,
         big_image: bool,
         label: &str,
     ) -> Result<()> {
-        // The base render's CFG over-guides at output resolution: the pass has
-        // little freedom left to begin with, and pushing it hard against the
-        // prompt spends that freedom on high-frequency artifacts — the same
-        // crunch the step floor above attacks from the other side. `img2img_cfg`
-        // is the knob for that, and follows `cfg_scale` unless someone set it.
-        let cfg = p.img2img_cfg();
         let mut cmd = self.base_cmd(p, prompt, negative, seed, out, cfg);
         // sd.cpp derives dimensions from the init image, so no -W/-H here.
         cmd.args(["-i", &path_str(init)]);

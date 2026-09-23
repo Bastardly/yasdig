@@ -57,13 +57,6 @@
           <label for="count">Images</label>
           <input id="count" type="number" min="1" step="1" value="1">
         </div>
-        <div>
-          <label for="runscale">Hi-res scale</label>
-          <!-- The same factor as the select above the image, which doesn't
-               exist until something has been rendered — so a run that has
-               never rendered anything still needs somewhere to set it. -->
-          <select id="runscale"></select>
-        </div>
       </div>
       <div class="checks">
         <label><input type="checkbox" id="autorun"> Keep going until stopped</label>
@@ -141,24 +134,65 @@
           <input id="h" type="number" step="64" min="64">
         </div>
       </div>
-
+      <!-- Its own row because it is the one box that decides what "the image"
+           even is: the size above is what gets diffused, this is what comes out.
+           1 is not a special case, it is FSR skipped — see the tooltip. -->
       <div class="row">
         <div>
-          <label for="hsteps">Hi-res steps</label>
-          <input id="hsteps" type="number" min="0" max="100">
-        </div>
-        <div>
-          <label for="hstrength">Hi-res strength</label>
-          <input id="hstrength" type="number" step="0.05" min="0.05" max="0.95">
+          <label for="upscale">Output upscale</label>
+          <input id="upscale" type="number" step="0.1" min="1" max="4">
         </div>
       </div>
-      <div class="row">
-        <div>
-          <label for="icfg">Refine/hi-res CFG</label>
-          <!-- Blank = follow the CFG box above. The placeholder shows what that
-               currently resolves to, so an empty field still says what it does. -->
-          <input id="icfg" type="number" step="0.1" min="0">
+      <!-- The arithmetic, live and under the row it is about — the same shape as
+           #runnote and #i2note. The model select quotes this sum for the model's
+           own factor; this box is what moves the right-hand half of it. -->
+      <p class="sub" id="outsize"></p>
+
+      <!-- Two passes, two of everything, and the rule between them is what says
+           which half you are reading. Hi-res first: it is the pass that enlarges
+           and refine is the finishing touch you run at whatever size you end up
+           at, which is also the order the buttons above a result are in. -->
+      <div class="pass">
+        <label class="grouphead">Hi-res pass</label>
+        <div class="row">
+          <div>
+            <label for="hsteps">Hi-res steps</label>
+            <input id="hsteps" type="number" min="0" max="100">
+          </div>
+          <div>
+            <label for="hstrength">Hi-res strength</label>
+            <input id="hstrength" type="number" step="0.05" min="0.05" max="0.95">
+          </div>
+          <div>
+            <!-- Blank = follow the knob below it. The placeholder shows what that
+                 resolves to, so an empty field still says what it does. -->
+            <label for="hcfg">Hi-res CFG</label>
+            <input id="hcfg" type="number" step="0.1" min="0">
+          </div>
+          <div>
+            <!-- The same factor as the select above a finished image, which is
+                 rebuilt by every render and so isn't there before the first one
+                 — this is where it is set when there is nothing on screen yet.
+                 In this group because it is what the hi-res pass enlarges by,
+                 and it was in the run panel only because that panel happened to
+                 be the part of the column that always exists. -->
+            <label for="hiresscale">Hi-res scale</label>
+            <select id="hiresscale"></select>
+          </div>
         </div>
+        <div class="row">
+          <div>
+            <!-- A checkpoint is a setting of the pass about to run, not of the
+                 one that made the image — so unlike Steps or CFG above, changing
+                 this after a generate does something. Draft on a Turbo model,
+                 finish on a detailed one. -->
+            <label for="hiresmodel">Hi-res model</label>
+            <select id="hiresmodel"></select>
+          </div>
+        </div>
+      </div>
+      <div class="pass">
+        <label class="grouphead">Refine pass</label>
         <div class="row">
           <div>
             <label for="rsteps">Refine steps</label>
@@ -168,14 +202,16 @@
             <label for="rstrength">Refine strength</label>
             <input id="rstrength" type="number" step="0.05" min="0.05" max="0.95">
           </div>
+          <div>
+            <label for="rcfg">Refine CFG</label>
+            <input id="rcfg" type="number" step="0.1" min="0">
+          </div>
         </div>
-        <div>
-          <!-- A checkpoint is a setting of the pass about to run, not of the one
-               that made the image — so unlike Steps or CFG above, changing this
-               after a generate does something. Draft on a Turbo model, finish on
-               a detailed one. -->
-          <label for="escmodel">Refine/hi-res model</label>
-          <select id="escmodel"></select>
+        <div class="row">
+          <div>
+            <label for="refmodel">Refine model</label>
+            <select id="refmodel"></select>
+          </div>
         </div>
       </div>
 
@@ -328,30 +364,52 @@
           </select>
         </div>
       </div>
-      <div class="row">
-        <div>
-          <label for="i2rsteps">Refine steps</label>
-          <input id="i2rsteps" type="number" min="0" max="100">
+      <!-- The same two groups as the Image tab, and the same rule between them:
+           these buttons appear over a result here too. -->
+      <div class="pass">
+        <label class="grouphead">Hi-res pass</label>
+        <div class="row">
+          <div>
+            <label for="i2hsteps">Hi-res steps</label>
+            <input id="i2hsteps" type="number" min="0" max="100">
+          </div>
+          <div>
+            <label for="i2hstrength">Hi-res strength</label>
+            <input id="i2hstrength" type="number" step="0.05" min="0.05" max="0.95">
+          </div>
+          <div>
+            <label for="i2hcfg">Hi-res CFG</label>
+            <input id="i2hcfg" type="number" step="0.1" min="0">
+          </div>
         </div>
-        <div>
-          <label for="i2rstrength">Refine strength</label>
-          <input id="i2rstrength" type="number" step="0.05" min="0.05" max="0.95">
+        <div class="row">
+          <div>
+            <label for="i2hiresmodel">Hi-res model</label>
+            <select id="i2hiresmodel"></select>
+          </div>
         </div>
       </div>
-      <div class="row">
-        <div>
-          <label for="i2hsteps">Hi-res steps</label>
-          <input id="i2hsteps" type="number" min="0" max="100">
+      <div class="pass">
+        <label class="grouphead">Refine pass</label>
+        <div class="row">
+          <div>
+            <label for="i2rsteps">Refine steps</label>
+            <input id="i2rsteps" type="number" min="0" max="100">
+          </div>
+          <div>
+            <label for="i2rstrength">Refine strength</label>
+            <input id="i2rstrength" type="number" step="0.05" min="0.05" max="0.95">
+          </div>
+          <div>
+            <label for="i2rcfg">Refine CFG</label>
+            <input id="i2rcfg" type="number" step="0.1" min="0">
+          </div>
         </div>
-        <div>
-          <label for="i2hstrength">Hi-res strength</label>
-          <input id="i2hstrength" type="number" step="0.05" min="0.05" max="0.95">
-        </div>
-      </div>
-      <div class="row">
-        <div>
-          <label for="i2escmodel">Refine/hi-res model</label>
-          <select id="i2escmodel"></select>
+        <div class="row">
+          <div>
+            <label for="i2refmodel">Refine model</label>
+            <select id="i2refmodel"></select>
+          </div>
         </div>
       </div>
       <p class="sub" id="i2note"></p>

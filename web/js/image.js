@@ -25,20 +25,40 @@ function syncAdvanced() {
   if (!m) return;
   $('steps').value = m.steps;
   $('cfg').value = m.cfg_scale;
-  // Left empty when the model doesn't set one, rather than pre-filled with the
-  // number it resolves to. Pre-filling would look friendlier and would be a lie:
-  // it pins the value, so moving the CFG box afterwards would silently stop
-  // carrying over to the escalations.
-  $('icfg').value = m.img2img_cfg_scale ?? '';
   $('sampler').value = m.sampler;
   $('w').value = m.base_width;
   $('h').value = m.base_height;
+  $('upscale').value = m.upscale_factor;
   $('rsteps').value = m.refine_steps;
   $('rstrength').value = m.refine_strength;
   $('hsteps').value = m.hires_steps;
   $('hstrength').value = m.hires_strength;
+  // Left empty when the model doesn't set one, rather than pre-filled with the
+  // number it resolves to. Pre-filling would look friendlier and would be a lie:
+  // it pins the value, so moving the box it follows would silently stop carrying
+  // over to this pass.
+  $('rcfg').value = m.refine_cfg_scale ?? '';
+  $('hcfg').value = m.hires_cfg_scale ?? '';
   setPost({ sharpness: m.sharpness, clarity: m.clarity });
-  syncIcfgPlaceholder();
+  syncCfgPlaceholders();
+  syncOutSize();
+}
+
+// What the base size becomes after the FSR enlarge. The model select already
+// quotes this sum for the model's own factor; this box is what moves the
+// right-hand half of it, so the answer has to follow the box rather than the
+// model. 1 is not a small upscale — `Fsr::process` skips EASU entirely there.
+export function syncOutSize() {
+  const f = parseFloat($('upscale').value);
+  const w = parseInt($('w').value, 10);
+  const h = parseInt($('h').value, 10);
+  if (!Number.isFinite(f) || !Number.isFinite(w) || !Number.isFinite(h)) {
+    $('outsize').textContent = '';
+    return;
+  }
+  $('outsize').textContent = f === 1
+    ? `${w} × ${h} — no upscale`
+    : `${w} × ${h} → ${Math.round(w * f)} × ${Math.round(h * f)}`;
 }
 
 // Mirror the step floor the server applies (see SdRunner::img2img): a pass that
@@ -50,25 +70,42 @@ export function effectiveSteps(steps, strength, base) {
   return Math.max(steps, Math.ceil(base * strength));
 }
 
-// A blank Refine/hi-res CFG box means "whatever the CFG box says", which is a
+// A blank per-pass CFG box means "whatever the box below it says", which is a
 // thing the field has to admit to rather than decide quietly — so the number it
-// resolves to goes in the placeholder, live, because the base CFG it follows is
-// one field away and editable.
-export function syncIcfgPlaceholder() {
-  const base = parseFloat($('cfg').value);
-  $('icfg').placeholder = Number.isFinite(base) ? base : '';
+// resolves to goes in the placeholder, live, because the base CFG it ends up
+// following is one field away and editable.
+//
+// The chain is the server's (`Profile::refine_cfg`): this pass's box, then
+// `img2img_cfg_scale`, then the base CFG. On the Image tab that middle rung has
+// no control — it governs the *other* tab's pass — so it comes off the selected
+// model; on Image-to-image it is a box the user can see and is read from there.
+export function syncCfgPlaceholders() {
+  const num = (id) => {
+    const v = parseFloat($(id).value);
+    return Number.isFinite(v) ? v : null;
+  };
+  const image = num('cfg') ?? '';
+  const mid = currentModel()?.img2img_cfg_scale;
+  for (const id of ['rcfg', 'hcfg']) $(id).placeholder = mid ?? image;
+
+  const i2 = num('i2icfg') ?? num('i2cfg') ?? '';
+  for (const id of ['i2rcfg', 'i2hcfg']) $(id).placeholder = i2;
 }
 
 export async function loadModels() {
   try {
     models = await (await fetch('/models')).json();
-    // Four selects off one list: the two that choose what generates, and the two
-    // that choose what escalates. The escalation pair leads with a blank option
-    // meaning "whatever made the image", which is what the server reads an empty
-    // string as.
+    // Six selects off one list: the two that choose what generates, and two per
+    // tab for what escalates — refine and hi-res pick their own, because the two
+    // passes run at different sizes on different pixels and there is no reason
+    // one checkpoint should be right for both. The escalation four lead with a
+    // blank option meaning "whatever made the image", which is what the server
+    // reads an empty string as.
     for (const [id, blank] of [['template', null], ['i2template', null],
-                               ['escmodel', '— same as generated —'],
-                               ['i2escmodel', '— same as generated —']]) {
+                               ['refmodel', '— same as generated —'],
+                               ['hiresmodel', '— same as generated —'],
+                               ['i2refmodel', '— same as generated —'],
+                               ['i2hiresmodel', '— same as generated —']]) {
       const sel = $(id);
       sel.innerHTML = '';
       if (blank) {
@@ -102,16 +139,17 @@ export async function loadModels() {
 export const UPSCALES = [[1, '1× (same size)'], [1.5, '1.5×'], [2, '2×'], [3, '3×'], [4, '4×']];
 
 // One factor, three places to set it: the select above the image, the one in the
-// run panel — which has to exist too, because the first is rebuilt by every
-// render and so isn't there before the first image — and the one over a clip's
-// frames. All three are views of `upFactor`; this keeps them saying the same
-// thing, which matters because two of them are on tabs you can't see at once.
+// Hi-res pass group — which has to exist too, because the first is rebuilt by
+// every render and so isn't there before the first image — and the one over a
+// clip's frames. All three are views of `upFactor`; this keeps them saying the
+// same thing, which matters because two of them are on tabs you can't see at
+// once.
 export const upOptions = () => UPSCALES.map(([v, label]) =>
   `<option value="${v}"${v === S.upFactor ? ' selected' : ''}>${label}</option>`).join('');
 
 export function setUpFactor(v) {
   S.upFactor = v;
-  for (const id of ['upfactor', 'runscale', 'vfactor']) {
+  for (const id of ['upfactor', 'hiresscale', 'vfactor']) {
     if ($(id) && parseFloat($(id).value) !== v) $(id).value = v;
   }
   syncRunNote();
@@ -256,27 +294,44 @@ async function escalate(which, path, payload, label) {
 // buttons. There is deliberately one function rather than a copy per tab: a run
 // that grew its own list of knobs is how the panel starts lying about what the
 // button will do.
+//
+// The checkpoint is *not* in here, and that is the split: it is per pass, so it
+// rides on the one request that runs that pass rather than in the object both
+// share. Which is also why nothing strips a stray `model` key out of this any
+// more on the way to /generate.
 export const escalateSettings = () => {
   const p = (id) => (S.pane === 'image' ? id : 'i2' + id);
   return {
-    // A checkpoint, unlike everything else here, isn't a number in a box — but
-    // it passes the same test: it describes the pass about to run. Empty means
-    // "the one that made the image", which is what an unchosen select sends.
-    model: P('escmodel').value || null,
     refine_steps: numOr(p('rsteps')),
     refine_strength: numOr(p('rstrength')),
     hires_steps: numOr(p('hsteps')),
     hires_strength: numOr(p('hstrength')),
     // Here null is a value, not an omission: clearing the box unsets the override
-    // so the passes follow the CFG box again. Sending nothing would pin whatever
-    // was last set, which is the one thing this field must never do.
-    img2img_cfg_scale: numOr(S.pane === 'image' ? 'icfg' : 'i2icfg'),
+    // so the pass follows the knob below it again. Sending nothing would pin
+    // whatever was last set, which is the one thing these must never do.
+    refine_cfg_scale: numOr(p('rcfg')),
+    hires_cfg_scale: numOr(p('hcfg')),
   };
 };
 
-const refine = () => escalate('refine', '/refine', escalateSettings(), 'Refining…');
+// The two escalation checkpoints, as a *generate* body spells them. They name no
+// pass this request runs — they are stored on the image so reopening it restores
+// the pickers, which is the one thing a work item used to lose. The escalation
+// routes take theirs as `model` instead, because there it is the pass about to
+// run and there is exactly one of them.
+export const escalateModels = () => ({
+  refine_model: P('refmodel').value || null,
+  hires_model: P('hiresmodel').value || null,
+});
+
+// Each button sends its own checkpoint. Empty means "the one that made the
+// image", which is what an unchosen select sends and what the server reads an
+// empty string as.
+const refine = () => escalate('refine', '/refine',
+  { model: P('refmodel').value || null, ...escalateSettings() }, 'Refining…');
 const hires = () => escalate('hires', '/hires',
-  { upscale: parseFloat($('upfactor').value), ...escalateSettings() }, 'Hi-res pass…');
+  { model: P('hiresmodel').value || null, upscale: parseFloat($('upfactor').value),
+    ...escalateSettings() }, 'Hi-res pass…');
 
 // ---- Runs -------------------------------------------------------------------
 //
@@ -338,17 +393,20 @@ function genPayload(index) {
     sampler: $('sampler').value || null,
     width: numOr('w'),
     height: numOr('h'),
-    // The same five the escalations send, from the same place — they set where
+    // The FSR enlarge on the way to the output size. An empty box sends nothing
+    // and the model's own factor runs; 1 is a real answer and means no upscale.
+    upscale_factor: numOr('upscale'),
+    // The same six the escalations send, from the same place — they set where
     // this image's passes start, and `/refine` and `/hires` can move them
-    // afterwards. `img2img_cfg_scale` is among them, and null for an empty box
-    // still means "leave it unset" here: the passes keep following cfg_scale
+    // afterwards. The two CFGs are among them, and null for an empty box still
+    // means "leave it unset" here: the passes keep following the knob below
     // rather than getting pinned to whatever it resolves to today.
-    //
-    // `model` is dropped rather than spread, and this is the one place it
-    // matters: it is the escalations' checkpoint, and `template` above is this
-    // generation's. Sent as-is it would arrive at /generate as a stray key —
-    // harmless today, and a name collision waiting to be renamed into a bug.
-    ...(({ model, ...rest }) => rest)(escalateSettings()),
+    ...escalateSettings(),
+    // Retained on the image rather than acted on — this request runs neither
+    // pass. It is what makes a reopened work item come back with its finishing
+    // checkpoints in the pickers. Spread separately from the knobs above because
+    // the two escalation routes spell the same choice as `model`, singular.
+    ...escalateModels(),
     // Always sent, including empty — the server reads `[]` as "none" and a
     // missing key as "keep whatever the profile has", and the picker on screen
     // is the complete answer to the question, so it must be able to say none.
@@ -389,11 +447,14 @@ async function startRun() {
       if ($('opthires').checked) {
         setBusy('go', at('Hi-res'));
         render(await post('/hires',
-          { image_id: S.imageId, upscale: S.upFactor, ...escalateSettings() }));
+          { image_id: S.imageId, upscale: S.upFactor,
+            model: P('hiresmodel').value || null, ...escalateSettings() }));
       }
       if ($('optrefine').checked) {
         setBusy('go', at('Refining'));
-        render(await post('/refine', { image_id: S.imageId, ...escalateSettings() }));
+        render(await post('/refine',
+          { image_id: S.imageId, model: P('refmodel').value || null,
+            ...escalateSettings() }));
       }
       if ($('optsave').checked) {
         setBusy('go', at('Saving'));
@@ -462,10 +523,10 @@ export function initImage() {
   imageLoras.init();
   $('go').addEventListener('click', startRun);
   $('stop').addEventListener('click', stopRun);
-  // The run panel's view of the shared upscale factor. Built here rather than in
-  // the markup so there is one list of factors on the page.
-  $('runscale').innerHTML = upOptions();
-  $('runscale').addEventListener('change', (e) => setUpFactor(parseFloat(e.target.value)));
+  // The Advanced panel's view of the shared upscale factor. Built here rather
+  // than in the markup so there is one list of factors on the page.
+  $('hiresscale').innerHTML = upOptions();
+  $('hiresscale').addEventListener('change', (e) => setUpFactor(parseFloat(e.target.value)));
   // 'input' covers the checkboxes too, and keeps the count responsive per keystroke
   // rather than on blur — the button's own label is the feedback.
   for (const id of ['count', 'autorun']) {
@@ -478,9 +539,13 @@ export function initImage() {
   }
   // Each model carries its own defaults, so re-fill the controls on switch.
   $('template').addEventListener('change', syncAdvanced);
-  // What an empty Refine/hi-res CFG box resolves to is whatever the box above it
-  // says, so the placeholder has to follow that field as it is typed in.
-  $('cfg').addEventListener('input', syncIcfgPlaceholder);
+  // What an empty per-pass CFG box resolves to is whatever the chain under it
+  // says, so the placeholders have to follow that field as it is typed in.
+  $('cfg').addEventListener('input', syncCfgPlaceholders);
+  // Three boxes decide the output size and the note under them states it.
+  for (const id of ['upscale', 'w', 'h']) {
+    $(id).addEventListener('input', syncOutSize);
+  }
 
   // `IDLE_LABELS.go` is only a fallback: what the button says at rest depends on
   // the run panel, which that map can't know.

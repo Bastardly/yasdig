@@ -98,23 +98,38 @@ const HELP = [
     text: 'How far the hi-res pass may move the enlarged image. Low (~0.3) keeps '
         + 'the composition and adds texture; high invents new detail and can lose '
         + 'the likeness of what you had.' },
-  { ids: ['icfg'],
-    text: 'CFG for the refine and hi-res passes only. Leave it empty and they '
-        + 'follow the CFG box above. A lower value here is the common trick: an '
-        + 'image that already exists needs less pushing than one being invented.' },
+  { ids: ['rcfg', 'i2rcfg'],
+    text: 'CFG for the refine pass alone. Empty follows the img2img CFG, and '
+        + 'then the CFG box. A lower value here is the common trick: an image '
+        + 'that already exists needs less pushing than one being invented.' },
+  { ids: ['hcfg', 'i2hcfg'],
+    text: 'CFG for the hi-res pass alone. Empty follows the img2img CFG, and '
+        + 'then the CFG box. It is a separate number from the refine one because '
+        + 'the two passes work on different pixels — hi-res is inventing detail '
+        + 'at a new size, refine is tightening what is already there.' },
   { ids: ['i2icfg'],
-    text: 'CFG for every image-to-image pass on this tab — the one the button '
-        + 'runs and the refine and hi-res passes after it. Empty means follow the '
-        + 'CFG box beside it. Lower is usually right, since the picture already '
-        + 'exists and only has to be pushed a little.' },
-  { ids: ['escmodel', 'i2escmodel'],
-    text: 'The checkpoint the Refine and Hi-res buttons use, which need not be '
-        + 'the one that drew the image: draft on a fast turbo model, finish on a '
-        + 'detailed one. It brings its own steps and strengths with it.' },
+    text: 'CFG for the pass this tab\'s button runs. Empty means follow the CFG '
+        + 'box beside it. Lower is usually right, since the picture already '
+        + 'exists and only has to be pushed a little. It is also what the two '
+        + 'per-pass CFG boxes below fall back to when they are empty.' },
+  { ids: ['refmodel', 'i2refmodel', 'hiresmodel', 'i2hiresmodel'],
+    text: 'The checkpoint this one pass uses, which need not be the one that '
+        + 'drew the image: draft on a fast turbo model, finish on a detailed '
+        + 'one. It brings its own steps and strengths with it. Costs no VRAM to '
+        + 'name a second — every pass is a separate sd-cli process that loads '
+        + 'and frees its own weights — only the disk read if the file has fallen '
+        + 'out of the page cache.' },
+  { ids: ['upscale'],
+    text: 'How much this render is enlarged by FSR on its way to the output '
+        + 'size — it is why a 768 model is listed as 768×768 → 1536×1536. Not a '
+        + 'diffusion pass: it invents nothing, and it is fast and '
+        + 'lossless-looking up to about 2×. Set it to 1 and the pass is skipped '
+        + 'entirely, which is how you see what the checkpoint actually drew; to '
+        + 'add real detail at the larger size, use the hi-res pass instead.' },
   { ids: ['count'],
     text: 'How many images this run makes. Each is a separate request, so results '
         + 'appear as they land and Stop only has to wait for the one in flight.' },
-  { ids: ['runscale'],
+  { ids: ['hiresscale'],
     text: 'How much the hi-res pass enlarges, when it runs. The same factor as '
         + 'the box above a finished image, which does not exist yet before the '
         + 'first render — hence a second copy of it here.' },
@@ -216,15 +231,11 @@ const HELP = [
         + 'sampler: it de-emphasises the word. The draw follows the seed, so the '
         + 'same seed still gives the same picture.' },
 
-  // The four settings with no control anywhere else to be the default *for*.
+  // The three settings with no control anywhere else to be the default *for*.
   // They were only ever reachable by editing models.toml by hand, which is what
-  // moving `[defaults]` into a form had to stop being the answer to.
-  { ids: ['setupscale'],
-    text: 'How much every base render is enlarged by FSR on its way to the '
-        + 'output size — it is why a 768 model is listed as 768×768 → 1536×1536. '
-        + 'This is not a diffusion pass and invents nothing; it is fast and '
-        + 'lossless-looking up to about 2×. To add real detail at the larger '
-        + 'size, use the hi-res pass instead.' },
+  // moving `[defaults]` into a form had to stop being the answer to. There were
+  // four: `upscale_factor` has a box on the Image tab now, so its sentence is up
+  // with the rest of that panel's under `upscale`.
   { ids: ['setflash'],
     text: 'Pass --diffusion-fa to the refine and hi-res passes when they run '
         + 'large. Worth about 6× at 2048² on this card (122 s → 20 s), so leave '

@@ -80,7 +80,9 @@ Node installed.
 Each stage is skipped when it would be a no-op — EASU at scale 1.0, the grade with all
 eight knobs at 0, contrast at clarity 0.0 — so `rustimage fsr in.png out.png 1.0 0.5`
 is an exact sharpen-only pass, and `rustimage fsr in.png out.png 1.0 0.0 0.0` is a
-byte-exact copy.
+byte-exact copy. That is also what **Output upscale** in the Advanced panel means by
+`1`: not a small enlarge, but no EASU pass at all, which is how you see the pixels the
+checkpoint actually drew.
 
 ## Requirements
 
@@ -186,14 +188,16 @@ doesn't name. Tuned for standard (non-distilled) SDXL.
 | `prompt` / `negative` | what the prompt boxes contain when the page loads. Not per-model — a checkpoint has a house step count, none has an opinion about what you usually want to draw |
 | `width` / `height` | base generation size, default `768` each (small = fast) |
 | `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `30`, `6.0`, `euler` (Turbo → few steps, cfg 1) |
-| `img2img_cfg_scale` *(opt)* | CFG for the refine and hi-res passes only; unset (the default) follows `cfg_scale`. `0` is legal and means guidance off |
-| `upscale_factor` | FSR upscale, default `2.0` (768 → 1536) — the enlarge every base render goes through, not a diffusion pass |
-| `hires_scale` | where the hi-res pass's enlarge factor starts, default `2.0`. The select above a finished image and the one in the run panel are the same setting |
+| `img2img_cfg_scale` *(opt)* | CFG for the **Image to image** tab's pass, and what the two below fall back to; unset (the default) follows `cfg_scale`. `0` is legal and means guidance off |
+| `upscale_factor` | FSR upscale, default `2.0` (768 → 1536) — the enlarge every base render goes through, not a diffusion pass. Also a box in the Advanced panel, where `1` means no FSR pass at all |
+| `hires_scale` | where the hi-res pass's enlarge factor starts, default `2.0`. The select above a finished image and the one in the Hi-res pass group are the same setting |
 | `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the viewer's slider starts. The only display filter here besides `clarity`: the eight colour knobs are not per-model and always start neutral |
 | `clarity` | local contrast, -1..1, default `0.0` = off — positive adds mid-frequency depth, negative softens; likewise the slider's starting value |
 | `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size (0 steps = disabled) |
+| `refine_cfg_scale` *(opt)* | CFG for the refine pass alone; unset falls through to `img2img_cfg_scale` and then to `cfg_scale` |
 | `source_steps` / `source_strength` | the **Image to image** tab's one pass over a source image you supply. Defaults `12` and `0.55` — far higher than the two escalations, because this one is asked to make a picture *out of* one rather than to finish one it made |
 | `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, after an enlarge (0 steps = disabled) |
+| `hires_cfg_scale` *(opt)* | the same, for the hi-res pass. Two knobs rather than one because the two passes work on different pixels at different sizes |
 | `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job. Does not limit refine. Also where the Image-to-image tab's working size starts |
 | `hires_flash_attn` | `--diffusion-fa` for the img2img passes when they run large (default true; worth 6× at 2048²) |
 | `weight_type` *(opt)* | on-the-fly quantization, e.g. `q8_0`, via sd-cli `--type` |
@@ -403,14 +407,25 @@ more range to cover and the count is raised to at least `steps × strength`. Too
 steps for the strength doesn't reinterpret less — it leaves un-removed noise behind,
 which is what reads as grit. The UI shows the number each pass will actually run.
 
-Guidance is the other half of that. **Refine/hi-res CFG** (`img2img_cfg_scale`) sets the
-CFG for those two passes alone. The value that suits a 768² base render over-guides at
-output resolution: a low-strength pass has little freedom to begin with, and pushing it
-hard against the prompt spends that freedom on high-frequency artifacts — the same crunch
-under-stepping produces, arriving from the other direction. If a pass looks harsh, try
-~2–3 here before reaching for more steps. Leave the box blank and it follows the CFG
-above, which is the default and matches how the passes have always run; the note under
-the controls always states the number that will actually be used.
+Guidance is the other half of that, and each pass has its own box: **Hi-res CFG**
+(`hires_cfg_scale`) and **Refine CFG** (`refine_cfg_scale`). The value that suits a 768²
+base render over-guides at output resolution: a low-strength pass has little freedom to
+begin with, and pushing it hard against the prompt spends that freedom on
+high-frequency artifacts — the same crunch under-stepping produces, arriving from the
+other direction. If a pass looks harsh, try ~2–3 there before reaching for more steps.
+
+Leave a box blank and it falls through to `img2img_cfg_scale`, and then to the CFG box
+above — so a setup that already pinned the old shared **Refine/hi-res CFG** keeps running
+both passes at exactly that number, and one that pinned nothing still follows the base
+CFG. The placeholder always shows what an empty box currently resolves to.
+
+**Each pass picks its own checkpoint too.** *Hi-res model* and *Refine model* are
+separate selects, both defaulting to *— same as generated —*: draft on a fast turbo
+model, enlarge on one that holds structure, finish on a detailed one. A named checkpoint
+brings its own steps, strengths, CFG and slider start points with it, and replaces the
+LoRAs — a LoRA is trained against one base. Naming a second model costs no VRAM: every
+pass is a separate `sd-cli` process that loads and frees its own weights, so the only
+cost is re-reading the file if it has fallen out of the page cache.
 
 Order is free and both repeat. The hi-res button disappears once the image is past
 `hires_max_side`; refine is not under that ceiling, because it doesn't rescale and so
@@ -443,9 +458,8 @@ and carries that control's own label and its own **(i)**, so "Refine strength"
 here is the same words and the same explanation as "Refine strength" there. The
 sections are named after the tabs they belong to, which is why *Steps* appears
 twice — once for the Image tab and once for Image-to-image, where it is a
-different pass. The four under **Advanced** are the ones with no control
-anywhere else: the output upscale, flash attention, the weight type and extra
-sd-cli arguments.
+different pass. The three under **Advanced** are the ones with no control
+anywhere else: flash attention, the weight type and extra sd-cli arguments.
 
 Edits you haven't saved are marked on the Settings tab itself, so walking away
 mid-change says so from wherever you walked to, and reloading the page asks
@@ -658,8 +672,9 @@ just comes back as though you hadn't attached it.
 What you pick travels with the image. **Refine** and **Hi-res** run the same
 adapters, because they are passes over that picture and one that dropped the LoRA
 would redraw the surface in the base model's idiom and undo the look — so there is
-one picker, not one per pass. Choosing a different **Refine/hi-res model** does clear
-them, which is also right: a LoRA belongs to the base it was trained against.
+one picker, not one per pass — unlike the checkpoint, which does get one each.
+Naming a different model for a pass does clear them, which is also right: a LoRA
+belongs to the base it was trained against.
 Reopening a generation from the work-item grid puts its LoRAs back with the rest of
 its settings, and they are in its sidecar, so what made an image stays readable.
 
@@ -700,20 +715,31 @@ different question, asked in a different place.
 
 ### Escalating with a different model
 
-**Refine/hi-res model**, in the Advanced panel of both tabs, runs that one pass on
-a checkpoint other than the one the image was made with. Leave it on *same as
-generated* and nothing changes.
+**Hi-res model** and **Refine model**, in the Advanced panel of both tabs, run
+that one pass on a checkpoint other than the one the image was made with. Leave
+either on *same as generated* and that pass doesn't change.
 
-It is there because a checkpoint is a setting of the pass *about to run*, not of
-the one that already ran — which is the same test `steps` and `cfg_scale` fail,
-and why those stay retained. Draft fast on a Turbo checkpoint and finish on a
-detailed one; or take something the Image-to-image tab produced and hi-res it
-through the model that suits the subject.
+Two pickers rather than one because the two passes are not the same job: hi-res
+is inventing detail at a size nothing has drawn yet, refine is tightening what is
+already there. Draft fast on a Turbo checkpoint, enlarge on one that holds
+structure, finish on one that draws surfaces well.
+
+Naming a second checkpoint costs no memory. Every pass is a separate `sd-cli`
+process that loads its weights and frees them when it exits — the pipeline
+already reloads the *same* file once per rung — so the only cost of a second one
+is re-reading it from disk when it has fallen out of the page cache.
+
+They are there because a checkpoint is a setting of the pass *about to run*, not
+of the one that already ran — which is the same test `steps` and `cfg_scale`
+fail, and why those stay retained. The pair is stored with the generation too, so
+reopening a work item brings back what you meant to finish it with along with
+everything else.
 
 The swap is **wholesale**: the chosen model brings its own refine and hi-res
 steps, strengths, img2img CFG, hi-res budget and slider starting points, and the
 boxes in the panel are then applied on top — which is what you'd expect, since
-those boxes already refill themselves from whichever model is selected. It also
+those boxes already refill themselves from whichever model is selected. The two
+model choices themselves survive it, being no checkpoint's to state. It also
 means the buttons re-derive from the new model, so picking one with
 `hires_steps = 0` removes the Hi-res button for that image, and one with a
 smaller `hires_max_side` may say the image is already past its budget.

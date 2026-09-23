@@ -322,6 +322,12 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    above it: these are settings of a *run*. */
 .run { border-bottom: var(--line); margin-bottom: var(--sp-4); padding-bottom: var(--sp-1); }
 .grouphead { display: block; font-size: var(--fs-sm); color: var(--text); font-weight: bold; margin: var(--sp-3) 0 0; }
+/* Refine and hi-res are two passes with their own checkpoint, steps, strength
+   and CFG, so every one of those words is in the panel twice — the rule is what
+   says which half you are reading. `.run` above is the same argument. Only
+   *between* them: these two are the foot of the panel, and a border under the
+   last would read as an edge the column doesn't have. */
+.pass + .pass { border-top: var(--line); margin-top: var(--sp-3); padding-top: var(--sp-2); }
 .checks { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-top: var(--sp-2); }
 /* `label` is a block with margins by default here — that's for the form column,
    not for a pair of radios, or a row of checkboxes, sitting on one line. */

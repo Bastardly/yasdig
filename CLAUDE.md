@@ -175,7 +175,7 @@ It is on `Profile` at all for two reasons, and both are load-bearing:
   actually made it.
 
 The consequence to keep in mind is that `swap_model` replaces the profile
-**wholesale**, so choosing a different *Refine/hi-res model* clears the LoRAs.
+**wholesale**, so naming a different checkpoint for a pass clears the LoRAs.
 That is right — a LoRA is trained against one base — and it is why `loras` is
 deliberately *not* on `EscalateRequest`: the boundary test in "Adding a per-model
 knob" would let it in, but a second picker on the page would then need its own
@@ -501,9 +501,13 @@ default for*, and takes both the label text and the tooltip from it —
 `labelOf()` reads the real `<label>`, and `data-help="<that id>"` hands
 `wireHints` the key the real control uses. So there is no second vocabulary for
 the same knobs and no second copy of any sentence, which is the rule `HELP`
-already states seen from the other end. Only the four with no control anywhere
-else (`upscale_factor`, `hires_flash_attn`, `weight_type`, `extra_args`) carry
-their own label and their own `HELP` entry.
+already states seen from the other end. Only the three with no control anywhere
+else (`hires_flash_attn`, `weight_type`, `extra_args`) carry their own label and
+their own `HELP` entry. There were four: `upscale_factor` has an *Output upscale*
+box on the Image tab now, so it is an ordinary row that names it. Note
+`img2img_cfg_scale`'s row points at `i2icfg` and sits in the *Image to image*
+section, because after the refine/hi-res split that is the only pass it governs
+outright — the other two fall through to it.
 
 The *Prompt variables* section is the one part of that form which is not a
 default for a control at all, and the one field with no label of its own — its
@@ -716,7 +720,7 @@ is showing. That is `PANES` and `P(k)`.
 
 **The third row is shorter than the other two, and deliberately.** `outputs` carries
 an `err` and nothing else: that tab has no result block, because its image only ever
-exists in the viewer, and no escalation select, because it offers no escalation. The
+exists in the viewer, and neither escalation select, because it offers no escalation. The
 two places that read `result` reach it with `?.` for exactly that row —
 `setResultImage` in `viewer.js` and `clearPane` here. Giving the tab an empty hidden
 `<div id="oresult">` to keep the shape square was the other option and is worse: a
@@ -731,7 +735,7 @@ would be wrong. It also means the ids `render()` writes (`refine`, `hires`, `sav
 `upfactor`, `viewadjust`) exist in at most one pane at a time, which is why
 `IDLE_LABELS` and `setUpFactor` need no second set of them.
 
-A pane is down to three keys — `result`, `err`, `escmodel` — and the two it lost say
+A pane is down to four keys — `result`, `err`, `refmodel`, `hiresmodel` — and the two it lost say
 what the viewer bought. The sliders and their timing readout used to be duplicated per
 pane; there is one dialog, so there is now one set, addressed by plain id. `setPost`,
 `syncPostLabels`, `runPost` and `setBusy` reach them with `$()` rather than `P()`, and
@@ -991,6 +995,16 @@ on the architecture belongs in `VideoFamily::recipe()` rather than in a `default
 function. Anything the page must *derive* from `family` goes on `VideoModelDto` instead
 of being reimplemented in JavaScript — see `frame_grid` below.
 
+The CFG is that pattern three deep — `refine_cfg_scale` → `img2img_cfg_scale` →
+`cfg_scale`, through `Profile::refine_cfg`, and the same for hi-res. The middle rung is
+not decoration: it is what makes the split invisible to an install that already pinned
+the old shared *Refine/hi-res CFG*, which keeps running both passes at that number until
+one of the two is set. `each_pass_falls_through_to_the_knob_below_it` is that under
+test, including that `Some(0.0)` is guidance off rather than unset. `SdRunner::img2img`
+takes the resolved number as an argument rather than asking the profile, because the
+three passes through it resolve it differently and a function that picked one of them
+would be right for two callers out of three.
+
 A knob that *defaults to another knob* stays `Option<T>` all the way onto `Profile` and
 resolves through a method — `img2img_cfg_scale` / `Profile::img2img_cfg()`. Resolving it
 to a number at load, or pinning it in `Engine::run` when the request omits it, both
@@ -1008,8 +1022,8 @@ faithfully.
 The retained profile is the **starting point** for an escalation, though, not a pin:
 `/refine` and `/hires` take an `EscalateRequest` (`src/pipeline.rs`) and fold it on top
 before the pass runs. Only the knobs that describe a pass which *hasn't happened yet* —
-`refine_steps`, `refine_strength`, `hires_steps`, `hires_strength`,
-`img2img_cfg_scale`, and **`template`**. `steps`, `cfg_scale`, `sampler` and the base
+`refine_steps`, `refine_strength`, `refine_cfg_scale`, `hires_steps`,
+`hires_strength`, `hires_cfg_scale`, `img2img_cfg_scale`, and **`template`**. `steps`, `cfg_scale`, `sampler` and the base
 size are settings of a txt2img that already ran, so there is nothing a new value could
 do to the image in hand; they stay retained, and the next *generate* picks them up. Get
 that boundary wrong in either direction and the Advanced panel starts lying: honour a
@@ -1034,11 +1048,29 @@ reset all describe the model that actually ran — which is what keeps a saved s
 true, and also means a swap can remove the Hi-res button (new model, `hires_steps = 0`)
 or declare the image past budget (smaller `hires_max_side`).
 
-On the wire the field is **`model`, not `template`**, and that is load-bearing:
-`genPayload()` spreads `escalateSettings()` into the `/generate` body, where
-`template` is the model doing the txt2img. A second field by that name would silently
-clobber it — `genPayload` destructures `model` back out, and
-`an_escalation_may_name_a_different_checkpoint` pins both halves.
+**`refine_model` and `hires_model` are the one exception to that replace**, and it
+is not a field-wise merge sneaking back in. They are request-only — neither
+`registry()` arm sets one, so the incoming profile always has them `None` and
+there is nothing of the checkpoint's to merge with. They say what the *user*
+means to finish with, which no checkpoint has an opinion about, so `swap_model`
+lifts them off the old profile and puts them back on the new one, and then the
+pass writes its own choice over its own field. Without that, refining twice would
+leave a saved output's sidecar claiming no finishing checkpoint was ever named.
+
+They are on `Profile` at all for the reason `loras` is (*## LoRAs*): the profile
+is what a `Pending` retains and what a sidecar stores, so it is the only place
+that makes a reopened work item restore the two pickers. **That is what the
+`/generate` and `/img2img` bodies carry them for** — neither request runs either
+pass. Before this they were dropped on the way out of `escalateSettings()`, which
+is exactly why the choice used to survive nothing.
+
+On the wire an *escalation* names it **`model`, not `template`**, and that is
+load-bearing: `template` already means the model doing the txt2img, and `/refine`
+and `/hires` each run exactly one pass, so one field is the whole answer there. A
+*generate* spells the same choice as the pair above instead, because it is
+recording two intentions rather than naming one pass.
+`an_escalation_may_name_a_different_checkpoint` pins the escalation half, and
+`escalateModels()` in `image.js` is the page's.
 
 `EscalateRequest.img2img_cfg_scale` is `Option<Option<f32>>` for the reason the
 "defaults to another knob" paragraph above gives: absent = keep, `null` = unset it so

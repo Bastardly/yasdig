@@ -1039,13 +1039,27 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         #[serde(default)]
         height: Option<u32>,
         #[serde(default)]
+        upscale_factor: Option<f32>,
+        #[serde(default)]
         refine_steps: Option<u32>,
         #[serde(default)]
         refine_strength: Option<f32>,
         #[serde(default)]
+        refine_cfg_scale: Option<f32>,
+        #[serde(default)]
         hires_steps: Option<u32>,
         #[serde(default)]
         hires_strength: Option<f32>,
+        #[serde(default)]
+        hires_cfg_scale: Option<f32>,
+        /// The two escalation checkpoints, as the *generate* body spells them.
+        /// They name no pass this request runs; they are archived with the work
+        /// item so reopening it restores the pickers. `/refine` and `/hires` take
+        /// theirs as `model` instead, because there it is the pass about to run.
+        #[serde(default)]
+        refine_model: Option<String>,
+        #[serde(default)]
+        hires_model: Option<String>,
         #[serde(default)]
         sharpness: Option<f32>,
         #[serde(default)]
@@ -1073,10 +1087,15 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         sampler: dto.sampler,
         width: dto.width,
         height: dto.height,
+        upscale_factor: dto.upscale_factor,
         refine_steps: dto.refine_steps,
         refine_strength: dto.refine_strength,
+        refine_cfg_scale: dto.refine_cfg_scale,
         hires_steps: dto.hires_steps,
         hires_strength: dto.hires_strength,
+        hires_cfg_scale: dto.hires_cfg_scale,
+        refine_model: dto.refine_model,
+        hires_model: dto.hires_model,
         sharpness: dto.sharpness,
         clarity: dto.clarity,
         loras: dto.loras,
@@ -1127,9 +1146,19 @@ fn handle_img2img(
         #[serde(default)]
         refine_strength: Option<f32>,
         #[serde(default)]
+        refine_cfg_scale: Option<f32>,
+        #[serde(default)]
         hires_steps: Option<u32>,
         #[serde(default)]
         hires_strength: Option<f32>,
+        #[serde(default)]
+        hires_cfg_scale: Option<f32>,
+        /// See `/generate`'s. No `upscale_factor` beside them: this pass has no
+        /// EASU stage to scale.
+        #[serde(default)]
+        refine_model: Option<String>,
+        #[serde(default)]
+        hires_model: Option<String>,
         #[serde(default)]
         sharpness: Option<f32>,
         #[serde(default)]
@@ -1172,8 +1201,12 @@ fn handle_img2img(
         sampler: dto.sampler,
         refine_steps: dto.refine_steps,
         refine_strength: dto.refine_strength,
+        refine_cfg_scale: dto.refine_cfg_scale,
         hires_steps: dto.hires_steps,
         hires_strength: dto.hires_strength,
+        hires_cfg_scale: dto.hires_cfg_scale,
+        refine_model: dto.refine_model,
+        hires_model: dto.hires_model,
         sharpness: dto.sharpness,
         clarity: dto.clarity,
         loras: dto.loras,
@@ -1262,6 +1295,12 @@ struct EscalateDto {
     /// it so the pass follows `cfg_scale` again.
     #[serde(default, deserialize_with = "double_option")]
     img2img_cfg_scale: Option<Option<f32>>,
+    /// The pass's own CFG, doubly optional for the same reason. Only the one
+    /// belonging to this route does anything; the page sends one panel.
+    #[serde(default, deserialize_with = "double_option")]
+    refine_cfg_scale: Option<Option<f32>>,
+    #[serde(default, deserialize_with = "double_option")]
+    hires_cfg_scale: Option<Option<f32>>,
 }
 
 impl EscalateDto {
@@ -1273,6 +1312,8 @@ impl EscalateDto {
             hires_steps: self.hires_steps,
             hires_strength: self.hires_strength,
             img2img_cfg_scale: self.img2img_cfg_scale,
+            refine_cfg_scale: self.refine_cfg_scale,
+            hires_cfg_scale: self.hires_cfg_scale,
         }
     }
 }
@@ -1487,6 +1528,15 @@ fn progress_json(p: Option<&sd::Progress>) -> String {
         None => "{\"busy\":false}".to_string(),
     }
 }
+/// An optional number as JSON: the number itself, or `null`.
+///
+/// Three fields need this and all three mean the same thing by an absent value —
+/// "follows the knob below it" — so the page must be able to tell that from a
+/// number that happens to match today. See `build_models_json`.
+fn opt_num(v: Option<f32>) -> String {
+    v.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string())
+}
+
 /// The registry (templates + discovered checkpoints) as JSON for the UI. The
 /// per-model defaults (steps/cfg/sampler/size) are included so the UI can
 /// pre-fill the advanced controls when a model is selected.
@@ -1501,8 +1551,9 @@ fn build_models_json(cfg: &Config) -> String {
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
                  \"steps\":{},\"cfg_scale\":{},\"img2img_cfg_scale\":{},\"sampler\":{},\
-                 \"refine_steps\":{},\"refine_strength\":{},\
-                 \"hires_steps\":{},\"hires_strength\":{},\
+                 \"upscale_factor\":{},\
+                 \"refine_steps\":{},\"refine_strength\":{},\"refine_cfg_scale\":{},\
+                 \"hires_steps\":{},\"hires_strength\":{},\"hires_cfg_scale\":{},\
                  \"source_steps\":{},\"source_strength\":{},\"hires_max_side\":{},\
                  \"sharpness\":{},\"clarity\":{}}}",
                 json_str(&p.name),
@@ -1518,14 +1569,23 @@ fn build_models_json(cfg: &Config) -> String {
                 // `null`, not the resolved number: the UI has to tell "unset" from
                 // "set to exactly the base CFG", because they look the same and
                 // behave differently the moment the CFG box moves.
-                p.img2img_cfg_scale
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "null".to_string()),
+                opt_num(p.img2img_cfg_scale),
                 json_str(&p.sampler),
+                // The panel's Output upscale box starts here. It is the one
+                // generation knob that changes what "the image" is, so the page
+                // needs the number and not just the `out_*` above, which is that
+                // number already spent.
+                p.upscale_factor,
                 p.refine_steps,
                 p.refine_strength,
+                // `null`, not the resolved number, for the reason
+                // `img2img_cfg_scale` above is: "unset" and "set to the same
+                // number" look identical and diverge the moment the box it
+                // follows moves.
+                opt_num(p.refine_cfg_scale),
                 p.hires_steps,
                 p.hires_strength,
+                opt_num(p.hires_cfg_scale),
                 p.source_steps,
                 p.source_strength,
                 // Published because the Image-to-image tab's working-size control
@@ -2170,6 +2230,25 @@ mod tests {
 
         let h2: HiresDto = serde_json::from_str(r#"{"image_id":7,"upscale":2.0}"#).unwrap();
         assert_eq!(h2.esc.overrides().img2img_cfg_scale, None);
+
+        // The two per-pass boxes are the same three states again, and each is a
+        // separate `deserialize_with` that a copy-paste can leave pointing at the
+        // wrong field — which compiles, and reads as the box doing nothing.
+        let pair: EscalateDto = serde_json::from_str(
+            r#"{"image_id":7,"refine_cfg_scale":3.0,"hires_cfg_scale":null}"#,
+        )
+        .unwrap();
+        assert_eq!(pair.overrides().refine_cfg_scale, Some(Some(3.0)));
+        assert_eq!(pair.overrides().hires_cfg_scale, Some(None));
+        assert_eq!(bare.overrides().refine_cfg_scale, None);
+        assert_eq!(bare.overrides().hires_cfg_scale, None);
+
+        let hp: HiresDto = serde_json::from_str(
+            r#"{"image_id":7,"upscale":2.0,"hires_cfg_scale":2.5}"#,
+        )
+        .unwrap();
+        assert_eq!(hp.esc.overrides().hires_cfg_scale, Some(Some(2.5)));
+        assert_eq!(hp.esc.overrides().refine_cfg_scale, None);
     }
 
     /// The per-pass model swap has the same three states as the CFG box above,

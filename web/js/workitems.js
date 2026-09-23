@@ -1,7 +1,7 @@
 import { $, esc, post } from './dom.js';
 import { S } from './state.js';
 import { setBusy } from './busy.js';
-import { imageLoras, models, render, syncIcfgPlaceholder } from './image.js';
+import { imageLoras, models, render, syncCfgPlaceholders, syncOutSize } from './image.js';
 import { i2Loras, setI2Source, syncI2Note } from './img2img.js';
 import { gridMarks } from './gridmark.js';
 
@@ -186,16 +186,27 @@ function applyWorkItem(item) {
   if (models.some((m) => m.name === item.template)) $('template').value = item.template;
   $('steps').value = p.steps;
   $('cfg').value = p.cfg_scale;
-  // Blank stays blank, for the reason syncAdvanced gives: a pre-filled number
-  // pins the value and quietly stops it following the CFG box.
-  $('icfg').value = p.img2img_cfg_scale ?? '';
   $('sampler').value = p.sampler;
   $('w').value = p.width;
   $('h').value = p.height;
+  // `?? ''` rather than a fallback number: a sidecar written before this box
+  // existed has no factor, and inventing one would claim the image was made at
+  // it. An empty box sends nothing and the model's own factor runs.
+  $('upscale').value = p.upscale_factor ?? '';
   $('rsteps').value = p.refine_steps;
   $('rstrength').value = p.refine_strength;
   $('hsteps').value = p.hires_steps;
   $('hstrength').value = p.hires_strength;
+  // Blank stays blank, for the reason syncAdvanced gives: a pre-filled number
+  // pins the value and quietly stops it following the box below it.
+  $('rcfg').value = p.refine_cfg_scale ?? '';
+  $('hcfg').value = p.hires_cfg_scale ?? '';
+  // The checkpoints this image was going to be finished with. Guarded the way
+  // `template` is: a select silently shows its first option when nothing
+  // matches, so a model deleted since would read as "— same as generated —"
+  // being *chosen* rather than as the choice having gone.
+  setModel('refmodel', p.refine_model);
+  setModel('hiresmodel', p.hires_model);
   // What the image was actually diffused with. The server restores these onto
   // the reopened image independently, so this is only about what the picker
   // says — but a picker that disagreed would send the wrong set on the next
@@ -215,12 +226,25 @@ function applyWorkItem(item) {
     $('i2cfg').value = p.cfg_scale;
     $('i2icfg').value = p.img2img_cfg_scale ?? '';
     $('i2sampler').value = p.sampler;
+    $('i2rcfg').value = p.refine_cfg_scale ?? '';
+    $('i2hcfg').value = p.hires_cfg_scale ?? '';
+    setModel('i2refmodel', p.refine_model);
+    setModel('i2hiresmodel', p.hires_model);
     i2Loras.set(p.loras ?? []);
     setI2Source(item.source);
     syncI2Note();
   }
   // Not the sliders: render() sets those from what the server actually applied.
-  syncIcfgPlaceholder();
+  syncCfgPlaceholders();
+  syncOutSize();
+}
+
+// Put a stored escalation checkpoint back in its picker, or leave the picker at
+// "— same as generated —". `null` is the ordinary answer: it is what an image
+// generated without one stored, and what every sidecar written before these two
+// fields existed says.
+function setModel(id, name) {
+  $(id).value = name && models.some((m) => m.name === name) ? name : '';
 }
 
 export function initWorkItems() {

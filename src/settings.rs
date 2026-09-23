@@ -66,7 +66,7 @@ pub struct Settings {
     pub prompt: String,
     /// What both image tabs' negative boxes contain at load.
     pub negative: String,
-    /// Where the hi-res pass's enlarge factor starts (`#runscale`/`#upfactor`).
+    /// Where the hi-res pass's enlarge factor starts (`#hiresscale`/`#upfactor`).
     /// Not [`Settings::upscale_factor`], which is the FSR enlarge every base
     /// render goes through on its way to the output size.
     pub hires_scale: f32,
@@ -76,9 +76,11 @@ pub struct Settings {
     pub height: u32,
     pub steps: u32,
     pub cfg_scale: f32,
-    /// CFG for the refine and hi-res passes. `None` = follow `cfg_scale`, and it
-    /// stays an `Option` all the way onto [`Profile`] so raising the base CFG
-    /// doesn't leave the escalations behind at whatever it used to be.
+    /// CFG for the Image-to-image tab's pass, and the fallback the two
+    /// escalations use when neither of the pair below is set. `None` = follow
+    /// `cfg_scale`, and it stays an `Option` all the way onto [`Profile`] so
+    /// raising the base CFG doesn't leave the passes behind at whatever it used
+    /// to be.
     pub img2img_cfg_scale: Option<f32>,
     pub sampler: String,
     pub upscale_factor: f32,
@@ -86,8 +88,15 @@ pub struct Settings {
     pub clarity: f32,
     pub refine_steps: u32,
     pub refine_strength: f32,
+    /// CFG for the refine pass alone; `None` falls through to
+    /// `img2img_cfg_scale` and then to `cfg_scale`. See [`Profile::refine_cfg`].
+    pub refine_cfg_scale: Option<f32>,
     pub hires_steps: u32,
     pub hires_strength: f32,
+    /// The same, for the hi-res pass. Declared here rather than beside
+    /// `img2img_cfg_scale` so each pass's three knobs — steps, strength, CFG —
+    /// are written in the file in the order the panel shows them.
+    pub hires_cfg_scale: Option<f32>,
     pub source_steps: u32,
     pub source_strength: f32,
     pub hires_max_side: u32,
@@ -147,10 +156,17 @@ pub struct PartialSettings {
     pub refine_steps: Option<u32>,
     #[serde(default)]
     pub refine_strength: Option<f32>,
+    /// Doubly optional for the same reason `img2img_cfg_scale` above is: a
+    /// template says "pin this" or says nothing, and has `cfg_scale` to reach
+    /// for when it wants the link back.
+    #[serde(default)]
+    pub refine_cfg_scale: Option<f32>,
     #[serde(default)]
     pub hires_steps: Option<u32>,
     #[serde(default)]
     pub hires_strength: Option<f32>,
+    #[serde(default)]
+    pub hires_cfg_scale: Option<f32>,
     #[serde(default)]
     pub source_steps: Option<u32>,
     #[serde(default)]
@@ -188,6 +204,11 @@ impl Default for Settings {
             clarity: 0.0,
             refine_steps: 0,
             refine_strength: 0.30,
+            // Both unset, which is what makes this change invisible to an
+            // existing install: every pass keeps resolving through
+            // `img2img_cfg_scale` and then `cfg_scale`, exactly as before.
+            refine_cfg_scale: None,
+            hires_cfg_scale: None,
             hires_steps: 0,
             // Same denoise as the refine: enough to resolve real detail at the
             // larger size, low enough that the composition doesn't drift.
@@ -239,8 +260,10 @@ impl Settings {
             clarity: over.clarity.unwrap_or(self.clarity),
             refine_steps: over.refine_steps.unwrap_or(self.refine_steps),
             refine_strength: over.refine_strength.unwrap_or(self.refine_strength),
+            refine_cfg_scale: over.refine_cfg_scale.or(self.refine_cfg_scale),
             hires_steps: over.hires_steps.unwrap_or(self.hires_steps),
             hires_strength: over.hires_strength.unwrap_or(self.hires_strength),
+            hires_cfg_scale: over.hires_cfg_scale.or(self.hires_cfg_scale),
             source_steps: over.source_steps.unwrap_or(self.source_steps),
             source_strength: over.source_strength.unwrap_or(self.source_strength),
             hires_max_side: over.hires_max_side.unwrap_or(self.hires_max_side),
@@ -383,8 +406,15 @@ impl Settings {
             clarity: self.clarity,
             refine_steps: self.refine_steps,
             refine_strength: self.refine_strength,
+            refine_cfg_scale: self.refine_cfg_scale,
             hires_steps: self.hires_steps,
             hires_strength: self.hires_strength,
+            hires_cfg_scale: self.hires_cfg_scale,
+            // Request-only, like `loras` below: which checkpoint finishes a
+            // picture is chosen per picture, so no checkpoint states it and
+            // there is no key for one here.
+            refine_model: None,
+            hires_model: None,
             source_steps: self.source_steps,
             source_strength: self.source_strength,
             hires_max_side: self.hires_max_side,

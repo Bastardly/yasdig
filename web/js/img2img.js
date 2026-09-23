@@ -1,7 +1,8 @@
 import { $, post, numOr } from './dom.js';
 import { S } from './state.js';
 import { setBusy, cancelRun, onIdle } from './busy.js';
-import { models, effectiveSteps, render, escalateSettings } from './image.js';
+import { models, effectiveSteps, render, escalateSettings, escalateModels,
+         syncCfgPlaceholders } from './image.js';
 import { loadWorkItems } from './workitems.js';
 import { fetchOutputs, outputGrid } from './outputs.js';
 import { loraPicker } from './loras.js';
@@ -54,6 +55,10 @@ export function syncI2() {
   $('i2rstrength').value = m.refine_strength;
   $('i2hsteps').value = m.hires_steps;
   $('i2hstrength').value = m.hires_strength;
+  // Blank stays blank — see `syncAdvanced`.
+  $('i2rcfg').value = m.refine_cfg_scale ?? '';
+  $('i2hcfg').value = m.hires_cfg_scale ?? '';
+  syncCfgPlaceholders();
 
   const want = parseInt($('i2maxside').value, 10) || m.hires_max_side;
   $('i2maxside').innerHTML = WORKING_SIDES.map((v) =>
@@ -188,11 +193,18 @@ async function startI2() {
       source_steps: numOr('i2steps'),
       source_strength: numOr('i2strength'),
       cfg_scale: numOr('i2cfg'),
+      // This tab's own pass. It used to arrive through escalateSettings(), which
+      // no longer carries it: after the split `img2img_cfg_scale` governs only
+      // the pass this button runs, plus being what the two per-pass boxes fall
+      // through to.
+      img2img_cfg_scale: numOr('i2icfg'),
       sampler: $('i2sampler').value || null,
       // The escalation knobs travel with the generation here too, so a later
       // Refine starts from what this panel says rather than from the model's
-      // defaults — and `model` is dropped for the reason genPayload drops it.
-      ...(({ model, ...rest }) => rest)(escalateSettings()),
+      // defaults. The two checkpoints ride along for the same reason they do on
+      // /generate: so reopening the work item restores the pickers.
+      ...escalateSettings(),
+      ...escalateModels(),
       // See genPayload: always sent, so an empty picker means none.
       loras: i2Loras.get(),
     }));
@@ -227,6 +239,11 @@ export function initI2() {
   $('i2template').addEventListener('change', syncI2);
   for (const id of ['i2steps', 'i2strength', 'i2cfg', 'i2icfg', 'i2maxside']) {
     $(id).addEventListener('input', syncI2Note);
+  }
+  // Both boxes the per-pass CFGs fall through to on this tab, so what an empty
+  // one resolves to has to follow them as they are typed in.
+  for (const id of ['i2cfg', 'i2icfg']) {
+    $(id).addEventListener('input', syncCfgPlaceholders);
   }
   // The whole zone, not the button — dragging a file onto a 90×30 target is a game
   // of skill. `dragover` must be cancelled or the browser navigates to the file.

@@ -11,9 +11,11 @@ import { wireHints } from './hints.js';
 // its `<label>` at build time, and `data-help` hands `wireHints` the same key
 // the real control uses. Neither can drift, because neither is written twice.
 //
-// The four at the bottom have no control to point at: they were only ever
+// The three at the bottom have no control to point at: they were only ever
 // settable by editing config, and removing `[defaults]` from models.toml is what
 // gave them a home. Those carry their own label and their own `HELP` entry.
+// There were four — `upscale_factor` has a box on the Image tab now, so it is an
+// ordinary row that names it like every other one.
 //
 // `sharpness` and `clarity` are in the file and deliberately *not* in this form.
 // They are where the viewer's two sliders start, which is a per-image live
@@ -22,9 +24,10 @@ import { wireHints } from './hints.js';
 // (invariant 1). A default for them reads as a setting that doesn't take, so
 // they stay hand-editable and documented in the README instead.
 
-// Blank means "not set", which is a different thing from zero for both of these
-// — an empty img2img CFG follows the base CFG, an empty weight type means no
-// `--type` flag at all — so the field has to be able to say nothing.
+// Blank means "not set", which is a different thing from zero for these — an
+// empty CFG follows the knob below it and an empty weight type means no `--type`
+// flag at all, while 0 is guidance off — so the field has to be able to say
+// nothing.
 const BLANK = true;
 
 // Where a section starts. Named after the tab whose controls it holds the
@@ -58,23 +61,25 @@ const FIELDS = [
   { key: 'sampler', from: 'sampler', kind: 'mirror' },
   { key: 'width', from: 'w', kind: 'int', min: 64, step: 64 },
   { key: 'height', from: 'h', kind: 'int', min: 64, step: 64 },
+  { key: 'upscale_factor', from: 'upscale', kind: 'num', min: 1, max: 4, step: 0.1 },
   { key: 'refine_steps', from: 'rsteps', kind: 'int', min: 0, max: 100 },
   { key: 'refine_strength', from: 'rstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
+  { key: 'refine_cfg_scale', from: 'rcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
   { key: 'hires_steps', from: 'hsteps', kind: 'int', min: 0, max: 100 },
   { key: 'hires_strength', from: 'hstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
-  { key: 'hires_scale', from: 'runscale', kind: 'upscale' },
-  { key: 'img2img_cfg_scale', from: 'icfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
+  { key: 'hires_cfg_scale', from: 'hcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
+  { key: 'hires_scale', from: 'hiresscale', kind: 'upscale' },
 
   SECTION('Image to image'),
   { key: 'source_steps', from: 'i2steps', kind: 'int', min: 1, max: 100 },
   { key: 'source_strength', from: 'i2strength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
+  // In this section rather than the one above, because that is now all it
+  // governs: the two escalations have their own CFG each and only fall back to
+  // this one. It is also where the control it names lives.
+  { key: 'img2img_cfg_scale', from: 'i2icfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
   { key: 'hires_max_side', from: 'i2maxside', kind: 'int', min: 64, step: 64 },
 
   SECTION('Advanced', { fold: true }),
-  // Not on any tab: the FSR enlarge every base render goes through on its way to
-  // the output size. It is why a 768 model is listed as 768×768 → 1536×1536.
-  { key: 'upscale_factor', label: 'Output upscale', help: 'setupscale',
-    kind: 'num', min: 1, max: 4, step: 0.1 },
   { key: 'hires_flash_attn', label: 'Flash attention', help: 'setflash', kind: 'check' },
   { key: 'weight_type', label: 'Weight type', help: 'setwtype', kind: 'text', blank: BLANK },
   { key: 'extra_args', label: 'Extra sd-cli arguments', help: 'setargs', kind: 'lines' },

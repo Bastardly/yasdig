@@ -49,9 +49,11 @@ export const S = {
 };
 
 export const PANES = {
-  image:   { result: 'result',   err: 'err',   escmodel: 'escmodel' },
-  img2img: { result: 'i2result', err: 'i2err', escmodel: 'i2escmodel' },
-  // Three tabs now, and the third has neither of the other two keys. It has no
+  image:   { result: 'result',   err: 'err',
+             refmodel: 'refmodel',   hiresmodel: 'hiresmodel' },
+  img2img: { result: 'i2result', err: 'i2err',
+             refmodel: 'i2refmodel', hiresmodel: 'i2hiresmodel' },
+  // Three tabs now, and the third has none of the other three keys. It has no
   // result block because its image only ever exists in the viewer, and no
   // escalation select because it deliberately offers no escalation — an output
   // is already-filtered pixels, and diffusing over those is invariant 1. The two
