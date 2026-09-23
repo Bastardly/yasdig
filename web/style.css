@@ -320,7 +320,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* What pressing Generate will actually do — how many images, and what happens
    to each one — as opposed to what any single image is made of. Hence the rule
    above it: these are settings of a *run*. */
-.run { border-top: var(--line); margin-top: var(--sp-4); padding-top: var(--sp-1); }
+.run { border-bottom: var(--line); margin-bottom: var(--sp-4); padding-bottom: var(--sp-1); }
 .grouphead { display: block; font-size: var(--fs-sm); color: var(--text); font-weight: bold; margin: var(--sp-3) 0 0; }
 .checks { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-top: var(--sp-2); }
 /* `label` is a block with margins by default here — that's for the form column,
