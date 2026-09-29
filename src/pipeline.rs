@@ -7,7 +7,7 @@
 //! one, and RCAS runs once on the way to the browser:
 //!
 //! ```text
-//!   run()     txt2img (base) ─▶ EASU upscale ──────────────▶ raw ─▶ RCAS ─▶ PNG
+//!   run()     txt2img (base) ─▶ EASU or ESRGAN upscale ────▶ raw ─▶ RCAS ─▶ PNG
 //!   img2img() fit a source image ─▶ img2img ───────────────▶ raw ─▶ RCAS ─▶ PNG
 //!   refine()  img2img @ current res, no rescale ──────────▶ raw ─▶ RCAS ─▶ PNG
 //!   hires()   EASU enlarge ─▶ img2img ─▶ EASU (if over budget) ─▶ raw ─▶ RCAS ─▶ PNG
@@ -78,6 +78,10 @@ pub struct GenRequest {
     /// **1.0 is off**: `Fsr::process` skips EASU entirely there, which is how you
     /// see what the checkpoint actually drew.
     pub upscale_factor: Option<f32>,
+    /// What performs that enlarge. `None` keeps the profile's; `Some("")` is FSR,
+    /// explicitly — the empty option of a select, which has to be able to say
+    /// "not a model" over a default that names one. See [`Profile::upscaler`].
+    pub upscaler: Option<String>,
     /// Where the escalation passes start. Applied to the profile before it's
     /// retained, so a later `refine`/`hires` uses what was set at generate time
     /// unless that pass is handed its own overrides — see [`EscalateRequest`].
@@ -298,6 +302,9 @@ impl EscalateRequest {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Timings {
     pub gen_ms: u128,
+    /// An ESRGAN model's share of the initial enlarge, reduce included. 0 when
+    /// EASU did it, which is also what keeps the stage off the readout.
+    pub upscale_ms: u128,
     pub fsr_ms: u128,
     pub refine_ms: u128,
     pub hires_ms: u128,
@@ -643,6 +650,11 @@ impl Engine {
         if let Some(v) = req.upscale_factor {
             profile.upscale_factor = v;
         }
+        // Absent keeps the default; present-and-empty is FSR. `named` is what
+        // turns the second into `None`, the same rule the checkpoint pickers use.
+        if req.upscaler.is_some() {
+            profile.upscaler = named(&req.upscaler);
+        }
         if let Some(v) = req.refine_steps {
             profile.refine_steps = v;
         }
@@ -687,6 +699,9 @@ impl Engine {
         // Before anything expensive: sd.cpp would warn and carry on without a
         // LoRA it can't find, which is two minutes spent on the wrong picture.
         self.cfg.check_loras(&profile.loras)?;
+        // Resolved here for the same reason: a deleted model file would
+        // otherwise fail only after the render it was going to enlarge.
+        let upscaler = self.cfg.check_upscaler(&profile.upscaler)?;
         let tpl = &profile;
 
         if !profile.exists {
@@ -738,12 +753,17 @@ impl Engine {
         sd.txt2img(tpl, &prompt, neg, seed, &lowres)?;
         let gen_ms = t.elapsed().as_millis();
 
-        // 2) EASU upscale, unsharpened — cheap, and enough on its own for a
-        //    draft. Quality is escalated afterwards via `refine` and `hires`,
-        //    both of which read this image rather than the sharpened one.
+        // 2) Upscale, unsharpened — EASU by default, which is cheap and enough
+        //    on its own for a draft, or an ESRGAN model. Quality is escalated
+        //    afterwards via `refine` and `hires`, both of which read this image
+        //    rather than the sharpened one.
         let t = Instant::now();
-        self.fsr
-            .process(&lowres, &raw, tpl.upscale_factor, &Filters::NONE)?;
+        let upscale_ms = self.enlarge(
+            &lowres,
+            &raw,
+            tpl.upscale_factor,
+            upscaler.as_deref(),
+        )?;
         // Nothing reads the base render once it has been upscaled — every
         // escalation works at output resolution now — so it stays in `scratch`
         // and goes when this returns, whichever way it returns.
@@ -751,7 +771,7 @@ impl Engine {
         // 3) Sharpen for display.
         let filters = Filters::starting_at(tpl.sharpness, tpl.clarity);
         let (png, w, h) = self.publish(&raw, &display, &filters)?;
-        let fsr_ms = t.elapsed().as_millis();
+        let fsr_ms = t.elapsed().as_millis() - upscale_ms;
 
         // Past every `?`: these two are the result, and the `Pending` below owns
         // them. Anything the guard still holds is an intermediate.
@@ -817,7 +837,7 @@ impl Engine {
             hires_passes: 0,
             step: 0,
         };
-        let result = self.result(id, &entry, png, Timings { gen_ms, fsr_ms, ..Default::default() });
+        let result = self.result(id, &entry, png, Timings { gen_ms, upscale_ms, fsr_ms, ..Default::default() });
         self.store(id, entry);
         Ok(result)
     }
@@ -1708,6 +1728,13 @@ impl Engine {
         Ok((png, w, h))
     }
 
+    /// See [`enlarge`], which this is wired to the engine's own FSR device and
+    /// monitored runner — so a model pass shows on the progress bar and Stop
+    /// can kill it, like every other sd-cli run.
+    fn enlarge(&self, src: &Path, dst: &Path, factor: f32, model: Option<&Path>) -> Result<u128> {
+        enlarge(&self.fsr, &self.sd(), src, dst, factor, model)
+    }
+
     fn lookup(&self, id: u64, action: &str) -> Result<Pending> {
         match self.pending.get(&id) {
             Some(p) => Ok(p.clone()),
@@ -1822,6 +1849,126 @@ fn fit_to(src: (u32, u32), max_side: u32) -> (u32, u32) {
     (fw, fh.max(1))
 }
 
+/// Enlarge `src` into `dst` by `factor`, unsharpened, with EASU or with an
+/// ESRGAN model. Returns the milliseconds the model's share took — 0 when
+/// EASU did it all.
+///
+/// The one place an enlarge is chosen, so it is the helper for every pass
+/// that makes pixels bigger. A free function rather than only a method so the
+/// `upscale` subcommand can run it without an `Engine`, whose constructor
+/// sweeps `work/`. Only `Engine::run` calls it today; hi-res's two EASU
+/// steps and `enlarge_clip` are the obvious next callers, and ESRGAN is a
+/// deterministic function of the pixels, so a clip may use it (invariant 9).
+///
+/// **The output is `fsr::out_size(src, factor)` whichever upscaler ran.** An
+/// ESRGAN model enlarges by the fixed scale it was trained at, and the
+/// difference is covered afterwards (see [`after_model`]): a model that
+/// overshot is reduced with Lanczos, one that fell short is finished by
+/// EASU. So the size the page quoted before the click stays true.
+///
+/// `model` is ignored at a factor of 1: that is "no upscale", and a
+/// 4× pass reduced back to 1× is minutes spent on a resample.
+pub fn enlarge(
+    fsr: &Fsr,
+    sd: &SdRunner,
+    src: &Path,
+    dst: &Path,
+    factor: f32,
+    model: Option<&Path>,
+) -> Result<u128> {
+    let Some(model) = model.filter(|_| factor > 1.0) else {
+        fsr.process(src, dst, factor, &Filters::NONE)?;
+        return Ok(0);
+    };
+    let t = Instant::now();
+    let input = image::image_dimensions(src)
+        .with_context(|| format!("reading the size of {}", src.display()))?;
+    // Beside `dst` so it shares its job id; a `.png` extension so `purge_pngs`
+    // reaches it after a crash. Its own guard, since it never outlives this.
+    let mut scratch = Scratch::default();
+    let big = scratch.path(dst.with_extension("esrgan.png"));
+    sd.upscale(model, src, &big)?;
+    let got = image::image_dimensions(&big).with_context(|| {
+        format!("sd-cli upscale reported success but wrote no image to {}", big.display())
+    })?;
+    match after_model(input, got, factor)
+        .with_context(|| format!("upscaling with {}", model.display()))?
+    {
+        AfterModel::Keep => {
+            std::fs::rename(&big, dst)
+                .with_context(|| format!("moving the upscale to {}", dst.display()))?;
+        }
+        AfterModel::Reduce(w, h) => reduce(&big, dst, w, h)?,
+        AfterModel::Easu(rest) => {
+            let ms = t.elapsed().as_millis();
+            fsr.process(&big, dst, rest, &Filters::NONE)?;
+            return Ok(ms);
+        }
+    }
+    Ok(t.elapsed().as_millis())
+}
+
+/// What an ESRGAN result still needs to reach `fsr::out_size(input, factor)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AfterModel {
+    /// The model's scale was the factor asked for.
+    Keep,
+    /// It overshot — the common case, a 4× model asked for 2× — so resample
+    /// down to exactly this size.
+    Reduce(u32, u32),
+    /// It fell short, a 2× model asked for 3×; EASU covers the rest at this
+    /// factor, the same move hi-res makes past its budget.
+    Easu(f32),
+}
+
+/// Decide [`AfterModel`] from what the model actually returned, never from a
+/// scale read off a filename.
+///
+/// **An image that didn't get bigger is an error**, not a `Keep`. That is what
+/// sd-cli hands back when it could not build the model at all — it logs, saves
+/// the input unchanged and exits 0 — and it is also what a 1× restoration
+/// model does by design. Neither is an upscale, and passing either through
+/// would be a picture that silently skipped the step it was asked for.
+fn after_model(input: (u32, u32), got: (u32, u32), factor: f32) -> Result<AfterModel> {
+    if got.0 <= input.0 || got.1 <= input.1 {
+        bail!(
+            "the model returned {}×{} for a {}×{} image — it enlarged nothing. \
+             sd.cpp runs ESRGAN (RRDBNet) upscalers only, at 2× or 4×; a compact/SRVGG, \
+             SwinIR, DAT or HAT file, or a 1× restoration model, is not one",
+            got.0,
+            got.1,
+            input.0,
+            input.1
+        );
+    }
+    let target = crate::fsr::out_size(input, factor);
+    Ok(if got == target {
+        AfterModel::Keep
+    } else if got.0 >= target.0 && got.1 >= target.1 {
+        AfterModel::Reduce(target.0, target.1)
+    } else {
+        // `factor / scale` rather than `target / got`: the latter would size the
+        // height off the width's rounding. This keeps EASU computing the same
+        // `round(side × factor)` per axis it would have computed from `input`.
+        AfterModel::Easu(factor / (got.0 as f32 / input.0 as f32))
+    })
+}
+
+/// Lanczos3 `src` down to exactly `w`×`h`, on the CPU.
+///
+/// Not EASU, which is an upsampler — handed a factor below 1 it point-samples
+/// and aliases. Lanczos from 4× is supersampling in its own right: the model's
+/// own grid noise averages out on the way down. CPU because it runs once per
+/// generate, on an image the model took seconds to make; the `image` crate's
+/// resize is in its core, so this needs no new feature. Not yet timed at
+/// 4096² → 2048².
+fn reduce(src: &Path, dst: &Path, w: u32, h: u32) -> Result<()> {
+    let img = image::open(src).with_context(|| format!("loading {}", src.display()))?;
+    img.resize_exact(w, h, image::imageops::FilterType::Lanczos3)
+        .save_with_format(dst, image::ImageFormat::Png)
+        .with_context(|| format!("writing {}", dst.display()))
+}
+
 /// Round down to a multiple of 64 (never below 64) — SDXL wants clean latent
 /// dimensions, and FSR's float scaling would otherwise hand it odd sizes.
 fn snap64(v: u32) -> u32 {
@@ -1879,7 +2026,46 @@ fn random_seed() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::fit_to;
+    use super::{after_model, fit_to, AfterModel};
+    use crate::fsr::out_size;
+
+    /// Whichever upscaler runs, the image comes out the size EASU would have
+    /// made — which is the size the page quoted before the click, and what
+    /// `preflight` budgets for. Walked over every factor the box allows and
+    /// both model scales sd.cpp can build, at sizes nowhere near round.
+    #[test]
+    fn an_esrgan_enlarge_lands_on_the_easu_size() {
+        for input in [(1024u32, 1024u32), (768, 1344), (832, 1216), (1000, 1373), (97, 61)] {
+            for s in [2u32, 4] {
+                let got = (input.0 * s, input.1 * s);
+                for tenths in 11..=40 {
+                    let f = tenths as f32 / 10.0;
+                    let want = out_size(input, f);
+                    let landed = match after_model(input, got, f).unwrap() {
+                        AfterModel::Keep => got,
+                        AfterModel::Reduce(w, h) => (w, h),
+                        AfterModel::Easu(rest) => out_size(got, rest),
+                    };
+                    assert_eq!(landed, want, "{input:?} at {f} through a {s}x model");
+                }
+            }
+        }
+        // And the common cases take the expected road.
+        let i = (1024, 1024);
+        assert_eq!(after_model(i, (4096, 4096), 4.0).unwrap(), AfterModel::Keep);
+        assert_eq!(after_model(i, (4096, 4096), 2.0).unwrap(), AfterModel::Reduce(2048, 2048));
+        assert!(matches!(after_model(i, (2048, 2048), 3.0).unwrap(), AfterModel::Easu(_)));
+    }
+
+    /// sd-cli saves the input unchanged and exits 0 when it can't build the
+    /// model, so the size is the only thing that says the step didn't happen.
+    /// A 1× restoration model looks identical, and is refused for the same
+    /// reason: it is not an upscaler.
+    #[test]
+    fn an_upscale_that_enlarged_nothing_is_an_error() {
+        assert!(after_model((1024, 1024), (1024, 1024), 2.0).is_err());
+        assert!(after_model((1024, 768), (2048, 768), 2.0).is_err());
+    }
 
     /// The Image-to-image tab's one piece of arithmetic, and the only part of
     /// that pass decidable without a GPU or a checkpoint.

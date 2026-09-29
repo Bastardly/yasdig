@@ -324,6 +324,45 @@ impl<'a> SdRunner<'a> {
         self.run(cmd, "convert")
     }
 
+    /// Enlarge `input` into `output` with an ESRGAN model, at whatever scale the
+    /// model was trained for.
+    ///
+    /// `-M upscale` never builds a diffusion context (`examples/cli/main.cpp:915`
+    /// hands the init image straight to the upscaler), so there is no checkpoint,
+    /// no prompt and no seed. sd.cpp reads `.pth` natively and maps the old
+    /// ESRGAN key layout (`src/name_conversion.cpp:1273`), but it only
+    /// implements **RRDBNet**: a compact SRVGG, SwinIR, DAT or HAT file is
+    /// not something it can build.
+    ///
+    /// **A model it can't build is not a failure exit.** `new_upscaler_ctx`
+    /// failing is a `LOG_ERROR`, after which sd-cli saves the *input unchanged*
+    /// and exits 0 (`main.cpp:991`). So the stderr tail is checked here for the
+    /// two lines that path prints, and the caller still checks the size of what
+    /// came back — the structural half of the same guard, which also catches a
+    /// 1× model that ran fine and enlarged nothing.
+    pub fn upscale(&self, model: &Path, input: &Path, output: &Path) -> Result<()> {
+        let mut cmd = Command::new(self.binary());
+        cmd.args(["-M", "upscale"]);
+        cmd.args(["-i", &path_str(input)]);
+        cmd.args(["-o", &path_str(output)]);
+        cmd.args(["--upscale-model", &path_str(model)]);
+        cmd.args(["--upscale-tile-size", &UPSCALE_TILE.to_string()]);
+        let err_tail = self.run_tail(cmd, "upscale")?;
+        if err_tail
+            .iter()
+            .any(|l| l.contains("new_upscaler_ctx failed") || l.contains("upscale failed"))
+        {
+            bail!(
+                "sd-cli could not run {} as an upscaler. sd.cpp supports ESRGAN \
+                 (RRDBNet) models only — RealESRGAN_x4plus, 4x-UltraSharp and the \
+                 like; not compact/SRVGG, SwinIR, DAT or HAT.\n--- stderr ---\n{}",
+                model.display(),
+                joined(&err_tail)
+            );
+        }
+        Ok(())
+    }
+
     /// The argv for [`SdRunner::convert`].
     ///
     /// `plan.slot` is the load-bearing part and it is chosen by the server from
@@ -435,7 +474,14 @@ impl<'a> SdRunner<'a> {
     /// failure message wants the informational tail as well as the error line,
     /// and stderr gets its own thread: a pipe nobody drains fills up and
     /// deadlocks the child half way through a render.
-    fn run(&self, mut cmd: Command, label: &str) -> Result<()> {
+    fn run(&self, cmd: Command, label: &str) -> Result<()> {
+        self.run_tail(cmd, label).map(|_| ())
+    }
+
+    /// [`SdRunner::run`], handing back the stderr tail of a run that succeeded —
+    /// for the one mode, `upscale`, whose failures don't always reach the exit
+    /// status.
+    fn run_tail(&self, mut cmd: Command, label: &str) -> Result<VecDeque<String>> {
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd
             .spawn()
@@ -476,7 +522,7 @@ impl<'a> SdRunner<'a> {
                 joined(&out_tail),
             );
         }
-        Ok(())
+        Ok(err_tail)
     }
 }
 
@@ -666,6 +712,12 @@ fn parse_progress(line: &str) -> Option<(u32, u32, &str)> {
 /// `-v` and a video job runs for minutes, so the tail is bounded — the failure
 /// is always at the end.
 const TAIL_LINES: usize = 40;
+
+/// `--upscale-tile-size` for an ESRGAN pass: the side of the square the model
+/// runs over at a time, which is what bounds its VRAM. sd.cpp's own default,
+/// kept until it has been measured on the 7900 XTX — a larger tile means fewer
+/// seams and fewer dispatches, and an RRDB at 128² is nowhere near 24 GB.
+const UPSCALE_TILE: u32 = 128;
 
 /// Read `sd-cli`'s stdout to EOF, feeding progress lines to `on_progress` as
 /// they arrive and keeping the last [`TAIL_LINES`] for a failure message.

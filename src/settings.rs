@@ -84,6 +84,9 @@ pub struct Settings {
     pub img2img_cfg_scale: Option<f32>,
     pub sampler: String,
     pub upscale_factor: f32,
+    /// What performs that enlarge: `None` is FSR (EASU), a name is an ESRGAN
+    /// model under the upscaler dir. See [`Profile::upscaler`].
+    pub upscaler: Option<String>,
     pub sharpness: f32,
     pub clarity: f32,
     pub refine_steps: u32,
@@ -148,6 +151,12 @@ pub struct PartialSettings {
     pub sampler: Option<String>,
     #[serde(default)]
     pub upscale_factor: Option<f32>,
+    /// Absent inherits, a name pins, the same one-way shape `img2img_cfg_scale`
+    /// above has: a template can name a model, and has no way to say "back to
+    /// FSR" over a setting that chose one — nor needs one, since the select on
+    /// the page can.
+    #[serde(default)]
+    pub upscaler: Option<String>,
     #[serde(default)]
     pub sharpness: Option<f32>,
     #[serde(default)]
@@ -197,6 +206,8 @@ impl Default for Settings {
             img2img_cfg_scale: None,
             sampler: "euler".to_string(),
             upscale_factor: 2.0,
+            // FSR: free, and needs no file. An ESRGAN model is a download.
+            upscaler: None,
             // Off. Sharpening is a live slider under the image, not something a
             // render arrives pre-seasoned with — so the first thing on screen is
             // what the model and the upscaler actually produced.
@@ -256,6 +267,7 @@ impl Settings {
             img2img_cfg_scale: over.img2img_cfg_scale.or(self.img2img_cfg_scale),
             sampler: over.sampler.clone().unwrap_or_else(|| self.sampler.clone()),
             upscale_factor: over.upscale_factor.unwrap_or(self.upscale_factor),
+            upscaler: over.upscaler.clone().or_else(|| self.upscaler.clone()),
             sharpness: over.sharpness.unwrap_or(self.sharpness),
             clarity: over.clarity.unwrap_or(self.clarity),
             refine_steps: over.refine_steps.unwrap_or(self.refine_steps),
@@ -402,6 +414,7 @@ impl Settings {
             img2img_cfg_scale: self.img2img_cfg_scale,
             sampler: self.sampler.clone(),
             upscale_factor: self.upscale_factor,
+            upscaler: self.upscaler.clone(),
             sharpness: self.sharpness,
             clarity: self.clarity,
             refine_steps: self.refine_steps,

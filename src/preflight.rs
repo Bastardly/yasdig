@@ -234,6 +234,18 @@ pub fn check(cfg: &Config) -> Report {
         ));
     }
 
+    // 2c) Upscalers, on the same terms: an empty folder is normal, since FSR
+    // needs no file, and the path is the answer to "why is the select empty".
+    let upscalers = cfg.list_upscalers();
+    info.push(format!(
+        "{} upscaler(s) in {} — FSR is always available",
+        upscalers.len(),
+        cfg.upscaler_dir().display()
+    ));
+    for u in &upscalers {
+        info.push(format!("  · {:<44} {}", u.name, human_size(u.bytes)));
+    }
+
     // 3) Video models: whatever the video dir was identified as, plus the
     // `[[video]]` table.
     //

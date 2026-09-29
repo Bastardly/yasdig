@@ -19,6 +19,7 @@ cargo run --release                         # server on 127.0.0.1:8080
 cargo run --release -- doctor               # preflight only: binary, checkpoints, web UI
 cargo run --release -- fsr-selftest         # full wgpu path; no sd.cpp or checkpoint needed
 cargo run --release -- fsr in.png out.png [scale] [sharpness] [clarity]
+cargo run --release -- upscale in.png out.png <model> [factor]  # ESRGAN enlarge alone; sd-cli, no checkpoint
 
 node --test 'web/js/*.test.js'              # the one JS unit test: the prompt-weighting string maths.
                                             #   Node's built-in runner — no npm, no package.json, no
@@ -194,6 +195,50 @@ one of them to send a different one. Two things in it break silently:
   explicitly" and a missing key as "keep whatever the profile has"; the picker on
   screen is the complete answer to the question, so it must be able to say none.
   Dropping the key when the list is empty would make a removed row unremovable.
+
+## Upscalers
+
+The initial enlarge in `Engine::run` is EASU or an ESRGAN model, picked per
+generate by `Profile.upscaler` (`None` = EASU; otherwise a name under
+`Config::upscaler_dir`, `models/upscalers/` by default). It is an ordinary
+generation knob down the seven-step table, sidecar included.
+**`pipeline::enlarge` is the helper, and it is a free function on purpose**: it
+takes `&Fsr` and `&SdRunner`, so the `upscale` subcommand can run it without an
+`Engine`, whose constructor sweeps `work/`. Hi-res's two EASU steps and
+`enlarge_clip` are its obvious next callers and don't use it yet.
+
+Three facts about sd.cpp's `-M upscale` shape all of it:
+
+- **A model it can't build exits 0.** `new_upscaler_ctx` failing is a
+  `LOG_ERROR`, then sd-cli saves the *input unchanged* (`examples/cli/main.cpp:991`).
+  So `SdRunner::upscale` greps the stderr tail (which is why `run_tail` exists), and
+  `after_model` refuses any result that didn't get bigger. The second guard is the
+  structural one and also refuses a 1× restoration model, which is correct.
+- **RRDBNet only.** `.pth` loads natively and old-arch keys are mapped
+  (`src/name_conversion.cpp:1273`), but compact/SRVGG, SwinIR, DAT and HAT can't be
+  built. The error text says so.
+- **The scale is in the weights** (`esrgan.hpp`: `conv_up2` → 4×, `conv_up1` →
+  2×). It is read off the output size, never off the filename.
+
+**The output is `fsr::out_size(input, factor)` whichever upscaler ran.**
+`after_model` reduces an overshoot with CPU Lanczos3 (EASU is an upsampler and
+aliases below 1×) and finishes a shortfall with EASU at `factor / scale`, which is
+not `target / got` — the latter sizes the height off the width's rounding.
+`an_esrgan_enlarge_lands_on_the_easu_size` walks every factor the box allows.
+`Fsr::process` calls `out_size` too, so the two can't disagree.
+
+**Listed by extension, not by header.** Most upscalers ship as `.pth`, a pickle in a
+zip that `discover::read_tensors` can't open, so header classification would reject
+most of the folder. Running the file is the real test and the two guards above
+cover it. The name goes through `valid_lora_name` — the same kind of thing, a
+user-chosen filename relative to a models subdir — rather than a third whitelist.
+
+On the page, `loadUpscalers` is started **before** `loadModels`' first `await`,
+because `upscalersReady` is what the Settings form awaits before mirroring the
+options. Started after it, Settings would await the initial resolved promise and
+mirror an empty list. `upscalerOptions` is the clean list: `setUpscaler` may add a
+"(missing)" option for a reopened item, and that is not a choice Settings should
+offer.
 
 ## Favourites
 

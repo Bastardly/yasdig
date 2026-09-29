@@ -171,6 +171,8 @@ Either way, **adding a model never needs a code change.**
   recursive, and files only, which is what lets the two folders below live inside it.
 - `[sd].lora_dir` — folder scanned for LoRAs (default `loras/` inside the models dir).
   This one *is* recursive, so `models/loras/sdxl/` works. See [LoRAs](#loras).
+- `[sd].upscaler_dir` — folder of ESRGAN upscaler models (default `upscalers/` inside
+  the models dir). See [Upscalers](#upscalers).
 - `[server].host` / `[server].port` — default `127.0.0.1` and `8080`.
 - `[templates.<name>]` — a preset for one checkpoint. `model` is the only
   required field; everything else is any of the settings below except
@@ -189,7 +191,8 @@ doesn't name. Tuned for standard (non-distilled) SDXL.
 | `width` / `height` | base generation size, default `768` each (small = fast) |
 | `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `30`, `6.0`, `euler` (Turbo → few steps, cfg 1) |
 | `img2img_cfg_scale` *(opt)* | CFG for the **Image to image** tab's pass, and what the two below fall back to; unset (the default) follows `cfg_scale`. `0` is legal and means guidance off |
-| `upscale_factor` | FSR upscale, default `2.0` (768 → 1536) — the enlarge every base render goes through, not a diffusion pass. Also a box in the Advanced panel, where `1` means no FSR pass at all |
+| `upscale_factor` | the enlarge every base render goes through, default `2.0` (768 → 1536) — not a diffusion pass. Also a box in the Advanced panel, where `1` means no enlarge at all |
+| `upscaler` *(opt)* | what does that enlarge: unset (the default) is FSR's EASU; a file name under the upscaler dir, extension included, is an ESRGAN model. See [Upscalers](#upscalers) |
 | `hires_scale` | where the hi-res pass's enlarge factor starts, default `2.0`. The select above a finished image and the one in the Hi-res pass group are the same setting |
 | `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the viewer's slider starts. The only display filter here besides `clarity`: the eight colour knobs are not per-model and always start neutral |
 | `clarity` | local contrast, -1..1, default `0.0` = off — positive adds mid-frequency depth, negative softens; likewise the slider's starting value |
@@ -360,7 +363,8 @@ missing it prints copy-pasteable fix instructions and exits rather than failing 
 mid-request — `doctor` below runs the same checks without starting the server.
 
 Open <http://127.0.0.1:8080>, pick a model, type a prompt, Generate. The result shows
-output resolution, seed, and per-stage timings (generate / fsr / refine / hi-res).
+output resolution, seed, and per-stage timings (generate / upscale / fsr / refine / hi-res —
+the upscale bar only when an ESRGAN model ran).
 `-1` in the seed box means "draw a new one each time" and stays that way; click the
 seed under the image to put it in the box when you want that image back.
 
@@ -687,6 +691,33 @@ You can also still type `<lora:name:0.8>` into the prompt box by hand; it resolv
 against the same folder. That route keeps sd.cpp's silent-drop behaviour, since
 nothing on this side is looking at it.
 
+### Upscalers
+
+Every render is enlarged on its way to the output size, and the **Upscaler** select
+beside *Output upscale* in the Advanced panel picks what does it. **FSR (EASU)** is the
+default: milliseconds, no file, and it only redistributes the pixels the checkpoint
+drew. An **ESRGAN** model draws new fine texture instead — hair, fabric, skin — at the
+cost of seconds. Drop one in `models/upscalers/` (subfolders work) and it appears in
+the select; `doctor` prints the folder and what is in it.
+
+stable-diffusion.cpp runs these itself (`sd-cli -M upscale`, no checkpoint loaded), and
+it reads `.pth` files directly, so no conversion and no Python. It implements
+**ESRGAN's RRDBNet only**: `RealESRGAN_x4plus`, `RealESRGAN_x4plus_anime_6B`,
+`4x-UltraSharp`, `4x_NMKD-Siax_200k` and most community `4x_*.pth` files work; the
+"compact" `realesr-general-x4v3`, SwinIR, DAT and HAT do not. A file it can't build is
+an **error** naming that rule — sd-cli on its own would save your image unenlarged and
+report success.
+
+A model enlarges by the fixed scale it was trained at, 2× or 4×, and the output is
+brought to exactly the size the *Output upscale* box asks for: a 4× model at 2× is run
+at 4× and reduced with Lanczos (the usual way to use one, and supersampling in its own
+right), and a 2× model at 3× is finished by EASU. So the size quoted under the box is
+the size you get, whichever upscaler you pick. Set the box to 1 and nothing runs at all.
+
+The choice is saved with the image, so reopening a work item restores it, and the
+Settings tab has a default for it. It applies to the first enlarge only; the hi-res
+pass and *Enlarge frames* still use EASU.
+
 ### Outputs
 
 The third tab is `work/output/` as a gallery: everything you have saved, and everything
@@ -966,12 +997,15 @@ A different config file can be passed as the first argument:
 
 ## Command-line tools
 
-Three subcommands, all of which skip the server. The last two touch only the GPU
-post-process — no sd.cpp, no checkpoint, no model weights — which makes them the quick
-way to check the Vulkan side in isolation.
+Four subcommands, all of which skip the server. `upscale` runs the initial enlarge
+exactly as a generate would, with an ESRGAN model — a name in the upscaler dir or a path
+— and needs sd-cli but no checkpoint, so it is the fast way to try a new upscaler file.
+The last two touch only the GPU post-process — no sd.cpp, no checkpoint, no model
+weights — which makes them the quick way to check the Vulkan side in isolation.
 
 ```sh
 rustimage doctor [models.toml]      # run the startup checks and report, without starting
+rustimage upscale in.png out.png <model> [factor=2.0] [models.toml]  # the ESRGAN enlarge alone
 rustimage fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]  # no colour knobs: UI only
 rustimage fsr-selftest [out.png]    # synthesize patterns and check the filters
 ```
@@ -993,7 +1027,7 @@ needs a Vulkan device and nothing else.
   discovered checkpoints alike. Built fresh on every call, so a newly-dropped checkpoint
   appears without a restart. Each entry carries `name`, `description`, `discovered`,
   `exists`, `base_width` / `base_height`, `out_width` / `out_height`, and the profile's
-  `steps`, `cfg_scale`, `img2img_cfg_scale`, `sampler`, `refine_steps`,
+  `steps`, `cfg_scale`, `img2img_cfg_scale`, `sampler`, `upscale_factor`, `upscaler`, `refine_steps`,
   `refine_strength`, `hires_steps`, `hires_strength`, `source_steps`,
   `source_strength`, `hires_max_side`, `sharpness`, `clarity` — which is
   what lets the UI pre-fill its controls when you pick a model. `hires_max_side` is
@@ -1011,11 +1045,13 @@ needs a Vulkan device and nothing else.
   omitting one uses the model's profile value:
   ```json
   { "steps": 20, "cfg_scale": 5.0, "img2img_cfg_scale": 2.5, "sampler": "euler",
-    "width": 768, "height": 768,
+    "width": 768, "height": 768, "upscale_factor": 2.0, "upscaler": "4x-UltraSharp.pth",
     "refine_steps": 2, "refine_strength": 0.3, "hires_steps": 8, "hires_strength": 0.3,
     "sharpness": 0.35, "clarity": 0.0,
     "loras": [{ "name": "detail.safetensors", "strength": 0.8 }] }
   ```
+  `upscaler` is a file name in the upscaler dir, or `""` for FSR — absent keeps the
+  profile's. A name that isn't on disk is a `500` naming what is.
   `loras` is the one list here, and absent is not the same as empty: omitting the key
   keeps whatever the profile has, `[]` clears it. `name` is the path relative to the
   LoRA dir, extension included; `strength` is -2 to 2. A name that isn't on disk is a
@@ -1044,9 +1080,10 @@ needs a Vulkan device and nothing else.
                  "temperature": 0.0, "tint": 0.0 },
     "filters_start": { "sharpness": 0.35, "clarity": 0.0, "…": 0.0 },
     "prompt": "A lovely crab wearing a blue hat",
-    "timings": { "gen_ms": 0, "fsr_ms": 0, "refine_ms": 0, "hires_ms": 0 } }
+    "timings": { "gen_ms": 0, "upscale_ms": 0, "fsr_ms": 0, "refine_ms": 0, "hires_ms": 0 } }
   ```
-  `image_id` addresses the retained intermediates; `can_refine` / `can_hires` say which
+  `upscale_ms` is an ESRGAN model's share of the enlarge, reduce included, and `0` when
+  EASU did it. `image_id` addresses the retained intermediates; `can_refine` / `can_hires` say which
   escalations that image can still take; `filters` reports all ten display filters as
   actually applied, which is what the UI's sliders reflect, and `filters_start` reports
   where they would start on a new image from the same model — the two differ after an
@@ -1165,6 +1202,10 @@ needs a Vulkan device and nothing else.
   rather than filtered out, because "my LoRA isn't in the list" is a much worse thing to
   debug than "my LoRA is in the list and says why". Filesystem only: it answers on the
   connection thread, and costs one header read per file.
+- `GET /upscalers` — every model file in the upscaler dir: `name` (what `/generate`
+  puts in `upscaler`), `label` and `bytes`. Listed by extension, not by reading the file:
+  most upscalers are `.pth`, which has no header to read, and running one is the only
+  real test — see [Upscalers](#upscalers).
 - `GET /outputs` — every image in `work/output/`, newest first: `stem`, `created_ms`,
   `width` / `height`, `prompt`, `seed`, `template`. Uploads are in here too, with an
   empty prompt and `template: "(imported)"` — one pool, because at the moment you are

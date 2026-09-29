@@ -29,6 +29,7 @@ function syncAdvanced() {
   $('w').value = m.base_width;
   $('h').value = m.base_height;
   $('upscale').value = m.upscale_factor;
+  setUpscaler(m.upscaler);
   $('rsteps').value = m.refine_steps;
   $('rstrength').value = m.refine_strength;
   $('hsteps').value = m.hires_steps;
@@ -44,10 +45,12 @@ function syncAdvanced() {
   syncOutSize();
 }
 
-// What the base size becomes after the FSR enlarge. The model select already
-// quotes this sum for the model's own factor; this box is what moves the
-// right-hand half of it, so the answer has to follow the box rather than the
-// model. 1 is not a small upscale — `Fsr::process` skips EASU entirely there.
+// What the base size becomes after the enlarge, and what does it. The model
+// select already quotes this sum for the model's own factor; this box is what
+// moves the right-hand half of it, so the answer has to follow the box rather
+// than the model. 1 is not a small upscale — nothing runs there, whichever
+// upscaler is picked. The size is the same for every upscaler: an ESRGAN model
+// is reduced or finished by EASU to land exactly here (`Engine::enlarge`).
 export function syncOutSize() {
   const f = parseFloat($('upscale').value);
   const w = parseInt($('w').value, 10);
@@ -56,9 +59,11 @@ export function syncOutSize() {
     $('outsize').textContent = '';
     return;
   }
+  const sel = $('upscaler');
+  const by = sel.value ? sel.options[sel.selectedIndex].textContent : 'FSR';
   $('outsize').textContent = f === 1
     ? `${w} × ${h} — no upscale`
-    : `${w} × ${h} → ${Math.round(w * f)} × ${Math.round(h * f)}`;
+    : `${w} × ${h} → ${Math.round(w * f)} × ${Math.round(h * f)} via ${by}`;
 }
 
 // Mirror the step floor the server applies (see SdRunner::img2img): a pass that
@@ -92,9 +97,60 @@ export function syncCfgPlaceholders() {
   for (const id of ['i2rcfg', 'i2hcfg']) $(id).placeholder = i2;
 }
 
+// The ESRGAN files `GET /upscalers` lists, as the Upscaler select's options,
+// behind an FSR option that needs no file. A promise that settles once the
+// select is filled, because two things must wait for it rather than race it:
+// `syncAdvanced`, which sets the select's value, and the Settings form, whose
+// row mirrors these options the way its sampler row mirrors the sampler's.
+// Refetched with the model list, so a file dropped into the folder shows up
+// after a Settings save as a checkpoint would.
+export let upscalersReady = Promise.resolve();
+// The options as the folder has them — without a "(missing)" one `setUpscaler`
+// may have added for a reopened image, which is that image's business and not a
+// choice for Settings to offer.
+export let upscalerOptions = '<option value="">FSR (EASU)</option>';
+
+export function loadUpscalers() {
+  upscalersReady = (async () => {
+    let list = [];
+    try {
+      const r = await fetch('/upscalers');
+      if (r.ok) list = await r.json();
+    } catch {
+      // An empty list leaves FSR, which is the whole feature minus the option.
+    }
+    const sel = $('upscaler');
+    const was = sel.value;
+    upscalerOptions = '<option value="">FSR (EASU)</option>'
+      + list.map((u) => `<option value="${esc(u.name)}">${esc(u.label)}</option>`).join('');
+    sel.innerHTML = upscalerOptions;
+    setUpscaler(was);
+  })();
+  return upscalersReady;
+}
+
+// Select a stored upscaler name, adding it if the folder no longer has it. A
+// select shows its first option when nothing matches, which here would display
+// FSR for an image that was made with a model — and then *send* FSR on the next
+// generate. Shown as missing instead, so the generate fails with the server's
+// message naming what is there, rather than quietly running something else.
+export function setUpscaler(name) {
+  const sel = $('upscaler');
+  const v = name ?? '';
+  if (v && ![...sel.options].some((o) => o.value === v)) {
+    sel.add(new Option(`${v} (missing)`, v));
+  }
+  sel.value = v;
+  syncOutSize();
+}
+
 export async function loadModels() {
   try {
+    // Started before the first `await`, so `upscalersReady` is this fetch by the
+    // time `initSettings` — later in the same boot tick — waits on it.
+    const upscalers = loadUpscalers();
     models = await (await fetch('/models')).json();
+    await upscalers;
     // Six selects off one list: the two that choose what generates, and two per
     // tab for what escalates — refine and hi-res pick their own, because the two
     // passes run at different sizes on different pixels and there is no reason
@@ -159,7 +215,7 @@ export function setUpFactor(v) {
 // buttons stay visible without scrolling past a tall image.
 export function render(data) {
   const t = data.timings;
-  const stages = [['generate', t.gen_ms], ['fsr', t.fsr_ms],
+  const stages = [['generate', t.gen_ms], ['upscale', t.upscale_ms ?? 0], ['fsr', t.fsr_ms],
                   ['refine', t.refine_ms], ['hi-res', t.hires_ms]];
   const total = stages.reduce((sum, [, ms]) => sum + ms, 0);
   const max = Math.max(...stages.map(([, ms]) => ms), 1);
@@ -396,6 +452,9 @@ function genPayload(index) {
     // The FSR enlarge on the way to the output size. An empty box sends nothing
     // and the model's own factor runs; 1 is a real answer and means no upscale.
     upscale_factor: numOr('upscale'),
+    // Always sent: `""` is FSR, explicitly, which has to be sayable over a
+    // saved default that names a model.
+    upscaler: $('upscaler').value,
     // The same six the escalations send, from the same place — they set where
     // this image's passes start, and `/refine` and `/hires` can move them
     // afterwards. The two CFGs are among them, and null for an empty box still
@@ -546,6 +605,8 @@ export function initImage() {
   for (const id of ['upscale', 'w', 'h']) {
     $(id).addEventListener('input', syncOutSize);
   }
+  // And one select says what does the enlarging, which the note names.
+  $('upscaler').addEventListener('change', syncOutSize);
 
   // `IDLE_LABELS.go` is only a fallback: what the button says at rest depends on
   // the run panel, which that map can't know.

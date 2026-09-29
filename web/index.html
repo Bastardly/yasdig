@@ -142,6 +142,13 @@
           <label for="upscale">Output upscale</label>
           <input id="upscale" type="number" step="0.1" min="1" max="4">
         </div>
+        <!-- Beside the factor because it is the other half of the same step:
+             how much, and by what. Filled from GET /upscalers; the empty value
+             is FSR, which needs no file. -->
+        <div>
+          <label for="upscaler">Upscaler</label>
+          <select id="upscaler"><option value="">FSR (EASU)</option></select>
+        </div>
       </div>
       <!-- The arithmetic, live and under the row it is about — the same shape as
            #runnote and #i2note. The model select quotes this sum for the model's

@@ -40,3 +40,84 @@ its own choice back, so a saved output records what actually ran.
   is held between passes. Every pass is a separate `sd-cli` process that loads its
   weights and frees them on exit, so the pipeline already reloads the *same* file
   once per rung. A second model costs page cache, not VRAM.
+
+# Feature 2 - Post-generate image quality: the options
+
+**Item 1 is built, for the initial upscale:** an *Upscaler* select beside *Output
+upscale* picks EASU or any ESRGAN file in `models/upscalers/`, through
+`pipeline::enlarge`. Hi-res and *Enlarge frames* are still on EASU and are the
+next callers of that helper. ADetailer is parked. See CLAUDE.md *## Upscalers*.
+
+The survey as it was written, so the findings survive the session. The question
+was what is left in FSR upscaling, whether antialiasing applies, and what else the
+GPU could do for the picture between the generate and the save.
+
+## Two answers that close a question rather than open work
+
+**FSR 1.0 is complete here.** `upscale.wgsl` is EASU and `sharpen.wgsl` is RCAS,
+which is the whole specification — there is no third pass being skipped. FSR 2 and
+3 are *temporal*: they need motion vectors, a depth buffer, a jittered projection
+and the previous frame's history, and a single still render has none of them. FSR 4
+is a neural network with weights, which puts it in the same box as ESRGAN below
+rather than in this one. Of the three unused helpers in `ffx_fsr1.h` — TEPD, SRTM,
+LFGA — only TEPD buys anything, and what it points at is item 2.
+
+**Antialiasing does not apply**, and adding it would make things worse. There is no
+rasterizer, no polygon edge and no sub-pixel coverage being point-sampled: MSAA
+needs geometry, TAA needs motion vectors, and FXAA and SMAA are edge-detect-and-blur
+filters built to hide stair-steps on a rendered frame — pointed at a diffusion image
+they read every high-contrast texture edge as a jaggy and soften it, which is
+precisely what RCAS and clarity exist to undo. The aliasing that *is* in these
+pictures was baked in upstream, by the VAE decoding an 8× downsampled latent: fabric
+weave, railings, text and hair are undersampled at generation time, and no filter
+removes that without removing the pattern with it. The one antialiasing technique
+that genuinely applies is supersampling — generate bigger, resample down — which is
+item 3.
+
+## Four candidates, ranked
+
+1. **A Real-ESRGAN rung.** The only one of these that *adds* detail rather than
+   redistributing what is there. `sd-cli -M upscale -i in.png -o out.png
+   --upscale-model …` never constructs a diffusion context at all
+   (`stable-diffusion.cpp examples/cli/main.cpp:915` hands the init image straight
+   to the upscaler), so it is a subprocess pass with no checkpoint load — exactly
+   the shape `refine` and `hires` already have. `--upscale-tile-size` (default 128)
+   bounds VRAM. The models are fixed 4×, which is why item 3 pairs with it.
+2. **Carry the filter chain at 16-bit, and dither once on the way out.** `mid`,
+   `graded`, `clarity` and `dst` in `Fsr::process` are all `Rgba8Unorm`
+   (`src/fsr/mod.rs:399-413`, `:505`, `:579`), so EASU → grade → clarity → RCAS
+   rounds to 8 bits four times. The grade is the worst of them: `grade.wgsl`'s own
+   header already admits the sRGB/OKLab round trip loses a least-significant bit,
+   and a shadows or contrast move on a sky is where that shows up as a step. About
+   50 MB more intermediate VRAM at 3072² and no time cost; `fsr-selftest`'s byte-
+   exact identity assertion is the guard that it stayed honest.
+3. **A downscale pass.** A box/Lanczos reduce, so the output can be *smaller* than
+   what was diffused — the supersampling above. Blocked today by two things, both
+   deliberate: `upscale_factor` is floored at 1.0 (`MAX_UPSCALE`,
+   `src/pipeline.rs:49`), and EASU is an upsampler that would undersample and alias
+   harder if handed a factor below 1. Generate at 1536 and resample to 1024 and the
+   VAE's grid noise and any moiré average out.
+
+   **Settled since:** a downscale only pays after a pass that adds *real* detail at
+   the larger size — ESRGAN, or a hi-res diffusion. FSR up then Lanczos down is two
+   resamples of the same information and gains nothing, so it is not an option.
+   The useful form is a **final output size** decoupled from the diffusion size, as
+   a post-processing feature of its own. The Lanczos reduce it needs now exists
+   (`pipeline::reduce`, from item 1).
+4. **ADetailer.** `-M adetailer` runs a YOLOv8 detector over a finished image and
+   inpaints each crop (`docs/adetailer.md`) — the answer to the small-face
+   complaint, and the biggest perceptual win here on portraits. The caveat to weigh:
+   the detector has to be converted once, offline, by sd.cpp's
+   `scripts/convert_yolov8_to_safetensors.py`, which is **Python**. Nothing Python
+   at runtime, but a Python line in the setup instructions of a project whose pitch
+   is that there isn't one.
+
+## One more, listed and not recommended
+
+sd.cpp's own `--hires` fix can enlarge in *latent* space — `--hires-upscaler` takes
+`Latent`, `Latent (bicubic antialiased)` and friends, or a model under
+`--hires-upscalers-dir`. That does something this ladder structurally cannot: our
+hi-res rung decodes to PNG, runs EASU, re-encodes and diffuses, so there is a VAE
+round trip per rung and theirs has none. The price is that it all happens inside one
+process, so taking it means giving up per-pass checkpoints, per-pass progress and
+cancel for that rung — which is most of what the ladder is for.

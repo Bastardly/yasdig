@@ -81,6 +81,10 @@ pub struct SdConfig {
     /// model select. Same split, same reason, as [`SdConfig::video_dir`].
     #[serde(default)]
     pub lora_dir: Option<String>,
+    /// Directory holding ESRGAN upscaler models. Defaults to `upscalers/` inside
+    /// [`SdConfig::models_dir`], for the reason [`SdConfig::lora_dir`] gives.
+    #[serde(default)]
+    pub upscaler_dir: Option<String>,
 }
 
 fn default_mode() -> String {
@@ -197,6 +201,12 @@ pub const LORA_STRENGTH_MAX: f32 = 2.0;
 /// one test. On top of that, `:` `<` `>` are rejected because sd.cpp's tag regex
 /// is `<lora:([^:>]+):([^>]+)>` (`common.cpp:2248`) — a name containing one
 /// wouldn't be escaped, it would silently re-cut the tag somewhere else.
+///
+/// It also guards [`Profile::upscaler`], which is the same kind of thing — a
+/// filename the user chose, relative to a models subdirectory — reaching
+/// `--upscale-model` rather than a tag. There the `:` `<` `>` rule is stricter
+/// than an argv needs, and costs nothing: a second whitelist for the same
+/// question would be a second place to get the traversal check wrong.
 pub fn valid_lora_name(name: &str) -> bool {
     if name.is_empty() || name.len() > 200 {
         return false;
@@ -227,6 +237,24 @@ pub struct LoraFile {
     pub note: String,
 }
 
+/// One file in the upscaler directory, as `GET /upscalers` publishes it.
+///
+/// No `usable`/`note` beside it, unlike [`LoraFile`], because nothing here reads
+/// the file to have an opinion: most upscalers ship as a `.pth`, a pickle inside
+/// a zip that [`crate::discover::read_tensors`] can't open, so a header check
+/// would reject most of the folder. What decides whether a file works is
+/// running it — see [`crate::sd::SdRunner::upscale`] and the size check in
+/// `Engine::enlarge`, which are the real guard.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpscalerFile {
+    /// What [`Profile::upscaler`] holds: the path relative to
+    /// [`Config::upscaler_dir`], extension included.
+    pub name: String,
+    /// What the select shows: the same path without its extension.
+    pub label: String,
+    pub bytes: u64,
+}
+
 /// A fully-resolved, ready-to-run model entry (from a template or discovery).
 ///
 /// Serializable because a work item stores its profile verbatim (see
@@ -250,6 +278,11 @@ pub struct Profile {
     pub img2img_cfg_scale: Option<f32>,
     pub sampler: String,
     pub upscale_factor: f32,
+    /// What performs that enlarge. `None` is FSR's EASU; a name is an ESRGAN
+    /// model under [`Config::upscaler_dir`], extension included — the same
+    /// contract as [`LoraRef::name`]. A sidecar written before this existed
+    /// reads as `None`, which is what it ran with.
+    pub upscaler: Option<String>,
     pub sharpness: f32,
     /// Local-contrast ("clarity") amount, -1..1. 0.0 = off; negative softens.
     pub clarity: f32,
@@ -405,6 +438,13 @@ impl Profile {
                     l.name,
                     l.strength
                 );
+            }
+        }
+        // Same reason as the LoRA names: this is one step from being a path
+        // handed to sd-cli.
+        if let Some(u) = &self.upscaler {
+            if !valid_lora_name(u) {
+                bail!("'{}': '{u}' is not an upscaler file name", self.name);
             }
         }
         Filters::starting_at(self.sharpness, self.clarity).validate(&self.name)
@@ -1305,6 +1345,96 @@ impl Config {
         }
     }
 
+    /// Directory holding ESRGAN upscaler models.
+    pub fn upscaler_dir(&self) -> PathBuf {
+        match &self.sd.upscaler_dir {
+            Some(d) => self.resolve(d),
+            None => self.models_dir().join("upscalers"),
+        }
+    }
+
+    /// Every model-shaped file in the upscaler dir, for `GET /upscalers` and
+    /// `doctor`. By extension only — see [`UpscalerFile`] for why nothing here
+    /// opens them. Recomputed per call, like [`Config::list_loras`].
+    ///
+    /// Recursive to one level, so an `esrgan/` or `anime/` subfolder works the
+    /// way `loras/sdxl/` does, and bounded because nobody nests these deeply.
+    pub fn list_upscalers(&self) -> Vec<UpscalerFile> {
+        fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<UpscalerFile>) {
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in rd.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if depth < 2 {
+                        walk(root, &path, depth + 1, out);
+                    }
+                    continue;
+                }
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_ascii_lowercase())
+                    .unwrap_or_default();
+                if !matches!(ext.as_str(), "pth" | "pt" | "safetensors" | "gguf") {
+                    continue;
+                }
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                // A name the whitelist refuses could never be selected, so it
+                // is not offered rather than offered and then rejected.
+                if !valid_lora_name(&name) {
+                    continue;
+                }
+                let label = match name.rsplit_once('.') {
+                    Some((stem, _)) => stem.to_string(),
+                    None => name.clone(),
+                };
+                let bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                out.push(UpscalerFile { name, label, bytes });
+            }
+        }
+        let dir = self.upscaler_dir();
+        let mut out = Vec::new();
+        walk(&dir, &dir, 0, &mut out);
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
+    }
+
+    /// Resolve the upscaler a profile names, or say what is there instead.
+    ///
+    /// `None` is FSR and needs nothing on disk. Called before the txt2img, so a
+    /// deleted file costs a millisecond rather than a render — the same reason
+    /// [`Config::check_loras`] runs first.
+    pub fn check_upscaler(&self, name: &Option<String>) -> Result<Option<PathBuf>> {
+        let Some(name) = name else {
+            return Ok(None);
+        };
+        if !valid_lora_name(name) {
+            bail!("'{name}' is not an upscaler file name");
+        }
+        let dir = self.upscaler_dir();
+        let path = dir.join(name);
+        if !path.is_file() {
+            let known: Vec<String> =
+                self.list_upscalers().into_iter().map(|f| f.name).collect();
+            bail!(
+                "no upscaler named '{name}' in {} — available: {}",
+                dir.display(),
+                if known.is_empty() {
+                    "nothing (the folder is empty; FSR needs no file)".to_string()
+                } else {
+                    known.join(", ")
+                }
+            );
+        }
+        Ok(Some(path))
+    }
+
     /// Everything in the LoRA dir, for `GET /loras` and for `doctor`.
     ///
     /// Recursive and header-read, through the same [`crate::discover::scan`] the
@@ -1757,6 +1887,51 @@ lora_dir = "adapters"
         )
         .expect("config should parse");
         assert_eq!(cfg.lora_dir(), PathBuf::from("/tmp/adapters"));
+    }
+
+    /// The upscaler folder is the LoRA folder's shape: listed by extension,
+    /// subfolders included, and a name resolves or says what is there.
+    #[test]
+    fn an_upscaler_resolves_in_its_folder_or_names_what_is() {
+        let base = std::env::temp_dir().join(format!("rustimage-cfg-up-{}", std::process::id()));
+        let dir = base.join("models").join("upscalers");
+        std::fs::create_dir_all(dir.join("anime")).unwrap();
+        std::fs::write(dir.join("4x-UltraSharp.pth"), b"x").unwrap();
+        std::fs::write(dir.join("anime").join("x4plus_anime.safetensors"), b"x").unwrap();
+        std::fs::write(dir.join("readme.txt"), b"x").unwrap();
+        let mut cfg = parse(MINIMAL).unwrap();
+        cfg.base_dir = base.clone();
+        assert_eq!(cfg.upscaler_dir(), dir);
+
+        let names: Vec<String> = cfg.list_upscalers().into_iter().map(|f| f.name).collect();
+        assert_eq!(names, ["4x-UltraSharp.pth", "anime/x4plus_anime.safetensors"]);
+
+        // FSR needs no file.
+        assert_eq!(cfg.check_upscaler(&None).unwrap(), None);
+        assert_eq!(
+            cfg.check_upscaler(&Some("4x-UltraSharp.pth".into())).unwrap(),
+            Some(dir.join("4x-UltraSharp.pth"))
+        );
+        let err = cfg.check_upscaler(&Some("gone.pth".into())).unwrap_err().to_string();
+        assert!(err.contains("4x-UltraSharp.pth"), "{err}");
+        // Out of the folder is refused before the disk is asked.
+        for bad in ["../x.pth", "/etc/passwd", "."] {
+            assert!(cfg.check_upscaler(&Some(bad.into())).is_err(), "{bad}");
+            let p = Profile {
+                upscaler: Some(bad.into()),
+                ..Default::default()
+            };
+            assert!(p.validate().is_err(), "{bad}");
+        }
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// A sidecar written before the knob existed ran with EASU, and has to say
+    /// so when it is read back.
+    #[test]
+    fn an_old_sidecar_profile_upscaled_with_fsr() {
+        let p: Profile = serde_json::from_str(r#"{"name":"old","upscale_factor":2.0}"#).unwrap();
+        assert_eq!(p.upscaler, None);
     }
 
     /// A registry entry never carries LoRAs: they only ever arrive on a request.

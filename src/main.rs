@@ -36,6 +36,8 @@
 //!   GET  /loras       -> every file in the LoRA dir, with why an unusable one
 //!                        can't be picked. Attach them per request with a
 //!                        `loras: [{name, strength}]` on /generate or /img2img
+//!   GET  /upscalers   -> every ESRGAN file in the upscaler dir. Pick one per
+//!                        generate with `upscaler: "<name>"`; `""` is FSR
 //!   GET  /outputs     -> every image in work/output/, newest first
 //!   POST /outputs/open -> {stem}     open a saved image as a live image_id,
 //!                        so the viewer's sliders can work on it
@@ -150,12 +152,13 @@ enum JobKind {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
-    // Subcommands that exercise the FSR (wgpu) path only — no sd.cpp, no server.
-    // Useful for verifying the GPU post-process in isolation.
+    // Subcommands that run without the server. `fsr` and `fsr-selftest` exercise
+    // the wgpu path alone; `upscale` adds sd-cli but still needs no checkpoint.
     match args.get(1).map(String::as_str) {
         Some("fsr") => return run_fsr_cli(&args[2..]),
         Some("fsr-selftest") => return run_fsr_selftest(&args[2..]),
         Some("doctor") => return run_doctor(&args[2..]),
+        Some("upscale") => return run_upscale_cli(&args[2..]),
         _ => {}
     }
 
@@ -395,6 +398,8 @@ fn handle_conn(
         // live for the reason `/models` is: dropping a file into a folder should
         // not need a restart to be noticed.
         ("GET", "/loras") => handle_list_loras(&mut conn, cfg),
+        // Same shape and reason, minus the header read — see `UpscalerFile`.
+        ("GET", "/upscalers") => handle_list_upscalers(&mut conn, cfg),
         ("GET", "/video-models") => handle_video_models(&mut conn, cfg),
         ("POST", "/video") => handle_video(&mut conn, job_tx, &req.body),
         ("POST", "/videos/enlarge") => handle_enlarge_clip(&mut conn, job_tx, &req.body),
@@ -585,6 +590,18 @@ fn handle_list_loras(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
             500,
             "application/json",
             error_json(&format!("listing LoRAs: {e}")).as_bytes(),
+        ),
+    }
+}
+
+/// `GET /upscalers`. Filesystem only, like `/loras`.
+fn handle_list_upscalers(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
+    match serde_json::to_vec(&cfg.list_upscalers()) {
+        Ok(body) => conn.respond(200, "application/json", &body),
+        Err(e) => conn.respond(
+            500,
+            "application/json",
+            error_json(&format!("listing upscalers: {e}")).as_bytes(),
         ),
     }
 }
@@ -1040,6 +1057,10 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         height: Option<u32>,
         #[serde(default)]
         upscale_factor: Option<f32>,
+        /// An ESRGAN file under the upscaler dir, or `""` for FSR. Absent keeps
+        /// the default. See [`GenRequest::upscaler`].
+        #[serde(default)]
+        upscaler: Option<String>,
         #[serde(default)]
         refine_steps: Option<u32>,
         #[serde(default)]
@@ -1088,6 +1109,7 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         width: dto.width,
         height: dto.height,
         upscale_factor: dto.upscale_factor,
+        upscaler: dto.upscaler,
         refine_steps: dto.refine_steps,
         refine_strength: dto.refine_strength,
         refine_cfg_scale: dto.refine_cfg_scale,
@@ -1466,7 +1488,7 @@ fn result_json(res: &GenResult) -> String {
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
          \"hires_passes\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\
          \"filters\":{},\"filters_start\":{},\"prompt\":{},\
-         \"timings\":{{\"gen_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{}}}}}",
+         \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{}}}}}",
         b64,
         res.width,
         res.height,
@@ -1488,6 +1510,7 @@ fn result_json(res: &GenResult) -> String {
         // prompt's roll under the image.
         json_str(&res.prompt),
         res.timings.gen_ms,
+        res.timings.upscale_ms,
         res.timings.fsr_ms,
         res.timings.refine_ms,
         res.timings.hires_ms,
@@ -1551,7 +1574,7 @@ fn build_models_json(cfg: &Config) -> String {
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
                  \"steps\":{},\"cfg_scale\":{},\"img2img_cfg_scale\":{},\"sampler\":{},\
-                 \"upscale_factor\":{},\
+                 \"upscale_factor\":{},\"upscaler\":{},\
                  \"refine_steps\":{},\"refine_strength\":{},\"refine_cfg_scale\":{},\
                  \"hires_steps\":{},\"hires_strength\":{},\"hires_cfg_scale\":{},\
                  \"source_steps\":{},\"source_strength\":{},\"hires_max_side\":{},\
@@ -1576,6 +1599,11 @@ fn build_models_json(cfg: &Config) -> String {
                 // needs the number and not just the `out_*` above, which is that
                 // number already spent.
                 p.upscale_factor,
+                // `null` is FSR. What the Upscaler select starts at.
+                p.upscaler
+                    .as_deref()
+                    .map(json_str)
+                    .unwrap_or_else(|| "null".to_string()),
                 p.refine_steps,
                 p.refine_strength,
                 // `null`, not the resolved number, for the reason
@@ -1623,6 +1651,59 @@ fn run_doctor(args: &[String]) -> Result<()> {
     } else {
         std::process::exit(1);
     }
+}
+
+/// `rustimage upscale <in.png> <out.png> <model> [factor] [models.toml]`
+///
+/// The initial enlarge on its own, exactly as a generate runs it: an ESRGAN
+/// model through `sd-cli -M upscale`, then the Lanczos reduce or EASU remainder
+/// that lands it on the size EASU would have made. No checkpoint and no server,
+/// so it is the fast loop for trying a new upscaler file — and the place to see
+/// that a file sd.cpp can't build is refused rather than passed through.
+///
+/// `model` is a name inside the upscaler dir, as the page's select sends it, or
+/// a path to a file anywhere.
+fn run_upscale_cli(args: &[String]) -> Result<()> {
+    if args.len() < 3 {
+        eprintln!(
+            "usage: rustimage upscale <in.png> <out.png> <model> [factor=2.0] [models.toml]"
+        );
+        std::process::exit(2);
+    }
+    let in_png = PathBuf::from(&args[0]);
+    let out_png = PathBuf::from(&args[1]);
+    let factor: f32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(2.0);
+    if !(1.0..=pipeline::MAX_UPSCALE).contains(&factor) {
+        anyhow::bail!("factor must be between 1 and {}", pipeline::MAX_UPSCALE);
+    }
+    let config_path = args
+        .get(4)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("models.toml"));
+    let cfg = Config::load(&config_path)
+        .with_context(|| format!("loading {}", config_path.display()))?;
+    let model = match PathBuf::from(&args[2]) {
+        p if p.is_file() => p,
+        _ => cfg
+            .check_upscaler(&Some(args[2].clone()))?
+            .expect("a name was given"),
+    };
+
+    let runner = sd::SdRunner::new(&cfg);
+    runner.preflight()?;
+    let fsr = fsr::Fsr::new()?;
+    let start = std::time::Instant::now();
+    let model_ms = pipeline::enlarge(&fsr, &runner, &in_png, &out_png, factor, Some(&model))?;
+    let (w, h) = image::image_dimensions(&out_png)
+        .with_context(|| format!("reading {}", out_png.display()))?;
+    println!(
+        "[upscale] {} -> {} : {w}x{h} (x{factor} with {}) — model {model_ms} ms, total {} ms",
+        in_png.display(),
+        out_png.display(),
+        model.display(),
+        start.elapsed().as_millis()
+    );
+    Ok(())
 }
 
 /// `rustimage fsr <in.png> <out.png> [upscale_factor] [sharpness] [clarity]`

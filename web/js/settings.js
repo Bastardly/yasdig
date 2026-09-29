@@ -1,5 +1,5 @@
 import { $, esc, post } from './dom.js';
-import { UPSCALES, setUpFactor, loadModels } from './image.js';
+import { UPSCALES, setUpFactor, loadModels, upscalersReady, upscalerOptions } from './image.js';
 import { wireHints } from './hints.js';
 
 // The Settings tab: `user/settings.toml` as an ordinary form.
@@ -62,6 +62,7 @@ const FIELDS = [
   { key: 'width', from: 'w', kind: 'int', min: 64, step: 64 },
   { key: 'height', from: 'h', kind: 'int', min: 64, step: 64 },
   { key: 'upscale_factor', from: 'upscale', kind: 'num', min: 1, max: 4, step: 0.1 },
+  { key: 'upscaler', from: 'upscaler', kind: 'upscaler' },
   { key: 'refine_steps', from: 'rsteps', kind: 'int', min: 0, max: 100 },
   { key: 'refine_strength', from: 'rstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
   { key: 'refine_cfg_scale', from: 'rcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
@@ -155,6 +156,11 @@ function control(f) {
     // sampler list is declared in the markup and this is a view of it.
     case 'mirror':
       return `<select id="${id}">${$(f.from).innerHTML}</select>`;
+    // A mirror too, but of a select filled from a fetch, so the options are
+    // copied in by `load` once `upscalersReady` says they exist. What is drawn
+    // here is only the option that needs no file.
+    case 'upscaler':
+      return `<select id="${id}"><option value="">FSR (EASU)</option></select>`;
     default:
       return `<input type="number" id="${id}"${attrs}>`;
   }
@@ -258,6 +264,8 @@ function take(f) {
   if (f.kind === 'lines') {
     return el.value.split('\n').map((s) => s.trim()).filter(Boolean);
   }
+  // The empty option is FSR, which the file spells as no key at all.
+  if (f.kind === 'upscaler') return $(fieldId(f)).value || null;
   if (f.kind === 'textarea' || f.kind === 'text' || f.kind === 'mirror') {
     const s = el.value;
     return f.blank ? (s.trim() || null) : s;
@@ -345,6 +353,10 @@ function settle(s) {
 async function load() {
   try {
     const s = await (await fetch('/settings')).json();
+    // Before `settle`, which `put`s the stored name — into a select that has to
+    // offer it by then, or `put` would add it as a stray from the file.
+    await upscalersReady;
+    $('set-upscaler').innerHTML = upscalerOptions;
     settle(s);
     // A file that won't parse still answers 200 with the built-ins, so the form
     // is editable and saving it is the repair. See `handle_get_settings`.

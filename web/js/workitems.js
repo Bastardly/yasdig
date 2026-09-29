@@ -1,7 +1,7 @@
 import { $, esc, post } from './dom.js';
 import { S } from './state.js';
 import { setBusy } from './busy.js';
-import { imageLoras, models, render, syncCfgPlaceholders, syncOutSize } from './image.js';
+import { imageLoras, models, render, setUpscaler, syncCfgPlaceholders, syncOutSize } from './image.js';
 import { i2Loras, setI2Source, syncI2Note } from './img2img.js';
 import { gridMarks } from './gridmark.js';
 
@@ -193,6 +193,9 @@ function applyWorkItem(item) {
   // existed has no factor, and inventing one would claim the image was made at
   // it. An empty box sends nothing and the model's own factor runs.
   $('upscale').value = p.upscale_factor ?? '';
+  // A sidecar from before the select existed has no key, and ran with FSR —
+  // which is what `null` selects, so there is nothing to invent here.
+  setUpscaler(p.upscaler);
   $('rsteps').value = p.refine_steps;
   $('rstrength').value = p.refine_strength;
   $('hsteps').value = p.hires_steps;

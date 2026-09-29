@@ -388,8 +388,7 @@ impl Fsr {
             .with_context(|| format!("loading {}", in_png.display()))?
             .to_rgba8();
         let (in_w, in_h) = img.dimensions();
-        let out_w = ((in_w as f32) * upscale_factor).round().max(1.0) as u32;
-        let out_h = ((in_h as f32) * upscale_factor).round().max(1.0) as u32;
+        let (out_w, out_h) = out_size((in_w, in_h), upscale_factor);
 
         // Source texture (uploaded), intermediate (upscaled), and final.
         let src = self.make_texture(
@@ -796,6 +795,16 @@ impl Fsr {
 
         Ok((out_w, out_h))
     }
+}
+
+/// The size [`Fsr::process`] turns `input` into at `factor`.
+///
+/// Public because it is the definition of the output size, not just EASU's:
+/// an ESRGAN enlarge lands on exactly this too (`Engine::enlarge`), so which
+/// upscaler ran never changes the size the page quoted before the click.
+pub fn out_size(input: (u32, u32), factor: f32) -> (u32, u32) {
+    let side = |v: u32| ((v as f32) * factor).round().max(1.0) as u32;
+    (side(input.0), side(input.1))
 }
 
 fn align_up(v: u32, align: u32) -> u32 {
