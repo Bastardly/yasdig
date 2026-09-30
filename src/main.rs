@@ -588,6 +588,19 @@ fn handle_save_settings(conn: &mut http::Connection, cfg: &Config, body: &[u8]) 
     }
 }
 
+/// Every model's slots, for the Settings tab's *Per model* card — the same
+/// views `/models` serves, keyed by name.
+fn part_views(cfg: &Config) -> std::collections::BTreeMap<String, Vec<config::PartView>> {
+    let scan = cfg.scan_images();
+    cfg.registry()
+        .into_iter()
+        .map(|(name, p)| {
+            let views = cfg.part_views(&p, &scan);
+            (name, views)
+        })
+        .collect()
+}
+
 /// `GET /model-settings`. A file that won't parse answers 200 with no
 /// overrides and the error beside them, for the reason `/settings` does: the
 /// form still has to be editable, and saving it is the repair.
@@ -599,7 +612,7 @@ fn handle_get_model_settings(conn: &mut http::Connection, cfg: &Config) -> Resul
             Some(format!("{e:#} — showing no per-model settings; saving will rewrite the file")),
         ),
     };
-    match settings::models_json(&cfg.entries(), &tuned, note.as_deref()) {
+    match settings::models_json(&cfg.entries(), &tuned, &part_views(cfg), note.as_deref()) {
         Ok(b) => conn.respond(200, "application/json", b.as_bytes()),
         Err(e) => conn.respond(500, "application/json", error_json(&format!("{e:#}")).as_bytes()),
     }
@@ -619,7 +632,11 @@ fn handle_save_model_settings(
     #[derive(serde::Deserialize)]
     struct Dto {
         model: String,
+        #[serde(default)]
         values: serde_json::Map<String, serde_json::Value>,
+        /// Slot key to a name under the models dir, or `null` to forget it.
+        #[serde(default)]
+        parts: serde_json::Map<String, serde_json::Value>,
     }
     let result = (|| -> Result<String> {
         let dto: Dto = serde_json::from_slice(body).context("parsing model settings body")?;
@@ -637,8 +654,15 @@ fn handle_save_model_settings(
         } else {
             tuned.model.insert(dto.model.clone(), next);
         }
+        let saved = tuned.parts.get(&dto.model).cloned().unwrap_or_default();
+        let parts = cfg.update_parts(&dto.model, &saved, &dto.parts)?;
+        if parts.is_empty() {
+            tuned.parts.remove(&dto.model);
+        } else {
+            tuned.parts.insert(dto.model.clone(), parts);
+        }
         tuned.save(&cfg.user_dir())?;
-        settings::models_json(&cfg.entries(), &tuned, None)
+        settings::models_json(&cfg.entries(), &tuned, &part_views(cfg), None)
     })();
     match result {
         Ok(b) => conn.respond(200, "application/json", b.as_bytes()),
@@ -1154,6 +1178,10 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         /// the other and never a merge.
         #[serde(default)]
         loras: Option<Vec<LoraRef>>,
+        /// See `GenRequest::parts`. A `null` inside the map is kept as `None`
+        /// — it means "empty this slot" — so no `double_option` is needed.
+        #[serde(default)]
+        parts: Option<std::collections::BTreeMap<String, Option<String>>>,
     }
 
     let dto: Dto = match parse_json::<Dto>(conn, body)? {
@@ -1185,6 +1213,7 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         sharpness: dto.sharpness,
         clarity: dto.clarity,
         loras: dto.loras,
+        parts: dto.parts,
     };
 
     submit(conn, job_tx, JobKind::Generate(req), 500)
@@ -1252,6 +1281,10 @@ fn handle_img2img(
         /// See `/generate`'s.
         #[serde(default)]
         loras: Option<Vec<LoraRef>>,
+        /// See `GenRequest::parts`. A `null` inside the map is kept as `None`
+        /// — it means "empty this slot" — so no `double_option` is needed.
+        #[serde(default)]
+        parts: Option<std::collections::BTreeMap<String, Option<String>>>,
     }
 
     let dto: Dto = match parse_json::<Dto>(conn, body)? {
@@ -1296,6 +1329,7 @@ fn handle_img2img(
         sharpness: dto.sharpness,
         clarity: dto.clarity,
         loras: dto.loras,
+        parts: dto.parts,
     };
 
     submit(conn, job_tx, JobKind::Img2Img(req), 500)
@@ -1631,6 +1665,8 @@ fn build_models_json(cfg: &Config) -> String {
     // Which models have saved defaults of their own, so the page can say so
     // beside the select rather than leave a changed number unexplained.
     let tuned = settings::ModelSettings::load_or_default(&cfg.user_dir());
+    // Every header here is memoized, so a second walk is a directory listing.
+    let scan = cfg.scan_images();
     let items: Vec<String> = cfg
         .registry()
         .values()
@@ -1642,9 +1678,14 @@ fn build_models_json(cfg: &Config) -> String {
             // for rather than only that it is waiting.
             let missing: Vec<String> =
                 p.missing().iter().map(|f| json_str(&f.display().to_string())).collect();
+            // The *Models* fold's slots, each with the files that fit it —
+            // filtered here, so the page never decides what fits a family.
+            // serde_json because it is a real struct, per the house rule.
+            let parts = serde_json::to_string(&cfg.part_views(p, &scan))
+                .unwrap_or_else(|_| "[]".into());
             format!(
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
-                 \"family\":{},\"family_label\":{},\"tuned\":{},\"missing\":[{}],\
+                 \"family\":{},\"family_label\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
                  \"steps\":{},\"cfg_scale\":{},\"img2img_cfg_scale\":{},\"sampler\":{},\
                  \"upscale_factor\":{},\"upscaler\":{},\
@@ -1658,8 +1699,9 @@ fn build_models_json(cfg: &Config) -> String {
                 p.exists,
                 json_str(p.family.as_str()),
                 json_str(p.family.label()),
-                tuned.model.contains_key(&p.name),
+                tuned.model.contains_key(&p.name) || tuned.parts.contains_key(&p.name),
                 missing.join(","),
+                parts,
                 p.width,
                 p.height,
                 out_w,
@@ -2609,6 +2651,67 @@ mod tests {
         // No VAE and no encoder: both named, and the model not runnable.
         assert_eq!(z["exists"], serde_json::json!(false));
         assert_eq!(z["missing"].as_array().unwrap().len(), 2);
+
+        // Two VAEs of different widths: each slot offers only the one that fits.
+        std::fs::create_dir_all(models.join("vae")).unwrap();
+        let vae = |name: &str, z2: u32| {
+            write(
+                &format!("vae/{name}"),
+                &format!(
+                    r#""decoder.conv_in.weight":{{"dtype":"F16","shape":[512,4,3,3],"data_offsets":[0,0]}},
+                       "decoder.mid.block_1.conv1.weight":{{"dtype":"F16","shape":[512,512,3,3],"data_offsets":[0,0]}},
+                       "encoder.conv_out.bias":{{"dtype":"F16","shape":[{z2}],"data_offsets":[0,0]}}"#
+                ),
+            )
+        };
+        vae("sdxl_vae.safetensors", 8);
+        vae("ae.safetensors", 32);
+        let list: serde_json::Value = serde_json::from_str(&super::build_models_json(&cfg)).unwrap();
+        let by = |n: &str| list.as_array().unwrap().iter().find(|m| m["name"] == n).unwrap().clone();
+        let (xl, z) = (by("xl"), by("z"));
+        let slot = |m: &serde_json::Value, i: usize| m["parts"][i].clone();
+        assert_eq!(slot(&xl, 0)["slot"], "vae");
+        assert_eq!(slot(&xl, 0)["optional"], true);
+        assert_eq!(slot(&xl, 0)["current"], serde_json::Value::Null);
+        assert_eq!(slot(&xl, 0)["options"][0]["name"], "vae/sdxl_vae.safetensors");
+        assert_eq!(slot(&xl, 0)["options"].as_array().unwrap().len(), 1);
+        assert_eq!(slot(&z, 0)["optional"], false);
+        assert_eq!(slot(&z, 0)["current"], "vae/ae.safetensors");
+        assert_eq!(slot(&z, 1)["slot"], "llm");
+
+        // And a request naming the wrong one is refused before anything runs.
+        let mut p = cfg.registry().remove("xl").unwrap();
+        let pick = |n: &str| [("vae".to_string(), Some(n.to_string()))].into_iter().collect();
+        assert!(cfg.apply_parts(&mut p, &pick("vae/ae.safetensors")).is_err());
+        assert!(cfg.apply_parts(&mut p, &pick("../models.toml")).is_err());
+        cfg.apply_parts(&mut p, &pick("vae/sdxl_vae.safetensors")).unwrap();
+        assert_eq!(p.components.unwrap().vae, Some(models.join("vae/sdxl_vae.safetensors")));
+        // A Z-Image has no VAE of its own, so emptying the slot is refused.
+        let mut zp = cfg.registry().remove("z").unwrap();
+        let clear = [("vae".to_string(), None)].into_iter().collect();
+        assert!(cfg.apply_parts(&mut zp, &clear).is_err());
+
+        // Saving: the scan's own pick is not a choice worth storing, a real
+        // one is, and `null` forgets it.
+        let body = |j: &str| serde_json::from_str::<serde_json::Map<_, _>>(j).unwrap();
+        let none = Default::default();
+        assert!(cfg.update_parts("z", &none, &body(r#"{"vae":"vae/ae.safetensors"}"#)).unwrap().is_empty());
+        let kept = cfg.update_parts("xl", &none, &body(r#"{"vae":"vae/sdxl_vae.safetensors"}"#)).unwrap();
+        assert_eq!(kept.get("vae").map(String::as_str), Some("vae/sdxl_vae.safetensors"));
+        assert!(cfg.update_parts("xl", &kept, &body(r#"{"vae":null}"#)).unwrap().is_empty());
+        assert!(cfg.update_parts("xl", &none, &body(r#"{"llm":"vae/ae.safetensors"}"#)).is_err());
+
+        // A saved part reaches the registry, and once its file is gone the
+        // model waits for it rather than quietly running on something else.
+        let mut tuned = crate::settings::ModelSettings::default();
+        tuned.parts.insert("xl".into(), kept);
+        tuned.save(&cfg.user_dir()).unwrap();
+        let sdxl_vae = models.join("vae/sdxl_vae.safetensors");
+        let p = cfg.registry().remove("xl").unwrap();
+        assert_eq!(p.components.and_then(|c| c.vae), Some(sdxl_vae.clone()));
+        std::fs::remove_file(&sdxl_vae).unwrap();
+        let p = cfg.registry().remove("xl").unwrap();
+        assert_eq!(p.missing(), vec![sdxl_vae]);
 
         std::fs::remove_dir_all(&root).ok();
     }

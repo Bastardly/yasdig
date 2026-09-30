@@ -9,7 +9,7 @@
 //! [`Monitor`] is the shared handle that makes that visible — one connection
 //! thread reads progress off it, another can kill the run through it.
 
-use crate::config::{Config, Profile, VideoModel, MIN_STRENGTH};
+use crate::config::{Components, Config, Profile, VideoModel, MIN_STRENGTH};
 use anyhow::{bail, Context, Result};
 use std::collections::VecDeque;
 use std::io::{BufReader, Read};
@@ -425,16 +425,14 @@ impl<'a> SdRunner<'a> {
         // plus a flag per separate file — the flag also decides the prefix
         // sd.cpp loads its tensors under, so a DiT through `-m` doesn't fail to
         // start, it fails to find its own weights.
-        match &p.components {
-            None => {
-                cmd.args(["-m", &path_str(&p.model)]);
-            }
-            Some(parts) => {
-                cmd.args(["--diffusion-model", &path_str(&p.model)]);
-                for (flag, path) in parts.flags() {
-                    cmd.args([flag, &path_str(path)]);
-                }
-            }
+        //
+        // The parts go on either way: on a bundled checkpoint a `--vae` is an
+        // override, which sd.cpp honours because it loads the VAE after the
+        // checkpoint and a later tensor replaces one of the same name.
+        let flag = if p.is_bundled() { "-m" } else { "--diffusion-model" };
+        cmd.args([flag, &path_str(&p.model)]);
+        for (flag, path) in p.components.iter().flat_map(Components::flags) {
+            cmd.args([flag, &path_str(path)]);
         }
         cmd.args(p.family.flags());
         // LoRAs ride inline in the prompt, which is sd.cpp's own spelling for
@@ -1081,6 +1079,29 @@ binary = "/opt/sd-cli"
         assert_eq!(flag(&a, "--llm"), Some("/models/text_encoders/qwen3.safetensors"));
         assert!(!a.iter().any(|x| x == "-m" || x == "--t5xxl" || x == "--clip_l"));
         assert_eq!(a.iter().filter(|x| *x == "--diffusion-fa").count(), 1);
+    }
+
+    /// A VAE picked for a bundled checkpoint is an override on `-m`, not a
+    /// reason to run it as a bare diffusion model — which would load the UNet
+    /// under the wrong prefix and find none of its weights.
+    #[test]
+    fn a_checkpoint_keeps_its_m_when_it_is_handed_a_vae() {
+        let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
+        let mut sdxl = Profile {
+            model: PathBuf::from("/models/sdxl.safetensors"),
+            bundled: Some(true),
+            ..Default::default()
+        };
+        sdxl.set_part("vae", Some(PathBuf::from("/models/vae/sdxl_vae.safetensors")));
+        let a = argv(&SdRunner::new(&cfg).base_cmd(&sdxl, "a cat", None, 1, Path::new("o.png"), 1.0));
+        assert_eq!(flag(&a, "-m"), Some("/models/sdxl.safetensors"));
+        assert_eq!(flag(&a, "--vae"), Some("/models/vae/sdxl_vae.safetensors"));
+        assert!(!a.iter().any(|x| x == "--diffusion-model"));
+
+        // Emptied again, it is the checkpoint as it was.
+        sdxl.set_part("vae", None);
+        assert_eq!(sdxl.components, None);
+        assert!(sdxl.is_bundled());
     }
 
     /// LoRAs are inline in the prompt, which is sd.cpp's spelling — and the

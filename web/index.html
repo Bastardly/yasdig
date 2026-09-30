@@ -130,16 +130,17 @@
     </prompt-box>
     <p class="sub" id="negnote" hidden>No negative prompt at CFG 1 — the model ignores it. Raise CFG to use one.</p>
 
-    <div class="row">
-      <div>
-        <label for="template">Model</label>
-        <select id="template"></select>
-      </div>
-      <div>
-        <label for="seed">Seed</label>
-        <input id="seed" type="number" value="-1">
-      </div>
-    </div>
+    <!-- What does the work: the diffusion model, then one select per separate
+         file its family runs with (a VAE, a text encoder), drawn by
+         `syncParts` from the slots `/models` serves. A fold because once they
+         are picked they rarely change, and the summary says what is in it.
+         Refine and Hi-res pick their own model with their own pass. -->
+    <details id="modelsbox" class="spaced" open>
+      <summary id="modelsum">Models</summary>
+      <label for="template">Diffusion model</label>
+      <select id="template"></select>
+      <div id="partrows"></div>
+    </details>
 
     <!-- Adapters that patch the checkpoint's weights, picked from
          models/loras/. Not in the Advanced rows below: unlike Steps or CFG,
@@ -167,6 +168,10 @@
           <label for="icfg">img2img CFG</label>
           <input id="icfg" type="number" step="0.1" min="0">
         </div>
+      </div>
+      <!-- Sampler and seed: the two that say how the noise is walked, not how
+           much. -->
+      <div class="row">
         <div>
           <label for="sampler">Sampler</label>
           <select id="sampler">
@@ -176,6 +181,10 @@
             <option value="dpm++2mv2">dpm++2mv2</option>
             <option value="lcm">lcm</option>
           </select>
+        </div>
+        <div>
+          <label for="seed">Seed</label>
+          <input id="seed" type="number" value="-1">
         </div>
       </div>
       <!-- Size and output upscale describe a txt2img: a source brings its own

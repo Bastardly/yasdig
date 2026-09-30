@@ -177,7 +177,8 @@ pub fn check(cfg: &Config) -> Report {
     // renamed or deleted file leaves an entry that applies to nothing. Named
     // rather than dropped: it is somebody's tuning, and the fix may be to
     // rename the key.
-    for name in tuned.model.keys().filter(|n| !registry.contains_key(*n)) {
+    let saved: std::collections::BTreeSet<&String> = tuned.model.keys().chain(tuned.parts.keys()).collect();
+    for name in saved.into_iter().filter(|n| !registry.contains_key(*n)) {
         warnings.push(format!(
             "per-model settings for '{name}' in {} apply to no model — was the file renamed?",
             crate::settings::ModelSettings::path(&cfg.user_dir()).display()
@@ -216,7 +217,8 @@ pub fn check(cfg: &Config) -> Report {
             let size = std::fs::metadata(&p.model)
                 .map(|m| human_size(m.len()))
                 .unwrap_or_else(|_| "?".into());
-            let tag = match (p.discovered, tuned.model.contains_key(&p.name)) {
+            let tuned_here = tuned.model.contains_key(&p.name) || tuned.parts.contains_key(&p.name);
+            let tag = match (p.discovered, tuned_here) {
                 (true, false) => "discovered",
                 (true, true) => "discovered, tuned",
                 (false, false) => "preset",

@@ -1,8 +1,8 @@
 import { $, esc, post } from './dom.js';
 import { S } from './state.js';
 import { setBusy } from './busy.js';
-import { imageLoras, imageSource, models, render, setUpscaler, syncCfgPlaceholders,
-         syncOutSize } from './image.js';
+import { imageLoras, imageSource, models, render, setParts, setUpscaler, syncCfgPlaceholders,
+         syncOutSize, syncParts } from './image.js';
 import { gridMarks } from './gridmark.js';
 
 // The last listing. It carries each item's full settings, so opening one needs
@@ -183,7 +183,14 @@ function applyWorkItem(item) {
   // Assigned directly, and deliberately without firing `change`: that listener
   // is syncAdvanced, which would overwrite every field below with the model's
   // defaults — the exact opposite of restoring this item.
-  if (models.some((m) => m.name === item.template)) $('template').value = item.template;
+  const known = models.some((m) => m.name === item.template);
+  if (known) $('template').value = item.template;
+  // The fold's slots are the model's, so they are redrawn for it — and then set
+  // to what this image ran with, which a sidecar records as absolute paths. Not
+  // when its model is gone: the select kept another one, and that model's slots
+  // have no business holding a different family's files.
+  syncParts();
+  if (known) setParts(p.components);
   $('steps').value = p.steps;
   $('cfg').value = p.cfg_scale;
   $('sampler').value = p.sampler;

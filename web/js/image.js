@@ -5,6 +5,7 @@ import { setPost, setPostStart, setViewerImage, showFullSize } from './viewer.js
 import { loadWorkItems, markGrid } from './workitems.js';
 import { loraPicker } from './loras.js';
 import { sourceSlot } from './source-slot.js';
+import { wireHints } from './hints.js';
 
 // The checkpoint list the server published. Exported because the work-item
 // grid looks a name up in it; only this module refills it.
@@ -54,12 +55,107 @@ function currentModel() {
   return models.find((m) => m.name === $('template').value);
 }
 
+// ---- The Models fold -------------------------------------------------------
+//
+// One select per separate file the selected model's family runs with. The
+// slots and the files that fit each come from `/models` (`parts`), already
+// filtered — which VAE decodes which family is the server's to know, the
+// `frame_grid` rule. A slot is `optional` on a bundled checkpoint, where the
+// empty choice is the one built into it; otherwise it must name a file.
+
+const partSelects = () => [...$('partrows').querySelectorAll('select')];
+const baseName = (name) => name.split('/').pop();
+
+function partOptions(part) {
+  const opts = part.optional
+    ? ['<option value="">Built into the checkpoint</option>'] : [];
+  for (const o of part.options) {
+    opts.push(`<option value="${esc(o.name)}" data-path="${esc(o.path)}">${esc(o.name)}</option>`);
+  }
+  // What the model holds and nothing on disk offers: a saved choice whose file
+  // was deleted, or a required part not downloaded yet. Listed so the select
+  // names it rather than silently showing another file.
+  if (part.current && !part.options.some((o) => o.name === part.current)) {
+    opts.push(`<option value="${esc(part.current)}" data-path="${esc(part.current_path ?? '')}">`
+      + `${esc(part.current)} (missing)</option>`);
+  }
+  return opts.join('');
+}
+
+// Redrawn from the selected model. Exported for `applyWorkItem`, which sets the
+// model without firing `change` and then puts back the parts the image ran with.
+export function syncParts() {
+  const parts = currentModel()?.parts ?? [];
+  $('partrows').innerHTML = parts.map((p) => `
+    <label for="part-${p.slot}">${esc(p.label)}</label>
+    <select id="part-${p.slot}" data-slot="${p.slot}">${partOptions(p)}</select>`).join('');
+  for (const p of parts) $(`part-${p.slot}`).value = p.current ?? '';
+  for (const sel of partSelects()) sel.addEventListener('change', syncModelsSummary);
+  wireHints($('partrows'));
+  syncModelsSummary();
+}
+
+// Put back the files a work item ran with, from its profile's absolute paths —
+// what a sidecar records. A path no option carries anymore is added as missing
+// rather than dropped, the way `setUpscaler` treats a deleted upscaler.
+export function setParts(components) {
+  for (const sel of partSelects()) {
+    const path = components?.[sel.dataset.slot] ?? null;
+    if (!path) {
+      if ([...sel.options].some((o) => o.value === '')) sel.value = '';
+      continue;
+    }
+    let opt = [...sel.options].find((o) => o.dataset.path === path);
+    if (!opt) {
+      opt = new Option(`${path} (missing)`, path);
+      opt.dataset.path = path;
+      sel.add(opt);
+    }
+    sel.value = opt.value;
+  }
+  syncModelsSummary();
+}
+
+// Every slot, including an emptied one as `null`: the fold is the complete
+// answer to what the model runs with, the same argument `loras` makes.
+function partsPicked() {
+  return Object.fromEntries(partSelects().map((s) => [s.dataset.slot, s.value || null]));
+}
+
+// The summary says what is in the fold, so folding it hides nothing.
+function syncModelsSummary() {
+  const m = currentModel();
+  if (!m) {
+    $('modelsum').textContent = 'Models';
+    return;
+  }
+  const bits = partSelects().map((s) => {
+    const label = m.parts.find((p) => p.slot === s.dataset.slot)?.label ?? s.dataset.slot;
+    return `${label}: ${s.value ? baseName(s.value) : 'built in'}`;
+  });
+  $('modelsum').textContent = ['Models — ' + m.name, ...bits].join(' · ');
+}
+
+// Open or folded is a per-viewer convenience, so it lives in this browser;
+// storage can be missing or throw, and the fold then simply starts open.
+const FOLD_KEY = 'rustimage.modelsOpen';
+function initModelsFold() {
+  try {
+    const v = localStorage.getItem(FOLD_KEY);
+    if (v !== null) $('modelsbox').open = v === '1';
+  } catch { /* starts open */ }
+  $('modelsbox').addEventListener('toggle', () => {
+    try { localStorage.setItem(FOLD_KEY, $('modelsbox').open ? '1' : '0'); } catch { /* ignore */ }
+  });
+}
+
 // Pre-fill the Advanced controls from the selected model's defaults.
 function syncAdvanced() {
   const m = currentModel();
   if (!m) return;
   // Re-greys the LoRA lists against the new model's family.
   imageLoras.refresh();
+  syncParts();
   $('steps').value = m.steps;
   $('cfg').value = m.cfg_scale;
   $('sampler').value = m.sampler;
@@ -285,7 +381,9 @@ async function saveModelDefaults() {
   }
   $('savemodelmsg').textContent = 'Saving…';
   try {
-    await post('/model-settings', { model: m.name, values });
+    // The parts too: the server keeps only a choice that differs from what
+    // the scan would pick, so sending every slot pins nothing by accident.
+    await post('/model-settings', { model: m.name, values, parts: partsPicked() });
     $('savemodelmsg').textContent = `Saved — ${m.name} now opens with these. `
       + 'Settings → Per model lists what differs from its defaults.';
     // The select's "tuned" tag and every pre-fill come from `/models`.
@@ -642,6 +740,9 @@ function genPayload(index) {
     // Retained on the image, so a later Refine or Hi-res runs with the same
     // adapters without a second picker to set them in.
     loras: imageLoras.get(),
+    // The Models fold. Retained like `loras`, so Refine and Hi-res decode with
+    // the VAE this image was made with.
+    parts: partsPicked(),
     // Not sharpness/clarity: those are post-process, not generation settings,
     // so a new image starts from the model's values rather than inheriting
     // wherever the last one's sliders were left.
@@ -771,6 +872,7 @@ async function saveOutput() {
 
 export function initImage() {
   imageLoras.init();
+  initModelsFold();
   $('go').addEventListener('click', startRun);
   $('stop').addEventListener('click', stopRun);
   // The Advanced panel's view of the shared upscale factor. Built here rather

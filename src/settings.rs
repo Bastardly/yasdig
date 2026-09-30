@@ -443,6 +443,7 @@ impl Settings {
             // behind it has always meant.
             family: crate::config::ImageFamily::default(),
             components: None,
+            bundled: None,
             discovered: false,
             exists: false,
         }
@@ -537,6 +538,14 @@ const MODELS_HEADER: &str = "\
 #[serde(default)]
 pub struct ModelSettings {
     pub model: std::collections::BTreeMap<String, PartialSettings>,
+    /// The separate files picked for a model in place of the ones the scan
+    /// would choose, `[parts."<name>"]`: slot key (`vae`, `llm`) to a path
+    /// relative to the models dir. A table beside `model` rather than inside
+    /// each entry, so an entry stays a plain [`PartialSettings`] and
+    /// [`update_model`] never sees a key it has to refuse. Declared after
+    /// `model`, which TOML doesn't care about here — both are tables.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub parts: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
 }
 
 impl ModelSettings {
@@ -644,6 +653,7 @@ const PAGE_ONLY: &[&str] = &["prompt", "negative", "hires_scale", "variables"];
 pub fn models_json(
     entries: &[crate::config::ModelEntry],
     tuned: &ModelSettings,
+    parts: &std::collections::BTreeMap<String, Vec<crate::config::PartView>>,
     note: Option<&str>,
 ) -> Result<String> {
     let models: Vec<serde_json::Value> = entries
@@ -659,6 +669,10 @@ pub fn models_json(
                 "family_label": e.family.label(),
                 "base": base,
                 "over": tuned.model.get(&e.name).cloned().unwrap_or_default(),
+                // The slots, as `/models` serves them, and which of them are
+                // saved choices rather than the scan's own pick.
+                "parts": parts.get(&e.name).cloned().unwrap_or_default(),
+                "parts_over": tuned.parts.get(&e.name).cloned().unwrap_or_default(),
             }))
         })
         .collect::<Result<_>>()?;
@@ -954,6 +968,12 @@ mod tests {
                 sampler: Some("dpm++2m".into()),
                 ..PartialSettings::default()
             },
+        );
+        // A saved part, for a model with no saved numbers at all — the table
+        // stands on its own.
+        m.parts.insert(
+            "juggernaut".into(),
+            [("vae".to_string(), "vae/sdxl_vae.safetensors".to_string())].into_iter().collect(),
         );
         m.save(&dir).unwrap();
         assert_eq!(ModelSettings::load(&dir).unwrap(), m);

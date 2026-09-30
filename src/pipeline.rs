@@ -111,6 +111,12 @@ pub struct GenRequest {
     /// Retained on the profile, so a later refine or hi-res runs with the same
     /// adapters. See [`Profile::loras`].
     pub loras: Option<Vec<LoraRef>>,
+    /// The separate files picked in the *Models* fold, slot key to a name
+    /// relative to the models dir. An absent slot keeps the model's; `null`
+    /// empties it, which is only allowed on a bundled checkpoint (its own copy
+    /// is then used). Resolved by [`Config::apply_parts`] and retained on the
+    /// profile like `loras`, so refine and hi-res decode with the same VAE.
+    pub parts: Option<BTreeMap<String, Option<String>>>,
 }
 
 /// One image-to-image generation: a source image the user supplied instead of a
@@ -158,6 +164,8 @@ pub struct Img2ImgRequest {
     pub clarity: Option<f32>,
     /// See [`GenRequest::loras`].
     pub loras: Option<Vec<LoraRef>>,
+    /// See [`GenRequest::parts`].
+    pub parts: Option<BTreeMap<String, Option<String>>>,
 }
 
 /// One clip to generate.
@@ -698,6 +706,9 @@ impl Engine {
         if let Some(v) = &req.loras {
             profile.loras = v.clone();
         }
+        if let Some(parts) = &req.parts {
+            self.cfg.apply_parts(&mut profile, parts)?;
+        }
         // The overrides can push the denoise strengths out of range even though
         // the profile was fine at load, and this profile is what the later
         // refine/hi-res passes run with.
@@ -910,6 +921,9 @@ impl Engine {
         }
         if let Some(v) = &req.loras {
             profile.loras = v.clone();
+        }
+        if let Some(parts) = &req.parts {
+            self.cfg.apply_parts(&mut profile, parts)?;
         }
         profile.validate()?;
         self.cfg.check_loras(&profile.loras, profile.family)?;

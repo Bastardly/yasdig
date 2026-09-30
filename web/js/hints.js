@@ -46,9 +46,20 @@ const HELP = [
         + 'should have to retype. Emptying the box means no negative at all.'
         + WEIGHTING },
   { ids: ['template', 'vmodel'],
-    text: 'Which checkpoint does the work. Every model has its own house style '
+    text: 'Which model does the work. Every model has its own house style '
         + 'and its own sensible steps, CFG and size — picking one refills the '
-        + 'boxes below with the values it was measured at.' },
+        + 'boxes below with the values it was measured at, and on the Image tab '
+        + 'shows the separate files it runs with (a VAE, a text encoder).' },
+  { ids: ['part-vae', 'pmpart-vae'],
+    text: 'Turns the finished latent into pixels. A checkpoint that carries its '
+        + 'own uses it when this says "built into the checkpoint"; pick a file to '
+        + 'replace it — the usual reason on SDXL is the fp16-fix VAE, since the '
+        + 'original overflows at half precision. Only VAEs this model can decode '
+        + 'are listed.' },
+  { ids: ['part-llm', 'pmpart-llm'],
+    text: 'The language model that reads your prompt for this model. Z-Image is '
+        + 'trained against Qwen3 4B and nothing else will do, so only files of '
+        + 'that size are listed.' },
   { ids: ['seed', 'vseed'],
     text: 'The random noise the picture is grown from, as a number. The same seed '
         + 'with the same settings gives the same image, so it is how you keep a '

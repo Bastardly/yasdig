@@ -68,8 +68,22 @@ export function loraPicker({ rows, add, family = () => null }) {
   // re-render rebuilds the elements and would lose a half-typed strength.
   let picked = [];
 
+  // Add is disabled when it would add nothing: nothing on disk, or nothing on
+  // disk for this model. Its click already picked only a fitting LoRA, so an
+  // enabled button that did nothing on Z-Image was the one control on the tab
+  // that looked broken. The title says which of the two it is.
+  function syncAdd(fam) {
+    const btn = $(add);
+    const any = available.some((l) => l.usable);
+    const ok = available.some((l) => l.usable && fits(l, fam));
+    btn.disabled = !ok;
+    btn.title = ok ? '' : !any ? 'No LoRAs in models/loras/'
+      : 'No LoRA in models/loras/ is for this model\'s family';
+  }
+
   function render() {
     const el = $(rows);
+    syncAdd(family());
     if (!available.length) {
       // The same shape as the empty-models message, and it names the folder,
       // because "the picker is empty" and "the picker is looking somewhere

@@ -83,6 +83,7 @@ function markup() {
     <label for="pmmodel">Model</label>
     <select id="pmmodel"></select>
     <p class="sub" id="pmnote"></p>
+    <div id="pmparts"></div>
     <div id="pmrows">${html}</div>
     <div class="row spaced">
       <div><button type="button" id="pmsave" class="btn btn-block">Save for this model</button></div>
@@ -94,10 +95,35 @@ function markup() {
 
 // ---- Reading and writing ---------------------------------------------------
 
+// The model's slots — VAE, text encoder — as selects. Empty is "no choice
+// saved", and its option says what that falls back to: the file the scan picks,
+// or on a bundled checkpoint the one built into it. Redrawn per model, since
+// the slots are the family's.
+function fillParts(m) {
+  $('pmparts').innerHTML = m.parts.map((p) => {
+    const fallback = p.auto ?? (p.optional ? 'built into the checkpoint' : 'none on disk');
+    const saved = m.parts_over[p.slot];
+    const opts = [`<option value="">— default: ${esc(fallback)} —</option>`,
+      ...p.options.map((o) => `<option value="${esc(o.name)}">${esc(o.name)}</option>`)];
+    if (saved && !p.options.some((o) => o.name === saved)) {
+      opts.push(`<option value="${esc(saved)}">${esc(saved)} (missing)</option>`);
+    }
+    return `<label for="pmpart-${p.slot}">${esc(p.label)}</label>
+      <select id="pmpart-${p.slot}" data-slot="${p.slot}">${opts.join('')}</select>`;
+  }).join('');
+  for (const p of m.parts) $(`pmpart-${p.slot}`).value = m.parts_over[p.slot] ?? '';
+  wireHints($('pmparts'));
+}
+
+// Every slot, `null` for the empty choice — which forgets a saved one.
+const partValues = () => Object.fromEntries(
+  [...$('pmparts').querySelectorAll('select')].map((s) => [s.dataset.slot, s.value || null]));
+
 function fill() {
   const m = listing.find((x) => x.name === current);
   if (!m) return;
-  const n = Object.keys(m.over).length;
+  fillParts(m);
+  const n = Object.keys(m.over).length + Object.keys(m.parts_over).length;
   $('pmnote').textContent = `${m.family_label}. `
     + (n ? `${n} setting${n === 1 ? '' : 's'} saved for this model; ` : 'Nothing saved for this model; ')
     + 'an empty box starts where the placeholder says.';
@@ -147,7 +173,8 @@ function fillSelect() {
   sel.innerHTML = families.map((fam) => `<optgroup label="${esc(fam)}">${
     listing.filter((m) => m.family_label === fam).map((m) =>
       `<option value="${esc(m.name)}">${esc(m.name)}${
-        Object.keys(m.over).length ? ' (tuned)' : ''}</option>`).join('')}</optgroup>`).join('');
+        Object.keys(m.over).length + Object.keys(m.parts_over).length ? ' (tuned)' : ''
+      }</option>`).join('')}</optgroup>`).join('');
   if (!listing.some((m) => m.name === current)) current = listing[0]?.name ?? null;
   if (current) sel.value = current;
 }
@@ -169,13 +196,13 @@ export async function loadModelSettings() {
   }
 }
 
-async function save(body) {
+async function save(body, parts) {
   $('pmerr').textContent = '';
   $('pmmsg').textContent = 'Saving…';
   try {
     // Redrawn from the reply: the server drops what equals the default, and
     // the form should show that rather than what was typed.
-    take(await post('/model-settings', { model: current, values: body }));
+    take(await post('/model-settings', { model: current, values: body, parts }));
     $('pmmsg').textContent = 'Saved.';
     // The Image tab's pre-fill and the select's "tuned" tag come from /models.
     loadModels();
@@ -192,10 +219,14 @@ export function initModelSettings() {
     current = $('pmmodel').value;
     fill();
   });
-  $('pmsave').addEventListener('click', () => save(values()));
+  $('pmsave').addEventListener('click', () => save(values(), partValues()));
   $('pmclear').addEventListener('click', () =>
-    save(Object.fromEntries(rows().map((f) => [f.key, null]))));
-  $('pmrows').addEventListener('input', () => { $('pmmsg').textContent = 'Unsaved changes'; });
+    save(Object.fromEntries(rows().map((f) => [f.key, null])),
+      Object.fromEntries([...$('pmparts').querySelectorAll('select')]
+        .map((s) => [s.dataset.slot, null]))));
+  for (const id of ['pmrows', 'pmparts']) {
+    $(id).addEventListener('input', () => { $('pmmsg').textContent = 'Unsaved changes'; });
+  }
   // The upscaler options exist once their fetch has landed; copied in behind
   // the "default" option, which `fill` relabels.
   upscalersReady.then(() => {

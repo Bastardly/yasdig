@@ -215,6 +215,24 @@ Flux, Qwen-Image, SD3, Chroma, LTX and several more are recognised and named by
 `doctor` ("… which this build doesn't run yet") rather than offered and then failing
 minutes into a render. The model select groups models by family.
 
+**Choosing the separate files.** The Image tab's **Models** fold holds the
+*Diffusion model* select and, under it, one select per file that model's family runs
+with — the VAE for SD and SDXL; the VAE and the text encoder for Z-Image. Each lists
+only the files that fit (a Flux VAE is never offered to an SDXL, whose latents it
+can't decode), identified by what is inside them like everything else here.
+
+- On a single-file checkpoint the VAE defaults to **Built into the checkpoint**.
+  Picking a file replaces it — the usual reason on SDXL is
+  [the fp16-fix VAE](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix), since the
+  original overflows at half precision. Drop it in `models/vae/`.
+- On a model assembled from parts, each slot starts at the file the scan found and
+  can't be emptied, because the model has nothing of its own to fall back on.
+
+The choice travels with the image — Refine and Hi-res decode with the same VAE, a
+reopened work item puts it back — and **Save as defaults for this model** remembers
+it (see [Per-model settings](#per-model-settings)). The fold's summary line says what
+is picked, so it can stay folded.
+
 **Where a model's numbers come from**, each layer overriding the one before only
 where it says something:
 
@@ -571,7 +589,21 @@ Only what differs from where the model would start anyway is kept, in
 `user/model-settings.toml`. So changing a global setting still reaches every model
 that has no opinion of its own about it — the tuned turbo keeps its 6 steps, and
 picks up your new refine strength. This is also the place for a model's own
-**Extra sd-cli arguments**, such as `--offload-to-cpu` for a model that doesn't fit.
+**Extra sd-cli arguments**, such as `--offload-to-cpu` for a model that doesn't fit,
+and for the files it runs with — a VAE picked in the **Models** fold is saved with the
+rest, under a table of its own:
+
+```toml
+[model."juggernautXL"]
+steps = 30
+
+[parts."juggernautXL"]
+vae = "vae/sdxl_vae.safetensors"   # relative to the models dir
+```
+
+A saved file that has since been deleted greys the model out naming it, rather than
+running on something else. Picking the file the scan would have picked anyway saves
+nothing.
 
 A model is remembered by its name, which for a discovered one is its file name
 without the extension — rename the file and `doctor` points out the settings that no
@@ -1164,7 +1196,13 @@ needs a Vulkan device and nothing else.
   appears without a restart. Each entry carries `name`, `description`, `discovered`,
   `exists`, `family` (`sd1`, `sd2`, `sdxl`, `z_image`) and `family_label`, `tuned` (it
   has per-model settings), `missing` (every file standing between it and a run, at the
-  path it is expected at — empty when `exists`), `base_width` / `base_height`, `out_width` / `out_height`, and the profile's
+  path it is expected at — empty when `exists`), `parts` (one entry per separate file
+  the family runs with: `slot` — `vae`, `llm` —, `label`, `optional` — may it be left
+  empty, true on a single-file checkpoint —, `current` and `current_path` — what the
+  model runs with now, as a name relative to the models dir and as the path a work
+  item's sidecar records —, `auto` — what the scan picks with nothing chosen, `null` on
+  a checkpoint, meaning its own — and `options`, every file that fits the slot as
+  `{name, path}`, already filtered for the family), `base_width` / `base_height`, `out_width` / `out_height`, and the profile's
   `steps`, `cfg_scale`, `img2img_cfg_scale`, `sampler`, `upscale_factor`, `upscaler`, `refine_steps`,
   `refine_strength`, `hires_steps`, `hires_strength`, `source_steps`,
   `source_strength`, `hires_max_side`, `sharpness`, `clarity` — which is
@@ -1176,10 +1214,14 @@ needs a Vulkan device and nothing else.
   same number as `cfg_scale`, because unset *follows* the base CFG rather than matching
   it once.
 - `GET /model-settings` — every model's per-model layer: `{"models": [{name,
-  family_label, base, over}]}`, where `base` is what the model starts at *without* its
-  own settings (the Per model card's placeholders) and `over` is what
-  `user/model-settings.toml` holds for it. A broken file answers 200 with an `error`.
-- `POST /model-settings` — `{"model": name, "values": {knob: value | null}}`. A missing
+  family_label, base, over, parts, parts_over}]}`, where `base` is what the model starts at *without* its
+  own settings (the Per model card's placeholders), `over` is what
+  `user/model-settings.toml` holds for it, `parts` is the same slot list `/models`
+  serves and `parts_over` the files saved for it (slot → name). A broken file answers 200 with an `error`.
+- `POST /model-settings` — `{"model": name, "values": {knob: value | null}, "parts":
+  {slot: name | null}}`, both optional. `parts` names a file relative to the models dir,
+  which must be one the scan found and one that fits the slot; a name equal to what the
+  scan would pick anyway is not stored. A missing
   key is left alone, `null` removes that setting, a value sets it — and then everything
   equal to `base` is dropped, so only real differences are stored. Any setting a model
   can have (not `prompt`, `negative`, `hires_scale` or `variables`); an unknown key is
@@ -1195,8 +1237,14 @@ needs a Vulkan device and nothing else.
     "width": 768, "height": 768, "upscale_factor": 2.0, "upscaler": "4x-UltraSharp.pth",
     "refine_steps": 2, "refine_strength": 0.3, "hires_steps": 8, "hires_strength": 0.3,
     "sharpness": 0.35, "clarity": 0.0,
-    "loras": [{ "name": "detail.safetensors", "strength": 0.8 }] }
+    "loras": [{ "name": "detail.safetensors", "strength": 0.8 }],
+    "parts": { "vae": "vae/sdxl_vae.safetensors" } }
   ```
+  `parts` is what the **Models** fold picked: slot → a file relative to the models
+  dir, or `null` to empty the slot (only on a single-file checkpoint, which then uses
+  its own). An absent slot keeps the model's. A name the scan didn't find, or a file
+  that doesn't fit the slot — a Flux VAE for an SDXL — is refused before anything
+  runs. Retained with the image, like `loras`. `/img2img` takes it too.
   `upscaler` is a file name in the upscaler dir, or `""` for FSR — absent keeps the
   profile's. A name that isn't on disk is a `500` naming what is.
   `loras` is the one list here, and absent is not the same as empty: omitting the key

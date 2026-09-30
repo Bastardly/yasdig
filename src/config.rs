@@ -361,9 +361,14 @@ pub struct Profile {
     /// is also what an old sidecar reads as, and it was right: those were all
     /// single-file checkpoints.
     ///
-    /// Identity, like `model`: filled by [`Config::registry`] from the scan,
-    /// never by a request, and carried whole through `swap_model`.
+    /// Identity, like `model`: filled by [`Config::registry`] from the scan and
+    /// the per-model file, then overridden per request by a part picked in the
+    /// *Models* fold (`GenRequest::parts`), and carried whole through
+    /// `swap_model`.
     pub components: Option<Components>,
+    /// Whether `model` runs as `-m`. Read through [`Profile::is_bundled`],
+    /// which is where the fallback for older sidecars lives.
+    pub bundled: Option<bool>,
     /// True if this came from a folder scan rather than an explicit template.
     pub discovered: bool,
     /// True if the checkpoint file actually exists on disk.
@@ -398,6 +403,30 @@ pub struct Components {
 }
 
 impl Components {
+    /// The file in slot `key` — a [`PartSlot::key`], which is the field name.
+    pub fn get(&self, key: &str) -> Option<&PathBuf> {
+        match key {
+            "vae" => self.vae.as_ref(),
+            "llm" => self.llm.as_ref(),
+            "clip_l" => self.clip_l.as_ref(),
+            "t5xxl" => self.t5xxl.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Fill or empty slot `key`. A key that is no slot does nothing — every
+    /// caller has it from [`ImageFamily::slots`].
+    pub fn set(&mut self, key: &str, path: Option<PathBuf>) {
+        let slot = match key {
+            "vae" => &mut self.vae,
+            "llm" => &mut self.llm,
+            "clip_l" => &mut self.clip_l,
+            "t5xxl" => &mut self.t5xxl,
+            _ => return,
+        };
+        *slot = path;
+    }
+
     /// Each present component with the sd.cpp flag that loads it.
     pub fn flags(&self) -> Vec<(&'static str, &Path)> {
         [
@@ -412,7 +441,65 @@ impl Components {
     }
 }
 
+/// One separate file a family runs with: what the Image tab's *Models* fold
+/// offers a select for, and what `discover::image_components` picks when
+/// nobody has.
+///
+/// One table for both, so the file the scan picks by itself and the files the
+/// page offers instead can't disagree about what fits. Whether a slot must be
+/// filled is not in here: it is optional exactly when the model is bundled and
+/// so carries its own copy — see [`Profile::is_bundled`].
+#[derive(Debug)]
+pub struct PartSlot {
+    /// The [`Components`] field, and the key on the wire and in
+    /// `user/model-settings.toml`.
+    pub key: &'static str,
+    pub label: &'static str,
+    /// Whether a discovered file can fill it — the check that keeps a Flux VAE
+    /// off an SDXL, which would decode to noise rather than fail.
+    pub fits: fn(&crate::discover::Role) -> bool,
+    /// Where it conventionally lives under the models dir, named when nothing
+    /// is on disk so the missing path is also the instruction.
+    pub dir: &'static str,
+    pub file: &'static str,
+}
+
 impl Profile {
+    /// Whether `model` carries its own VAE and text encoder, and so runs as
+    /// `-m` — with any [`Components`] then *overriding* its own, which sd.cpp
+    /// allows because a tensor loaded later replaces one of the same name
+    /// (`model_loader.cpp:171`, the external VAE loading after the checkpoint).
+    ///
+    /// Stored since a bundled checkpoint can have a VAE picked for it, so
+    /// "has components" stopped meaning "is assembled". The fallback reads
+    /// every sidecar written before then correctly: no components was a
+    /// bundled checkpoint, and some was a Z-Image.
+    pub fn is_bundled(&self) -> bool {
+        self.bundled.unwrap_or(self.components.is_none())
+    }
+
+    /// Whether a slot may be left empty: on a bundled checkpoint, which then
+    /// uses its own copy, and on any UNet — every one of those is bundled, and
+    /// a bare one was never assembled at all. The one rule both the fold's
+    /// "built in" option and [`Config::apply_parts`] follow.
+    pub fn parts_optional(&self) -> bool {
+        self.is_bundled() || self.family.is_unet()
+    }
+
+    /// Put `path` in slot `key`, or empty it. A bundled model left with
+    /// nothing picked goes back to `None`, what it had before anyone chose.
+    pub fn set_part(&mut self, key: &str, path: Option<PathBuf>) {
+        let bundled = self.is_bundled();
+        self.bundled = Some(bundled);
+        let mut parts = self.components.take().unwrap_or_default();
+        parts.set(key, path);
+        self.components = if bundled && parts == Components::default() {
+            None
+        } else {
+            Some(parts)
+        };
+    }
+
     /// Every file this profile runs with that isn't on disk: the model, and
     /// each component. Empty means runnable.
     ///
@@ -840,6 +927,44 @@ impl ImageFamily {
             &[]
         } else {
             &["--diffusion-fa"]
+        }
+    }
+
+    /// The separate files this family runs with, in the order the page shows
+    /// them. Adding a family's parts is a row here.
+    ///
+    /// The UNet families list their VAE only: every checkpoint of theirs is
+    /// bundled, so the slot is an override, and the VAE is the one part people
+    /// actually swap — SDXL's own overflows in fp16, which is what the
+    /// fp16-fix VAE exists for. Flux (VAE, `clip_l`, `t5xxl`) and Qwen-Image
+    /// get rows when they become runnable.
+    pub fn slots(self) -> &'static [PartSlot] {
+        use crate::discover::{ImageVaeKind, LlmKind, Role};
+        const SD_VAE: PartSlot = PartSlot {
+            key: "vae",
+            label: "VAE",
+            fits: |r| matches!(r, Role::ImageVae(ImageVaeKind::Sd)),
+            dir: "vae",
+            file: "sdxl_vae.safetensors",
+        };
+        const FLUX_VAE: PartSlot = PartSlot {
+            key: "vae",
+            label: "VAE",
+            fits: |r| matches!(r, Role::ImageVae(ImageVaeKind::Flux)),
+            dir: "vae",
+            file: "ae.safetensors",
+        };
+        const QWEN3_4B: PartSlot = PartSlot {
+            key: "llm",
+            label: "Text encoder",
+            fits: |r| matches!(r, Role::Llm(LlmKind::Qwen3 { dim: 2560 })),
+            dir: "text_encoders",
+            file: "qwen_3_4b.safetensors",
+        };
+        match self {
+            ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl => &[SD_VAE],
+            ImageFamily::ZImage => &[FLUX_VAE, QWEN3_4B],
+            ImageFamily::Flux | ImageFamily::QwenImage => &[],
         }
     }
 
@@ -1899,6 +2024,9 @@ impl Config {
     /// the user's per-model overrides laid on last.
     pub fn registry(&self) -> BTreeMap<String, Profile> {
         let tuned = crate::settings::ModelSettings::load_or_default(&self.user_dir());
+        // Scanned again after `entries` did, which costs a directory walk: the
+        // headers are memoized by `discover::identify`.
+        let scan = self.scan_images();
         self.entries()
             .into_iter()
             .map(|e| {
@@ -1912,8 +2040,19 @@ impl Config {
                     discovered: e.discovered,
                     family: e.family,
                     components: e.components,
+                    bundled: Some(e.bundled),
                     ..settings.as_profile(&e.name)
                 };
+                // The parts somebody picked for this model. One that no longer
+                // resolves — deleted, or hand-edited into something that
+                // doesn't fit — is kept as a path when the file is simply gone,
+                // so the model greys out naming it, and dropped otherwise;
+                // `doctor` says which.
+                for (key, name) in tuned.parts.get(&e.name).into_iter().flatten() {
+                    if let Some(path) = self.saved_part(p.family, key, name, &scan) {
+                        p.set_part(key, Some(path));
+                    }
+                }
                 // Read off the disk rather than passed in, because a discovered
                 // file exists by definition and a templated one may name a
                 // checkpoint that was never downloaded — and a DiT may be here
@@ -1922,6 +2061,168 @@ impl Config {
                 // video model.
                 p.exists = p.missing().is_empty();
                 (e.name, p)
+            })
+            .collect()
+    }
+
+    /// A part named relative to the models dir, as the scan found it, if it
+    /// fills `key` on a `family` model — or an error listing what would.
+    ///
+    /// **Membership in the scan is the whitelist**: the name is compared with
+    /// what a directory walk produced, so `..` or an absolute path can't name
+    /// anything that isn't already listed, and the role check is what refuses
+    /// a Flux VAE on an SDXL. Stronger than [`valid_lora_name`], which only
+    /// knows about paths.
+    pub fn resolve_part(
+        &self,
+        family: ImageFamily,
+        key: &str,
+        name: &str,
+        scan: &[crate::discover::Found],
+    ) -> Result<PathBuf> {
+        let Some(slot) = family.slots().iter().find(|s| s.key == key) else {
+            bail!("a {} model has no '{key}' to choose", family.label());
+        };
+        let path = self.models_dir().join(name);
+        match scan.iter().find(|f| f.path == path) {
+            Some(f) if (slot.fits)(&f.role) => Ok(path),
+            Some(f) => bail!(
+                "'{name}' is a {}, not a {} for a {} model",
+                f.role.describe(),
+                slot.label,
+                family.label()
+            ),
+            None => {
+                let fitting: Vec<String> = self.part_options(slot, scan).into_iter().map(|o| o.name).collect();
+                bail!(
+                    "no {} named '{name}' under {} — available: {}",
+                    slot.label,
+                    self.models_dir().display(),
+                    if fitting.is_empty() { "none".to_string() } else { fitting.join(", ") }
+                )
+            }
+        }
+    }
+
+    /// Lay a request's part choices onto a profile. See [`GenRequest::parts`].
+    ///
+    /// [`GenRequest::parts`]: crate::pipeline::GenRequest::parts
+    pub fn apply_parts(&self, p: &mut Profile, parts: &BTreeMap<String, Option<String>>) -> Result<()> {
+        let scan = self.scan_images();
+        for (key, name) in parts {
+            match name {
+                Some(name) => {
+                    let path = self.resolve_part(p.family, key, name, &scan)?;
+                    p.set_part(key, Some(path));
+                }
+                None if p.parts_optional() => p.set_part(key, None),
+                None => {
+                    let label = p.family.slots().iter().find(|s| s.key == key).map_or(key.as_str(), |s| s.label);
+                    bail!("a {} model has no {label} of its own — pick one", p.family.label());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Fold a `POST /model-settings` body's `parts` into one model's saved
+    /// choices: a name picks, `null` forgets.
+    ///
+    /// **A choice equal to what the scan picks anyway is not stored**, the rule
+    /// [`crate::settings::update_model`] has for numbers and for its reason:
+    /// the Image tab's *Save as defaults* sends every slot, and pinning the
+    /// automatic pick would stop the model following a better file dropped in
+    /// later. On a bundled checkpoint that pick is "its own", so any VAE named
+    /// is a real choice.
+    pub fn update_parts(
+        &self,
+        model: &str,
+        saved: &BTreeMap<String, String>,
+        values: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<BTreeMap<String, String>> {
+        let e = self
+            .entries()
+            .into_iter()
+            .find(|e| e.name == model)
+            .with_context(|| format!("no model named '{model}'"))?;
+        let scan = self.scan_images();
+        let mut out = saved.clone();
+        for (key, v) in values {
+            match v {
+                serde_json::Value::Null => {
+                    out.remove(key);
+                }
+                serde_json::Value::String(name) => {
+                    let path = self.resolve_part(e.family, key, name, &scan)?;
+                    let auto = e.components.as_ref().and_then(|c| c.get(key));
+                    if auto == Some(&path) {
+                        out.remove(key);
+                    } else {
+                        out.insert(key.clone(), name.clone());
+                    }
+                }
+                other => bail!("'{key}' should name a file, not {other}"),
+            }
+        }
+        Ok(out)
+    }
+
+    /// A part from `user/model-settings.toml`: resolved like a request's, or
+    /// the bare path when the file is missing, so the model lists what it is
+    /// waiting for. `None` for a name that exists and doesn't fit.
+    fn saved_part(
+        &self,
+        family: ImageFamily,
+        key: &str,
+        name: &str,
+        scan: &[crate::discover::Found],
+    ) -> Option<PathBuf> {
+        if let Ok(path) = self.resolve_part(family, key, name, scan) {
+            return Some(path);
+        }
+        let path = self.models_dir().join(name);
+        let known = family.slots().iter().any(|s| s.key == key);
+        (known && valid_lora_name(name) && !path.exists()).then_some(path)
+    }
+
+    /// What the page names a part by: its path under the models dir, or the
+    /// whole path for one outside it (a template may point anywhere).
+    pub fn part_name(&self, path: &Path) -> String {
+        path.strip_prefix(self.models_dir())
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Every file on disk that fits `slot`, for its select.
+    pub fn part_options(&self, slot: &PartSlot, scan: &[crate::discover::Found]) -> Vec<PartOption> {
+        let mut out: Vec<PartOption> = scan
+            .iter()
+            .filter(|f| (slot.fits)(&f.role))
+            .map(|f| PartOption { name: self.part_name(&f.path), path: f.path.clone() })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
+    }
+
+    /// A profile's slots as `/models` publishes them: what each holds now,
+    /// what the scan would hold with nothing picked, and what else fits.
+    pub fn part_views(&self, p: &Profile, scan: &[crate::discover::Found]) -> Vec<PartView> {
+        let auto = crate::discover::image_components(p.family, p.is_bundled(), scan, &self.models_dir());
+        p.family
+            .slots()
+            .iter()
+            .map(|slot| {
+                let name = |c: Option<&Components>| c.and_then(|c| c.get(slot.key)).map(|x| self.part_name(x));
+                PartView {
+                    slot: slot.key,
+                    label: slot.label,
+                    optional: p.parts_optional(),
+                    current: name(p.components.as_ref()),
+                    current_path: p.components.as_ref().and_then(|c| c.get(slot.key)).cloned(),
+                    auto: name(auto.as_ref()),
+                    options: self.part_options(slot, scan),
+                }
             })
             .collect()
     }
@@ -2031,6 +2332,7 @@ impl Config {
             model,
             discovered,
             family,
+            bundled,
             components,
         }
     }
@@ -2045,8 +2347,34 @@ pub struct ModelEntry {
     pub model: PathBuf,
     pub discovered: bool,
     pub family: ImageFamily,
+    pub bundled: bool,
     pub components: Option<Components>,
     pub base: Settings,
+}
+
+/// A file that can fill a slot: `name` is what a request and
+/// `user/model-settings.toml` carry, `path` is what a work item's sidecar
+/// records, so a reopened image can find its option again.
+#[derive(Debug, Clone, Serialize)]
+pub struct PartOption {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+/// One slot of one model, for the *Models* fold. `optional` is whether it may
+/// be left empty — true for a bundled checkpoint, whose own copy is then used,
+/// and for every UNet family.
+/// `auto` is what the scan would pick with nothing chosen (`None` on a bundled
+/// model: its own), so the page can say what "no choice" means.
+#[derive(Debug, Clone, Serialize)]
+pub struct PartView {
+    pub slot: &'static str,
+    pub label: &'static str,
+    pub optional: bool,
+    pub current: Option<String>,
+    pub current_path: Option<PathBuf>,
+    pub auto: Option<String>,
+    pub options: Vec<PartOption>,
 }
 
 /// Return `base`, or `base-2`, `base-3`, … if already present.

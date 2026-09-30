@@ -108,12 +108,21 @@ a bundled checkpoint carries its VAE and text encoder and runs as `-m`; a bare D
 runs as `--diffusion-model` plus one flag per part, and `discover::image_components`
 picks those parts from the same scan — or, when one is missing, names the
 conventional path inside its role folder, so the model is listed greyed out and the
-missing path is the instruction. `Profile.components` is `None` for bundled, which is
-also what every old sidecar reads as. **The flag decides the tensor prefix sd.cpp
+missing path is the instruction. **The flag decides the tensor prefix sd.cpp
 loads under**, so a DiT through `-m` doesn't fail to start, it fails to find its own
-weights — which is why `base_cmd` never guesses.
+weights — which is why `base_cmd` never guesses: it asks `Profile::is_bundled`.
 
-Seven things break silently:
+**The parts are one table, `ImageFamily::slots()`** — key, label, a `fits` test on
+the role, and the conventional path. `image_components` fills the slots from it,
+`/models` serves each slot's fitting files from it (`Config::part_views`), and
+`Config::resolve_part` checks a picked name against it. So the file the scan picks
+and the files the *Models* fold offers cannot disagree about what fits, and adding a
+family's parts is rows there. A picked part arrives on `GenRequest::parts` or from
+`[parts."<name>"]` in `user/model-settings.toml`, both through `resolve_part`, whose
+whitelist is **membership in the scan**: a name is compared with what a directory
+walk produced, so `..` can't name anything that isn't already listed.
+
+Eight things break silently:
 
 - **Image models are tested before either VAE branch in `classify`.** A bundled SDXL
   carries its VAE, whose resnets are `decoder.…conv2`, which is the Wan VAE's
@@ -134,17 +143,36 @@ Seven things break silently:
   captured at startup. It used to capture one, so a file added while the server ran
   showed in the select and failed as "unknown model", and a saved per-model default
   never reached a run.
+- **`bundled` is its own field now, not `components.is_none()`.** A bundled SDXL can
+  have a VAE picked, and sd.cpp takes `-m` plus `--vae` as an override — it loads the
+  VAE after the checkpoint and a later tensor replaces one of the same name
+  (`model_loader.cpp:171`). Deriving the flag from "has components" would run that
+  checkpoint as `--diffusion-model` and find none of its weights.
+  `Profile.bundled` is an `Option` read through `is_bundled()`, whose fallback *is*
+  the old rule, which is exactly right for every sidecar written before it.
+  `a_checkpoint_keeps_its_m_when_it_is_handed_a_vae` pins it. (With an external VAE
+  sd.cpp also skips the 1/32 conv scale it applies to SDXL's own VAE for fp16 —
+  which is why the fp16-fix VAE is the one to pick, not the original.)
 - **`ImageFamily::runnable` is the gate, and it needs both halves.** A family turns
   on once it has components *and* a `recipe()`; `a_runnable_dit_has_a_recipe_and_its_parts`
   refuses one without either. Without the recipe a DiT would run at the SDXL-tuned
   steps and CFG, which is a picture, just a bad one.
 
 **Adding a family** is: a classifier arm (from `get_sd_version`'s marker), a variant
-with `label`/`as_str`, its parts in `image_components`, a `recipe()`, its `flags()`,
-and `runnable()` turned on. `README.md` gets its download list. The escalation ladder
+with `label`/`as_str`, its rows in `slots()` (plus a `Components` field and flag if
+it needs one that isn't there — Flux's `clip_l` and `t5xxl` already are), a
+`recipe()`, its `flags()`, and `runnable()` turned on. Its LoRAs are already
+identified (*## LoRAs*). `README.md` gets its download list. The escalation ladder
 needs nothing — every rung is pixels in, pixels out, so refining a Z-Image on an SDXL
 is ordinary, and `swap_model` already carries family and components with the rest of
 the profile.
+
+On the page the fold is `syncParts` in `image.js`, redrawn from `currentModel().parts`
+by `syncAdvanced`. `genPayload` sends **every** slot, an emptied one as `null` — the
+fold is the complete answer, the argument `loras` makes. `applyWorkItem` sets the
+model without firing `change`, so it calls `syncParts` itself and then `setParts`
+with the sidecar's `components`, matched on each option's absolute `data-path`: the
+sidecar records paths, the wire carries names.
 
 ## Start from
 
@@ -726,6 +754,11 @@ adds the fourth):
    tables of `PartialSettings`, written by the Image tab's *Save as defaults for this
    model* and the Settings tab's *Per model* card (`web/js/modelsettings.js`). Named
    so, not `user/models.toml`, so it doesn't share a name with the root config.
+   Beside them, `[parts."<name>"]` holds the files picked for a model (slot → name
+   under the models dir) — a sibling table rather than a key inside the entry, so an
+   entry stays a plain `PartialSettings` and `update_model` never meets a key it must
+   refuse. `Config::update_parts` is its `update_model`, with the same rule: a pick
+   equal to what the scan chooses anyway is not stored.
 
 Four things break silently:
 

@@ -1307,35 +1307,23 @@ pub fn image_components(
     found: &[Found],
     models_dir: &Path,
 ) -> Option<Components> {
-    if bundled {
+    // A bundled checkpoint has its own, and a slot on it is an override that
+    // somebody picks — never one the scan helps itself to. A bare UNet was
+    // never assembled (it would need CLIP-L and CLIP-G slots too) and still
+    // isn't.
+    if bundled || family.is_unet() || family.slots().is_empty() {
         return None;
     }
-    let pick = |want: &dyn Fn(&Role) -> bool, sub: &str, file: &str| {
-        Some(
-            found
-                .iter()
-                .find(|f| want(&f.role))
-                .map(|f| f.path.clone())
-                .unwrap_or_else(|| models_dir.join(sub).join(file)),
-        )
-    };
-    match family {
-        ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl => None,
-        ImageFamily::ZImage => Some(Components {
-            vae: pick(
-                &|r| matches!(r, Role::ImageVae(ImageVaeKind::Flux)),
-                "vae",
-                "ae.safetensors",
-            ),
-            llm: pick(
-                &|r| matches!(r, Role::Llm(LlmKind::Qwen3 { dim: 2560 })),
-                "text_encoders",
-                "qwen_3_4b.safetensors",
-            ),
-            ..Components::default()
-        }),
-        ImageFamily::Flux | ImageFamily::QwenImage => None,
+    let mut parts = Components::default();
+    for slot in family.slots() {
+        let path = found
+            .iter()
+            .find(|f| (slot.fits)(&f.role))
+            .map(|f| f.path.clone())
+            .unwrap_or_else(|| models_dir.join(slot.dir).join(slot.file));
+        parts.set(slot.key, Some(path));
     }
+    Some(parts)
 }
 
 /// Drop the expert marker from a pair's name.
