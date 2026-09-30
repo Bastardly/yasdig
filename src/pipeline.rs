@@ -586,13 +586,7 @@ impl Engine {
         let Some(next) = self.registry.get(name) else {
             bail!("unknown model '{name}'");
         };
-        if !next.exists {
-            bail!(
-                "checkpoint for '{}' not found: {}",
-                next.name,
-                next.model.display()
-            );
-        }
+        next.require_files()?;
         eprintln!(
             "[rustimage] escalating with '{}' instead of '{}'",
             next.name, p.profile.name
@@ -704,13 +698,7 @@ impl Engine {
         let upscaler = self.cfg.check_upscaler(&profile.upscaler)?;
         let tpl = &profile;
 
-        if !profile.exists {
-            bail!(
-                "checkpoint for '{}' not found: {}",
-                profile.name,
-                profile.model.display()
-            );
-        }
+        profile.require_files()?;
         if req.prompt.trim().is_empty() {
             bail!("prompt is empty");
         }
@@ -917,13 +905,7 @@ impl Engine {
         profile.validate()?;
         self.cfg.check_loras(&profile.loras)?;
 
-        if !profile.exists {
-            bail!(
-                "checkpoint for '{}' not found: {}",
-                profile.name,
-                profile.model.display()
-            );
-        }
+        profile.require_files()?;
         if req.prompt.trim().is_empty() {
             bail!("prompt is empty");
         }

@@ -157,7 +157,8 @@ impl<'a> SdRunner<'a> {
         );
         if big_image {
             cmd.arg("--vae-tiling");
-            if p.hires_flash_attn {
+            // Not twice: a DiT family already runs with it at every size.
+            if p.hires_flash_attn && !p.family.flags().contains(&"--diffusion-fa") {
                 cmd.arg("--diffusion-fa");
             }
         }
@@ -420,7 +421,22 @@ impl<'a> SdRunner<'a> {
     ) -> Command {
         let mut cmd = Command::new(self.binary());
         cmd.args(["-M", &self.cfg.sd.mode]);
-        cmd.args(["-m", &path_str(&p.model)]);
+        // A bundled checkpoint is one `-m`. A bare DiT is `--diffusion-model`
+        // plus a flag per separate file — the flag also decides the prefix
+        // sd.cpp loads its tensors under, so a DiT through `-m` doesn't fail to
+        // start, it fails to find its own weights.
+        match &p.components {
+            None => {
+                cmd.args(["-m", &path_str(&p.model)]);
+            }
+            Some(parts) => {
+                cmd.args(["--diffusion-model", &path_str(&p.model)]);
+                for (flag, path) in parts.flags() {
+                    cmd.args([flag, &path_str(path)]);
+                }
+            }
+        }
+        cmd.args(p.family.flags());
         // LoRAs ride inline in the prompt, which is sd.cpp's own spelling for
         // them — the same shape `video_cmd` uses below. The tags are pulled back
         // out before the text is conditioned (`extract_and_remove_lora`,
@@ -1029,6 +1045,42 @@ binary = "/opt/sd-cli"
             flag(&a, "-p"),
             Some("a lovely cat<lora:detail.safetensors:0.8><lora:sdxl/style.safetensors:-0.5>")
         );
+    }
+
+    /// A bundled checkpoint is one `-m`; a DiT is `--diffusion-model` plus a
+    /// flag per part and its family's own flags. And `-m` must not appear for
+    /// a DiT: sd.cpp would load its tensors under the wrong prefix.
+    #[test]
+    fn a_dit_is_handed_its_parts_and_a_checkpoint_is_not() {
+        let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
+        let cmd = |p: &Profile| {
+            argv(&SdRunner::new(&cfg).base_cmd(p, "a cat", None, 1, Path::new("out.png"), 1.0))
+        };
+
+        let sdxl = Profile {
+            model: PathBuf::from("/models/sdxl.safetensors"),
+            ..Default::default()
+        };
+        let a = cmd(&sdxl);
+        assert_eq!(flag(&a, "-m"), Some("/models/sdxl.safetensors"));
+        assert!(!a.iter().any(|x| x == "--diffusion-model" || x == "--diffusion-fa"));
+
+        let z = Profile {
+            model: PathBuf::from("/models/zimage.safetensors"),
+            family: crate::config::ImageFamily::ZImage,
+            components: Some(crate::config::Components {
+                vae: Some(PathBuf::from("/models/vae/ae.safetensors")),
+                llm: Some(PathBuf::from("/models/text_encoders/qwen3.safetensors")),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let a = cmd(&z);
+        assert_eq!(flag(&a, "--diffusion-model"), Some("/models/zimage.safetensors"));
+        assert_eq!(flag(&a, "--vae"), Some("/models/vae/ae.safetensors"));
+        assert_eq!(flag(&a, "--llm"), Some("/models/text_encoders/qwen3.safetensors"));
+        assert!(!a.iter().any(|x| x == "-m" || x == "--t5xxl" || x == "--clip_l"));
+        assert_eq!(a.iter().filter(|x| *x == "--diffusion-fa").count(), 1);
     }
 
     /// LoRAs are inline in the prompt, which is sd.cpp's spelling — and the

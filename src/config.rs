@@ -342,6 +342,18 @@ pub struct Profile {
     /// retains and what a sidecar stores, and an image whose record doesn't
     /// name its LoRAs isn't reproducible.
     pub loras: Vec<LoraRef>,
+    /// Which architecture `model` is. A sidecar written before families existed
+    /// reads as SDXL, which is what every one of them ran.
+    pub family: ImageFamily,
+    /// The separate files a bare diffusion model runs with, or `None` for a
+    /// bundled checkpoint that carries its own — the difference between
+    /// sd.cpp's `-m` and `--diffusion-model` plus a flag per component. `None`
+    /// is also what an old sidecar reads as, and it was right: those were all
+    /// single-file checkpoints.
+    ///
+    /// Identity, like `model`: filled by [`Config::registry`] from the scan,
+    /// never by a request, and carried whole through `swap_model`.
+    pub components: Option<Components>,
     /// True if this came from a folder scan rather than an explicit template.
     pub discovered: bool,
     /// True if the checkpoint file actually exists on disk.
@@ -363,7 +375,71 @@ impl Default for Profile {
     }
 }
 
+/// The files a bare diffusion model is handed beside itself, one per sd.cpp
+/// flag. Only what the runnable families use: Z-Image takes `vae` and `llm`,
+/// and Flux will take `clip_l` and `t5xxl`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Components {
+    pub vae: Option<PathBuf>,
+    pub llm: Option<PathBuf>,
+    pub clip_l: Option<PathBuf>,
+    pub t5xxl: Option<PathBuf>,
+}
+
+impl Components {
+    /// Each present component with the sd.cpp flag that loads it.
+    pub fn flags(&self) -> Vec<(&'static str, &Path)> {
+        [
+            ("--vae", &self.vae),
+            ("--llm", &self.llm),
+            ("--clip_l", &self.clip_l),
+            ("--t5xxl", &self.t5xxl),
+        ]
+        .into_iter()
+        .filter_map(|(flag, p)| p.as_deref().map(|p| (flag, p)))
+        .collect()
+    }
+}
+
 impl Profile {
+    /// Every file this profile runs with that isn't on disk: the model, and
+    /// each component. Empty means runnable.
+    ///
+    /// A component that was never found is named at its conventional path (see
+    /// `discover::image_components`), so this list is also where to put it.
+    pub fn missing(&self) -> Vec<PathBuf> {
+        let mut files = vec![self.model.as_path()];
+        if let Some(c) = &self.components {
+            files.extend(c.flags().into_iter().map(|(_, p)| p));
+        }
+        files
+            .into_iter()
+            .filter(|p| !p.is_file())
+            .map(Path::to_path_buf)
+            .collect()
+    }
+
+    /// Fail, naming every missing file, before a pass that would need them.
+    ///
+    /// One sentence for all the callers that used to say "checkpoint not found"
+    /// with only the model's path — which was the whole story for a single-file
+    /// checkpoint and is half of it for a Z-Image whose text encoder isn't
+    /// downloaded yet.
+    pub fn require_files(&self) -> Result<()> {
+        let missing = self.missing();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let list: Vec<String> = missing.iter().map(|p| format!("  {}", p.display())).collect();
+        bail!(
+            "'{}' can't run — {} not on disk:\n{}",
+            self.name,
+            if missing.len() == 1 { "this file is" } else { "these files are" },
+            list.join("\n")
+        )
+    }
+
     /// The CFG an img2img pass runs at when nothing more specific is set: the
     /// Image-to-image tab's own pass, and the floor of the two chains below.
     ///
@@ -686,15 +762,75 @@ impl ImageFamily {
 
     /// Can the Image tab run this family yet?
     ///
-    /// Only the UNet families, today, and for a reason that is about the
-    /// *defaults*, not the binary: sd.cpp runs a Z-Image as readily as an
-    /// SDXL, but it needs its text encoder and VAE handed to it as separate
-    /// files, and `user/settings.toml`'s 30 steps at CFG 6 is a wrong answer for
-    /// every DiT here. A family turns true once it has both — its components
-    /// and a recipe. Until then it is identified, named by `doctor`, and kept
-    /// out of the select rather than offered and then failing minutes in.
+    /// A family turns true once it has both halves of what a DiT needs: its
+    /// components (`discover::image_components` knows which VAE and encoder to
+    /// hand it) and a [`ImageFamily::recipe`], because `user/settings.toml`'s
+    /// SDXL-tuned steps and CFG are a wrong answer for every DiT here. Until
+    /// then it is identified, named by `doctor`, and kept out of the select
+    /// rather than offered and then failing minutes in.
     pub fn runnable(self) -> bool {
+        match self {
+            ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl | ImageFamily::ZImage => true,
+            ImageFamily::Flux | ImageFamily::QwenImage => false,
+        }
+    }
+
+    /// The UNet families — the ones every setting in `user/settings.toml` was
+    /// tuned for, and so the ones that take it with no recipe laid over it.
+    pub fn is_unet(self) -> bool {
         matches!(self, ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl)
+    }
+
+    /// What a model of this family arrives set to, laid **over** the user's
+    /// settings and under a `[templates.*]` entry.
+    ///
+    /// Empty for the UNet families: the user's settings *are* their recipe —
+    /// that is what those numbers were tuned against, and an install that
+    /// upgrades into this keeps generating exactly what it did.
+    ///
+    /// A DiT's recipe names only the knobs that are about the architecture:
+    /// size, steps, CFG and sampler. The workflow knobs — strengths, the
+    /// escalation step floors, the upscaler, the hi-res budget — stay the
+    /// user's. The escalation CFGs are deliberately *not* pinned: unset, they
+    /// fall through to this `cfg_scale`, so a turbo model's refine runs at the
+    /// CFG 1 it needs, and raising CFG for a base model carries them along.
+    ///
+    /// Z-Image's is the **turbo**'s, from sd.cpp's `docs/z_image.md` — the
+    /// release people actually run. A header can't tell turbo from base (same
+    /// tensors, different training), so the base model wants a template: about
+    /// 28 steps at CFG 4-5.
+    pub fn recipe(self) -> PartialSettings {
+        match self {
+            ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl => PartialSettings::default(),
+            ImageFamily::ZImage => PartialSettings {
+                width: Some(1024),
+                height: Some(1024),
+                steps: Some(8),
+                cfg_scale: Some(1.0),
+                sampler: Some("euler".into()),
+                ..PartialSettings::default()
+            },
+            // Not runnable yet, so nothing reads these; a recipe arrives with
+            // the family.
+            ImageFamily::Flux | ImageFamily::QwenImage => PartialSettings::default(),
+        }
+    }
+
+    /// Flags this family always runs with, whatever the settings say.
+    ///
+    /// Flash attention on every DiT: `hires_flash_attn` only turns it on for
+    /// large passes because that is where it paid off on SDXL (122 s → 20 s at
+    /// 2048²), but a DiT attends over every token of the image in every block,
+    /// so it is the difference at 1024² too — and every example in sd.cpp's
+    /// DiT docs passes it. No `--offload-to-cpu`: a Z-Image turbo is 12.3 GB of
+    /// DiT and 8 GB of Qwen3, which fits a 24 GB card, while offloading would
+    /// hold all 20 GB in system RAM, the thing this box runs out of first.
+    pub fn flags(self) -> &'static [&'static str] {
+        if self.is_unet() {
+            &[]
+        } else {
+            &["--diffusion-fa"]
+        }
     }
 
     /// Human-readable name, for `doctor` and the page's model groups.
@@ -1405,7 +1541,7 @@ impl Config {
     }
 
     /// Every model file under the models dir that belongs to the image side,
-    /// identified by its header — for [`Config::discover_files`] and `doctor`.
+    /// identified by its header — for [`Config::registry`] and `doctor`.
     ///
     /// Recursive, so `checkpoints/`, `diffusion_models/sdxl/` or a flat folder
     /// all work and the layout is the person's to choose. The three directories
@@ -1418,23 +1554,6 @@ impl Config {
             &self.models_dir(),
             &[self.video_dir(), self.lora_dir(), self.upscaler_dir()],
         )
-    }
-
-    /// The checkpoints the Image tab can run, sorted by path.
-    ///
-    /// **By what the file is, not by its extension.** This used to be every
-    /// `.safetensors`/`.ckpt`/`.gguf` in the models root, which listed an LTX-2
-    /// video transformer as an SDXL checkpoint and let it fail at load. A file
-    /// that isn't a runnable image family is left out here and named by
-    /// `doctor` instead — see [`ImageFamily::runnable`].
-    pub fn discover_files(&self) -> Vec<PathBuf> {
-        self.scan_images()
-            .into_iter()
-            .filter(|f| {
-                matches!(f.role, crate::discover::Role::Image { family, .. } if family.runnable())
-            })
-            .map(|f| f.path)
-            .collect()
     }
 
     /// Directory holding video model components.
@@ -1743,6 +1862,9 @@ impl Config {
     /// discovered checkpoint not already referenced by a template.
     pub fn registry(&self) -> BTreeMap<String, Profile> {
         let settings = self.settings();
+        // One scan serves both arms: a template's file is identified from it
+        // too, and so are the VAE and encoder a bare DiT is assembled with.
+        let scan = self.scan_images();
         let mut reg: BTreeMap<String, Profile> = BTreeMap::new();
 
         for (name, t) in &self.templates {
@@ -1751,6 +1873,7 @@ impl Config {
                 name.clone(),
                 self.profile(
                     &settings,
+                    &scan,
                     &t.over,
                     name.clone(),
                     t.description
@@ -1771,11 +1894,21 @@ impl Config {
         // the file is — which is why there is one `profile()` below and not an
         // arm each. Two arms is how the `[defaults]`/`[templates]` pair used to
         // drift.
+        //
+        // **Listed by what the file is, not by its extension.** This used to be
+        // every `.safetensors`/`.ckpt`/`.gguf` in the models root, which offered
+        // an LTX-2 video transformer as an SDXL checkpoint that then failed at
+        // load. A file that isn't a runnable image family is left out and named
+        // by `doctor` instead — see [`ImageFamily::runnable`].
         let empty = PartialSettings::default();
-        for file in self.discover_files() {
-            if covered.contains(&file) {
+        for f in &scan {
+            let crate::discover::Role::Image { family, .. } = f.role else {
+                continue;
+            };
+            if !family.runnable() || covered.contains(&f.path) {
                 continue;
             }
+            let file = f.path.clone();
             let stem = file
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -1788,38 +1921,67 @@ impl Config {
             );
             reg.insert(
                 name.clone(),
-                self.profile(&settings, &empty, name, description, file, true),
+                self.profile(&settings, &scan, &empty, name, description, file, true),
             );
         }
 
         reg
     }
 
-    /// One resolved model: the settings, the template's overlay, and the three
-    /// things that are the model's own identity.
+    /// One resolved model: the settings, its family's recipe, the template's
+    /// overlay, and the things that are the model's own identity.
+    ///
+    /// The layers, each one [`Settings::merged_with`]: the user's settings,
+    /// then [`ImageFamily::recipe`] (empty for the UNet families, whose recipe
+    /// the settings already are), then the template. A recipe sits *over* the
+    /// settings because what it names — size, steps, CFG, sampler — is about
+    /// the architecture, and an SDXL-tuned 25 steps at CFG 6 is a wrong answer
+    /// for a turbo DiT; a template sits over both because it is somebody's
+    /// decision about one file.
     ///
     /// `exists` is read off the disk here rather than passed in, because a
     /// discovered file exists by definition and a templated one may name a
-    /// checkpoint that was never downloaded — which the UI greys out rather
-    /// than hiding, the same rule `doctor` follows for a half-downloaded video
-    /// model.
+    /// checkpoint that was never downloaded — and a DiT may be here without its
+    /// text encoder. Both are greyed out in the UI rather than hidden, the same
+    /// rule `doctor` follows for a half-downloaded video model.
+    #[allow(clippy::too_many_arguments)]
     fn profile(
         &self,
         settings: &Settings,
+        scan: &[crate::discover::Found],
         over: &PartialSettings,
         name: String,
         description: String,
         model: PathBuf,
         discovered: bool,
     ) -> Profile {
-        let exists = model.exists();
-        Profile {
+        // What the file is: from the scan when it is under the models dir, read
+        // directly when a template names one elsewhere, and SDXL-and-bundled —
+        // what every model was before families — when it isn't on disk at all.
+        let role = match scan.iter().find(|f| f.path == model) {
+            Some(f) => f.role.clone(),
+            None if model.is_file() => crate::discover::identify(&model),
+            None => crate::discover::Role::Unknown(String::new()),
+        };
+        let (family, bundled) = match role {
+            crate::discover::Role::Image { family, bundled } => (family, bundled),
+            _ => (ImageFamily::default(), true),
+        };
+        let components =
+            crate::discover::image_components(family, bundled, scan, &self.models_dir());
+        let mut p = Profile {
             description,
             model,
             discovered,
-            exists,
-            ..settings.merged_with(over).as_profile(&name)
-        }
+            family,
+            components,
+            ..settings
+                .merged_with(&family.recipe())
+                .merged_with(over)
+                .as_profile(&name)
+        };
+        p.exists = p.missing().is_empty();
+        p
     }
 }
 
@@ -1990,6 +2152,72 @@ t5xxl = "v/umt5.gguf"
         assert_eq!(names, ["nested", "xl"]);
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A bare Z-Image in the tree is assembled from the VAE and encoder beside
+    /// it, arrives on its recipe rather than on the SDXL-tuned settings, and a
+    /// template still has the last word. Without its encoder it is listed and
+    /// not runnable, naming the file it is waiting for.
+    #[test]
+    fn a_z_image_is_assembled_and_arrives_on_its_recipe() {
+        let root =
+            std::env::temp_dir().join(format!("rustimage-cfg-zimage-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let models = root.join("models");
+        fake_model(
+            &models.join("zimage.safetensors"),
+            &[("cap_embedder.0.weight", "[3840,2560]")],
+        );
+        fake_model(
+            &models.join("vae").join("ae.safetensors"),
+            &[
+                ("decoder.conv_in.weight", "[512,16,3,3]"),
+                ("decoder.mid.block_1.conv2.bias", "[512]"),
+                ("encoder.conv_out.bias", "[32]"),
+            ],
+        );
+        let toml = "[sd]\nbinary = \"sd-cli\"\n";
+        std::fs::write(root.join("models.toml"), toml).unwrap();
+
+        let cfg = Config::load(&root.join("models.toml")).unwrap();
+        let p = cfg.registry().remove("zimage").unwrap();
+        assert_eq!(p.family, ImageFamily::ZImage);
+        assert_eq!((p.width, p.steps, p.cfg_scale), (1024, 8, 1.0));
+        assert!(!p.exists, "no encoder yet");
+        assert_eq!(p.missing(), [models.join("text_encoders").join("qwen_3_4b.safetensors")]);
+
+        fake_model(
+            &models.join("te").join("qwen3.safetensors"),
+            &[
+                ("model.embed_tokens.weight", "[151936,2560]"),
+                ("model.layers.0.self_attn.q_norm.weight", "[128]"),
+                ("model.norm.weight", "[2560]"),
+            ],
+        );
+        let with_template = format!(
+            "{toml}\n[templates.zbase]\nmodel = \"{}\"\nsteps = 28\n",
+            models.join("zimage.safetensors").display()
+        );
+        std::fs::write(root.join("models.toml"), with_template).unwrap();
+        let cfg = Config::load(&root.join("models.toml")).unwrap();
+        let reg = cfg.registry();
+        assert!(!reg.contains_key("zimage"), "the template covers the file");
+        let p = &reg["zbase"];
+        assert!(p.exists, "missing: {:?}", p.missing());
+        assert_eq!((p.width, p.steps), (1024, 28), "recipe under, template over");
+        let parts = p.components.as_ref().unwrap();
+        assert_eq!(parts.llm, Some(models.join("te").join("qwen3.safetensors")));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A sidecar from before families: no `family`, no `components`. It must
+    /// read as what it was — an SDXL run through `-m`.
+    #[test]
+    fn an_old_sidecar_profile_is_a_bundled_sdxl() {
+        let p: Profile = serde_json::from_str(r#"{"name":"old","model":"/m/x.safetensors"}"#).unwrap();
+        assert_eq!(p.family, ImageFamily::Sdxl);
+        assert_eq!(p.components, None);
     }
 
     #[test]

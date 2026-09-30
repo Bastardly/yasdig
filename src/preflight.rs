@@ -213,15 +213,31 @@ pub fn check(cfg: &Config) -> Report {
                 p.steps,
                 p.cfg_scale,
             ));
+            // Which VAE and encoder a DiT was assembled with. Picked, not
+            // named in config, so this is the only place the choice is shown.
+            if let Some(parts) = &p.components {
+                for (flag, path) in parts.flags() {
+                    info.push(format!(
+                        "      {flag:<7} {}",
+                        path.strip_prefix(&models_dir).unwrap_or(path).display()
+                    ));
+                }
+            }
         }
     }
 
     // Templates that point at a file that isn't there are worth flagging.
+    // Either a template naming a file that was never downloaded, or a DiT
+    // whose VAE or text encoder isn't here yet. Every missing file is printed,
+    // at the path it is expected at, so the warning is the download list.
     for p in &missing {
+        let files: Vec<String> = p.missing().iter().map(|f| format!("  {}", f.display())).collect();
         warnings.push(format!(
-            "template '{}' references a checkpoint that doesn't exist:\n  {}",
+            "{} '{}' ({}) is listed but can't run until these exist:\n{}",
+            if p.discovered { "model" } else { "template" },
             p.name,
-            p.model.display()
+            p.family.label(),
+            files.join("\n")
         ));
     }
 
@@ -262,7 +278,7 @@ pub fn check(cfg: &Config) -> Report {
     }
     if !parked.is_empty() {
         info.push(format!(
-            "{} other image-side file(s) — recognised, not runnable on their own yet:",
+            "{} other image-side file(s) — components, or families this build doesn't run yet:",
             parked.len()
         ));
         info.extend(parked);

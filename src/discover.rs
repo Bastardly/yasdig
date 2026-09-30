@@ -45,7 +45,7 @@ use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::config::{ImageFamily, VideoFamily, VideoModel};
+use crate::config::{Components, ImageFamily, VideoFamily, VideoModel};
 
 /// One tensor's name, shape and stored type.
 ///
@@ -188,6 +188,9 @@ pub enum Role {
     /// A VAE in the Stable Diffusion (LDM) layout — `decoder.conv_in`,
     /// `decoder.mid` — told apart by latent width.
     ImageVae(ImageVaeKind),
+    /// A plain causal language model used as a text encoder (`--llm`), with no
+    /// vision tower — that one is [`Role::QwenVl`].
+    Llm(LlmKind),
     /// An architecture sd.cpp knows and this build does not run yet, named.
     ///
     /// Distinct from [`Role::Unknown`] because the two call for different
@@ -209,6 +212,15 @@ pub enum ImageVaeKind {
     Sd,
     /// 16 latent channels: Flux's `ae`, which Z-Image and Chroma share.
     Flux,
+}
+
+/// The language models the image families use as text encoders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmKind {
+    /// Qwen3, at the hidden width read from its final norm. Z-Image wants the
+    /// 4B, which is 2560 wide; Flux 2 Klein takes the same file, which is why
+    /// the width is carried rather than the family decided here.
+    Qwen3 { dim: u64 },
 }
 
 /// The transformer architectures worth telling apart.
@@ -265,6 +277,10 @@ impl Role {
             Role::ImageVae(ImageVaeKind::Flux) => {
                 "Flux ae VAE (16 channels) — Flux, Z-Image, Chroma".into()
             }
+            Role::Llm(LlmKind::Qwen3 { dim: 2560 }) => {
+                "Qwen3-4B text encoder — Z-Image".into()
+            }
+            Role::Llm(LlmKind::Qwen3 { dim }) => format!("Qwen3 text encoder ({dim} wide)"),
             Role::Unsupported(what) => format!("{what}, which this build doesn't run yet"),
             Role::Unknown(why) => why.clone(),
         }
@@ -631,6 +647,27 @@ pub fn classify(t: &Tensors) -> Role {
     if t.has("model.embed_tokens.weight") && t.has("visual.") {
         return Role::QwenVl;
     }
+    // A Qwen3 LM with no vision tower — Z-Image's text encoder. `q_norm` on the
+    // attention is what separates Qwen3 from Qwen2.5, which has none. Spelled
+    // both ways: Hugging Face's names in a safetensors, llama.cpp's in the GGUF
+    // quantizations sd.cpp's own docs point at.
+    if (t.has("embed_tokens.weight") && t.has("self_attn.q_norm.weight"))
+        || (t.has("token_embd.weight") && t.has("attn_q_norm.weight"))
+    {
+        // The final norm is one-dimensional and as wide as the model.
+        let dim = t
+            .tensors
+            .iter()
+            .find(|x| matches!(x.name.as_str(), "model.norm.weight" | "norm.weight" | "output_norm.weight"))
+            .and_then(|x| match x.shape.as_slice() {
+                [n] => Some(*n),
+                _ => None,
+            });
+        return match dim {
+            Some(dim) => Role::Llm(LlmKind::Qwen3 { dim }),
+            None => Role::Unknown("a Qwen3 language model whose width could not be read".into()),
+        };
+    }
     if t.has("vision_model.encoder.layers") {
         return Role::ClipVision;
     }
@@ -812,7 +849,7 @@ fn walk(dir: &Path, depth: usize, skip: &[PathBuf], out: &mut Vec<Found>) {
 /// path alone, so a download that finishes — same path, new length — is read
 /// again: the scan's promise that a new file shows up without a restart is
 /// what the memo must not break.
-fn identify(path: &Path) -> Role {
+pub fn identify(path: &Path) -> Role {
     use std::collections::HashMap;
     use std::sync::{LazyLock, Mutex};
     use std::time::SystemTime;
@@ -1110,6 +1147,55 @@ fn model_for(
     }
     m.description = Some(describe(kind, &f.path));
     Some(m)
+}
+
+/// The separate files an image family runs with, picked from a scan.
+///
+/// `None` for a family that takes none — a UNet checkpoint is bundled, and so
+/// is anything that carries its own VAE and encoder — and for a family that
+/// isn't runnable yet. Otherwise every slot the family needs is filled: with
+/// the file the scan found, or, when there isn't one, with the conventional
+/// path inside the role folder it belongs in. That is `discover::build`'s rule
+/// for video — the model is listed greyed out, and `doctor` and the error
+/// print a path that is also the instruction.
+///
+/// The encoder is picked by **width**, not just by kind: Qwen3 comes in 0.6B
+/// to 32B, and only the 2560-wide 4B conditions a Z-Image.
+pub fn image_components(
+    family: ImageFamily,
+    bundled: bool,
+    found: &[Found],
+    models_dir: &Path,
+) -> Option<Components> {
+    if bundled {
+        return None;
+    }
+    let pick = |want: &dyn Fn(&Role) -> bool, sub: &str, file: &str| {
+        Some(
+            found
+                .iter()
+                .find(|f| want(&f.role))
+                .map(|f| f.path.clone())
+                .unwrap_or_else(|| models_dir.join(sub).join(file)),
+        )
+    };
+    match family {
+        ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl => None,
+        ImageFamily::ZImage => Some(Components {
+            vae: pick(
+                &|r| matches!(r, Role::ImageVae(ImageVaeKind::Flux)),
+                "vae",
+                "ae.safetensors",
+            ),
+            llm: pick(
+                &|r| matches!(r, Role::Llm(LlmKind::Qwen3 { dim: 2560 })),
+                "text_encoders",
+                "qwen_3_4b.safetensors",
+            ),
+            ..Components::default()
+        }),
+        ImageFamily::Flux | ImageFamily::QwenImage => None,
+    }
 }
 
 /// Drop the expert marker from a pair's name.
@@ -1410,14 +1496,59 @@ mod tests {
         assert!(matches!(classify(&vae(64)), Role::Unsupported(_)));
     }
 
-    /// Only the families with components and a recipe are offered; the rest are
-    /// identified and parked. Pinned so turning one on is a deliberate edit.
+    /// A DiT is only offered once it has both halves: a recipe, since the
+    /// user's settings are SDXL's, and the parts it is assembled from. Turning
+    /// a family on without either is what this refuses.
     #[test]
-    fn only_the_unet_families_are_runnable_yet() {
+    fn a_runnable_dit_has_a_recipe_and_its_parts() {
+        let dir = Path::new("/m");
         for f in ImageFamily::ALL {
-            let unet = matches!(f, ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl);
-            assert_eq!(f.runnable(), unet, "{f:?}");
+            if !f.runnable() || f.is_unet() {
+                continue;
+            }
+            assert!(f.recipe().steps.is_some(), "{f:?} is runnable with no recipe");
+            let parts = image_components(f, false, &[], dir);
+            assert!(parts.is_some(), "{f:?} is runnable with no components");
         }
+    }
+
+    /// Found parts are used; a missing one is named at the conventional path
+    /// inside its role folder. And the encoder is picked by width — a Qwen3 of
+    /// the wrong size is not Z-Image's.
+    #[test]
+    fn a_z_image_takes_the_right_encoder_or_names_where_it_goes() {
+        let dir = Path::new("/m");
+        let found = [
+            Found {
+                path: dir.join("misc/ae.safetensors"),
+                role: Role::ImageVae(ImageVaeKind::Flux),
+            },
+            Found {
+                path: dir.join("big_qwen.safetensors"),
+                role: Role::Llm(LlmKind::Qwen3 { dim: 4096 }),
+            },
+        ];
+        let c = image_components(ImageFamily::ZImage, false, &found, dir).unwrap();
+        assert_eq!(c.vae, Some(dir.join("misc/ae.safetensors")));
+        assert_eq!(c.llm, Some(dir.join("text_encoders/qwen_3_4b.safetensors")));
+        // Bundled needs nothing, whatever the family.
+        assert_eq!(image_components(ImageFamily::ZImage, true, &found, dir), None);
+    }
+
+    #[test]
+    fn a_qwen3_encoder_is_read_in_either_spelling() {
+        let hf = t(&[
+            ("model.embed_tokens.weight", &[151936, 2560]),
+            ("model.layers.0.self_attn.q_norm.weight", &[128]),
+            ("model.norm.weight", &[2560]),
+        ]);
+        assert_eq!(classify(&hf), Role::Llm(LlmKind::Qwen3 { dim: 2560 }));
+        let gguf = t(&[
+            ("token_embd.weight", &[2560, 151936]),
+            ("blk.0.attn_q_norm.weight", &[128]),
+            ("output_norm.weight", &[2560]),
+        ]);
+        assert_eq!(classify(&gguf), Role::Llm(LlmKind::Qwen3 { dim: 2560 }));
     }
 
     #[test]

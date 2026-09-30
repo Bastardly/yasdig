@@ -254,7 +254,7 @@ impl Store {
         // The stored flag says whether the checkpoint was there when the image
         // was made, which is not a question about now. Re-ask it, so a profile
         // whose model has since been deleted reports honestly.
-        item.profile.exists = item.profile.model.is_file();
+        item.profile.exists = item.profile.missing().is_empty();
         Ok(item)
     }
 

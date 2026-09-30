@@ -198,7 +198,7 @@ impl Slot {
             // Image files reach this list through the registry as
             // `Slot::Checkpoint`, not through the video dir's scan. A bare image
             // DiT or VAE gets a slot when the image side can assemble one.
-            Role::Image { .. } | Role::ImageVae(_) | Role::Unsupported(_) => None,
+            Role::Image { .. } | Role::ImageVae(_) | Role::Llm(_) | Role::Unsupported(_) => None,
         }
     }
 }
@@ -385,10 +385,18 @@ pub fn candidates(cfg: &Config) -> Vec<Candidate> {
     }
     for p in cfg.registry().values() {
         if p.exists {
+            // A bare DiT goes in through `--diffusion-model`, like a video
+            // transformer: converted through `-m` its tensors would come out
+            // without the `model.diffusion_model.` prefix sd.cpp then loads it
+            // under. Its VAE and encoder are left off the list for now.
+            let (slot, label) = match p.components {
+                None => (Slot::Checkpoint, "image checkpoint".to_string()),
+                Some(_) => (Slot::Diffusion, format!("{} diffusion model", p.family.label())),
+            };
             push(
                 &p.model,
-                Slot::Checkpoint,
-                "image checkpoint".into(),
+                slot,
+                label,
                 &mut seen,
             );
         }

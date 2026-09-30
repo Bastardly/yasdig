@@ -437,6 +437,11 @@ impl Settings {
             // Request-only, like everywhere else a profile is built: a LoRA is
             // reached for per picture, so there is no key for one here.
             loras: Vec::new(),
+            // Identity, like `model` above: the registry fills these from what
+            // the file is. SDXL and bundled is what a profile with no file
+            // behind it has always meant.
+            family: crate::config::ImageFamily::default(),
+            components: None,
             discovered: false,
             exists: false,
         }
