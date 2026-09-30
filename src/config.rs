@@ -1859,42 +1859,70 @@ impl Config {
     }
 
     /// Build the name→Profile registry: explicit templates first, then any
-    /// discovered checkpoint not already referenced by a template.
+    /// discovered checkpoint not already referenced by a template, each with
+    /// the user's per-model overrides laid on last.
     pub fn registry(&self) -> BTreeMap<String, Profile> {
+        let tuned = crate::settings::ModelSettings::load_or_default(&self.user_dir());
+        self.entries()
+            .into_iter()
+            .map(|e| {
+                let settings = match tuned.model.get(&e.name) {
+                    Some(over) => e.base.merged_with(over),
+                    None => e.base,
+                };
+                let mut p = Profile {
+                    description: e.description,
+                    model: e.model,
+                    discovered: e.discovered,
+                    family: e.family,
+                    components: e.components,
+                    ..settings.as_profile(&e.name)
+                };
+                // Read off the disk rather than passed in, because a discovered
+                // file exists by definition and a templated one may name a
+                // checkpoint that was never downloaded — and a DiT may be here
+                // without its text encoder. Both are greyed out in the UI rather
+                // than hidden, the rule `doctor` follows for a half-downloaded
+                // video model.
+                p.exists = p.missing().is_empty();
+                (e.name, p)
+            })
+            .collect()
+    }
+
+    /// What one model starts at *without* the user's per-model overrides — the
+    /// thing [`crate::settings::update_model`] compares against, so only a
+    /// real difference is stored. `None` for a name that isn't a model.
+    pub fn model_base(&self, name: &str) -> Option<Settings> {
+        self.entries().into_iter().find(|e| e.name == name).map(|e| e.base)
+    }
+
+    /// Every model, resolved up to but not including the per-model layer.
+    ///
+    /// A discovered checkpoint is not a second kind of model, it is a template
+    /// that states only where the file is — which is why both arms go through
+    /// one `entry()` and not an arm each. Two arms is how the
+    /// `[defaults]`/`[templates]` pair used to drift.
+    pub fn entries(&self) -> Vec<ModelEntry> {
         let settings = self.settings();
         // One scan serves both arms: a template's file is identified from it
         // too, and so are the VAE and encoder a bare DiT is assembled with.
         let scan = self.scan_images();
-        let mut reg: BTreeMap<String, Profile> = BTreeMap::new();
+        let mut out: Vec<ModelEntry> = Vec::new();
 
         for (name, t) in &self.templates {
             let model = self.resolve(&t.model);
-            reg.insert(
-                name.clone(),
-                self.profile(
-                    &settings,
-                    &scan,
-                    &t.over,
-                    name.clone(),
-                    t.description
-                        .clone()
-                        .unwrap_or_else(|| format!("preset for {}", t.model)),
-                    model,
-                    false,
-                ),
-            );
+            let description = t
+                .description
+                .clone()
+                .unwrap_or_else(|| format!("preset for {}", t.model));
+            out.push(self.entry(&settings, &scan, &t.over, name.clone(), description, model, false));
         }
 
         // Paths already covered by a template shouldn't be re-listed.
         let covered: std::collections::HashSet<PathBuf> =
-            reg.values().map(|p| p.model.clone()).collect();
+            out.iter().map(|e| e.model.clone()).collect();
 
-        // The same call with nothing laid over it. A discovered checkpoint is
-        // not a second kind of model, it is a template that states only where
-        // the file is — which is why there is one `profile()` below and not an
-        // arm each. Two arms is how the `[defaults]`/`[templates]` pair used to
-        // drift.
-        //
         // **Listed by what the file is, not by its extension.** This used to be
         // every `.safetensors`/`.ckpt`/`.gguf` in the models root, which offered
         // an LTX-2 video transformer as an SDXL checkpoint that then failed at
@@ -1908,28 +1936,25 @@ impl Config {
             if !family.runnable() || covered.contains(&f.path) {
                 continue;
             }
-            let file = f.path.clone();
-            let stem = file
+            let stem = f
+                .path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("model")
                 .to_string();
-            let name = unique_key(&reg, stem);
+            let name = unique_key(&out, stem);
             let description = format!(
                 "discovered: {}",
-                file.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+                f.path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
             );
-            reg.insert(
-                name.clone(),
-                self.profile(&settings, &scan, &empty, name, description, file, true),
-            );
+            out.push(self.entry(&settings, &scan, &empty, name, description, f.path.clone(), true));
         }
-
-        reg
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
     }
 
-    /// One resolved model: the settings, its family's recipe, the template's
-    /// overlay, and the things that are the model's own identity.
+    /// One model up to its template: the settings, its family's recipe, the
+    /// template's overlay, and the things that are the model's own identity.
     ///
     /// The layers, each one [`Settings::merged_with`]: the user's settings,
     /// then [`ImageFamily::recipe`] (empty for the UNet families, whose recipe
@@ -1937,15 +1962,9 @@ impl Config {
     /// settings because what it names — size, steps, CFG, sampler — is about
     /// the architecture, and an SDXL-tuned 25 steps at CFG 6 is a wrong answer
     /// for a turbo DiT; a template sits over both because it is somebody's
-    /// decision about one file.
-    ///
-    /// `exists` is read off the disk here rather than passed in, because a
-    /// discovered file exists by definition and a templated one may name a
-    /// checkpoint that was never downloaded — and a DiT may be here without its
-    /// text encoder. Both are greyed out in the UI rather than hidden, the same
-    /// rule `doctor` follows for a half-downloaded video model.
+    /// decision about one file. [`Config::registry`] adds the last layer.
     #[allow(clippy::too_many_arguments)]
-    fn profile(
+    fn entry(
         &self,
         settings: &Settings,
         scan: &[crate::discover::Found],
@@ -1954,7 +1973,7 @@ impl Config {
         description: String,
         model: PathBuf,
         discovered: bool,
-    ) -> Profile {
+    ) -> ModelEntry {
         // What the file is: from the scan when it is under the models dir, read
         // directly when a template names one elsewhere, and SDXL-and-bundled —
         // what every model was before families — when it isn't on disk at all.
@@ -1969,31 +1988,41 @@ impl Config {
         };
         let components =
             crate::discover::image_components(family, bundled, scan, &self.models_dir());
-        let mut p = Profile {
+        ModelEntry {
+            base: settings.merged_with(&family.recipe()).merged_with(over),
+            name,
             description,
             model,
             discovered,
             family,
             components,
-            ..settings
-                .merged_with(&family.recipe())
-                .merged_with(over)
-                .as_profile(&name)
-        };
-        p.exists = p.missing().is_empty();
-        p
+        }
     }
 }
 
+/// One model as [`Config::entries`] resolves it: its identity, and the
+/// settings it starts at before the user's per-model overrides.
+#[derive(Debug, Clone)]
+pub struct ModelEntry {
+    pub name: String,
+    pub description: String,
+    pub model: PathBuf,
+    pub discovered: bool,
+    pub family: ImageFamily,
+    pub components: Option<Components>,
+    pub base: Settings,
+}
+
 /// Return `base`, or `base-2`, `base-3`, … if already present.
-fn unique_key(reg: &BTreeMap<String, Profile>, base: String) -> String {
-    if !reg.contains_key(&base) {
+fn unique_key(taken: &[ModelEntry], base: String) -> String {
+    let used = |n: &str| taken.iter().any(|e| e.name == n);
+    if !used(&base) {
         return base;
     }
     let mut n = 2;
     loop {
         let candidate = format!("{base}-{n}");
-        if !reg.contains_key(&candidate) {
+        if !used(&candidate) {
             return candidate;
         }
         n += 1;
@@ -2207,6 +2236,20 @@ t5xxl = "v/umt5.gguf"
         assert_eq!((p.width, p.steps), (1024, 28), "recipe under, template over");
         let parts = p.components.as_ref().unwrap();
         assert_eq!(parts.llm, Some(models.join("te").join("qwen3.safetensors")));
+
+        // The user's per-model layer is last, over the template — and the base
+        // the page diffs against is everything *but* it.
+        let mut tuned = crate::settings::ModelSettings::default();
+        tuned.model.insert(
+            "zbase".into(),
+            PartialSettings {
+                steps: Some(5),
+                ..PartialSettings::default()
+            },
+        );
+        tuned.save(&cfg.user_dir()).unwrap();
+        assert_eq!(cfg.registry()["zbase"].steps, 5);
+        assert_eq!(cfg.model_base("zbase").unwrap().steps, 28);
 
         std::fs::remove_dir_all(&root).ok();
     }

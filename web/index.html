@@ -223,6 +223,13 @@
         </div>
       </div>
 
+      <!-- Writes the boxes above to user/model-settings.toml for the selected
+           model, keeping only what differs from where it would start anyway.
+           Neutral, not amber: it spends no GPU time and is not what this panel
+           is for. -->
+      <button type="button" id="savemodel" class="btn btn-block spaced">Save as defaults for this model</button>
+      <p class="sub" id="savemodelmsg"></p>
+
   </div>
 
   <!-- The sliders that act on this image are in the viewer, not here: see the
@@ -691,17 +698,25 @@
       text.</p>
     </div>
 
+    <!-- user/model-settings.toml: one model's overrides. Its own card and its
+         own Save, because it is its own file — see web/js/modelsettings.js. -->
+    <div class="card spaced">
+      <div id="pmbox"></div>
+    </div>
+
     <div class="card spaced">
       <b>What these are</b>
-      <p class="sub">The values every checkpoint starts from, and what the
-      prompt boxes contain when the page loads. They are stored in
-      <code>user/settings.toml</code>, which this form owns — it is rewritten in
-      full on every save.</p>
-      <p class="sub">A <code>[templates.&lt;name&gt;]</code> block in
-      <code>models.toml</code> is how one checkpoint says what is
-      <em>different</em> about it. It overrides whichever of these it names and
-      inherits the rest from here, so a preset for a Turbo model is three lines
-      rather than a copy of this page.</p>
+      <p class="sub">A model starts from four layers, each overriding the one
+      before it only where it says something: <b>the form on the left</b>
+      (<code>user/settings.toml</code>); its <b>family's defaults</b>, which set
+      size, steps, CFG and sampler for every family but SD and SDXL; a
+      <code>[templates.&lt;name&gt;]</code> block in <code>models.toml</code>, if
+      you wrote one; and <b>Per model</b> above
+      (<code>user/model-settings.toml</code>).</p>
+      <p class="sub">Both files here are rewritten in full on every save, and
+      Per model keeps only what differs from where the model would start anyway
+      — so raising a setting on the left still reaches every model that has no
+      opinion of its own about it.</p>
       <p class="sub">Nothing here is retroactive: an image already made keeps
       the settings it was made with, which is what lets reopening a work item
       restore it faithfully.</p>

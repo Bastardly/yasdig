@@ -461,7 +461,6 @@ pub struct Engine {
     /// The clip archive. Unlike `items` this is written *through* rather than
     /// copied into — a clip has no scratch stage; see [`crate::videos`].
     videos: VideoStore,
-    registry: BTreeMap<String, Profile>,
     /// Shared with the connection threads: progress out, cancel in.
     monitor: Monitor,
     /// Escalatable results, keyed by job id (ordered, so the oldest evicts first).
@@ -483,7 +482,6 @@ impl Engine {
         let fsr = Fsr::new()?;
         // Fail fast with a friendly message if the sd binary is missing.
         SdRunner::new(&cfg).preflight()?;
-        let registry = cfg.registry();
         Ok(Engine {
             cfg,
             fsr,
@@ -491,7 +489,6 @@ impl Engine {
             items,
             videos,
             monitor,
-            registry,
             pending: BTreeMap::new(),
         })
     }
@@ -583,9 +580,7 @@ impl Engine {
         if name == p.profile.name {
             return Ok(());
         }
-        let Some(next) = self.registry.get(name) else {
-            bail!("unknown model '{name}'");
-        };
+        let next = self.model(name)?;
         next.require_files()?;
         eprintln!(
             "[rustimage] escalating with '{}' instead of '{}'",
@@ -605,15 +600,32 @@ impl Engine {
         Ok(())
     }
 
+    /// One model, resolved **now**.
+    ///
+    /// This used to read a registry built once in [`Engine::new`], which quietly
+    /// broke the promise the rest of the program makes about it: `/models` is
+    /// served live, so a checkpoint dropped in while the server ran appeared in
+    /// the select and then failed here as an unknown model, and a model's saved
+    /// defaults never reached a run. Resolving per job is a few header reads
+    /// that `discover`'s memo answers from memory, against a multi-second
+    /// diffusion — the same trade `Config::registry` documents.
+    fn model(&self, name: &str) -> Result<Profile> {
+        let mut reg = self.cfg.registry();
+        match reg.remove(name) {
+            Some(p) => Ok(p),
+            None => bail!(
+                "unknown model '{name}' — available: {}",
+                reg.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        }
+    }
+
     pub fn adapter_name(&self) -> &str {
         self.fsr.adapter_name()
     }
 
     pub fn run(&mut self, req: &GenRequest) -> Result<GenResult> {
-        let mut profile = match self.registry.get(&req.template) {
-            Some(p) => p.clone(),
-            None => bail!("unknown model '{}'", req.template),
-        };
+        let mut profile = self.model(&req.template)?;
         // Apply per-request overrides onto the profile.
         if let Some(v) = req.steps {
             profile.steps = v;
@@ -846,10 +858,7 @@ impl Engine {
     ///   and the only sizing question is whether that size is affordable — see
     ///   [`fit_to`].
     pub fn img2img(&mut self, req: &Img2ImgRequest) -> Result<GenResult> {
-        let mut profile = match self.registry.get(&req.template) {
-            Some(p) => p.clone(),
-            None => bail!("unknown model '{}'", req.template),
-        };
+        let mut profile = self.model(&req.template)?;
         // The same fold as `run`, minus width/height: this pass sends no -W/-H,
         // so a base size would be a box that does nothing.
         if let Some(v) = req.steps {

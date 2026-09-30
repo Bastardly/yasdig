@@ -246,6 +246,19 @@ const HELP = [
   // moving `[defaults]` into a form had to stop being the answer to. There were
   // four: `upscale_factor` has a box on the Image tab now, so its sentence is up
   // with the rest of that panel's under `upscale`.
+  { ids: ['setunet'],
+    text: 'Where every SD 1.x, SD 2.x and SDXL checkpoint starts. Other families '
+        + 'start from their own defaults instead — a Z-Image turbo wants 8 steps '
+        + 'at CFG 1, and 25 steps at CFG 6 would be a wrong answer for it — so '
+        + 'these do not reach them. To change one model, use Per model.' },
+  { ids: ['setpermodel'],
+    text: 'Where one model starts, when that should differ from the rest: a '
+        + 'turbo SDXL at 6 steps and CFG 1, say, which its file cannot tell us. '
+        + 'An empty box starts where its placeholder says, and a box set to the '
+        + 'same number is dropped on save, so changing the settings above still '
+        + 'reaches everything this model has no opinion about. Saved to '
+        + 'user/model-settings.toml. The Image tab’s “Save as defaults for this '
+        + 'model” writes here too.' },
   { ids: ['setflash'],
     text: 'Pass --diffusion-fa to the refine and hi-res passes when they run '
         + 'large. Worth about 6× at 2048² on this card (122 s → 20 s), so leave '

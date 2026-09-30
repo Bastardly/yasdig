@@ -1,6 +1,7 @@
 import { $, esc, post } from './dom.js';
 import { UPSCALES, setUpFactor, loadModels, upscalersReady, upscalerOptions } from './image.js';
 import { wireHints } from './hints.js';
+import { loadModelSettings } from './modelsettings.js';
 
 // The Settings tab: `user/settings.toml` as an ordinary form.
 //
@@ -41,7 +42,7 @@ const BLANK = true;
 const SECTION = (title, { fold = false, help = null, pane = 'setform' } = {}) =>
   ({ title, fold, help, pane });
 
-const FIELDS = [
+export const FIELDS = [
   SECTION('Prompts'),
   { key: 'prompt', from: 'prompt', kind: 'textarea' },
   { key: 'negative', from: 'negative', kind: 'text' },
@@ -55,12 +56,20 @@ const FIELDS = [
   SECTION('Prompt variables', { help: 'setvars', pane: 'setvarbox' }),
   { key: 'variables', kind: 'vars' },
 
-  SECTION('Image'),
+  // The five knobs a family recipe names. Here they are the defaults for the
+  // UNet families only, because that is what they are: every other family's
+  // recipe is laid over them (`ImageFamily::recipe`), so a Steps box that
+  // claimed to reach a Z-Image would be a setting that appears not to take.
+  // Kept rather than removed because they are the one place to change every
+  // SDXL at once; a single model is Per model's business.
+  SECTION('SD 1.x, SD 2.x and SDXL', { help: 'setunet' }),
   { key: 'steps', from: 'steps', kind: 'int', min: 1, max: 100 },
   { key: 'cfg_scale', from: 'cfg', kind: 'num', min: 0, step: 0.1 },
   { key: 'sampler', from: 'sampler', kind: 'mirror' },
   { key: 'width', from: 'w', kind: 'int', min: 64, step: 64 },
   { key: 'height', from: 'h', kind: 'int', min: 64, step: 64 },
+
+  SECTION('Image'),
   { key: 'upscale_factor', from: 'upscale', kind: 'num', min: 1, max: 4, step: 0.1 },
   { key: 'upscaler', from: 'upscaler', kind: 'upscaler' },
   { key: 'refine_steps', from: 'rsteps', kind: 'int', min: 0, max: 100 },
@@ -89,7 +98,7 @@ const FIELDS = [
 // The label of the control this is the default for, without the (i) `wireHints`
 // puts inside it. Text nodes only, so it reads the same whether this runs before
 // or after that pass.
-function labelOf(id) {
+export function labelOf(id) {
   const el = document.querySelector(`label[for="${id}"]`);
   if (!el) return id;
   return [...el.childNodes]
@@ -401,6 +410,9 @@ async function save() {
     // model list is built from these numbers — so it is stale the moment this
     // returns. Rebuilt rather than reloaded: `/models` is served live.
     loadModels();
+    // And every model's base moved with it, which is what the Per model
+    // section's placeholders show.
+    loadModelSettings();
   } catch (e) {
     $('setmsg').textContent = '';
     markDirty();

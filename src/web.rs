@@ -31,6 +31,7 @@ pub const WEB_FILES: &[(&str, &str)] = &[
     ("js/image.js", "text/javascript; charset=utf-8"),
     ("js/img2img.js", "text/javascript; charset=utf-8"),
     ("js/loras.js", "text/javascript; charset=utf-8"),
+    ("js/modelsettings.js", "text/javascript; charset=utf-8"),
     ("js/outputs.js", "text/javascript; charset=utf-8"),
     ("js/player.js", "text/javascript; charset=utf-8"),
     ("js/prompt-box.js", "text/javascript; charset=utf-8"),

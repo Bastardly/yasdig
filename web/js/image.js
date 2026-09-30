@@ -173,6 +173,53 @@ export function setUpscaler(name) {
   syncOutSize();
 }
 
+// The boxes "Save as defaults for this model" writes: every control in the
+// Advanced panel that is a model's setting, as [wire key, id, kind]. Not the
+// sliders — those are per image — and not the escalation models, which are a
+// choice per picture rather than something a checkpoint starts at.
+//
+// Every one is sent, and the server drops whatever equals where the model would
+// start anyway (`settings::update_model`), so the file keeps only the boxes that
+// were actually changed and a model stays linked to the Settings tab for the
+// rest. A blank CFG box is `null`, which removes an override: it means "follow
+// the box below", the same thing it means when generating.
+const MODEL_KNOBS = [
+  ['steps', 'steps'], ['cfg_scale', 'cfg'], ['sampler', 'sampler', 'text'],
+  ['width', 'w'], ['height', 'h'],
+  ['upscale_factor', 'upscale'], ['upscaler', 'upscaler', 'choice'],
+  ['hires_steps', 'hsteps'], ['hires_strength', 'hstrength'], ['hires_cfg_scale', 'hcfg', 'blank'],
+  ['refine_steps', 'rsteps'], ['refine_strength', 'rstrength'], ['refine_cfg_scale', 'rcfg', 'blank'],
+];
+
+async function saveModelDefaults() {
+  const m = currentModel();
+  if (!m) return;
+  const values = {};
+  for (const [key, id, kind] of MODEL_KNOBS) {
+    const raw = $(id).value.trim();
+    if (kind === 'text') values[key] = raw;
+    // The empty option is FSR, which is "no upscaler named" — so it clears.
+    else if (kind === 'choice') values[key] = raw || null;
+    else if (raw === '') {
+      // A blank number box says nothing, except where blank has a meaning.
+      if (kind === 'blank') values[key] = null;
+    } else {
+      const n = parseFloat(raw);
+      if (Number.isFinite(n)) values[key] = n;
+    }
+  }
+  $('savemodelmsg').textContent = 'Saving…';
+  try {
+    await post('/model-settings', { model: m.name, values });
+    $('savemodelmsg').textContent = `Saved — ${m.name} now opens with these. `
+      + 'Settings → Per model lists what differs from its defaults.';
+    // The select's "tuned" tag and every pre-fill come from `/models`.
+    loadModels();
+  } catch (e) {
+    $('savemodelmsg').textContent = String(e.message || e);
+  }
+}
+
 export async function loadModels() {
   try {
     // Started before the first `await`, so `upscalersReady` is this fetch by the
@@ -192,6 +239,11 @@ export async function loadModels() {
                                ['i2refmodel', '— same as generated —'],
                                ['i2hiresmodel', '— same as generated —']]) {
       const sel = $(id);
+      // Rebuilt after a save as well as at boot, and a rebuilt select falls
+      // back to its first option — so saving a model's defaults, or the
+      // Settings form, used to switch the Image tab to whichever model sorts
+      // first. What was selected is put back if it is still selectable.
+      const keep = sel.value;
       sel.innerHTML = '';
       if (blank) {
         const none = document.createElement('option');
@@ -212,7 +264,9 @@ export async function loadModels() {
         for (const m of models.filter((x) => x.family_label === family)) {
           const opt = document.createElement('option');
           opt.value = m.name;
-          const tag = m.discovered ? 'discovered' : 'preset';
+          // "tuned": it opens with saved defaults of its own, which is the
+          // answer to "why does this one start at 12 steps".
+          const tag = (m.discovered ? 'discovered' : 'preset') + (m.tuned ? ', tuned' : '');
           opt.textContent = blank
             // An escalation never uses a model's base size, so quoting it there
             // would be a number that means nothing about what the button will do.
@@ -230,6 +284,7 @@ export async function loadModels() {
           group.appendChild(opt);
         }
       }
+      if ([...sel.options].some((o) => o.value === keep && !o.disabled)) sel.value = keep;
     }
     if (!models.length) {
       $('err').textContent = 'No models found. Drop a .safetensors into the models/ folder.';
@@ -647,6 +702,9 @@ export function initImage() {
   }
   // Each model carries its own defaults, so re-fill the controls on switch.
   $('template').addEventListener('change', syncAdvanced);
+  $('savemodel').addEventListener('click', saveModelDefaults);
+  // A note about the model that was selected is stale once another one is.
+  $('template').addEventListener('change', () => { $('savemodelmsg').textContent = ''; });
   // What an empty per-pass CFG box resolves to is whatever the chain under it
   // says, so the placeholders have to follow that field as it is typed in.
   $('cfg').addEventListener('input', syncCfgPlaceholders);

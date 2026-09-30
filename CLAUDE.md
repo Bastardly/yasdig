@@ -22,7 +22,8 @@ cargo run --release -- fsr in.png out.png [scale] [sharpness] [clarity]
 cargo run --release -- upscale in.png out.png <model> [factor]  # model enlarge alone + consistency dB; no checkpoint
 cargo run --release -- sr-selftest          # `src/sr/` shader ops vs CPU references, plus matmul TFLOPS
 
-node --test 'web/js/*.test.js'              # the one JS unit test: the prompt-weighting string maths.
+node --test 'web/js/*.test.js'              # the prompt-weighting string maths, and that the page's module
+                                            #   graph evaluates (a cyclic import read at top level blanks every tab).
                                             #   Node's built-in runner — no npm, no package.json, no
                                             #   build step, and nothing at runtime needs Node.
 ```

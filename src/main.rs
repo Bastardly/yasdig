@@ -322,6 +322,8 @@ fn handle_conn(
         // render would appear to hang for the length of the render.
         ("GET", "/settings") => handle_get_settings(&mut conn, cfg),
         ("POST", "/settings") => handle_save_settings(&mut conn, cfg, &req.body),
+        ("GET", "/model-settings") => handle_get_model_settings(&mut conn, cfg),
+        ("POST", "/model-settings") => handle_save_model_settings(&mut conn, cfg, &req.body),
         ("POST", "/generate") => handle_generate(&mut conn, job_tx, &req.body),
         ("POST", "/img2img") => handle_img2img(&mut conn, cfg, job_tx, &req.body),
         // The one route with a binary body, and the one `http.rs` gives a large
@@ -583,6 +585,64 @@ fn handle_save_settings(conn: &mut http::Connection, cfg: &Config, body: &[u8]) 
             "application/json",
             error_json(&format!("{e:#}")).as_bytes(),
         ),
+    }
+}
+
+/// `GET /model-settings`. A file that won't parse answers 200 with no
+/// overrides and the error beside them, for the reason `/settings` does: the
+/// form still has to be editable, and saving it is the repair.
+fn handle_get_model_settings(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
+    let (tuned, note) = match settings::ModelSettings::load(&cfg.user_dir()) {
+        Ok(t) => (t, None),
+        Err(e) => (
+            settings::ModelSettings::default(),
+            Some(format!("{e:#} — showing no per-model settings; saving will rewrite the file")),
+        ),
+    };
+    match settings::models_json(&cfg.entries(), &tuned, note.as_deref()) {
+        Ok(b) => conn.respond(200, "application/json", b.as_bytes()),
+        Err(e) => conn.respond(500, "application/json", error_json(&format!("{e:#}")).as_bytes()),
+    }
+}
+
+/// `POST /model-settings`: `{"model": name, "values": {knob: value | null}}`.
+///
+/// Filesystem only, like `/settings`, and for the same reason off the queue.
+/// Answers with the whole listing, so the page redraws from what was stored
+/// rather than from what it sent — the server drops every value equal to the
+/// model's base, and the form should show that.
+fn handle_save_model_settings(
+    conn: &mut http::Connection,
+    cfg: &Config,
+    body: &[u8],
+) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        model: String,
+        values: serde_json::Map<String, serde_json::Value>,
+    }
+    let result = (|| -> Result<String> {
+        let dto: Dto = serde_json::from_slice(body).context("parsing model settings body")?;
+        let base = cfg
+            .model_base(&dto.model)
+            .with_context(|| format!("no model named '{}'", dto.model))?;
+        // Over a broken file, nothing: the same repair rule as `/settings`.
+        let mut tuned = settings::ModelSettings::load(&cfg.user_dir()).unwrap_or_default();
+        let current = tuned.model.get(&dto.model).cloned().unwrap_or_default();
+        let next = settings::update_model(&current, &base, &dto.values)?;
+        // An entry with nothing left in it is removed rather than written as an
+        // empty table, so clearing every box leaves no trace of the model.
+        if next == settings::PartialSettings::default() {
+            tuned.model.remove(&dto.model);
+        } else {
+            tuned.model.insert(dto.model.clone(), next);
+        }
+        tuned.save(&cfg.user_dir())?;
+        settings::models_json(&cfg.entries(), &tuned, None)
+    })();
+    match result {
+        Ok(b) => conn.respond(200, "application/json", b.as_bytes()),
+        Err(e) => conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
     }
 }
 
@@ -1568,15 +1628,23 @@ fn opt_num(v: Option<f32>) -> String {
 /// per-model defaults (steps/cfg/sampler/size) are included so the UI can
 /// pre-fill the advanced controls when a model is selected.
 fn build_models_json(cfg: &Config) -> String {
+    // Which models have saved defaults of their own, so the page can say so
+    // beside the select rather than leave a changed number unexplained.
+    let tuned = settings::ModelSettings::load_or_default(&cfg.user_dir());
     let items: Vec<String> = cfg
         .registry()
         .values()
         .map(|p| {
             let out_w = ((p.width as f32) * p.upscale_factor).round() as u32;
             let out_h = ((p.height as f32) * p.upscale_factor).round() as u32;
+            // Every file standing between this model and a run, at the path it
+            // is expected at, so a greyed-out option can say what it is waiting
+            // for rather than only that it is waiting.
+            let missing: Vec<String> =
+                p.missing().iter().map(|f| json_str(&f.display().to_string())).collect();
             format!(
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
-                 \"family\":{},\"family_label\":{},\"missing\":{},\
+                 \"family\":{},\"family_label\":{},\"tuned\":{},\"missing\":[{}],\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
                  \"steps\":{},\"cfg_scale\":{},\"img2img_cfg_scale\":{},\"sampler\":{},\
                  \"upscale_factor\":{},\"upscaler\":{},\
@@ -1590,17 +1658,8 @@ fn build_models_json(cfg: &Config) -> String {
                 p.exists,
                 json_str(p.family.as_str()),
                 json_str(p.family.label()),
-                // Every file standing between this model and a run, at the path
-                // it is expected at, so a greyed-out option can say what it is
-                // waiting for rather than only that it is waiting.
-                format!(
-                    "[{}]",
-                    p.missing()
-                        .iter()
-                        .map(|f| json_str(&f.display().to_string()))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                ),
+                tuned.model.contains_key(&p.name),
+                missing.join(","),
                 p.width,
                 p.height,
                 out_w,
@@ -2511,5 +2570,46 @@ mod tests {
         // The amplitudes are chosen to keep contrast.wgsl's midtone protection
         // near 1, so the printed gains are the filter and not the fade.
         assert!(protect_min > 0.9, "protect floor {protect_min:.3} is too low");
+    }
+
+    /// `/models` is hand-rolled `format!`, so a field added out of step with
+    /// its argument — which this change nearly shipped — is valid Rust and
+    /// broken JSON, or worse, valid JSON with one value under another's name.
+    /// Parsed here, with a model of each shape.
+    #[test]
+    fn the_models_listing_is_json_with_every_field_where_it_belongs() {
+        let root = std::env::temp_dir().join(format!("rustimage-models-json-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let models = root.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        let write = |name: &str, tensors: &str| {
+            let json = format!("{{{tensors}}}");
+            let mut buf = (json.len() as u64).to_le_bytes().to_vec();
+            buf.extend_from_slice(json.as_bytes());
+            std::fs::write(models.join(name), buf).unwrap();
+        };
+        write(
+            "xl.safetensors",
+            r#""input_blocks.4.1.transformer_blocks.0.attn2.to_k.weight":{"dtype":"F16","shape":[640,2048],"data_offsets":[0,0]}"#,
+        );
+        write(
+            "z.safetensors",
+            r#""cap_embedder.0.weight":{"dtype":"F16","shape":[3840,2560],"data_offsets":[0,0]}"#,
+        );
+        std::fs::write(root.join("models.toml"), "[sd]\nbinary = \"sd-cli\"\n").unwrap();
+        let cfg = crate::config::Config::load(&root.join("models.toml")).unwrap();
+
+        let list: serde_json::Value = serde_json::from_str(&super::build_models_json(&cfg)).unwrap();
+        let by = |n: &str| list.as_array().unwrap().iter().find(|m| m["name"] == n).unwrap().clone();
+        let (xl, z) = (by("xl"), by("z"));
+        assert_eq!((xl["family"].as_str(), xl["exists"].as_bool()), (Some("sdxl"), Some(true)));
+        assert_eq!(xl["missing"], serde_json::json!([]));
+        assert_eq!(xl["tuned"], serde_json::json!(false));
+        assert_eq!((z["family_label"].as_str(), z["steps"].as_u64()), (Some("Z-Image"), Some(8)));
+        // No VAE and no encoder: both named, and the model not runnable.
+        assert_eq!(z["exists"], serde_json::json!(false));
+        assert_eq!(z["missing"].as_array().unwrap().len(), 2);
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -160,6 +160,29 @@ pub fn check(cfg: &Config) -> Report {
 
     // 2) Model registry (explicit templates + discovered checkpoints).
     let registry = cfg.registry();
+    // The per-model layer, read once here for the tags below and for the
+    // check that every entry in it still names a model.
+    let tuned = match crate::settings::ModelSettings::load(&cfg.user_dir()) {
+        Ok(t) => t,
+        Err(e) => {
+            warnings.push(format!(
+                "{e:#}\n\n\
+                 No per-model settings are in use until it is fixed. Saving a model's\n\
+                 defaults rewrites the file and repairs it."
+            ));
+            crate::settings::ModelSettings::default()
+        }
+    };
+    // Keyed by name, and a discovered model's name is its file stem — so a
+    // renamed or deleted file leaves an entry that applies to nothing. Named
+    // rather than dropped: it is somebody's tuning, and the fix may be to
+    // rename the key.
+    for name in tuned.model.keys().filter(|n| !registry.contains_key(*n)) {
+        warnings.push(format!(
+            "per-model settings for '{name}' in {} apply to no model — was the file renamed?",
+            crate::settings::ModelSettings::path(&cfg.user_dir()).display()
+        ));
+    }
     // What each image file was identified as, so a checkpoint's line can name
     // its family and the files the registry left out can be accounted for. The
     // memo in `discover` means this second scan re-reads nothing.
@@ -193,7 +216,12 @@ pub fn check(cfg: &Config) -> Report {
             let size = std::fs::metadata(&p.model)
                 .map(|m| human_size(m.len()))
                 .unwrap_or_else(|_| "?".into());
-            let tag = if p.discovered { "discovered" } else { "preset" };
+            let tag = match (p.discovered, tuned.model.contains_key(&p.name)) {
+                (true, false) => "discovered",
+                (true, true) => "discovered, tuned",
+                (false, false) => "preset",
+                (false, true) => "preset, tuned",
+            };
             // Steps and CFG are printed because a template now *inherits* what
             // it doesn't name: these are the resolved numbers, so a preset that
             // states only `steps` still shows what it will actually run with.

@@ -52,7 +52,7 @@ So, again. Anything is up for discussion.
   `doctor` shows the parts a DiT was assembled with.
   Known gaps: SDXL LoRAs are not yet filtered out for a Z-Image (phase F); the Qwen-Image VAE still reads as a
   Wan 2.1 VAE (same shape) and needs telling apart when Qwen-Image is added.
-- **Phase 3 — capabilities in the page: DONE, awaiting your check.** `/models` carries `family`, `family_label`
+- **Phase 3 — capabilities in the page: DONE** (verified). `/models` carries `family`, `family_label`
   and `missing` (paths). The six model selects group by family (`<optgroup>`, only when there is more than one)
   and list a model with missing files *disabled*, with the files in its tooltip. The negative prompt is hidden, with
   a one-line note in its place, at CFG exactly 1 on both tabs (`syncNegative`, hung off `syncCfgPlaceholders`) — sd.cpp only runs the
@@ -61,7 +61,22 @@ So, again. Anything is up for discussion.
   here (DiTs need 16), so generalising `snap64`/`fit_to` would buy at most 48 px of width for churn in tested
   code. `guidance`, `ref_images` and `inpaint` caps are not served yet — nothing uses them; they arrive with
   Flux and the edit tab.
-- **Next: phase 4** (settings layers: per-model overrides in `user/models.toml`, global form shrinks).
+- **Phase 4 — settings layers: DONE, awaiting your check.** Layers: `user/settings.toml` → family recipe →
+  `[templates.*]` → **`user/model-settings.toml`** (renamed from the planned `user/models.toml`, to not share a
+  name with the root config). `settings::ModelSettings` (load/save, `[model."<name>"]` tables of
+  `PartialSettings`, now `Serialize`); `settings::update_model` keeps only values that differ from the model's
+  base (compared after a typed round trip, so `6.3` vs an f32 doesn't pin); `Config::entries()` / `ModelEntry`
+  / `model_base()` split the registry into base + per-model layer. Routes `GET/POST /model-settings`
+  (filesystem-only, off the queue). `/models` gains `tuned`; `doctor` tags "tuned" and warns about entries
+  naming no model. **Engine now resolves models per job** (`Engine::model`) instead of a registry built at
+  startup, which had made new files and saved defaults invisible to runs. Page: "Save as defaults for this
+  model" under the Image tab's Advanced rows (sends every box; server drops the unchanged); a *Per model* card
+  on the Settings tab (`web/js/modelsettings.js`, rows reused from `settings.js`'s `FIELDS`, placeholders are
+  the served base); model selects keep their selection across a rebuild. **Changed from the plan:** the global
+  form keeps width/height/steps/CFG/sampler, relabelled *SD 1.x, SD 2.x and SDXL* — they are the one place to
+  change every SDXL at once, and other families' recipes already override them. Limitation: this layer can't
+  pin FSR over a global ESRGAN upscaler (absent key and FSR are both "no name").
+- **Next: phase 5** (merge the image tabs via a "Start from" slot).
 
 ## Context
 

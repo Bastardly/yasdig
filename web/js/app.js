@@ -17,6 +17,7 @@ import { initOutputs, loadOutputs } from './outputs.js';
 import { initVideo } from './video.js';
 import { initConvert } from './convert.js';
 import { initSettings } from './settings.js';
+import { initModelSettings } from './modelsettings.js';
 import { stopPlayback } from './player.js';
 import './prompt-box.js';
 
@@ -86,4 +87,7 @@ initConvert();
 // one module that does, and the reason `wireHints` takes a root.
 // Its form is built synchronously here; only the values wait on the fetch.
 initSettings();
+// After initImage(), whose model list starts the upscaler fetch this waits on
+// for its own select, and after initHints(), since it wires its own labels.
+initModelSettings();
 initTabs();

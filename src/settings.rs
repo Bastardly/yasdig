@@ -38,9 +38,10 @@ const HEADER: &str = "\
 # like, but note that pressing Save rewrites the whole file and any comments you
 # add here go with it.
 #
-# These apply to every checkpoint discovered in the models dir. A
-# [templates.<name>] block in models.toml overrides whichever of them it names,
-# and inherits the rest from here. See README.md for what each field does.
+# These apply to every model. width, height, steps, cfg_scale and sampler reach
+# only SD 1.x, 2.x and SDXL: every other family starts from its own defaults for
+# those. A [templates.<name>] block in models.toml, then user/model-settings.toml,
+# override whichever of these they name. See README.md for what each field does.
 
 ";
 
@@ -131,62 +132,62 @@ pub struct Settings {
 /// It doubles as the reader for the old `[defaults]` block, which is how a first
 /// run seeds the settings file from a `models.toml` that was already tuned. See
 /// [`Settings::ensure`].
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PartialSettings {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steps: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cfg_scale: Option<f32>,
     /// Doubly optional on purpose: absent means "inherit", and an explicit
     /// `img2img_cfg_scale = ...` means "pin this". A template cannot express
     /// "unset it back to following cfg_scale" and doesn't need to — it can name
     /// `cfg_scale` instead.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub img2img_cfg_scale: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampler: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upscale_factor: Option<f32>,
     /// Absent inherits, a name pins, the same one-way shape `img2img_cfg_scale`
     /// above has: a template can name a model, and has no way to say "back to
     /// FSR" over a setting that chose one — nor needs one, since the select on
     /// the page can.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upscaler: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sharpness: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clarity: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refine_steps: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refine_strength: Option<f32>,
     /// Doubly optional for the same reason `img2img_cfg_scale` above is: a
     /// template says "pin this" or says nothing, and has `cfg_scale` to reach
     /// for when it wants the link back.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refine_cfg_scale: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hires_steps: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hires_strength: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hires_cfg_scale: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_steps: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_strength: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hires_max_side: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hires_flash_attn: Option<bool>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weight_type: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_args: Option<Vec<String>>,
 }
 
@@ -501,6 +502,173 @@ pub fn patch(base: &Settings, body: &[u8]) -> Result<Settings> {
     Ok(settings)
 }
 
+/// File name of the per-model overrides, inside the same user dir.
+///
+/// Not `models.toml`, which is what the plan first called it: the root one is
+/// the hand-written startup config, and two files of one name with two
+/// different owners is a mistake waiting to be made in a text editor.
+const MODELS_FILE: &str = "model-settings.toml";
+
+const MODELS_HEADER: &str = "\
+# rustimage — per-model defaults. Written by the Image tab's \"Save as defaults
+# for this model\" and the Settings tab's Per model section; pressing either
+# rewrites the whole file.
+#
+# Each [model.\"<name>\"] table overrides one model and nothing else, and only
+# what differs from where that model would otherwise start is kept — so a
+# change to your settings, or to the model's family defaults, still reaches
+# every knob not named here.
+
+";
+
+/// `user/model-settings.toml`: what one model starts at, where that differs
+/// from what it would start at anyway.
+///
+/// The last layer in [`crate::config::Config::registry`]: settings, the
+/// family's recipe, a `[templates.*]` entry, then this. It exists because a
+/// header can't tell an SDXL from an SDXL-Turbo, or a Z-Image turbo from its
+/// base — same tensors, different training — so the difference has to be
+/// something a person says, and saying it should not need a text editor.
+///
+/// Keyed by registry name, which for a discovered model is its file stem. A
+/// renamed file therefore loses its entry, and `doctor` names entries that no
+/// longer match a model rather than dropping them silently.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelSettings {
+    pub model: std::collections::BTreeMap<String, PartialSettings>,
+}
+
+impl ModelSettings {
+    pub fn path(user_dir: &Path) -> PathBuf {
+        user_dir.join(MODELS_FILE)
+    }
+
+    /// Read it. A missing file is an empty one — the ordinary state, since
+    /// nothing is written until somebody saves a model's defaults.
+    pub fn load(user_dir: &Path) -> Result<ModelSettings> {
+        let path = Self::path(user_dir);
+        if !path.exists() {
+            return Ok(ModelSettings::default());
+        }
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    /// Read it, or nothing. The same decision [`Settings::load_or_default`]
+    /// makes for the same reason, and reported in the same two places: the
+    /// Settings tab and `doctor`.
+    pub fn load_or_default(user_dir: &Path) -> ModelSettings {
+        Self::load(user_dir).unwrap_or_default()
+    }
+
+    /// Write it whole, through a rename, as [`Settings::save`] does.
+    pub fn save(&self, user_dir: &Path) -> Result<()> {
+        std::fs::create_dir_all(user_dir)
+            .with_context(|| format!("creating {}", user_dir.display()))?;
+        let body = format!(
+            "{MODELS_HEADER}{}",
+            toml::to_string_pretty(self).context("serializing model settings")?
+        );
+        let path = Self::path(user_dir);
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
+        std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))?;
+        Ok(())
+    }
+}
+
+/// Fold a `POST /model-settings` body into one model's overrides.
+///
+/// `values` maps a knob to a value or to `null`. A key that is absent is left
+/// alone, `null` removes the override, and a value sets it — the patch rules
+/// [`patch`] uses, for the reason it gives.
+///
+/// Then **everything equal to `base` is dropped**, `base` being what the model
+/// starts at without this layer. That is what makes "Save as defaults for this
+/// model" safe to press with the whole Advanced panel in the body: only the
+/// boxes that differ become pins, so raising a global setting later still
+/// reaches every knob this model has no opinion about. Pinning all of them
+/// would quietly cut the model off from the Settings tab.
+///
+/// Compared after a round trip through the typed struct, not as raw JSON: the
+/// page sends `6.3` and an `f32` serializes as `6.300000190734863`, which would
+/// otherwise never compare equal and would pin every CFG it touched.
+pub fn update_model(
+    over: &PartialSettings,
+    base: &Settings,
+    values: &serde_json::Map<String, serde_json::Value>,
+) -> Result<PartialSettings> {
+    let base_v = match serde_json::to_value(base).context("reading the model's defaults")? {
+        serde_json::Value::Object(m) => m,
+        other => bail!("settings are not an object: {other}"),
+    };
+    let mut m = match serde_json::to_value(over).context("reading the model's overrides")? {
+        serde_json::Value::Object(m) => m,
+        other => bail!("overrides are not an object: {other}"),
+    };
+    for (k, v) in values {
+        // Only the per-model knobs. `Settings` also carries the page's own
+        // defaults (prompt, variables), and serde would drop an unknown key
+        // silently — so a typo would read as saved and do nothing.
+        if !base_v.contains_key(k) || PAGE_ONLY.contains(&k.as_str()) {
+            bail!("'{k}' is not a setting a model can override");
+        }
+        if v.is_null() {
+            m.remove(k);
+        } else {
+            m.insert(k.clone(), v.clone());
+        }
+    }
+    let typed: PartialSettings = serde_json::from_value(serde_json::Value::Object(m))
+        .context("reading the model's settings")?;
+    let mut m = match serde_json::to_value(&typed)? {
+        serde_json::Value::Object(m) => m,
+        other => bail!("overrides are not an object: {other}"),
+    };
+    m.retain(|k, v| base_v.get(k) != Some(v));
+    let out: PartialSettings = serde_json::from_value(serde_json::Value::Object(m))?;
+    base.merged_with(&out).validate()?;
+    Ok(out)
+}
+
+/// The fields of [`Settings`] that are the page's rather than a model's.
+const PAGE_ONLY: &[&str] = &["prompt", "negative", "hires_scale", "variables"];
+
+/// `GET /model-settings`: every model's base and overrides.
+///
+/// The base is served so the Settings tab can show what an *empty* box means
+/// — its placeholder — without the page re-deriving the layering, which is the
+/// `frame_grid` rule: one implementation of a rule, on the side that runs it.
+pub fn models_json(
+    entries: &[crate::config::ModelEntry],
+    tuned: &ModelSettings,
+    note: Option<&str>,
+) -> Result<String> {
+    let models: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| {
+            let mut base = match serde_json::to_value(&e.base)? {
+                serde_json::Value::Object(m) => m,
+                other => bail!("settings are not an object: {other}"),
+            };
+            base.retain(|k, _| !PAGE_ONLY.contains(&k.as_str()));
+            Ok(serde_json::json!({
+                "name": e.name,
+                "family_label": e.family.label(),
+                "base": base,
+                "over": tuned.model.get(&e.name).cloned().unwrap_or_default(),
+            }))
+        })
+        .collect::<Result<_>>()?;
+    let mut body = serde_json::json!({ "models": models });
+    if let Some(msg) = note {
+        body["error"] = serde_json::Value::String(msg.to_string());
+    }
+    Ok(body.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -702,5 +870,95 @@ mod tests {
         let cleared = patch(&stored, br#"{"img2img_cfg_scale":null}"#).unwrap();
         assert_eq!(cleared.img2img_cfg_scale, None);
         assert_eq!(cleared.steps, 12);
+    }
+
+    fn values(json: &str) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::from_str(json).unwrap()
+    }
+
+    /// The Image tab sends every box, and only the ones that differ from where
+    /// the model starts become pins — including a CFG the page sends as `6.3`,
+    /// which as an `f32` serializes as 6.300000190734863 and would never
+    /// compare equal as raw JSON.
+    #[test]
+    fn a_model_keeps_only_what_differs_from_its_base() {
+        let base = Settings {
+            steps: 25,
+            cfg_scale: 6.3,
+            ..Settings::default()
+        };
+        let over = update_model(
+            &PartialSettings::default(),
+            &base,
+            &values(r#"{"steps":12,"cfg_scale":6.3,"sampler":"euler","refine_cfg_scale":null}"#),
+        )
+        .unwrap();
+        assert_eq!(
+            over,
+            PartialSettings {
+                steps: Some(12),
+                ..PartialSettings::default()
+            }
+        );
+        // A later save that puts the box back to the base removes the pin, and
+        // an absent key leaves the others alone.
+        let over = update_model(
+            &PartialSettings {
+                steps: Some(12),
+                cfg_scale: Some(1.0),
+                ..PartialSettings::default()
+            },
+            &base,
+            &values(r#"{"steps":25}"#),
+        )
+        .unwrap();
+        assert_eq!((over.steps, over.cfg_scale), (None, Some(1.0)));
+        // `null` clears.
+        let over = update_model(&over, &base, &values(r#"{"cfg_scale":null}"#)).unwrap();
+        assert_eq!(over, PartialSettings::default());
+    }
+
+    #[test]
+    fn a_model_override_is_checked_like_a_setting() {
+        let base = Settings::default();
+        let none = PartialSettings::default();
+        for bad in [
+            r#"{"steps":0}"#,
+            r#"{"refine_strength":1.0}"#,
+            r#"{"stpes":12}"#,
+            r#"{"prompt":"a cat"}"#,
+            r#"{"variables":{}}"#,
+        ] {
+            assert!(update_model(&none, &base, &values(bad)).is_err(), "{bad}");
+        }
+    }
+
+    /// Model names are file stems — dots, spaces, capitals — and each is a
+    /// quoted table key. The file must read back what it wrote.
+    #[test]
+    fn model_settings_round_trip_through_the_file() {
+        let dir = tmpdir("models");
+        let mut m = ModelSettings::default();
+        m.model.insert(
+            "sd_xl_base_1.0".into(),
+            PartialSettings {
+                steps: Some(6),
+                cfg_scale: Some(1.0),
+                extra_args: Some(vec!["--offload-to-cpu".into()]),
+                ..PartialSettings::default()
+            },
+        );
+        m.model.insert(
+            "hand 5.5".into(),
+            PartialSettings {
+                sampler: Some("dpm++2m".into()),
+                ..PartialSettings::default()
+            },
+        );
+        m.save(&dir).unwrap();
+        assert_eq!(ModelSettings::load(&dir).unwrap(), m);
+        // No file is no overrides, not an error.
+        std::fs::remove_file(ModelSettings::path(&dir)).unwrap();
+        assert_eq!(ModelSettings::load(&dir).unwrap(), ModelSettings::default());
     }
 }
