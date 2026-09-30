@@ -23,11 +23,17 @@ Both escalations read the *unfiltered* image and write a new one; the grade, cla
 and RCAS run once on the way out. So no filter compounds, and no pass ever diffuses
 over pixels an earlier pass already sharpened or graded.
 
-The **Image to image** tab is the second way in: drop, paste or pick a picture and
-run one diffusion pass over it, after which it climbs the same ladder. And because
-a checkpoint describes the pass *about to* run rather than the one that already
-did, each rung can name its own — draft on a Turbo model, finish on a detailed one.
-See [Image to image](#image-to-image).
+**Start from** is the second way in: drop, paste or pick a picture above the prompt
+and Generate runs one diffusion pass over it, after which it climbs the same ladder.
+And because a checkpoint describes the pass *about to* run rather than the one that
+already did, each rung can name its own — draft on a Turbo model, finish on a
+detailed one. See [Start from](#start-from).
+
+Models are identified by **what is inside the file**, not by name or folder: SD 1.x,
+SD 2.x and SDXL checkpoints, and **Z-Image**, which arrives as three files (the
+model, a text encoder and a VAE) that are found and put together for you. Each
+family starts at its own sensible settings, and any model can be given its own. See
+[Model families](#model-families).
 
 There is a **Video** tab too, over the same subprocess and the same GPU queue: Wan 2.2
 through sd.cpp's `vid_gen` mode, animating either a prompt or one of your finished
@@ -121,16 +127,44 @@ This produces the CLI binary (`build/bin/sd-cli` on recent checkouts, `sd` on ol
 > Note: `rustimage` itself does **not** need `glslc` — its FSR shaders are WGSL, compiled
 > in-process by `wgpu`/naga. `glslc` is only needed to build sd.cpp.
 
-### 2. Get a checkpoint
+### 2. Get a model
 
-Download a single-file `.safetensors` / `.ckpt` / `.gguf` (no conversion needed) into
-`models/`, or any folder under it (`models/checkpoints/` is fine). That's the whole
-step — every checkpoint is **auto-discovered** by reading its header, so its family
-(SD 1.x, SD 2.x, SDXL) is known and a file that isn't an image checkpoint — an LTX
-video model, a loose VAE — is left out of the select and named by `doctor` instead. It
-is listed in the UI, so no config edit is needed to add a model. Distilled checkpoints
-(SDXL-Turbo, SD-Turbo, LCM) give the fastest results, but want a template to set their
-low step count and CFG 1 — see below.
+Put model files anywhere under `models/`. Every file is **identified by reading its
+header** — the tensor names inside it — so neither the file name nor the folder
+matters, and a file that isn't an image model (an LTX video model, a loose VAE) is
+left out of the model select and named by `doctor` instead. No config edit is needed
+to add a model.
+
+A tidy layout, and the one ComfyUI uses, so an existing ComfyUI `models` folder
+works as-is:
+
+```
+models/
+  checkpoints/         SD 1.x / 2.x / SDXL single-file checkpoints
+  diffusion_models/    a model that comes without its text encoder and VAE (Z-Image)
+  text_encoders/       their text encoders
+  vae/                 their VAEs
+  loras/   upscalers/  video/
+```
+
+**SD 1.x, SD 2.x, SDXL** — one `.safetensors` / `.ckpt` / `.gguf` file, no
+conversion needed. Distilled checkpoints (SDXL-Turbo, LCM) are the fastest, but want
+few steps and CFG 1: set that once with *Save as defaults for this model* (see
+[Per-model settings](#per-model-settings)).
+
+**Z-Image** — three files, which are found and put together for you:
+
+| file | where to get it |
+|---|---|
+| the model — Z-Image-Turbo | [safetensors](https://huggingface.co/Comfy-Org/z_image_turbo/tree/main/split_files/diffusion_models) or [GGUF](https://huggingface.co/leejet/Z-Image-Turbo-GGUF/tree/main) |
+| the text encoder — Qwen3-4B | [safetensors](https://huggingface.co/Comfy-Org/z_image_turbo/tree/main/split_files/text_encoders) or [GGUF](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/tree/main) |
+| the VAE — Flux's `ae.safetensors` | [FLUX.1-schnell](https://huggingface.co/black-forest-labs/FLUX.1-schnell/tree/main) |
+
+With only some of them, the model is listed greyed out and `doctor` prints the path
+it is waiting for. The bf16 set is ~20 GB and fits a 24 GB card; a GGUF quantization
+is the answer on a smaller one. The turbo runs at 8 steps and CFG 1, which is what it
+arrives set to; the base Z-Image wants ~28 steps at CFG 4-5, which is a per-model
+setting.
 
 ### 3. Smoke-test sd.cpp on its own
 
@@ -143,14 +177,15 @@ Before involving Rust, confirm generation works:
 
 ## Configure
 
-**Two files, and the difference between them is who writes them.**
+**Three files, and the difference between them is who writes them.**
 
 | file | holds | written by |
 |---|---|---|
 | `models.toml` | what the program needs in order to start: the sd.cpp binary, the directories, the port, per-checkpoint presets, video models | you, by hand |
 | `user/settings.toml` | your defaults: steps, CFG, size, the refine and hi-res settings, the default prompt | the **Settings tab**, on every save |
+| `user/model-settings.toml` | what one model does differently — a turbo's 6 steps, say | *Save as defaults for this model* and the Settings tab's **Per model** card |
 
-The second is created on first run, seeded from a `[defaults]` block in
+`user/settings.toml` is created on first run, seeded from a `[defaults]` block in
 `models.toml` if you still have one. It is rewritten in full every time you press
 Save, so it carries no comments — which is exactly why it is a separate file from
 the one above, where the comments are most of the content.
@@ -158,13 +193,36 @@ the one above, where the comments are most of the content.
 There are two ways to get a selectable model, and the first needs no config at
 all:
 
-- **Discovery** — any checkpoint in the models dir is auto-listed and runs on
-  your settings. Nothing to edit.
+- **Discovery** — any model in the models dir is auto-listed and runs on your
+  settings, laid under its family's defaults (see below). Nothing to edit.
 - **Templates** — a `[templates.<name>]` block says what is *different* about
   one specific checkpoint (matched by its `model` path) and inherits everything
   it doesn't name. A Turbo preset is three lines: 4 steps, CFG 1, and the file.
 
 Either way, **adding a model never needs a code change.**
+
+### Model families
+
+A model's **family** is read from its file, and it decides two things: which files
+sd.cpp is handed, and what the model starts at.
+
+| family | files | starts at |
+|---|---|---|
+| SD 1.x, SD 2.x, SDXL | one checkpoint (`-m`) | your settings — the *SD 1.x, SD 2.x and SDXL* section of the Settings tab |
+| Z-Image | model + Qwen3-4B text encoder + Flux VAE | 1024², 8 steps, CFG 1, euler — the turbo's recipe from sd.cpp's docs |
+
+Flux, Qwen-Image, SD3, Chroma, LTX and several more are recognised and named by
+`doctor` ("… which this build doesn't run yet") rather than offered and then failing
+minutes into a render. The model select groups models by family.
+
+**Where a model's numbers come from**, each layer overriding the one before only
+where it says something:
+
+1. `user/settings.toml` — the Settings tab.
+2. The family's defaults — size, steps, CFG and sampler, for every family except SD
+   and SDXL (whose defaults are your settings).
+3. A `[templates.<name>]` block in `models.toml`, if you wrote one.
+4. `user/model-settings.toml` — see [Per-model settings](#per-model-settings).
 
 ### `models.toml`
 
@@ -185,16 +243,18 @@ Either way, **adding a model never needs a code change.**
 
 ### `user/settings.toml`
 
-Edited from the Settings tab, or by hand. These are the values every
-**discovered** checkpoint starts from, and what a template inherits whatever it
-doesn't name. Tuned for standard (non-distilled) SDXL.
+Edited from the Settings tab, or by hand. These are the values every model starts
+from, and what a template inherits whatever it doesn't name. Tuned for standard
+(non-distilled) SDXL — which is why `width`, `height`, `steps`, `cfg_scale` and
+`sampler` reach SD 1.x, 2.x and SDXL only: every other family starts from its own
+(see [Model families](#model-families)).
 
 | field | meaning |
 |-------|---------|
 | `prompt` / `negative` | what the prompt boxes contain when the page loads. Not per-model — a checkpoint has a house step count, none has an opinion about what you usually want to draw |
 | `width` / `height` | base generation size, default `768` each (small = fast) |
 | `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `30`, `6.0`, `euler` (Turbo → few steps, cfg 1) |
-| `img2img_cfg_scale` *(opt)* | CFG for the **Image to image** tab's pass, and what the two below fall back to; unset (the default) follows `cfg_scale`. `0` is legal and means guidance off |
+| `img2img_cfg_scale` *(opt)* | CFG for a pass over a [*Start from*](#start-from) image, and what the two below fall back to; unset (the default) follows `cfg_scale`. `0` is legal and means guidance off |
 | `upscale_factor` | the enlarge every base render goes through, default `2.0` (768 → 1536) — not a diffusion pass. Also a box in the Advanced panel, where `1` means no enlarge at all |
 | `upscaler` *(opt)* | what does that enlarge: unset (the default) is FSR's EASU; a file name under the upscaler dir, extension included, is an ESRGAN model. See [Upscalers](#upscalers) |
 | `hires_scale` | where the hi-res pass's enlarge factor starts, default `2.0`. The select above a finished image and the one in the Hi-res pass group are the same setting |
@@ -202,10 +262,10 @@ doesn't name. Tuned for standard (non-distilled) SDXL.
 | `clarity` | local contrast, -1..1, default `0.0` = off — positive adds mid-frequency depth, negative softens; likewise the slider's starting value |
 | `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size (0 steps = disabled) |
 | `refine_cfg_scale` *(opt)* | CFG for the refine pass alone; unset falls through to `img2img_cfg_scale` and then to `cfg_scale` |
-| `source_steps` / `source_strength` | the **Image to image** tab's one pass over a source image you supply. Defaults `12` and `0.55` — far higher than the two escalations, because this one is asked to make a picture *out of* one rather than to finish one it made |
+| `source_steps` / `source_strength` | the one pass over a [*Start from*](#start-from) image. Defaults `12` and `0.55` — far higher than the two escalations, because this one is asked to make a picture *out of* one rather than to finish one it made |
 | `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, after an enlarge (0 steps = disabled) |
 | `hires_cfg_scale` *(opt)* | the same, for the hi-res pass. Two knobs rather than one because the two passes work on different pixels at different sizes |
-| `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job. Does not limit refine. Also where the Image-to-image tab's working size starts |
+| `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job. Does not limit refine. Also where *Start from*'s working size starts |
 | `hires_flash_attn` | `--diffusion-fa` for the img2img passes when they run large (default true; worth 6× at 2048²) |
 | `weight_type` *(opt)* | on-the-fly quantization, e.g. `q8_0`, via sd-cli `--type` |
 | `extra_args` *(opt)* | arbitrary flags passed verbatim to sd-cli |
@@ -351,9 +411,12 @@ experts and a smaller encoder, in that order.
 ```sh
 cargo run --release
 # [rustimage] settings: /home/you/rustimage/user/settings.toml
-# [rustimage] 2 model(s) available in /home/you/rustimage/models:
-# [rustimage]   • samExtTURBO_v10   [discovered, 6.5 GB]  768x768 → 1536x1536  · 30 steps, cfg 6
-# [rustimage]   • sd_xl_base_1.0    [discovered, 6.5 GB]  768x768 → 1536x1536  · 30 steps, cfg 6
+# [rustimage] 3 model(s) available in /home/you/rustimage/models:
+# [rustimage]   • samExtTURBO_v10   [sdxl, discovered, tuned, 6.5 GB]  768x768 → 1536x1536  · 6 steps, cfg 1
+# [rustimage]   • sd_xl_base_1.0    [sdxl, discovered, 6.5 GB]  768x768 → 1536x1536  · 30 steps, cfg 6
+# [rustimage]   • z_image_turbo     [z_image, discovered, 11.5 GB]  1024x1024 → 2048x2048  · 8 steps, cfg 1
+# [rustimage]       --vae   vae/ae.safetensors
+# [rustimage]       --llm   text_encoders/qwen_3_4b.safetensors
 # [rustimage] GPU worker ready on adapter: AMD Radeon RX 7900 XTX (RADV NAVI31)
 # [rustimage] GPU post-process: upscale=easu, grade=oklab, contrast=clarity, sharpen=rcas
 # [rustimage] listening on http://127.0.0.1:8080
@@ -383,8 +446,8 @@ Every control has a small **(i)** beside its label, with a sentence or two on wh
 setting does and how to choose a value — and, where that is the honest answer, on the
 fact that the value belongs to the *checkpoint* rather than to image generation: a
 turbo model is trained to land in 1–4 steps at CFG 1, where a standard SDXL wants
-around 20 at 5–7. The same icons are on the image-to-image, video and convert tabs and
-on the viewer's ten sliders.
+around 20 at 5–7. The same icons are on the video and convert tabs and on the viewer's ten
+sliders.
 
 The interface is static files — `web/index.html`, `web/style.css` and a folder of ES
 modules under `web/js/` — with no build step, no framework and nothing fetched from
@@ -451,8 +514,11 @@ soft. At output resolution there is nothing downstream to smear what it adds.
 
 ### Settings
 
-The **Settings** tab is `user/settings.toml` as a form: the values every
-checkpoint starts from, and what the prompt boxes contain when the page loads.
+The **Settings** tab is `user/settings.toml` as a form: the values every model
+starts from, and what the prompt boxes contain when the page loads. Steps, CFG,
+sampler and size are in a section named *SD 1.x, SD 2.x and SDXL*, because that is
+all they reach — other families start from their own (see
+[Model families](#model-families)).
 Press **Save settings** and it is written and takes effect immediately — the
 model list and the Advanced panel refill themselves, with no restart and no
 reload.
@@ -464,9 +530,9 @@ bound has no business in the middle of one. It is the word lists behind
 they do. Everything else is the default for a control on one of the other tabs,
 and carries that control's own label and its own **(i)**, so "Refine strength"
 here is the same words and the same explanation as "Refine strength" there. The
-sections are named after the tabs they belong to, which is why *Steps* appears
-twice — once for the Image tab and once for Image-to-image, where it is a
-different pass. The three under **Advanced** are the ones with no control
+sections are named after what they belong to, which is why *Steps* appears
+twice — once for the Image tab and once under *Starting from an image*, where it
+is a different pass. The three under **Advanced** are the ones with no control
 anywhere else: flash attention, the weight type and extra sd-cli arguments.
 
 Edits you haven't saved are marked on the Settings tab itself, so walking away
@@ -487,6 +553,29 @@ those same built-ins rather than refusing to run.
 
 Nothing here is retroactive. An image already made keeps the settings it was
 made with, which is what lets reopening a work item restore it faithfully.
+
+#### Per-model settings
+
+A file can't say whether it is an SDXL or an SDXL-Turbo, or a Z-Image turbo or its
+base model — same tensors, different training — so the difference is yours to say,
+once per model:
+
+- On the Image tab, set the Advanced boxes the way that model wants them and press
+  **Save as defaults for this model**. It opens that way from then on, and is tagged
+  *tuned* in the select.
+- Or on the Settings tab, the **Per model** card: pick a model, and each box shows
+  its own setting — or is empty, with the value it will start at as the
+  placeholder. Empty a box to drop that setting; **Clear all** drops them all.
+
+Only what differs from where the model would start anyway is kept, in
+`user/model-settings.toml`. So changing a global setting still reaches every model
+that has no opinion of its own about it — the tuned turbo keeps its 6 steps, and
+picks up your new refine strength. This is also the place for a model's own
+**Extra sd-cli arguments**, such as `--offload-to-cpu` for a model that doesn't fit.
+
+A model is remembered by its name, which for a discovered one is its file name
+without the extension — rename the file and `doctor` points out the settings that no
+longer apply to anything.
 
 ### Prompt variables
 
@@ -635,17 +724,22 @@ refines to keep every step.
 
 Everything else in `work/` is scratch and is still cleared at startup.
 
-### Image to image
+### Start from
 
-The second tab starts from a picture instead of a prompt. Drop a file on the zone
-at the top, paste one, or click a tile in **Source images** — which is everything
-in `work/output/`: what you have saved from the Image tab, and what you have
-dropped in. An import is listed beside the rest because at the moment you are
-choosing something to diffuse, the difference isn't interesting.
+The Image tab can start from a picture instead of from noise. **Start from** sits
+above the prompt: **Choose…** picks one of your outputs (everything in
+`work/output/` — what you have saved, and what you have uploaded), **Upload…** takes
+a file, and dropping or pasting an image onto the tab does the same. An upload lands
+in `work/output/` beside your saves, so it is in the picker next time, in the Outputs
+tab, and animatable on the Video tab. **Clear** goes back to text to image.
 
 Anything the browser can open works — JPEG, WebP, AVIF — because the page
 re-encodes it to PNG in a canvas before uploading. Nothing in the binary decodes
 anything but PNG, and that stays true.
+
+With a picture picked, the panel changes to match: base size, base steps and Output
+upscale hide, because they describe a render from noise, and three boxes appear under
+the picture, plus an **img2img CFG** beside CFG scale.
 
 **Strength** is the knob that matters. It decides whether this is a retouch or a
 re-render: 0.3 barely moves the picture, the default 0.55 keeps the composition,
@@ -656,10 +750,12 @@ scaled down first. It starts at the model's `hires_max_side` because that is the
 same question already answered for this card: a 4000 px phone photo diffused at
 full size is an out-of-memory, not a better picture.
 
-The result then joins the ordinary ladder. Refine, Hi-res, the viewer's sliders
-and Save to output all work on it exactly as they do on a generation, and it is archived
-as a work item like one — so it comes back from the grid on the Image tab, source
-image and all.
+Everything else is the Image tab as usual: the same prompt, model, LoRAs and
+escalation settings, and the same run panel — *Generate 8* over one picture is eight
+seeds of the same transform, a good way to pick the best of several. The result joins
+the ordinary ladder (Refine, Hi-res, the viewer, Save), and is archived as a work item
+with its source, so reopening it puts the picture back in *Start from*. Reopening one
+made from noise clears the slot.
 
 ### LoRAs
 
@@ -769,8 +865,8 @@ so the sliders and Save keep working; it just has nothing to go back to.
 There is no Refine and no Hi-res here, on purpose. A saved image already has its grade
 and its sharpening in the pixels, and everything else in this program is built so that
 nothing ever diffuses over filtered pixels. If you want to take a saved image further,
-the **Image to image** tab is the way — that starts a real pass from it, at a strength
-you choose. Grading it further is exactly what this tab is for; re-rendering it is a
+pick it in the Image tab's **Start from** — that starts a real pass from it, at a
+strength you choose. Grading it further is exactly what this tab is for; re-rendering it is a
 different question, asked in a different place.
 
 ### Escalating with a different model
@@ -1018,8 +1114,8 @@ Dialling it back in costs a drag, not a render.
 same argument: +0.2 saturation means the same thing at any size, so there is nothing
 stale about it, and losing a grade every time you climb a rung would be a reason not to
 climb it. It is re-applied to the new pixels rather than stacked on them — the escalation
-diffuses the ungraded image, as everything here does. A fresh generate, an
-image-to-image, or reopening a work item all start from neutral again.
+diffuses the ungraded image, as everything here does. A fresh generate — from noise
+or from a picture — or reopening a work item all start from neutral again.
 
 A different config file can be passed as the first argument:
 `cargo run --release -- /path/to/models.toml`.
@@ -1058,17 +1154,28 @@ needs a Vulkan device and nothing else.
 - `GET /templates` (alias: `GET /models`) — JSON list of the registry, templates and
   discovered checkpoints alike. Built fresh on every call, so a newly-dropped checkpoint
   appears without a restart. Each entry carries `name`, `description`, `discovered`,
-  `exists`, `base_width` / `base_height`, `out_width` / `out_height`, and the profile's
+  `exists`, `family` (`sd1`, `sd2`, `sdxl`, `z_image`) and `family_label`, `tuned` (it
+  has per-model settings), `missing` (every file standing between it and a run, at the
+  path it is expected at — empty when `exists`), `base_width` / `base_height`, `out_width` / `out_height`, and the profile's
   `steps`, `cfg_scale`, `img2img_cfg_scale`, `sampler`, `upscale_factor`, `upscaler`, `refine_steps`,
   `refine_strength`, `hires_steps`, `hires_strength`, `source_steps`,
   `source_strength`, `hires_max_side`, `sharpness`, `clarity` — which is
   what lets the UI pre-fill its controls when you pick a model. `hires_max_side` is
-  published because the Image-to-image tab's working-size control starts there, and a
+  published because *Start from*'s working-size control starts there, and a
   second answer to "how large can this card afford to diffuse" computed in JavaScript
   would be a second answer free to disagree. `img2img_cfg_scale` is
   `null` when the profile doesn't set one; that is deliberately distinguishable from the
   same number as `cfg_scale`, because unset *follows* the base CFG rather than matching
   it once.
+- `GET /model-settings` — every model's per-model layer: `{"models": [{name,
+  family_label, base, over}]}`, where `base` is what the model starts at *without* its
+  own settings (the Per model card's placeholders) and `over` is what
+  `user/model-settings.toml` holds for it. A broken file answers 200 with an `error`.
+- `POST /model-settings` — `{"model": name, "values": {knob: value | null}}`. A missing
+  key is left alone, `null` removes that setting, a value sets it — and then everything
+  equal to `base` is dropped, so only real differences are stored. Any setting a model
+  can have (not `prompt`, `negative`, `hires_scale` or `variables`); an unknown key is
+  a 400 rather than a silent no-op. Answers with the same shape as the GET.
 - `POST /generate` — only `prompt` and `template` are required:
   ```json
   { "prompt": "…", "template": "sdxl-turbo", "negative": null, "seed": -1 }
@@ -1347,11 +1454,12 @@ the GPU worker is gone.
   ```
   src/main.rs      server + routing + single GPU worker + CLI subcommands
   src/http.rs      minimal std-only HTTP/1.1
-  src/config.rs    models.toml -> typed profiles (templates + discovery)
-  src/discover.rs  identify video model files by their tensor headers
+  src/config.rs    models.toml -> typed profiles (templates + discovery), image families
+  src/discover.rs  identify model files by their tensor headers, image and video
   src/convert.rs   requantize a model file (-M convert) — types, size estimate, slots
   src/preflight.rs startup environment checks, shared with `doctor`
   src/sd.rs        sd-cli subprocess wrapper (txt2img + img2img + vid_gen)
+  src/settings.rs  user/settings.toml and user/model-settings.toml
   src/pipeline.rs  orchestrate sd -> fsr -> escalations, with timings + result cache
   src/workitems.rs durable storage: work/workitems/ + work/output/
   src/videos.rs    durable storage for clips: work/videos/
@@ -1364,6 +1472,7 @@ the GPU worker is gone.
   models.toml      config + model profiles + the [[video]] overrides
   models/video/    video components, scanned recursively and identified by header
   user/settings.toml  the defaults every generation starts from
+  user/model-settings.toml  what individual models do differently
   user/favorite/   work items you kept — the one place nothing here sweeps
   work/            scratch, cleared at startup
   work/workitems/  every generation + its settings — kept
@@ -1384,6 +1493,17 @@ the GPU worker is gone.
 
 ## Roadmap
 
+- **More image families.** Flux (and Krea/Flex) and Qwen-Image are already recognised;
+  each is a recipe, its parts (Flux: CLIP-L + T5-XXL; Qwen-Image: Qwen2.5-VL) and a
+  switch in `ImageFamily`. See CLAUDE.md, *## Families*.
+- **LoRAs filtered by family.** A LoRA's tensor names say which base it patches; the
+  picker should grey out an SDXL LoRA on a Z-Image rather than send it.
+- **An edit tab.** Two different things share the name: *instruction* editing
+  (Flux Kontext, Qwen-Image-Edit, Flux 2 — a reference image and "make the sky red",
+  sd.cpp's `-r`) and *masked inpainting* (`--mask`). Both are more slots on the
+  *Start from* factory: a mask painter and a list of reference images.
+- **LTX-2 on the Video tab**, as a `VideoFamily` (`--llm` Gemma, `--audio-vae`,
+  `--embeddings-connectors`). The classifier already names the file.
 - Keep the model resident via the sd.cpp C API (FFI) instead of per-request subprocess,
   if warm-start latency matters.
 - **Refine a clip with a VACE pass.** `--control-video` takes a directory of frames,

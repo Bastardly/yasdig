@@ -1,4 +1,4 @@
-# Feature 1 - Preparation for more models
+# ~~Feature 1 - Preparation for more models~~ — DONE
 
 This is an open-ended definition where I try to explain future plans. The goal here is to prepare for that future by making the architecture more modular. Any suggestions are simply suggestions, and any ideas based on deeper insight would be appreciated. 
 
@@ -77,7 +77,7 @@ So, again. Anything is up for discussion.
   form keeps width/height/steps/CFG/sampler, relabelled *SD 1.x, SD 2.x and SDXL* — they are the one place to
   change every SDXL at once, and other families' recipes already override them. Limitation: this layer can't
   pin FSR over a global ESRGAN upscaler (absent key and FSR are both "no name").
-- **Phase 5 — one Image tab: DONE, awaiting your check.** The Image-to-image tab is gone (`img2img.js`,
+- **Phase 5 — one Image tab: DONE** (verified). The Image-to-image tab is gone (`img2img.js`,
   `#tab-img2img`, its PANES row, `i2go`/`i2prog`). `web/js/source-slot.js` is a factory (Choose… via the shared
   `#picker` dialog, Upload…, drop, paste gated to its tab) used by the Image tab's *Start from* and the Video
   tab's first frame — so a video can now start from an upload. With a source, `data-when` controls swap
@@ -85,7 +85,14 @@ So, again. Anything is up for discussion.
   CFG show. `genPayload` returns `[route, body]` — `/img2img` with a source, `/generate` without — so the run
   panel (batch, loop, after-each) works over a source too, walking the seed. Reopening a work item sets or clears
   the slot. No server change. Settings rows moved to the new ids (section renamed *Starting from an image*).
-- **Next: phase 6** (docs: CLAUDE.md sections for families / Start from / per-model settings, README).
+- **Phase 6 — docs: DONE.** CLAUDE.md: new *## Families* and *## Start from* (replacing *The image-to-image
+  tab*), a *Per model* subsection under *## Settings*, step 7b in *Adding a per-model knob*, and every stale
+  reference to the old tab, `img2img.js`, `#i2go` and the three panes. README: *Get a model* (ComfyUI layout,
+  Z-Image download table), *Model families* with the four layers, *Start from*, *Per-model settings*, the
+  `/models` fields and `/model-settings` routes, and the roadmap.
+- **Left for later** (phase F, in the README roadmap): Flux and Qwen-Image as runnable families, LoRAs
+  filtered by family, the edit tab (instruction edit vs masked inpaint, as more *Start from* slots), LTX-2 on
+  the Video tab.
 
 ## Context
 

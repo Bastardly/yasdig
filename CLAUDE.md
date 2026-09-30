@@ -86,7 +86,73 @@ comment in each `.wgsl` is thorough; open the file rather than guessing.
   each at 1.0 and fails if it moved nothing, which is the copy-paste that `GradeParams`
   and the shader's `Params` invite.
 
-## The image-to-image tab
+## Families
+
+An image model is a **family** and a set of files, read off the file's own tensor
+names — the video side's discovery (`src/discover.rs`) pointed at the image side.
+`ImageFamily` (`src/config.rs`) sits beside `VideoFamily`: separate enums, because
+their recipes are different shapes, but one classifier feeds both.
+
+**Nothing is identified by filename or folder.** `Config::scan_images` walks the
+whole models dir (recursive; the video, LoRA and upscaler dirs are left out, each
+having a listing of its own) and `discover::classify` names what each file is. The
+folders are for the person — ComfyUI's role layout works, and so does a flat folder.
+This replaced an extension check that listed an LTX-2 video transformer as an SDXL
+checkpoint, and it is also what found an SD 1.x file that had been running on SDXL's
+settings. A file that isn't a runnable family is not offered and `doctor` says what
+it is (`Role::Unsupported` for an architecture sd.cpp knows and this build doesn't,
+`Role::Unknown` for nothing matched).
+
+**A model is either bundled or assembled.** `Role::Image { family, bundled }`:
+a bundled checkpoint carries its VAE and text encoder and runs as `-m`; a bare DiT
+runs as `--diffusion-model` plus one flag per part, and `discover::image_components`
+picks those parts from the same scan — or, when one is missing, names the
+conventional path inside its role folder, so the model is listed greyed out and the
+missing path is the instruction. `Profile.components` is `None` for bundled, which is
+also what every old sidecar reads as. **The flag decides the tensor prefix sd.cpp
+loads under**, so a DiT through `-m` doesn't fail to start, it fails to find its own
+weights — which is why `base_cmd` never guesses.
+
+Seven things break silently:
+
+- **Image models are tested before either VAE branch in `classify`.** A bundled SDXL
+  carries its VAE, whose resnets are `decoder.…conv2`, which is the Wan VAE's
+  marker — it would read as a 512-channel Wan VAE. The LDM-VAE test comes before the
+  Wan one for the same reason.
+- **The unsupported markers come before the supported families.** Hunyuan Video has
+  Flux's `double_blocks`, and an SVD is a UNet.
+- **The UNet split is by cross-attention context width** (`attn2.to_k`: 768 SD1,
+  1024 SD2, 2048 SDXL), not by the text encoder's token embedding the way sd.cpp's
+  `get_sd_version` does it — that only works while the encoder is in the file.
+  `inner_dim(layout)`, because `to_k` is rectangular and GGUF reverses the shape.
+- **An encoder is picked by width, not kind.** Qwen3 ships from 0.6B to 32B; only the
+  2560-wide 4B conditions a Z-Image (`LlmKind::Qwen3 { dim }`).
+- **`discover::identify` memoizes on `(path, len, mtime)`**, not on the path. The
+  registry scans on every request, and a download that finishes is the same path
+  with a new length — keyed on the path alone, a model would never appear.
+- **The engine resolves a model per job** (`Engine::model`), never from a registry
+  captured at startup. It used to capture one, so a file added while the server ran
+  showed in the select and failed as "unknown model", and a saved per-model default
+  never reached a run.
+- **`ImageFamily::runnable` is the gate, and it needs both halves.** A family turns
+  on once it has components *and* a `recipe()`; `a_runnable_dit_has_a_recipe_and_its_parts`
+  refuses one without either. Without the recipe a DiT would run at the SDXL-tuned
+  steps and CFG, which is a picture, just a bad one.
+
+**Adding a family** is: a classifier arm (from `get_sd_version`'s marker), a variant
+with `label`/`as_str`, its parts in `image_components`, a `recipe()`, its `flags()`,
+and `runnable()` turned on. `README.md` gets its download list. The escalation ladder
+needs nothing — every rung is pixels in, pixels out, so refining a Z-Image on an SDXL
+is ordinary, and `swap_model` already carries family and components with the rest of
+the profile.
+
+## Start from
+
+The Image tab's source image: nothing picked is text to image, a picked image makes
+Generate run `/img2img` instead of `/generate`. It used to be a tab of its own, which
+duplicated the prompt, model, LoRAs and the whole escalation panel for one image
+slot. `web/js/source-slot.js` is the factory, and the Video tab's first frame is a
+second instance of it — so a video can start from an upload too.
 
 `Engine::img2img` (`src/pipeline.rs`) is `run` with the txt2img replaced by a source
 image, and `open`'s copy-in rule bolted to the front. Three things about it.
@@ -112,7 +178,7 @@ not already be a generation of loss. The size ceiling is not politeness: a phone
 is 4032×3024 and a pass at that size is an OOM on a 24 GB card.
 
 Uploads (`POST /upload`) land in `work/output/` through `Store::import`, which is why
-the tab needed no new listing, thumbnail or picker route — that directory is already
+Start from needed no new listing, thumbnail or picker route — that directory is already
 *the* pool of images you can start from, and an import is animatable as well as
 diffusable. The stem is minted (`new_id`), never taken from the filename: `valid_id`
 is alphanumerics and `-`, so almost no real filename is even expressible, and
@@ -125,6 +191,28 @@ is never UTF-8 validated, so this costs nothing and saves a third of the wire.
 of bailing, which used to close the socket with no response at all. **PNG only in
 Rust, on purpose**: the page re-encodes through a `<canvas>` first, so JPEG/WebP/AVIF
 all work and `image` stays compiled `features = ["png"]`.
+
+On the page, four things break silently:
+
+- **`data-when` is what swaps the panel, and `syncMode` is the only writer.** Base
+  Steps, base size and Output upscale are `data-when="text"` — they describe a render
+  from noise, and a pass over a source has no enlarge stage and takes Steps from
+  beside the source. Strength, Steps, Working size and img2img CFG are
+  `data-when="source"`. The slot's `onChange` calls `syncMode`, so every way a source
+  arrives — pick, upload, drop, paste, a reopened work item — flips the panel.
+- **`genPayload` returns `[route, body]`**, and the run loop posts whatever it is
+  given. That is what lets batch, loop and the after-each passes work over a source
+  with no second loop: a batch over one source is N seeds of one transform.
+- **A reopened work item always sets the slot** — to its source, or to nothing.
+  Leaving a previously picked source in place would turn the next Generate into a
+  pass over *that*, beside boxes restored from an image made from noise.
+- **The img2img CFG is the middle of the escalation chain only when a source is
+  picked.** `/generate` doesn't send it, so from noise the retained value is the
+  model's, and `syncCfgPlaceholders` reads the model's; with a source it reads the
+  box. The negative-prompt rule (hidden at CFG exactly 1) follows the same choice.
+
+Paste is a document listener per slot, each gated to its own tab being visible, so
+two slots never both take one paste.
 
 ## LoRAs
 
@@ -162,9 +250,9 @@ tag parser:
 
 **`Profile.loras` is the only knob on `Profile` with no `Defaults`/`Template`
 pair**, and that is deliberate: a LoRA is reached for per picture, so it arrives
-on the request and both arms of `registry()` build the field empty. That is what
-keeps this change clear of the trap at the top of this file — there is no second
-struct to forget. `a_model_brings_no_loras_of_its_own` pins it, and is the test
+on the request and `Settings::as_profile` builds the field empty for every model.
+That is what keeps this change clear of the trap at the top of this file — there
+is no second struct to forget. `a_model_brings_no_loras_of_its_own` pins it, and is the test
 that fails if somebody adds the config key later without reading this.
 
 It is on `Profile` at all for two reasons, and both are load-bearing:
@@ -186,13 +274,15 @@ rule for how a `Vec` interacts with a wholesale swap.
 
 On the page, `loras.js` is a factory in `gridmark.js`'s shape and for the same
 reason — two copies of a control that builds a request body is two chances for
-one of them to send a different one. Two things in it break silently:
+one of them to send a different one. There is one instance today — the
+Image-to-image tab that had the second one is now the Image tab's *Start from* —
+and the factory stays one because the edit tab is the next likely second. Two
+things in it break silently:
 
 - **The module-level `available` list is shared; the picked rows are not.** One
-  fetch feeds both tabs (`loading` memoizes the in-flight promise so two `init()`
-  calls in one tick don't race two requests), but a LoRA chosen for a txt2img has
-  no business riding along on a pass over somebody's photograph, so each instance
-  owns its own `picked`.
+  fetch feeds every instance (`loading` memoizes the in-flight promise so two
+  `init()` calls in one tick don't race two requests), but each owns its own
+  `picked` — a LoRA chosen for one request has no business riding along on another.
 - **`loras` is always sent, including empty.** The server reads `[]` as "none,
   explicitly" and a missing key as "keep whatever the profile has"; the picker on
   screen is the complete answer to the question, so it must be able to say none.
@@ -362,8 +452,8 @@ through the gallery with the dialog left up.
 saved output is `display`, not `raw` — its grade and its RCAS are already in the
 pixels — so diffusing over one is precisely what invariant 1 exists to prevent.
 Grading it *further* is fine and is what the tab is for; escalating it is not, and
-the way to escalate a saved image is the Image-to-image tab, which starts a real
-pass from it.
+the way to escalate a saved image is to pick it as the Image tab's *Start from*,
+which starts a real pass from it.
 
 That also makes this the one place the sliders are **not** the lossless re-filter
 they are everywhere else. `/adjust` elsewhere re-runs the passes over a retained
@@ -406,7 +496,8 @@ Four things in it break silently:
   one `confirm()` on the page, and it only appears in delete mode: marking is visible
   and reversible, "all" is neither.
 - **`outputGrid` is the one tile.** It was written out three times — this grid, the
-  img2img source strip, the video tab's first-frame picker — and the declared height
+  old img2img source strip, the video tab's first-frame picker; now this grid and the
+  picker dialog behind every *Start from* slot — and the declared height
   has to match what `.wigrid` draws or the strip reflows as the thumbnails decode.
   One function with a `height`, an `empty` and an `onPick`.
 - **The arrow keys yield to a focused range input.** An `<input type=range>` consumes
@@ -464,7 +555,7 @@ Three things in it break silently:
 - **`--col-*` cannot be used in the media query.** Custom properties aren't allowed
   there, so the 899 px breakpoint is a literal that has to be kept in step by hand.
 
-`.tab` carries no style at all — it is how `showTab` finds the five tab buttons, and
+`.tab` carries no style at all — it is how `showTab` finds the tab buttons, and
 a rule with no declarations would be worse than none. Don't delete it for looking
 unused. And `doctor` checks for both files under `web/`, because an unstyled page
 reads as a broken one rather than as a missing one.
@@ -485,15 +576,16 @@ resolves the imports itself. `index.html` loads exactly one of them:
 | `image.js` | the Image tab: models, Advanced, `render`, escalations, runs, Save |
 | `workitems.js` | the work-item grid and reopening one |
 | `gridmark.js` | click-to-mark: the marks, the action table, the buttons, the requests |
-| `img2img.js` | the Image-to-image tab, including the upload |
-| `loras.js` | the LoRA picker, one instance per image tab |
+| `source-slot.js` | *Start from*: the source-image slot factory, the upload, drop and paste |
+| `loras.js` | the LoRA picker factory (one instance, on the Image tab) |
 | `outputs.js` | `fetchOutputs`, `outputGrid`, and the Outputs tab |
-| `video.js` | the Video tab: models, generate, the clip grid, the first-frame picker |
+| `video.js` | the Video tab: models, generate, the clip grid, the first frame (a `sourceSlot`) |
 | `player.js` | the canvas frame player and `renderClip` |
 | `convert.js` | the Convert tab |
 | `prompt-box.js` | the one custom element, and the weighting shortcut on it |
 | `prompt-weight.js` | `adjust`: the string maths behind Ctrl+↑/↓. Pure, and the one file with a test |
 | `settings.js` | the Settings tab: the field table, and the form generated from it |
+| `modelsettings.js` | the Settings tab's *Per model* card: `user/model-settings.toml` |
 | `app.js` | `showTab`, and the boot order |
 
 Four things in it break silently:
@@ -502,20 +594,22 @@ Four things in it break silently:
   every `innerHTML =` and every first fetch is inside that module's exported
   `init*()`, and `app.js` calls them in order. That is what makes the cycles in
   the graph harmless — `video.js` and `player.js` import each other, and so do
-  `image.js`, `workitems.js` and `img2img.js`, because the tabs genuinely do call
-  into each other. A cycle only bites when a module *reads* a cyclic import while
-  the other is still evaluating, and nothing here does. Put a `$(...)` at file
-  scope and that stops being true.
+  `image.js` and `workitems.js`, and `settings.js` and `modelsettings.js`, because
+  the tabs genuinely do call into each other. A cycle only bites when a module
+  *reads* a cyclic import while the other is still evaluating — and that has
+  happened: `modelsettings.js` once read `FIELDS` at load and blanked every tab.
+  `web/js/modules.test.js` now evaluates the whole graph under Node and fails on
+  exactly that. Put a `$(...)` at file scope and it will fail there too.
 - **The six shared values live on one object, `S`.** Not six exported `let`s: an
   imported binding is read-only at the importer, so `imageId = null` in another
   file is a `TypeError` rather than an assignment. The single-state rule under
-  *The three image panes* is unchanged; this is only how it is spelled now. Anything
+  *The image panes* is unchanged; this is only how it is spelled now. Anything
   only one module writes stays a plain `let` in that module and is exported if
   others read it (`models`, `clip`).
 - **`setBusy` reaches every tab, and gets there through `onIdle`.** It disables
-  `#go`, `#i2go`, `#vgo`, `#cgo`, `#lbsave`, all ten sliders and three upscale
-  selects at once, because there is one GPU queue. What a button says at rest is the owning
-  tab's to decide, so `image.js` and `img2img.js` register a callback rather than
+  `#go`, `#vgo`, `#cgo`, `#lbsave`, all ten sliders and three upscale selects at
+  once, because there is one GPU queue. What a button says at rest is the owning
+  tab's to decide, so `image.js` registers a callback rather than
   `busy.js` importing them back — which is also what keeps that module importable
   from everywhere.
 - **`web::WEB_FILES` is both the route table and the `doctor` list**, and the
@@ -528,8 +622,8 @@ Four things in it break silently:
 `<prompt-box>` (`web/js/prompt-box.js`) is the only custom element, and it
 **wraps** its `<textarea>`/`<input>` rather than replacing it: the control inside
 keeps the id, so `$('prompt').value`, `<label for>` and `wireHints` need nothing
-forwarded. It is where the features around a prompt go, and there are six of them
-on the page, so writing one three times is what it exists to prevent. Light DOM on
+forwarded. It is where the features around a prompt go, and there is one on every
+prompt control on the page, so writing one per tab is what it exists to prevent. Light DOM on
 purpose. See *## The prompt box* below for the one feature on it.
 
 **The tabs are deliberately *not* components.** Shadow DOM is the only thing a
@@ -565,7 +659,8 @@ Five things break silently:
   `Config` is an `Arc` and the GPU worker holds its *own* clone (`main.rs`), so a
   value cached at load could only be changed by restarting the server — which is
   not what a Save button means. A ~1 KB parse against a multi-second diffusion,
-  the same rule the LoRA scan already follows.
+  the same rule the LoRA scan already follows. The engine obeys it too:
+  `Engine::model` resolves a name per job rather than holding a registry.
 - **`Settings::merged_with` and `as_profile` have no `..rest`**, on purpose. See
   *Adding a per-model knob* — that is what makes the two-struct pair safe.
 - **`POST /settings` is a patch over what is stored, not a whole document**
@@ -584,6 +679,41 @@ Five things break silently:
   record has to describe the image it belongs to — reading the live file would
   let a setting changed today rewrite what an old generation claims it ran with.
 
+### Per model, and where each number comes from
+
+A model's settings are four layers, each a `Settings::merged_with` that overrides
+only what it names (`Config::entries` builds the first three, `Config::registry`
+adds the fourth):
+
+1. **`user/settings.toml`** — the global form.
+2. **`ImageFamily::recipe()`** — size, steps, CFG and sampler for a DiT family.
+   Empty for SD 1.x/2.x/SDXL, whose recipe the global numbers already *are*; that is
+   why the global form's section for those five boxes is called *SD 1.x, SD 2.x and
+   SDXL* rather than being removed — it is the one place to change every SDXL at once.
+3. **`[templates.*]`** in `models.toml` — hand-written, read-only.
+4. **`user/model-settings.toml`** — `settings::ModelSettings`, `[model."<name>"]`
+   tables of `PartialSettings`, written by the Image tab's *Save as defaults for this
+   model* and the Settings tab's *Per model* card (`web/js/modelsettings.js`). Named
+   so, not `user/models.toml`, so it doesn't share a name with the root config.
+
+Four things break silently:
+
+- **`settings::update_model` keeps only what differs from the model's base**, the
+  base being layers 1-3 (`Config::model_base`). That is what makes *Save as
+  defaults* safe to press with the whole Advanced panel in the body: pinning every
+  box would cut the model off from the global form for good. The comparison is
+  after a typed round trip — the page sends `6.3` and an `f32` serializes as
+  `6.300000190734863`, which as raw JSON would pin every CFG it touched.
+- **Unknown and page-only keys are refused**, not dropped. serde ignores an unknown
+  key silently, so a typo would read as saved and do nothing; `prompt`,
+  `negative`, `hires_scale` and `variables` are the page's, not a model's.
+- **An entry is keyed by registry name**, which for a discovered model is its file
+  stem — a renamed file orphans it. `doctor` warns about an entry naming no model
+  rather than dropping it: it is somebody's tuning, and the fix may be a rename.
+- **The FSR-versus-no-override ambiguity is real.** `upscaler: None` means both
+  "FSR" and "not set", so this layer can't pin FSR over a global ESRGAN upscaler.
+  Documented rather than fixed; fixing it means an explicit FSR name in the file.
+
 On the page, `web/js/settings.js` generates the form from one table, the way
 `viewer.js` builds ten sliders from `FILTERS`. A row names the *control it is the
 default for*, and takes both the label text and the tooltip from it —
@@ -594,8 +724,8 @@ already states seen from the other end. Only the three with no control anywhere
 else (`hires_flash_attn`, `weight_type`, `extra_args`) carry their own label and
 their own `HELP` entry. There were four: `upscale_factor` has an *Output upscale*
 box on the Image tab now, so it is an ordinary row that names it. Note
-`img2img_cfg_scale`'s row points at `i2icfg` and sits in the *Image to image*
-section, because after the refine/hi-res split that is the only pass it governs
+`img2img_cfg_scale`'s row points at `icfg` and sits in the *Starting from an
+image* section, because after the refine/hi-res split that is the only pass it governs
 outright — the other two fall through to it.
 
 The *Prompt variables* section is the one part of that form which is not a
@@ -744,8 +874,8 @@ re-renders the list while you are typing in it. That is the opposite of
 Ctrl+↑ / Ctrl+↓ and Ctrl+wheel weight the word under the caret or the selected
 phrase, rewriting the text as `(word:1.2)` — ComfyUI's and Forge's syntax, and the
 one `stable-diffusion.cpp` actually parses. It is on `<prompt-box>`
-(`web/js/prompt-box.js`), which is why it lands on all six prompt controls across
-three tabs with no markup change and no per-tab code, and it is **the whole
+(`web/js/prompt-box.js`), which is why it lands on every prompt control on
+the page with no markup change and no per-tab code, and it is **the whole
 feature** — nothing on the Rust side knows about it. A prompt already travels
 verbatim from `$('prompt').value` to `cmd.args(["-p", …])` with no shell in
 between, so parens and colons were always inert on the way out, and a weighted
@@ -801,13 +931,14 @@ the group's *inner* text, never the brackets, which is what makes a held key
 idempotent: every step leaves the selection equal to the inner text again, so the
 edit branch keeps being the one taken.
 
-## The three image panes
+## The image panes
 
-The page has three tabs that put an image on screen, and everything around the
-image — the action row, Save, the viewer — is one set of functions pointed at whichever
-is showing. That is `PANES` and `P(k)`.
+The page has two tabs that put an image on screen — Image and Outputs; there were
+three until Image-to-image became *Start from* — and everything around the image —
+the action row, Save, the viewer — is one set of functions pointed at whichever is
+showing. That is `PANES` and `P(k)`.
 
-**The third row is shorter than the other two, and deliberately.** `outputs` carries
+**The `outputs` row is shorter than the `image` one, and deliberately.** `outputs` carries
 an `err` and nothing else: that tab has no result block, because its image only ever
 exists in the viewer, and neither escalation select, because it offers no escalation. The
 two places that read `result` reach it with `?.` for exactly that row —
@@ -1051,8 +1182,9 @@ the note below the table.
 | 3 | `src/sd.rs` | consume it in `base_cmd` / `txt2img` / `img2img` |
 | 4 | `src/pipeline.rs` | `Option<T>` on `GenRequest`, applied onto the profile in `Engine::run()` **before** `profile.validate()` — and, for an *escalation* knob, on `EscalateRequest` + its `apply()` as well |
 | 5 | `src/main.rs` | field on the `/generate` `Dto`, plus `build_models_json` so the UI can pre-fill it — and, for a *display* knob, the `/adjust` `Dto` and `result_json` too; for an escalation knob, `EscalateDto` and `overrides()` |
-| 6 | `web/index.html` + `web/js/image.js` (or `img2img.js`, `video.js`) | input in the Advanced panel; `syncAdvanced()` and `applyWorkItem()` pre-fill it, `generate()` reads it — an escalation knob goes in `escalateSettings()`, which `generate()` spreads, so it is read once and sent by all three routes |
+| 6 | `web/index.html` + `web/js/image.js` (or `video.js`) | input in the Advanced panel; `syncAdvanced()` and `applyWorkItem()` pre-fill it, `generate()` reads it — an escalation knob goes in `escalateSettings()`, which `generate()` spreads, so it is read once and sent by all three routes |
 | 7 | `src/settings.rs` + `web/js/settings.js` + `README.md` | default in `Settings::default()`, a row in `FIELDS` so it is editable, and a row in the `user/settings.toml` field table |
+| 7b | `src/config.rs` + `web/js/image.js` | if its right value depends on the architecture, a value in each DiT family's `ImageFamily::recipe()` (the UNet ones stay empty); and if it has an Advanced box, a row in `MODEL_KNOBS` so *Save as defaults for this model* writes it — `PartialSettings` already carries it, so `user/model-settings.toml` and the *Per model* card (built from `FIELDS`) need nothing |
 
 The trap this used to have — two structs with one field list, built in two arms of
 `registry()`, so adding to one and not the other compiled cleanly and ignored the
@@ -1061,8 +1193,9 @@ the pair is still two structs. `Settings` and `PartialSettings` are joined by
 `Settings::merged_with`, and `Settings`/`Profile` by `Settings::as_profile`; both
 are spelled-out literals with no `..rest`, so a field added to one end and not the
 other has nowhere to hide. Don't "tidy" either into a `..Default::default()` — that
-is exactly the tidy-up that puts the trap back. `registry()` now has one arm, not
-two: a discovered checkpoint is a template that states only where the file is.
+is exactly the tidy-up that puts the trap back. `Config::entries` has one path,
+not two (`Config::entry`): a discovered checkpoint is a template that states only
+where the file is.
 
 Step 7 is also different now: a new knob's default goes in `Settings::default()`
 and its documentation in the `user/settings.toml` table, **not** in `models.toml`
@@ -1253,12 +1386,10 @@ again.
   `build_models_json`) and `serde_json` for anything backed by a real struct (work item
   sidecars, `GET /workitems`). `serde_json` was already a dependency for parsing; don't
   hand-roll a 22-field round-trip, and don't churn the two that exist.
-- **Batch and loop generation are a client loop, not a job.** The Image-to-image tab
-  is deliberately single-shot and has no run panel: the run panel's value is drawing
-  N *different* pictures from one prompt, and with a fixed source image the only
-  variation left is the seed. `startRun()` in
-  `web/js/image.js` calls `/generate`, then `/hires`, `/refine` and `/save-output` per
-  image; there is no batch route and there shouldn't be. The worker is a single blocking
+- **Batch and loop generation are a client loop, not a job.** `startRun()` in
+  `web/js/image.js` calls `/generate` — or `/img2img` with a *Start from* source, as
+  `genPayload` decides — then `/hires`, `/refine` and `/save-output` per image;
+  there is no batch route and there shouldn't be. The worker is a single blocking
   consumer (`for job in job_rx`), so one job that owned it for a whole run would leave
   `/adjust`, the grid and every other client dead for the length of it, and cancelling it
   would need a second channel into that loop. Looping over the existing routes costs one
