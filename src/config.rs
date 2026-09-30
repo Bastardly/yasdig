@@ -21,8 +21,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-const MODEL_EXTS: &[&str] = &["safetensors", "ckpt", "gguf"];
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub sd: SdConfig,
@@ -65,20 +63,18 @@ pub struct SdConfig {
     /// Directory scanned for video model components. Defaults to `video/`
     /// inside [`SdConfig::models_dir`], so moving the models dir moves both.
     ///
-    /// Separate from the checkpoint scan because the two are different kinds of
-    /// search: the image side lists single-file checkpoints at the top level and
-    /// deliberately does not recurse, while this one walks the tree and groups
-    /// what it finds. Keeping video weights in a subdirectory is what lets both
-    /// be true of the same `models/`.
+    /// The image scan (`Config::scan_images`) walks the rest of `models/` and
+    /// leaves this subtree out: a transformer here is the Video tab's, and its
+    /// encoders are assembled by `discover::build`, not offered as checkpoints.
     #[serde(default)]
     pub video_dir: Option<String>,
     /// Directory scanned for LoRAs. Defaults to `loras/` inside
     /// [`SdConfig::models_dir`], so moving the models dir moves this too.
     ///
-    /// Its own directory rather than the models dir because the checkpoint scan
-    /// there is non-recursive and file-only — which is what makes a `loras/`
-    /// subdirectory invisible to it, and what keeps a 200 MB adapter out of the
-    /// model select. Same split, same reason, as [`SdConfig::video_dir`].
+    /// Its own directory, which the image scan leaves out, so the LoRA listing
+    /// is the one place an adapter is described. The classifier would refuse a
+    /// LoRA as a checkpoint anyway; the exclusion is about which listing
+    /// explains the file, not about keeping it out of the select.
     #[serde(default)]
     pub lora_dir: Option<String>,
     /// Directory holding ESRGAN upscaler models. Defaults to `upscalers/` inside
@@ -239,12 +235,12 @@ pub struct LoraFile {
 
 /// One file in the upscaler directory, as `GET /upscalers` publishes it.
 ///
-/// No `usable`/`note` beside it, unlike [`LoraFile`], because nothing here reads
-/// the file to have an opinion: most upscalers ship as a `.pth`, a pickle inside
-/// a zip that [`crate::discover::read_tensors`] can't open, so a header check
-/// would reject most of the folder. What decides whether a file works is
-/// running it — see [`crate::sd::SdRunner::upscale`] and the size check in
-/// `Engine::enlarge`, which are the real guard.
+/// `arch` is read from the file's tensor names by [`crate::sr::identify`] — a
+/// safetensors header, or the pickle of a `.pth`, never the weights — so the
+/// select can grey out a HAT or a DAT *before* anyone waits for a render to find
+/// out. It is not the whole guard: a file can name the right tensors and hold
+/// garbage, which is what the size check in `enlarge` and `sr::consistency`
+/// are for.
 #[derive(Debug, Clone, Serialize)]
 pub struct UpscalerFile {
     /// What [`Profile::upscaler`] holds: the path relative to
@@ -253,6 +249,10 @@ pub struct UpscalerFile {
     /// What the select shows: the same path without its extension.
     pub label: String,
     pub bytes: u64,
+    /// `ESRGAN`, `SwinIR-M`, `HAT`, `unknown` … — see [`crate::sr::arch::Arch::name`].
+    pub arch: String,
+    /// Runnable, by sd-cli (ESRGAN) or by [`crate::sr`] (everything else).
+    pub supported: bool,
 }
 
 /// A fully-resolved, ready-to-run model entry (from a template or discovery).
@@ -623,6 +623,101 @@ impl FiltersPatch {
             if let Some(v) = src {
                 *dst = v;
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Image families
+// ---------------------------------------------------------------------------
+
+/// Which image architecture a model is, read off its tensor names by
+/// [`crate::discover::classify`].
+///
+/// The image side's counterpart to [`VideoFamily`], and a separate enum on
+/// purpose: the two share a classifier but not a recipe — a video family has an
+/// fps and a frame grid, an image family has neither. What a family decides is
+/// the same kind of thing on both sides, though: which files sd.cpp has to be
+/// handed, what the model arrives set to, and which controls on the page mean
+/// anything.
+///
+/// Only the families the classifier can name are here. An architecture sd.cpp
+/// knows and this build doesn't list — SD3, Flux 2, Chroma, LTX — is a
+/// [`crate::discover::Role::Unsupported`] rather than a variant, so `doctor` can
+/// say what it is without the registry having to decide what to do with it.
+///
+/// `Default` is SDXL because that is what every checkpoint this program ran
+/// before it had families was, which is what an old work-item sidecar needs to
+/// read as.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, Deserialize)]
+pub enum ImageFamily {
+    #[serde(rename = "sd1")]
+    Sd1,
+    #[serde(rename = "sd2")]
+    Sd2,
+    #[default]
+    #[serde(rename = "sdxl")]
+    Sdxl,
+    /// Flux.1 dev/schnell, and the Krea and Flex finetunes that keep its
+    /// tensor layout. CLIP-L + T5-XXL + the 16-channel `ae` VAE.
+    #[serde(rename = "flux")]
+    Flux,
+    /// Z-Image (Tongyi). One Qwen3-4B as the text encoder, and Flux's `ae` VAE.
+    #[serde(rename = "z_image")]
+    ZImage,
+    /// Qwen-Image. Qwen2.5-VL-7B as the text encoder, and its own Wan-shaped
+    /// VAE.
+    #[serde(rename = "qwen_image")]
+    QwenImage,
+}
+
+impl ImageFamily {
+    /// Every variant, for the tests that have to hold across all of them. The
+    /// same tripwire arrangement as [`VideoFamily::ALL`].
+    #[cfg(test)]
+    pub const ALL: [ImageFamily; 6] = [
+        ImageFamily::Sd1,
+        ImageFamily::Sd2,
+        ImageFamily::Sdxl,
+        ImageFamily::Flux,
+        ImageFamily::ZImage,
+        ImageFamily::QwenImage,
+    ];
+
+    /// Can the Image tab run this family yet?
+    ///
+    /// Only the UNet families, today, and for a reason that is about the
+    /// *defaults*, not the binary: sd.cpp runs a Z-Image as readily as an
+    /// SDXL, but it needs its text encoder and VAE handed to it as separate
+    /// files, and `user/settings.toml`'s 30 steps at CFG 6 is a wrong answer for
+    /// every DiT here. A family turns true once it has both — its components
+    /// and a recipe. Until then it is identified, named by `doctor`, and kept
+    /// out of the select rather than offered and then failing minutes in.
+    pub fn runnable(self) -> bool {
+        matches!(self, ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl)
+    }
+
+    /// Human-readable name, for `doctor` and the page's model groups.
+    pub fn label(self) -> &'static str {
+        match self {
+            ImageFamily::Sd1 => "SD 1.x",
+            ImageFamily::Sd2 => "SD 2.x",
+            ImageFamily::Sdxl => "SDXL",
+            ImageFamily::Flux => "Flux",
+            ImageFamily::ZImage => "Z-Image",
+            ImageFamily::QwenImage => "Qwen-Image",
+        }
+    }
+
+    /// Stable string for the wire and for config, matching the serde spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ImageFamily::Sd1 => "sd1",
+            ImageFamily::Sd2 => "sd2",
+            ImageFamily::Sdxl => "sdxl",
+            ImageFamily::Flux => "flux",
+            ImageFamily::ZImage => "z_image",
+            ImageFamily::QwenImage => "qwen_image",
         }
     }
 }
@@ -1309,24 +1404,37 @@ impl Config {
         Settings::load_or_default(&self.user_dir())
     }
 
-    /// Scan the models dir for checkpoint files (non-recursive), sorted by name.
+    /// Every model file under the models dir that belongs to the image side,
+    /// identified by its header — for [`Config::discover_files`] and `doctor`.
+    ///
+    /// Recursive, so `checkpoints/`, `diffusion_models/sdxl/` or a flat folder
+    /// all work and the layout is the person's to choose. The three directories
+    /// with scans of their own are left out: the video dir (whose transformers
+    /// are the Video tab's, and whose encoders `discover::build` assembles), and
+    /// the LoRA and upscaler dirs, which `list_loras` and `list_upscalers`
+    /// already describe.
+    pub fn scan_images(&self) -> Vec<crate::discover::Found> {
+        crate::discover::scan_excluding(
+            &self.models_dir(),
+            &[self.video_dir(), self.lora_dir(), self.upscaler_dir()],
+        )
+    }
+
+    /// The checkpoints the Image tab can run, sorted by path.
+    ///
+    /// **By what the file is, not by its extension.** This used to be every
+    /// `.safetensors`/`.ckpt`/`.gguf` in the models root, which listed an LTX-2
+    /// video transformer as an SDXL checkpoint and let it fail at load. A file
+    /// that isn't a runnable image family is left out here and named by
+    /// `doctor` instead — see [`ImageFamily::runnable`].
     pub fn discover_files(&self) -> Vec<PathBuf> {
-        let dir = self.models_dir();
-        let mut files: Vec<PathBuf> = match std::fs::read_dir(&dir) {
-            Ok(rd) => rd
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.is_file())
-                .filter(|p| {
-                    p.extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| MODEL_EXTS.contains(&e.to_ascii_lowercase().as_str()))
-                        .unwrap_or(false)
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        files.sort();
-        files
+        self.scan_images()
+            .into_iter()
+            .filter(|f| {
+                matches!(f.role, crate::discover::Role::Image { family, .. } if family.runnable())
+            })
+            .map(|f| f.path)
+            .collect()
     }
 
     /// Directory holding video model components.
@@ -1354,8 +1462,9 @@ impl Config {
     }
 
     /// Every model-shaped file in the upscaler dir, for `GET /upscalers` and
-    /// `doctor`. By extension only — see [`UpscalerFile`] for why nothing here
-    /// opens them. Recomputed per call, like [`Config::list_loras`].
+    /// `doctor`, each identified by [`crate::sr::identify`]. Recomputed per
+    /// call, like [`Config::list_loras`]: reading a header or a `.pth`'s pickle
+    /// is milliseconds.
     ///
     /// Recursive to one level, so an `esrgan/` or `anime/` subfolder works the
     /// way `loras/sdxl/` does, and bounded because nobody nests these deeply.
@@ -1395,7 +1504,17 @@ impl Config {
                     None => name.clone(),
                 };
                 let bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                out.push(UpscalerFile { name, label, bytes });
+                // A file that can't even be parsed is listed as unknown rather
+                // than hidden: it is in the folder, and the select saying so is
+                // how its owner finds out.
+                let arch = crate::sr::identify(&path).unwrap_or(crate::sr::arch::Arch::Unknown);
+                out.push(UpscalerFile {
+                    name,
+                    label,
+                    bytes,
+                    supported: arch.supported(),
+                    arch: arch.name(),
+                });
             }
         }
         let dir = self.upscaler_dir();
@@ -1429,6 +1548,21 @@ impl Config {
                     "nothing (the folder is empty; FSR needs no file)".to_string()
                 } else {
                     known.join(", ")
+                }
+            );
+        }
+        // Refused here, before the txt2img, for the reason the missing-file
+        // case above is: a HAT would otherwise fail after the render it was
+        // meant to enlarge.
+        let arch = crate::sr::identify(&path)
+            .with_context(|| format!("reading upscaler '{name}'"))?;
+        if !arch.supported() {
+            bail!(
+                "upscaler '{name}' is {} — not an architecture this can run. \
+                 ESRGAN, Compact, SwinIR and SPAN are",
+                match arch {
+                    crate::sr::arch::Arch::Unknown => "not a recognised upscaler".to_string(),
+                    a => format!("a {}", a.name()),
                 }
             );
         }
@@ -1816,6 +1950,56 @@ t5xxl = "v/umt5.gguf"
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// The image select lists what a file *is*: an LTX transformer in the root,
+    /// a loose VAE, and anything under the video and LoRA dirs are all
+    /// `.safetensors` and none of them is a checkpoint. A subfolder is found.
+    #[test]
+    fn the_image_registry_lists_checkpoints_by_header_not_by_extension() {
+        let root =
+            std::env::temp_dir().join(format!("rustimage-cfg-images-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let models = root.join("models");
+        let sdxl = [
+            ("model.diffusion_model.input_blocks.0.0.weight", "[320,4,3,3]"),
+            (
+                "model.diffusion_model.input_blocks.4.1.transformer_blocks.0.attn2.to_k.weight",
+                "[640,2048]",
+            ),
+        ];
+        fake_model(&models.join("xl.safetensors"), &sdxl);
+        fake_model(&models.join("checkpoints").join("nested.safetensors"), &sdxl);
+        fake_model(
+            &models.join("ltx.safetensors"),
+            &[("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias", "[4096]")],
+        );
+        fake_model(
+            &models.join("vae").join("ae.safetensors"),
+            &[
+                ("decoder.conv_in.weight", "[512,16,3,3]"),
+                ("decoder.mid.block_1.conv2.bias", "[512]"),
+                ("encoder.conv_out.bias", "[32]"),
+            ],
+        );
+        // A checkpoint-shaped file in the LoRA dir is the LoRA listing's to
+        // explain, not a second copy in the select.
+        fake_model(&models.join("loras").join("stray.safetensors"), &sdxl);
+
+        std::fs::write(root.join("models.toml"), "[sd]\nbinary = \"sd-cli\"\n").unwrap();
+        let cfg = Config::load(&root.join("models.toml")).unwrap();
+        let names: Vec<String> = cfg.registry().into_keys().collect();
+        assert_eq!(names, ["nested", "xl"]);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn image_family_names_match_their_wire_spelling() {
+        for f in ImageFamily::ALL {
+            let json = serde_json::to_string(&f).unwrap();
+            assert_eq!(json, format!("\"{}\"", f.as_str()));
+        }
+    }
+
     /// The guard is structural, so these are the shapes that would otherwise be
     /// joined onto the LoRA directory or re-cut sd.cpp's tag regex.
     #[test]
@@ -1896,15 +2080,33 @@ lora_dir = "adapters"
         let base = std::env::temp_dir().join(format!("rustimage-cfg-up-{}", std::process::id()));
         let dir = base.join("models").join("upscalers");
         std::fs::create_dir_all(dir.join("anime")).unwrap();
-        std::fs::write(dir.join("4x-UltraSharp.pth"), b"x").unwrap();
-        std::fs::write(dir.join("anime").join("x4plus_anime.safetensors"), b"x").unwrap();
+        // A header naming an RRDB block is all identification reads. The
+        // extension is not what decides the format — the magic is — so a
+        // safetensors body under `.pth` is a fair stand-in.
+        let esrgan = {
+            let h = r#"{"body.0.rdb1.conv1.weight":{"dtype":"F32","shape":[1],"data_offsets":[0,4]},"conv_up2.weight":{"dtype":"F32","shape":[1],"data_offsets":[4,8]}}"#;
+            let mut b = (h.len() as u64).to_le_bytes().to_vec();
+            b.extend(h.as_bytes());
+            b.extend([0u8; 8]);
+            b
+        };
+        std::fs::write(dir.join("4x-UltraSharp.pth"), &esrgan).unwrap();
+        std::fs::write(dir.join("anime").join("x4plus_anime.safetensors"), &esrgan).unwrap();
+        std::fs::write(dir.join("junk.pt"), b"x").unwrap();
         std::fs::write(dir.join("readme.txt"), b"x").unwrap();
         let mut cfg = parse(MINIMAL).unwrap();
         cfg.base_dir = base.clone();
         assert_eq!(cfg.upscaler_dir(), dir);
 
-        let names: Vec<String> = cfg.list_upscalers().into_iter().map(|f| f.name).collect();
-        assert_eq!(names, ["4x-UltraSharp.pth", "anime/x4plus_anime.safetensors"]);
+        let listed = cfg.list_upscalers();
+        let names: Vec<&str> = listed.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["4x-UltraSharp.pth", "anime/x4plus_anime.safetensors", "junk.pt"]);
+        assert_eq!(listed[0].arch, "ESRGAN");
+        assert!(listed[0].supported);
+        // Unreadable is listed — it is in the folder — and marked, not hidden.
+        assert_eq!((listed[2].arch.as_str(), listed[2].supported), ("unknown", false));
+        let err = cfg.check_upscaler(&Some("junk.pt".into())).unwrap_err();
+        assert!(format!("{err:#}").contains("junk.pt"), "{err:#}");
 
         // FSR needs no file.
         assert_eq!(cfg.check_upscaler(&None).unwrap(), None);

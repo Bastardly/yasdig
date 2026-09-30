@@ -49,8 +49,8 @@ function syncAdvanced() {
 // select already quotes this sum for the model's own factor; this box is what
 // moves the right-hand half of it, so the answer has to follow the box rather
 // than the model. 1 is not a small upscale — nothing runs there, whichever
-// upscaler is picked. The size is the same for every upscaler: an ESRGAN model
-// is reduced or finished by EASU to land exactly here (`Engine::enlarge`).
+// upscaler is picked. The size is the same for every upscaler: a model's output
+// is reduced or finished by EASU to land exactly here (`pipeline::enlarge`).
 export function syncOutSize() {
   const f = parseFloat($('upscale').value);
   const w = parseInt($('w').value, 10);
@@ -97,8 +97,11 @@ export function syncCfgPlaceholders() {
   for (const id of ['i2rcfg', 'i2hcfg']) $(id).placeholder = i2;
 }
 
-// The ESRGAN files `GET /upscalers` lists, as the Upscaler select's options,
-// behind an FSR option that needs no file. A promise that settles once the
+// The files `GET /upscalers` lists, as the Upscaler select's options, behind an
+// FSR option that needs no file. Each says its architecture, and one the server
+// can't run (a HAT, a DAT) is listed *disabled* rather than hidden: it is in the
+// folder, and a select that silently left it out would read as the file not
+// having been found. A promise that settles once the
 // select is filled, because two things must wait for it rather than race it:
 // `syncAdvanced`, which sets the select's value, and the Settings form, whose
 // row mirrors these options the way its sampler row mirrors the sampler's.
@@ -122,7 +125,10 @@ export function loadUpscalers() {
     const sel = $('upscaler');
     const was = sel.value;
     upscalerOptions = '<option value="">FSR (EASU)</option>'
-      + list.map((u) => `<option value="${esc(u.name)}">${esc(u.label)}</option>`).join('');
+      + list.map((u) => (u.supported
+        ? `<option value="${esc(u.name)}">${esc(u.label)} (${esc(u.arch)})</option>`
+        : `<option value="${esc(u.name)}" disabled>${esc(u.label)} (${esc(u.arch)}, not supported)</option>`))
+        .join('');
     sel.innerHTML = upscalerOptions;
     setUpscaler(was);
   })();

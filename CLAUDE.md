@@ -19,7 +19,8 @@ cargo run --release                         # server on 127.0.0.1:8080
 cargo run --release -- doctor               # preflight only: binary, checkpoints, web UI
 cargo run --release -- fsr-selftest         # full wgpu path; no sd.cpp or checkpoint needed
 cargo run --release -- fsr in.png out.png [scale] [sharpness] [clarity]
-cargo run --release -- upscale in.png out.png <model> [factor]  # ESRGAN enlarge alone; sd-cli, no checkpoint
+cargo run --release -- upscale in.png out.png <model> [factor]  # model enlarge alone + consistency dB; no checkpoint
+cargo run --release -- sr-selftest          # `src/sr/` shader ops vs CPU references, plus matmul TFLOPS
 
 node --test 'web/js/*.test.js'              # the one JS unit test: the prompt-weighting string maths.
                                             #   Node's built-in runner — no npm, no package.json, no
@@ -127,9 +128,9 @@ all work and `image` stays compiled `features = ["png"]`.
 ## LoRAs
 
 `models/loras/` (`Config::lora_dir`, an `SdConfig` option defaulting inside the
-models dir — the same shape as `video_dir`, and for the same reason: the
-checkpoint scan there is non-recursive and file-only, so a subdirectory is
-already invisible to it). `GET /loras` lists it through `discover::scan`, and
+models dir — the same shape as `video_dir`, and left out of the image scan
+(`Config::scan_images`) for the same reason: the LoRA listing is the one place
+an adapter is described). `GET /loras` lists it through `discover::scan`, and
 `base_cmd` is where a picked one becomes a command line.
 
 **Everything here is shaped by three facts about `extract_and_remove_lora`**
@@ -198,7 +199,7 @@ one of them to send a different one. Two things in it break silently:
 
 ## Upscalers
 
-The initial enlarge in `Engine::run` is EASU or an ESRGAN model, picked per
+The initial enlarge in `Engine::run` is EASU or an upscaler model, picked per
 generate by `Profile.upscaler` (`None` = EASU; otherwise a name under
 `Config::upscaler_dir`, `models/upscalers/` by default). It is an ordinary
 generation knob down the seven-step table, sidecar included.
@@ -207,7 +208,16 @@ takes `&Fsr` and `&SdRunner`, so the `upscale` subcommand can run it without an
 `Engine`, whose constructor sweeps `work/`. Hi-res's two EASU steps and
 `enlarge_clip` are its obvious next callers and don't use it yet.
 
-Three facts about sd.cpp's `-M upscale` shape all of it:
+**Two routes, chosen by what the file is** (`sr::identify`, tensor names only):
+an ESRGAN goes to sd-cli, everything else to `src/sr/`, rustimage's own
+super-resolution runner on the FSR device. The split exists because sd.cpp's
+upscaler is hard-wired to one class (`src/upscaler.cpp` builds an `ESRGAN` and
+nothing else) and the repo is public, so a patched sd.cpp was not an option;
+burn was rejected for a second wgpu and pooled VRAM held between sd-cli runs.
+`sr` runs Compact, SPAN and SwinIR; DAT and HAT are identified and refused, the
+first pending SwinIR's measured speed and the second as minutes per image.
+
+Three facts about sd.cpp's `-M upscale` shape the ESRGAN route:
 
 - **A model it can't build exits 0.** `new_upscaler_ctx` failing is a
   `LOG_ERROR`, then sd-cli saves the *input unchanged* (`examples/cli/main.cpp:991`).
@@ -227,11 +237,44 @@ not `target / got` — the latter sizes the height off the width's rounding.
 `an_esrgan_enlarge_lands_on_the_easu_size` walks every factor the box allows.
 `Fsr::process` calls `out_size` too, so the two can't disagree.
 
-**Listed by extension, not by header.** Most upscalers ship as `.pth`, a pickle in a
-zip that `discover::read_tensors` can't open, so header classification would reject
-most of the folder. Running the file is the real test and the two guards above
-cover it. The name goes through `valid_lora_name` — the same kind of thing, a
-user-chosen filename relative to a models subdir — rather than a third whitelist.
+**Listed by architecture, read without Python.** `sr/weights.rs` reads safetensors
+and both torch formats — the zip (`archive/data.pkl` plus *stored* storages, so no
+inflater) and the legacy five-pickles-then-storages — through a pickle subset
+modelled on sd.cpp's `pickle_io.cpp`. `list_upscalers` identifies every file (a
+header or one pickle, milliseconds), the page greys out what can't run, and
+`check_upscaler` refuses it before the txt2img. The name goes through
+`valid_lora_name` — the same kind of thing, a user-chosen filename relative to a
+models subdir — rather than a third whitelist.
+
+`src/sr/` has five things that break silently:
+
+- **Legacy torch is recognised by all eight magic bytes, not the `0x80`.** A
+  safetensors file opens with its header length, and the DAT this started from
+  has a 238 208-byte header — `80 a2 03 00` — so a one-byte check read it as a
+  pickle and listed it as unknown.
+- **Channels-last everywhere** (`[H·W, C]`), which is what makes a Linear a plain
+  matmul and a conv the same matmul over an implicit im2col. Conv weights are
+  reordered at load to `[out][ky][kx][in]` (`gpu::conv_weight`); PyTorch's own
+  order would still compute the right answer, just with every tile load scattered.
+- **The Swin window partition, shift and mask are index maths in `attn.wgsl`**,
+  not copies: qkv is computed in image order, and the kernel maps each window slot
+  to `((sy + s) mod H, (sx + s) mod W)`. `sr-selftest` checks it against a literal
+  transcription of `roll → window_partition → calculate_mask → window_reverse`.
+- **`Gpu::tensor` flushes before `write_buffer`.** A queued write lands before the
+  *next* submission, so with commands still unsubmitted it would overtake them and
+  clobber a pooled buffer they read.
+- **The tile is sized from the device, which is why `Fsr::new` asks for the
+  adapter's storage-binding limit** (capped at 1 GiB) instead of wgpu's 128 MiB
+  default. A 4× SwinIR tail is 64 channels at 4× the tile — 340 MB at 288² — and
+  `plan_tile` shrinks the tile until `Net::peak` fits.
+
+There is no PyTorch to compare a whole network against, so the network-level check
+is **`sr::consistency`**: shrink the output back by the scale and compare with the
+input. A working model lands above 30 dB; a transposed weight, a missed mean or a
+wrong activation lands far below. `upscale` prints it at any whole-number factor.
+SPAN's two traps are in its header: `Conv3XC` is folded at load from the training
+weights rather than trusting `eval_conv`, and SPAB's `SiLU(inplace=True)` means the
+`out1` it concatenates is the *activated* tensor.
 
 On the page, `loadUpscalers` is started **before** `loadModels`' first `await`,
 because `upscalersReady` is what the Settings form awaits before mirroring the

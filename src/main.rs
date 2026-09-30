@@ -36,8 +36,9 @@
 //!   GET  /loras       -> every file in the LoRA dir, with why an unusable one
 //!                        can't be picked. Attach them per request with a
 //!                        `loras: [{name, strength}]` on /generate or /img2img
-//!   GET  /upscalers   -> every ESRGAN file in the upscaler dir. Pick one per
-//!                        generate with `upscaler: "<name>"`; `""` is FSR
+//!   GET  /upscalers   -> every file in the upscaler dir, with its architecture
+//!                        and whether it can run. Pick one per generate with
+//!                        `upscaler: "<name>"`; `""` is FSR
 //!   GET  /outputs     -> every image in work/output/, newest first
 //!   POST /outputs/open -> {stem}     open a saved image as a live image_id,
 //!                        so the viewer's sliders can work on it
@@ -70,6 +71,7 @@ mod pipeline;
 mod preflight;
 mod sd;
 mod settings;
+mod sr;
 mod variables;
 mod videos;
 mod web;
@@ -152,11 +154,13 @@ enum JobKind {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
-    // Subcommands that run without the server. `fsr` and `fsr-selftest` exercise
-    // the wgpu path alone; `upscale` adds sd-cli but still needs no checkpoint.
+    // Subcommands that run without the server. `fsr`, `fsr-selftest` and
+    // `sr-selftest` exercise the wgpu path alone; `upscale` adds sd-cli for an
+    // ESRGAN but still needs no checkpoint.
     match args.get(1).map(String::as_str) {
         Some("fsr") => return run_fsr_cli(&args[2..]),
         Some("fsr-selftest") => return run_fsr_selftest(&args[2..]),
+        Some("sr-selftest") => return run_sr_selftest(),
         Some("doctor") => return run_doctor(&args[2..]),
         Some("upscale") => return run_upscale_cli(&args[2..]),
         _ => {}
@@ -1689,20 +1693,61 @@ fn run_upscale_cli(args: &[String]) -> Result<()> {
             .expect("a name was given"),
     };
 
+    let arch = sr::identify(&model)?;
+    println!(
+        "[upscale] {}: {} at {}",
+        model.display(),
+        arch.name(),
+        arch.scale().map(|s| format!("{s}×")).unwrap_or_else(|| "unknown scale".into())
+    );
     let runner = sd::SdRunner::new(&cfg);
-    runner.preflight()?;
+    // sd-cli only runs the ESRGANs; the rest never touch it, so a missing
+    // binary is no reason to refuse them.
+    if matches!(arch, sr::arch::Arch::Esrgan { .. }) {
+        runner.preflight()?;
+    }
     let fsr = fsr::Fsr::new()?;
     let start = std::time::Instant::now();
     let model_ms = pipeline::enlarge(&fsr, &runner, &in_png, &out_png, factor, Some(&model))?;
     let (w, h) = image::image_dimensions(&out_png)
         .with_context(|| format!("reading {}", out_png.display()))?;
     println!(
-        "[upscale] {} -> {} : {w}x{h} (x{factor} with {}) — model {model_ms} ms, total {} ms",
+        "[upscale] {} -> {} : {w}x{h} (x{factor}) — model {model_ms} ms, total {} ms",
         in_png.display(),
         out_png.display(),
-        model.display(),
         start.elapsed().as_millis()
     );
+    // The round trip, when the factor is a whole number: shrink the result
+    // back and compare it with what went in. See `sr::consistency`.
+    if factor.fract() == 0.0 {
+        let input = image::open(&in_png)?.to_rgb8();
+        let output = image::open(&out_png)?.to_rgb8();
+        let db = sr::consistency(&input, &output, factor as u32);
+        println!(
+            "[upscale] consistency: {db:.1} dB {}",
+            if db >= 30.0 {
+                "(ok — shrunk back, it is the input)"
+            } else if db >= 25.0 {
+                "(low — a heavily stylising model can land here; look at it)"
+            } else {
+                "(FAIL — this is not the input enlarged; the network is mis-wired or the file is wrong)"
+            }
+        );
+    }
+    Ok(())
+}
+
+/// `rustimage sr-selftest`: every `sr` shader op against a CPU transcription of
+/// the PyTorch op, plus a matmul throughput. No model file needed.
+fn run_sr_selftest() -> Result<()> {
+    let fsr = fsr::Fsr::new()?;
+    println!("[sr-selftest] adapter: {}", fsr.adapter_name());
+    println!(
+        "[sr-selftest] storage binding limit: {} MiB",
+        fsr.device().limits().max_storage_buffer_binding_size >> 20
+    );
+    sr::selftest(fsr.device(), fsr.queue())?;
+    println!("[sr-selftest] all ops agree with the reference");
     Ok(())
 }
 

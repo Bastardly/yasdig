@@ -1850,18 +1850,25 @@ fn fit_to(src: (u32, u32), max_side: u32) -> (u32, u32) {
 }
 
 /// Enlarge `src` into `dst` by `factor`, unsharpened, with EASU or with an
-/// ESRGAN model. Returns the milliseconds the model's share took — 0 when
+/// upscaler model. Returns the milliseconds the model's share took — 0 when
 /// EASU did it all.
+///
+/// A model runs by one of two routes, decided by what the file *is*
+/// ([`crate::sr::identify`]): an ESRGAN through sd-cli, which has its own
+/// loader and kernels for exactly that network, and anything else through
+/// [`crate::sr`] on the FSR device. Everything after the model is the same
+/// for both.
 ///
 /// The one place an enlarge is chosen, so it is the helper for every pass
 /// that makes pixels bigger. A free function rather than only a method so the
 /// `upscale` subcommand can run it without an `Engine`, whose constructor
 /// sweeps `work/`. Only `Engine::run` calls it today; hi-res's two EASU
-/// steps and `enlarge_clip` are the obvious next callers, and ESRGAN is a
-/// deterministic function of the pixels, so a clip may use it (invariant 9).
+/// steps and `enlarge_clip` are the obvious next callers, and every model
+/// here is a deterministic function of the pixels, so a clip may use one
+/// (invariant 9).
 ///
 /// **The output is `fsr::out_size(src, factor)` whichever upscaler ran.** An
-/// ESRGAN model enlarges by the fixed scale it was trained at, and the
+/// upscaler model enlarges by the fixed scale it was trained at, and the
 /// difference is covered afterwards (see [`after_model`]): a model that
 /// overshot is reduced with Lanczos, one that fell short is finished by
 /// EASU. So the size the page quoted before the click stays true.
@@ -1886,10 +1893,20 @@ pub fn enlarge(
     // Beside `dst` so it shares its job id; a `.png` extension so `purge_pngs`
     // reaches it after a crash. Its own guard, since it never outlives this.
     let mut scratch = Scratch::default();
-    let big = scratch.path(dst.with_extension("esrgan.png"));
-    sd.upscale(model, src, &big)?;
+    let big = scratch.path(dst.with_extension("model.png"));
+    if crate::sr::is_esrgan(model)? {
+        sd.upscale(model, src, &big)?;
+    } else {
+        let r = crate::sr::upscale(fsr.device(), fsr.queue(), model, src, &big)?;
+        // One line per run: the tile is chosen from the device's buffer limit,
+        // so it is worth being able to see what it came out as.
+        eprintln!(
+            "[rustimage] {} {}× in {} tile(s) of {} px, {} ms",
+            r.arch, r.scale, r.tiles, r.tile, r.ms
+        );
+    }
     let got = image::image_dimensions(&big).with_context(|| {
-        format!("sd-cli upscale reported success but wrote no image to {}", big.display())
+        format!("the upscaler reported success but wrote no image to {}", big.display())
     })?;
     match after_model(input, got, factor)
         .with_context(|| format!("upscaling with {}", model.display()))?
@@ -1908,7 +1925,7 @@ pub fn enlarge(
     Ok(t.elapsed().as_millis())
 }
 
-/// What an ESRGAN result still needs to reach `fsr::out_size(input, factor)`.
+/// What a model's result still needs to reach `fsr::out_size(input, factor)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum AfterModel {
     /// The model's scale was the factor asked for.
@@ -1925,7 +1942,7 @@ enum AfterModel {
 /// scale read off a filename.
 ///
 /// **An image that didn't get bigger is an error**, not a `Keep`. That is what
-/// sd-cli hands back when it could not build the model at all — it logs, saves
+/// sd-cli hands back when it could not build an ESRGAN at all — it logs, saves
 /// the input unchanged and exits 0 — and it is also what a 1× restoration
 /// model does by design. Neither is an upscale, and passing either through
 /// would be a picture that silently skipped the step it was asked for.
@@ -1933,8 +1950,8 @@ fn after_model(input: (u32, u32), got: (u32, u32), factor: f32) -> Result<AfterM
     if got.0 <= input.0 || got.1 <= input.1 {
         bail!(
             "the model returned {}×{} for a {}×{} image — it enlarged nothing. \
-             sd.cpp runs ESRGAN (RRDBNet) upscalers only, at 2× or 4×; a compact/SRVGG, \
-             SwinIR, DAT or HAT file, or a 1× restoration model, is not one",
+             A 1× restoration model is not an upscaler, and neither is a file sd-cli \
+             could not build as an ESRGAN",
             got.0,
             got.1,
             input.0,

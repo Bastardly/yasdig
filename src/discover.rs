@@ -1,11 +1,17 @@
-//! Identifying video model files by what is *inside* them.
+//! Identifying model files by what is *inside* them.
 //!
-//! The image side needs none of this: a checkpoint is one file, so its name in
-//! the models dir is its name in the UI. A video model is three to five files
-//! with distinct roles, and the roles are not in the filenames — the file that
+//! This started on the video side, where a model is three to five files with
+//! distinct roles and the roles are not in the filenames — the file that
 //! arrived here called `minimax_h3Comfy.safetensors` is a Qwen3-VL-32B text
 //! encoder, which filename matching would have slotted in as a transformer and
 //! then failed on minutes into a run.
+//!
+//! The image side needed it next, for the same reason arriving from the other
+//! direction: its scan used to take any `.safetensors` in the models dir as an
+//! SDXL checkpoint, so an LTX-2 video transformer dropped there was offered in
+//! the Image tab's select. Every image family after SDXL is also a set of files
+//! rather than one — a Z-Image is a DiT, a Qwen3 text encoder and Flux's VAE —
+//! which is the shape this module already assembles.
 //!
 //! So nothing here reads a filename to decide *what* a file is. Both formats
 //! carry a tensor index in a header at the front — safetensors a JSON blob
@@ -39,7 +45,7 @@ use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::config::{VideoFamily, VideoModel};
+use crate::config::{ImageFamily, VideoFamily, VideoModel};
 
 /// One tensor's name, shape and stored type.
 ///
@@ -172,8 +178,37 @@ pub enum Role {
     /// A LoRA. Classified only so it isn't reported as a mystery; which model it
     /// belongs to is not in the file and stays `models.toml`'s business.
     Lora,
+    /// An image diffusion model — what the Image tab's select lists.
+    ///
+    /// `bundled` is whether its VAE and text encoder travel in the same file,
+    /// which is the difference between sd.cpp's `-m` and `--diffusion-model`
+    /// plus a flag per component. Every SDXL checkpoint on a download site is
+    /// bundled; a Z-Image or Flux DiT almost never is.
+    Image { family: ImageFamily, bundled: bool },
+    /// A VAE in the Stable Diffusion (LDM) layout — `decoder.conv_in`,
+    /// `decoder.mid` — told apart by latent width.
+    ImageVae(ImageVaeKind),
+    /// An architecture sd.cpp knows and this build does not run yet, named.
+    ///
+    /// Distinct from [`Role::Unknown`] because the two call for different
+    /// sentences: "nothing matched" is a bad download or a new architecture,
+    /// while "this is an LTX-2 video transformer" is a perfectly good file in
+    /// the wrong place, or one waiting for its family to be added.
+    Unsupported(String),
     /// Parsed, but nothing matched. Carries a short reason for `doctor`.
     Unknown(String),
+}
+
+/// The image-side VAEs, by latent channel count — which is what decides which
+/// family can decode them, and the one thing about a VAE that is wrong silently
+/// rather than loudly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageVaeKind {
+    /// 4 latent channels: SD 1.x, SD 2.x and SDXL (whose VAE is a retrain of the
+    /// same shape).
+    Sd,
+    /// 16 latent channels: Flux's `ae`, which Z-Image and Chroma share.
+    Flux,
 }
 
 /// The transformer architectures worth telling apart.
@@ -222,6 +257,15 @@ impl Role {
                 format!("a Wan transformer of width {dim}, which is not a family this build runs")
             }
             Role::Dit(_) => "transformer".into(),
+            Role::Image { family, bundled: true } => format!("{} checkpoint", family.label()),
+            Role::Image { family, bundled: false } => {
+                format!("{} diffusion model (VAE and text encoder are separate files)", family.label())
+            }
+            Role::ImageVae(ImageVaeKind::Sd) => "SD VAE (4 channels) — SD 1.x/2.x/SDXL".into(),
+            Role::ImageVae(ImageVaeKind::Flux) => {
+                "Flux ae VAE (16 channels) — Flux, Z-Image, Chroma".into()
+            }
+            Role::Unsupported(what) => format!("{what}, which this build doesn't run yet"),
             Role::Unknown(why) => why.clone(),
         }
     }
@@ -237,8 +281,14 @@ pub struct Found {
 /// Read the tensor index out of a model file's header.
 ///
 /// Dispatches on the magic rather than the extension: a `.gguf` is identified by
-/// its first four bytes, and anything else is tried as safetensors. Neither
-/// branch reads past the header.
+/// its first four bytes, a torch file (`.ckpt`, `.pt`) by its zip or pickle
+/// magic, and anything else is tried as safetensors. None of them reads past
+/// the index.
+///
+/// The torch branch is [`crate::sr::weights`]'s pickle subset, which exists for
+/// `.pth` upscalers and reads a legacy SD 1.x `.ckpt` the same way — names and
+/// shapes, no storages. Without it the image scan, which used to list any
+/// `.ckpt` on its extension alone, would drop them.
 pub fn read_tensors(path: &Path) -> Result<Tensors> {
     let mut f = std::fs::File::open(path)
         .with_context(|| format!("opening {} to identify it", path.display()))?;
@@ -248,6 +298,20 @@ pub fn read_tensors(path: &Path) -> Result<Tensors> {
     f.seek(SeekFrom::Start(0))?;
     if &magic == b"GGUF" {
         read_gguf(&mut f).with_context(|| format!("reading the GGUF header of {}", path.display()))
+    } else if &magic == b"PK\x03\x04" || magic == [0x80, 0x02, 0x8a, 0x0a] {
+        let w = crate::sr::weights::load(path, false)?;
+        Ok(Tensors {
+            tensors: w
+                .map
+                .into_iter()
+                .map(|(name, t)| TensorInfo {
+                    name,
+                    shape: t.shape.iter().map(|&d| d as u64).collect(),
+                    dtype: String::new(),
+                })
+                .collect(),
+            layout: Layout::PyTorch,
+        })
     } else {
         read_safetensors(&mut f)
             .with_context(|| format!("reading the safetensors header of {}", path.display()))
@@ -481,6 +545,12 @@ pub fn classify(t: &Tensors) -> Role {
     {
         return Role::Lora;
     }
+    // Architectures sd.cpp names and this build doesn't run. Before everything
+    // below, because two of them carry a generic marker a supported family
+    // tests for: Hunyuan Video has Flux's `double_blocks`, and an SVD is a UNet.
+    if let Some(what) = unsupported(t) {
+        return Role::Unsupported(what.into());
+    }
     // Wan's marker, `model_loader.cpp:524`.
     if t.has("blocks.0.cross_attn.norm_k.weight") {
         // Width, from a square attention projection rather than from the patch
@@ -501,6 +571,27 @@ pub fn classify(t: &Tensors) -> Role {
             3072 => Role::Dit(DitKind::Wan22Ti2v5b),
             5120 => Role::Dit(DitKind::Wan22A14b),
             d => Role::Dit(DitKind::WanOther { dim: d }),
+        };
+    }
+    // Image models, and **before either VAE test**: a bundled SDXL checkpoint
+    // carries its VAE, whose resnets are named `conv1`/`conv2` under
+    // `decoder.`, so it would otherwise be read as a Wan VAE of 512 channels.
+    if let Some(role) = image_model(t) {
+        return role;
+    }
+    // An image VAE, in the LDM layout. Tested ahead of the Wan VAE for the same
+    // reason as above — an LDM VAE has `decoder.` and `conv2.` too — and told
+    // apart from it by `conv_in`/`mid`, which Wan's (`conv1`, `middle`) doesn't
+    // use. The width comes off `encoder.conv_out.bias`, which is `2 × z` (mean
+    // and log-variance) and one-dimensional, so it reads the same in either
+    // container — the same reason the Wan branch below reads a bias.
+    if t.has("decoder.conv_in.") && t.has("decoder.mid.") {
+        return match t.vector_len("encoder.conv_out.bias") {
+            Some(8) => Role::ImageVae(ImageVaeKind::Sd),
+            Some(32) => Role::ImageVae(ImageVaeKind::Flux),
+            Some(64) => Role::Unsupported("a Flux 2 VAE (32 latent channels)".into()),
+            Some(n) => Role::Unknown(format!("an LDM-style VAE with {} latent channels", n / 2)),
+            None => Role::Unknown("an LDM-style VAE with no encoder to read its width from".into()),
         };
     }
     // The Wan VAE. `decoder.` plus `conv2` is the shape of it, and the latent
@@ -546,6 +637,109 @@ pub fn classify(t: &Tensors) -> Role {
     Role::Unknown(format!("{} tensors, no known marker", t.tensors.len()))
 }
 
+/// The first tensor whose name ends in `suffix`.
+fn tensor<'a>(t: &'a Tensors, suffix: &str) -> Option<&'a TensorInfo> {
+    t.tensors.iter().find(|x| x.name.ends_with(suffix))
+}
+
+/// An architecture sd.cpp's `get_sd_version` names and this build doesn't run,
+/// by the same markers (`model_loader.cpp:427-620`), minus the
+/// `model.diffusion_model.` prefix, which a bare DiT on disk usually lacks.
+///
+/// Every one is a single tensor that nothing supported carries, so the order
+/// among them doesn't matter; what matters is that this runs before the
+/// supported families are tested — see the call site.
+fn unsupported(t: &Tensors) -> Option<&'static str> {
+    const MARKERS: &[(&str, &str)] = &[
+        // Video, but not a family the Video tab has yet. The LTX one is not
+        // hypothetical: an LTX-2.3 checkpoint in the models root was listed as an
+        // SDXL checkpoint before this existed.
+        ("adaln_single.emb.timestep_embedder.linear_1.bias", "an LTX-2 video transformer"),
+        ("txt_in.individual_token_refiner.", "a Hunyuan Video transformer"),
+        ("input_blocks.8.0.time_mixer.mix_factor", "a Stable Video Diffusion UNet"),
+        // Image families not yet added.
+        ("joint_blocks.", "an SD3 transformer"),
+        ("double_stream_modulation_img.lin.weight", "a Flux 2 transformer"),
+        ("distilled_guidance_layer.", "a Chroma transformer"),
+        ("nerf_final_layer_conv.", "a Chroma Radiance transformer"),
+        ("txtfusion.projector.weight", "a Krea 2 transformer"),
+        ("text_fusion.projector.weight", "a Krea 2 transformer"),
+        ("double_blocks.0.img_mlp.gate_proj.weight", "an Ovis-Image transformer"),
+        ("layers.0.adaLN_sa_ln.weight", "an ERNIE-Image transformer"),
+        ("llm_adapter.blocks.0.cross_attn.q_proj.weight", "an Anima transformer"),
+        ("time_text_embed.addition_t_embedding.weight", "a Qwen-Image Layered transformer"),
+    ];
+    MARKERS
+        .iter()
+        .find(|(needle, _)| t.has(needle))
+        .map(|(_, what)| *what)
+}
+
+/// An image diffusion model, or `None` when the file isn't one.
+///
+/// The DiT markers are sd.cpp's. The UNet split is not, and says why below.
+fn image_model(t: &Tensors) -> Option<Role> {
+    // A bundled checkpoint carries its own VAE and text encoder; the prefixes
+    // are the ones single-file releases use (`first_stage_model.`,
+    // `cond_stage_model.`/`conditioner.`) and the ones sd.cpp's own converter
+    // writes (`vae.`, `text_encoders.`).
+    let bundled = (t.has("first_stage_model.") || t.has("vae.decoder."))
+        && (t.has("cond_stage_model.") || t.has("conditioner.") || t.has("text_encoders."));
+    let image = |family| Some(Role::Image { family, bundled });
+
+    if t.has("cap_embedder.0.weight") {
+        return image(ImageFamily::ZImage);
+    }
+    if t.has("transformer_blocks.0.img_mod.1.weight") {
+        // Mage-Flow shares Qwen-Image's block naming and differs in its patch
+        // width: `img_in` takes 128 channels where Qwen-Image takes 64.
+        if tensor(t, "img_in.weight").map(|x| x.inner_dim(t.layout)) == Some(128) {
+            return Some(Role::Unsupported("a Mage-Flow transformer".into()));
+        }
+        return image(ImageFamily::QwenImage);
+    }
+    if t.has("double_blocks.") || t.has("single_transformer_blocks.") {
+        // The variants that keep Flux's layout and change what goes in: sd.cpp
+        // tells them apart by `img_in`'s input width (`model_loader.cpp:589`)
+        // and LongCat by its text projection. They need inputs this build
+        // doesn't send (a mask, a control image), so they are named rather
+        // than offered.
+        if tensor(t, "txt_in.weight").map(|x| x.inner_dim(t.layout)) == Some(3584) {
+            return Some(Role::Unsupported("a LongCat-Image transformer".into()));
+        }
+        return match tensor(t, "img_in.weight").map(|x| x.inner_dim(t.layout)) {
+            Some(384) => Some(Role::Unsupported("a Flux Fill transformer".into())),
+            Some(128) => Some(Role::Unsupported("a Flux Controls transformer".into())),
+            Some(196) => Some(Role::Unsupported("a Flex.2 transformer".into())),
+            _ => image(ImageFamily::Flux),
+        };
+    }
+    if t.has("input_blocks.") || t.has("unet.down_blocks.") {
+        // The width the cross-attention keys are projected *from* is the text
+        // encoder's: CLIP-L's 768 for SD 1.x, OpenCLIP-H's 1024 for SD 2.x, and
+        // SDXL's two encoders concatenated to 2048. sd.cpp reads the text
+        // encoder's token embedding instead, which only works while the encoder
+        // is in the file — this also reads a bare UNet. `inner_dim` because
+        // `to_k` is `[inner, context]` and so is rectangular; see [`Layout`].
+        let context = tensor(t, "attn2.to_k.weight").map(|x| x.inner_dim(t.layout));
+        return match context {
+            Some(768) => image(ImageFamily::Sd1),
+            Some(1024) => image(ImageFamily::Sd2),
+            Some(2048) => image(ImageFamily::Sdxl),
+            // SDXL's ADM label embedding, which neither SD 1 nor 2 has, for a
+            // file whose attention keys weren't readable.
+            _ if t.has("label_emb.") => image(ImageFamily::Sdxl),
+            Some(w) => Some(Role::Unknown(format!(
+                "a UNet conditioned on {w}-wide text, which is no SD family"
+            ))),
+            None => Some(Role::Unknown(
+                "a UNet whose text-conditioning width could not be read".into(),
+            )),
+        };
+    }
+    None
+}
+
 /// Walk a directory tree and identify every model file in it.
 ///
 /// Recursive, so the role subdirectories under `models/video/` are a convenience
@@ -554,8 +748,23 @@ pub fn classify(t: &Tensors) -> Role {
 /// [`Role::Unknown`] rather than stopping the walk — a half-downloaded 8 GB
 /// transformer is a normal thing to find here.
 pub fn scan(dir: &Path) -> Vec<Found> {
+    scan_excluding(dir, &[])
+}
+
+/// [`scan`], skipping the subtrees in `skip`.
+///
+/// For the image scan, which walks the whole models dir and must leave out the
+/// folders that have scans of their own — the video dir, whose transformers
+/// are the Video tab's, and the LoRA and upscaler dirs. Compared canonically,
+/// so a `video_dir` written as an absolute path still matches the walk's
+/// relative one.
+pub fn scan_excluding(dir: &Path, skip: &[PathBuf]) -> Vec<Found> {
+    let skip: Vec<PathBuf> = skip
+        .iter()
+        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
+        .collect();
     let mut out = Vec::new();
-    walk(dir, 0, &mut out);
+    walk(dir, 0, &skip, &mut out);
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out
 }
@@ -564,7 +773,7 @@ pub fn scan(dir: &Path) -> Vec<Found> {
 /// share one copy of a 7 GB encoder between projects.
 const MAX_DEPTH: usize = 4;
 
-fn walk(dir: &Path, depth: usize, out: &mut Vec<Found>) {
+fn walk(dir: &Path, depth: usize, skip: &[PathBuf], out: &mut Vec<Found>) {
     if depth > MAX_DEPTH {
         return;
     }
@@ -574,7 +783,10 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<Found>) {
     for entry in rd.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            walk(&path, depth + 1, out);
+            let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if !skip.contains(&canon) {
+                walk(&path, depth + 1, skip, out);
+            }
             continue;
         }
         let ext = path
@@ -585,15 +797,51 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<Found>) {
         if !matches!(ext.as_str(), "safetensors" | "gguf" | "ckpt" | "pt" | "pth") {
             continue;
         }
-        let role = match read_tensors(&path) {
-            Ok(t) => classify(&t),
-            // The message is kept: "is not JSON" and "too short" are what a
-            // partial download looks like, and that is worth telling apart from
-            // a file whose architecture we don't know.
-            Err(e) => Role::Unknown(format!("could not be read ({e})")),
-        };
+        let role = identify(&path);
         out.push(Found { path, role });
     }
+}
+
+/// What a file is, from its header — or from the memo, if the file hasn't
+/// changed since it was last read.
+///
+/// The memo exists because the image scan now reads a header for every
+/// checkpoint, and `Config::registry` runs on every request. An SDXL header is
+/// ~2 500 tensor names of JSON, so twenty checkpoints is a parse per request
+/// that tells us nothing new. Keyed on length *and* mtime rather than on the
+/// path alone, so a download that finishes — same path, new length — is read
+/// again: the scan's promise that a new file shows up without a restart is
+/// what the memo must not break.
+fn identify(path: &Path) -> Role {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+    use std::time::SystemTime;
+    type Memo = HashMap<PathBuf, (u64, SystemTime, Role)>;
+    static MEMO: LazyLock<Mutex<Memo>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    let stamp = std::fs::metadata(path)
+        .ok()
+        .and_then(|m| Some((m.len(), m.modified().ok()?)));
+    if let Some((len, mtime)) = stamp {
+        if let Some((l, m, role)) = MEMO.lock().unwrap().get(path) {
+            if (*l, *m) == (len, mtime) {
+                return role.clone();
+            }
+        }
+    }
+    let role = match read_tensors(path) {
+        Ok(t) => classify(&t),
+        // The message is kept: "is not JSON" and "too short" are what a
+        // partial download looks like, and that is worth telling apart from
+        // a file whose architecture we don't know.
+        Err(e) => Role::Unknown(format!("could not be read ({e})")),
+    };
+    if let Some((len, mtime)) = stamp {
+        MEMO.lock()
+            .unwrap()
+            .insert(path.to_path_buf(), (len, mtime, role.clone()));
+    }
+    role
 }
 
 /// Which half of a mixture-of-experts pair this file is, if the name says.
@@ -750,6 +998,10 @@ pub fn build(dir: &Path, found: &[Found]) -> Discovery {
             Role::Unknown(why) => d.unrecognized.push(Unrecognized {
                 path: f.path.clone(),
                 why: why.clone(),
+            }),
+            Role::Unsupported(_) => d.unrecognized.push(Unrecognized {
+                path: f.path.clone(),
+                why: f.role.describe(),
             }),
             _ => d.components.push(f.clone()),
         }
@@ -1048,6 +1300,124 @@ mod tests {
     fn an_unknown_file_says_so_rather_than_guessing() {
         let junk = t(&[("something.weight", &[8])]);
         assert!(matches!(classify(&junk), Role::Unknown(_)));
+    }
+
+    /// The three UNet families differ in the width of the text they attend to,
+    /// and a bundled checkpoint's VAE must not pull it into the VAE branch —
+    /// its `decoder.…conv2` tensors are exactly what that branch looks for.
+    #[test]
+    fn a_unet_is_told_apart_by_its_text_width_and_its_vae_does_not_leak() {
+        let unet = |context: u64| {
+            t(&[
+                ("model.diffusion_model.input_blocks.0.0.weight", &[320, 4, 3, 3]),
+                (
+                    "model.diffusion_model.output_blocks.3.1.transformer_blocks.0.attn2.to_k.weight",
+                    &[640, context],
+                ),
+                ("first_stage_model.decoder.conv_in.weight", &[512, 4, 3, 3]),
+                ("first_stage_model.decoder.up.0.block.0.conv2.bias", &[128]),
+                ("cond_stage_model.transformer.text_model.final_layer_norm.weight", &[768]),
+            ])
+        };
+        for (context, family) in [
+            (768, ImageFamily::Sd1),
+            (1024, ImageFamily::Sd2),
+            (2048, ImageFamily::Sdxl),
+        ] {
+            assert_eq!(
+                classify(&unet(context)),
+                Role::Image { family, bundled: true },
+                "context width {context}"
+            );
+        }
+        assert!(matches!(classify(&unet(512)), Role::Unknown(_)));
+    }
+
+    /// `inner_dim` rather than a guess at which end of the shape to read: the
+    /// same `to_k` quantized to GGUF is stored the other way round.
+    #[test]
+    fn a_gguf_unet_reads_the_same_width() {
+        let mut g = t(&[
+            ("model.diffusion_model.input_blocks.0.0.weight", &[3, 3, 4, 320]),
+            ("input_blocks.4.1.transformer_blocks.0.attn2.to_k.weight", &[2048, 640]),
+        ]);
+        g.layout = Layout::Ggml;
+        assert_eq!(
+            classify(&g),
+            Role::Image { family: ImageFamily::Sdxl, bundled: false }
+        );
+    }
+
+    #[test]
+    fn the_dits_are_named_by_their_own_markers() {
+        let z = t(&[("cap_embedder.0.weight", &[3840, 2560]), ("layers.0.attention.qkv.weight", &[11520, 3840])]);
+        assert_eq!(
+            classify(&z),
+            Role::Image { family: ImageFamily::ZImage, bundled: false }
+        );
+        let qwen = t(&[
+            ("transformer_blocks.0.img_mod.1.weight", &[18432, 3072]),
+            ("img_in.weight", &[3072, 64]),
+        ]);
+        assert_eq!(
+            classify(&qwen),
+            Role::Image { family: ImageFamily::QwenImage, bundled: false }
+        );
+        let flux = t(&[("double_blocks.0.img_attn.qkv.weight", &[9216, 3072]), ("img_in.weight", &[3072, 64])]);
+        assert_eq!(
+            classify(&flux),
+            Role::Image { family: ImageFamily::Flux, bundled: false }
+        );
+        // Flux's layout with a different input width is a variant that needs
+        // inputs this build doesn't send.
+        let fill = t(&[("double_blocks.0.img_attn.qkv.weight", &[9216, 3072]), ("img_in.weight", &[3072, 384])]);
+        assert!(matches!(classify(&fill), Role::Unsupported(_)));
+    }
+
+    /// The file that started this: an LTX checkpoint in the image root.
+    #[test]
+    fn an_ltx_transformer_is_named_and_is_not_an_image_model() {
+        let ltx = t(&[
+            ("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias", &[4096]),
+            ("model.diffusion_model.transformer_blocks.0.attn2.to_k.weight", &[4096, 4096]),
+        ]);
+        match classify(&ltx) {
+            Role::Unsupported(what) => assert!(what.contains("LTX"), "{what}"),
+            other => panic!("{other:?}"),
+        }
+        // Hunyuan Video carries Flux's `double_blocks` and must not be read as a
+        // Flux.
+        let hunyuan = t(&[
+            ("double_blocks.0.img_attn_qkv.weight", &[9216, 3072]),
+            ("txt_in.individual_token_refiner.blocks.0.adaLN_modulation.1.weight", &[6144, 3072]),
+        ]);
+        assert!(matches!(classify(&hunyuan), Role::Unsupported(_)));
+    }
+
+    /// An LDM VAE by latent width, and not a Wan VAE despite sharing its
+    /// `decoder.`/`conv2.` names.
+    #[test]
+    fn an_image_vae_is_told_by_its_latent_width() {
+        let vae = |two_z: u64| {
+            t(&[
+                ("decoder.conv_in.weight", &[512, two_z / 2, 3, 3]),
+                ("decoder.mid.block_1.conv2.bias", &[512]),
+                ("encoder.conv_out.bias", &[two_z]),
+            ])
+        };
+        assert_eq!(classify(&vae(8)), Role::ImageVae(ImageVaeKind::Sd));
+        assert_eq!(classify(&vae(32)), Role::ImageVae(ImageVaeKind::Flux));
+        assert!(matches!(classify(&vae(64)), Role::Unsupported(_)));
+    }
+
+    /// Only the families with components and a recipe are offered; the rest are
+    /// identified and parked. Pinned so turning one on is a deliberate edit.
+    #[test]
+    fn only_the_unet_families_are_runnable_yet() {
+        for f in ImageFamily::ALL {
+            let unet = matches!(f, ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl);
+            assert_eq!(f.runnable(), unet, "{f:?}");
+        }
     }
 
     #[test]

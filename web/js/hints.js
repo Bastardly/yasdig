@@ -128,12 +128,12 @@ const HELP = [
         + 'add real detail at the larger size, use the hi-res pass instead.' },
   { ids: ['upscaler'],
     text: 'What does that enlarge. FSR is instant and only redistributes the '
-        + 'pixels the checkpoint drew. An ESRGAN model (a .pth or .safetensors '
-        + 'in models/upscalers/, such as 4x-UltraSharp or RealESRGAN_x4plus) '
-        + 'draws new fine texture instead, and takes seconds. Those models are '
-        + 'fixed at 2× or 4×; a 4× model asked for 2× is enlarged 4× and '
-        + 'then reduced, which is the normal way to use one. The size that comes '
-        + 'out is the same either way.' },
+        + 'pixels the checkpoint drew. A model (a .pth or .safetensors in '
+        + 'models/upscalers/) draws new fine texture instead. ESRGAN (4x-UltraSharp, '
+        + 'RealESRGAN_x4plus) and Compact take seconds, SPAN about the same, SwinIR '
+        + 'longer; HAT and DAT are listed but not supported. Models are fixed at '
+        + '2× or 4×; a 4× model asked for 2× is enlarged 4× and then reduced, which '
+        + 'is the normal way to use one. The size that comes out is the same either way.' },
   { ids: ['count'],
     text: 'How many images this run makes. Each is a separate request, so results '
         + 'appear as they land and Stop only has to wait for the one in flight.' },

@@ -195,6 +195,10 @@ impl Slot {
             Role::Vae(_) => Some(Slot::Vae),
             Role::Umt5 => Some(Slot::T5xxl),
             Role::QwenVl | Role::ClipVision | Role::Lora | Role::Unknown(_) => None,
+            // Image files reach this list through the registry as
+            // `Slot::Checkpoint`, not through the video dir's scan. A bare image
+            // DiT or VAE gets a slot when the image side can assemble one.
+            Role::Image { .. } | Role::ImageVae(_) | Role::Unsupported(_) => None,
         }
     }
 }

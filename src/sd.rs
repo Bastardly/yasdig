@@ -331,8 +331,9 @@ impl<'a> SdRunner<'a> {
     /// hands the init image straight to the upscaler), so there is no checkpoint,
     /// no prompt and no seed. sd.cpp reads `.pth` natively and maps the old
     /// ESRGAN key layout (`src/name_conversion.cpp:1273`), but it only
-    /// implements **RRDBNet**: a compact SRVGG, SwinIR, DAT or HAT file is
-    /// not something it can build.
+    /// implements **RRDBNet**: every other architecture goes through
+    /// [`crate::sr`] instead, and `pipeline::enlarge` decides which by reading
+    /// the file, so only an ESRGAN should ever reach this.
     ///
     /// **A model it can't build is not a failure exit.** `new_upscaler_ctx`
     /// failing is a `LOG_ERROR`, after which sd-cli saves the *input unchanged*
@@ -353,9 +354,8 @@ impl<'a> SdRunner<'a> {
             .any(|l| l.contains("new_upscaler_ctx failed") || l.contains("upscale failed"))
         {
             bail!(
-                "sd-cli could not run {} as an upscaler. sd.cpp supports ESRGAN \
-                 (RRDBNet) models only — RealESRGAN_x4plus, 4x-UltraSharp and the \
-                 like; not compact/SRVGG, SwinIR, DAT or HAT.\n--- stderr ---\n{}",
+                "sd-cli could not run {} as an ESRGAN upscaler, though its tensor \
+                 names say it is one — the file may be damaged.\n--- stderr ---\n{}",
                 model.display(),
                 joined(&err_tail)
             );

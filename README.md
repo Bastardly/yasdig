@@ -124,8 +124,11 @@ This produces the CLI binary (`build/bin/sd-cli` on recent checkouts, `sd` on ol
 ### 2. Get a checkpoint
 
 Download a single-file `.safetensors` / `.ckpt` / `.gguf` (no conversion needed) into
-`models/`. That's the whole step — every checkpoint in that folder is **auto-discovered**
-and listed in the UI, so no config edit is needed to add a model. Distilled checkpoints
+`models/`, or any folder under it (`models/checkpoints/` is fine). That's the whole
+step — every checkpoint is **auto-discovered** by reading its header, so its family
+(SD 1.x, SD 2.x, SDXL) is known and a file that isn't an image checkpoint — an LTX
+video model, a loose VAE — is left out of the select and named by `doctor` instead. It
+is listed in the UI, so no config edit is needed to add a model. Distilled checkpoints
 (SDXL-Turbo, SD-Turbo, LCM) give the fastest results, but want a template to set their
 low step count and CFG 1 — see below.
 
@@ -167,8 +170,9 @@ Either way, **adding a model never needs a code change.**
 
 - `[sd].binary` — path to your `sd-cli` (or `sd`) binary.
 - `[sd].mode` — `img_gen` for recent sd.cpp; `txt2img` for older builds.
-- `[sd].models_dir` — folder scanned for checkpoints (default `models`). Not
-  recursive, and files only, which is what lets the two folders below live inside it.
+- `[sd].models_dir` — folder scanned for checkpoints (default `models`).
+  Recursive, and identified by header rather than extension; the video, LoRA and
+  upscaler folders below are left out, since each has a listing of its own.
 - `[sd].lora_dir` — folder scanned for LoRAs (default `loras/` inside the models dir).
   This one *is* recursive, so `models/loras/sdxl/` works. See [LoRAs](#loras).
 - `[sd].upscaler_dir` — folder of ESRGAN upscaler models (default `upscalers/` inside
@@ -696,17 +700,34 @@ nothing on this side is looking at it.
 Every render is enlarged on its way to the output size, and the **Upscaler** select
 beside *Output upscale* in the Advanced panel picks what does it. **FSR (EASU)** is the
 default: milliseconds, no file, and it only redistributes the pixels the checkpoint
-drew. An **ESRGAN** model draws new fine texture instead — hair, fabric, skin — at the
-cost of seconds. Drop one in `models/upscalers/` (subfolders work) and it appears in
-the select; `doctor` prints the folder and what is in it.
+drew. A **model** draws new fine texture instead — hair, fabric, skin — at the cost of
+seconds. Drop one in `models/upscalers/` (subfolders work) and it appears in the select
+with its architecture beside it; `doctor` prints the folder, what each file is, and
+whether it can run.
 
-stable-diffusion.cpp runs these itself (`sd-cli -M upscale`, no checkpoint loaded), and
-it reads `.pth` files directly, so no conversion and no Python. It implements
-**ESRGAN's RRDBNet only**: `RealESRGAN_x4plus`, `RealESRGAN_x4plus_anime_6B`,
-`4x-UltraSharp`, `4x_NMKD-Siax_200k` and most community `4x_*.pth` files work; the
-"compact" `realesr-general-x4v3`, SwinIR, DAT and HAT do not. A file it can't build is
-an **error** naming that rule — sd-cli on its own would save your image unenlarged and
-report success.
+`.pth`, `.pt` and `.safetensors` all load directly — no conversion and no Python. The
+architecture is read from the file's tensor names, never from its filename, and decides
+how it runs:
+
+| architecture | runs on | examples | speed |
+|---|---|---|---|
+| **ESRGAN** (RRDBNet) | sd-cli (`-M upscale`) | `4x-UltraSharp`, `RealESRGAN_x4plus`, `x4plus_anime_6B`, `4x_NMKD-Siax_200k`, `4x_foolhardy_Remacri`, `4xNomos8kSC`, most `4x_*.pth` | seconds |
+| **Compact** (SRVGG) | rustimage's own shaders | `realesr-general-x4v3`, `realesr-animevideov3`, most "compact" releases | fast |
+| **SPAN** | rustimage's own shaders | `4xNomos8k_span_otf_*`, most `*_span*` files on OpenModelDB | fast |
+| **SwinIR** | rustimage's own shaders | `003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-L_x4_GAN`, the classical and lightweight releases | slowest — measure it |
+| DAT, HAT, others | — | listed greyed out, *not supported* | |
+
+**If you want the best result for the least fuss, pick an ESRGAN.** It is the most
+widely trained family by far, and sd.cpp's kernels for it are mature. The other three
+run on hand-written compute shaders on the same Vulkan device the post-process uses —
+sd.cpp can't run them, and adding them there would mean a patched sd.cpp — and every
+buffer they use is freed when the enlarge finishes, so the next diffusion pass has the
+whole card. DAT and HAT are transformer upscalers too heavy to be worth it here: minutes
+per image. A file that isn't supported is shown in the select but can't be picked, and
+a generate that names one anyway is refused *before* it renders.
+
+sd-cli on its own saves your image unenlarged and reports success when it can't build a
+model; that is caught and is an **error**.
 
 A model enlarges by the fixed scale it was trained at, 2× or 4×, and the output is
 brought to exactly the size the *Output upscale* box asks for: a 4× model at 2× is run
@@ -717,6 +738,14 @@ the size you get, whichever upscaler you pick. Set the box to 1 and nothing runs
 The choice is saved with the image, so reopening a work item restores it, and the
 Settings tab has a default for it. It applies to the first enlarge only; the hi-res
 pass and *Enlarge frames* still use EASU.
+
+**Checking a new model file**: `rustimage upscale in.png out.png <file> 4`, at the
+model's own scale. Besides the time, it prints a **consistency** figure — the result
+shrunk back by 4 and compared with the input, in dB. An upscaler that works lands above
+30 dB, because shrinking its output gives back what went in; one that is broken, or a
+file that isn't what its tensor names claim, lands far below. `rustimage sr-selftest`
+checks the shader operations themselves against reference implementations, and prints
+how fast the GPU runs them.
 
 ### Outputs
 
@@ -997,17 +1026,20 @@ A different config file can be passed as the first argument:
 
 ## Command-line tools
 
-Four subcommands, all of which skip the server. `upscale` runs the initial enlarge
-exactly as a generate would, with an ESRGAN model — a name in the upscaler dir or a path
-— and needs sd-cli but no checkpoint, so it is the fast way to try a new upscaler file.
-The last two touch only the GPU post-process — no sd.cpp, no checkpoint, no model
-weights — which makes them the quick way to check the Vulkan side in isolation.
+Five subcommands, all of which skip the server. `upscale` runs the initial enlarge
+exactly as a generate would, with a model — a name in the upscaler dir or a path — and
+needs no checkpoint (sd-cli only for an ESRGAN), so it is the fast way to try a new
+upscaler file; at a whole-number factor it also prints the consistency check described
+under [Upscalers](#upscalers). The last three touch only the GPU — no sd.cpp, no
+checkpoint, no model weights — which makes them the quick way to check the Vulkan side
+in isolation.
 
 ```sh
 rustimage doctor [models.toml]      # run the startup checks and report, without starting
-rustimage upscale in.png out.png <model> [factor=2.0] [models.toml]  # the ESRGAN enlarge alone
+rustimage upscale in.png out.png <model> [factor=2.0] [models.toml]  # the model enlarge alone
 rustimage fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]  # no colour knobs: UI only
 rustimage fsr-selftest [out.png]    # synthesize patterns and check the filters
+rustimage sr-selftest               # the upscaler shaders against CPU references, plus speed
 ```
 
 From a source checkout, put them after `--`: `cargo run --release -- doctor`.
@@ -1203,9 +1235,10 @@ needs a Vulkan device and nothing else.
   debug than "my LoRA is in the list and says why". Filesystem only: it answers on the
   connection thread, and costs one header read per file.
 - `GET /upscalers` — every model file in the upscaler dir: `name` (what `/generate`
-  puts in `upscaler`), `label` and `bytes`. Listed by extension, not by reading the file:
-  most upscalers are `.pth`, which has no header to read, and running one is the only
-  real test — see [Upscalers](#upscalers).
+  puts in `upscaler`), `label`, `bytes`, `arch` (`ESRGAN`, `Compact`, `SPAN`,
+  `SwinIR-M`, `HAT`, `unknown`, …) and `supported`. The architecture is read from the
+  tensor names — a safetensors header, or a `.pth`'s pickle — never the weights, so it
+  answers on the connection thread. See [Upscalers](#upscalers).
 - `GET /outputs` — every image in `work/output/`, newest first: `stem`, `created_ms`,
   `width` / `height`, `prompt`, `seed`, `template`. Uploads are in here too, with an
   empty prompt and `template: "(imported)"` — one pool, because at the moment you are

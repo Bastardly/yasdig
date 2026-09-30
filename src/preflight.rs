@@ -160,6 +160,16 @@ pub fn check(cfg: &Config) -> Report {
 
     // 2) Model registry (explicit templates + discovered checkpoints).
     let registry = cfg.registry();
+    // What each image file was identified as, so a checkpoint's line can name
+    // its family and the files the registry left out can be accounted for. The
+    // memo in `discover` means this second scan re-reads nothing.
+    let image_scan = cfg.scan_images();
+    let family_of = |path: &std::path::Path| {
+        image_scan.iter().find(|f| f.path == path).and_then(|f| match f.role {
+            Role::Image { family, .. } => Some(family),
+            _ => None,
+        })
+    };
     let usable: Vec<_> = registry.values().filter(|p| p.exists).collect();
     let missing: Vec<_> = registry.values().filter(|p| !p.exists).collect();
     let models_dir = cfg.models_dir();
@@ -187,9 +197,13 @@ pub fn check(cfg: &Config) -> Report {
             // Steps and CFG are printed because a template now *inherits* what
             // it doesn't name: these are the resolved numbers, so a preset that
             // states only `steps` still shows what it will actually run with.
+            // A template naming a file that isn't where discovery looks has no
+            // scan entry, so its family goes unsaid rather than guessed.
+            let family = family_of(&p.model).map(|f| f.as_str()).unwrap_or("?");
             info.push(format!(
-                "  • {:<28} [{}, {}]  {}x{} → {}x{}  · {} steps, cfg {}",
+                "  • {:<28} [{}, {}, {}]  {}x{} → {}x{}  · {} steps, cfg {}",
                 p.name,
+                family,
                 tag,
                 size,
                 p.width,
@@ -209,6 +223,49 @@ pub fn check(cfg: &Config) -> Report {
             p.name,
             p.model.display()
         ));
+    }
+
+    // 2a) Image-side files the select doesn't offer, each with what it is. The
+    // registry now lists by header rather than by extension, so without this a
+    // file that used to appear in the select would silently stop appearing.
+    //
+    // Split by how much it matters. A recognised family this build can't run
+    // yet, and a component (a VAE, an encoder) waiting for the model that uses
+    // it, are normal and are info. An architecture we don't do, or a file
+    // nothing matched, is a warning — it is several GB that either is a bad
+    // download or is in the wrong folder, and the person believes it works.
+    let mut parked = Vec::new();
+    for f in &image_scan {
+        let name = f
+            .path
+            .strip_prefix(&models_dir)
+            .unwrap_or(&f.path)
+            .display()
+            .to_string();
+        match &f.role {
+            Role::Image { family, .. } if family.runnable() => {}
+            Role::Unsupported(_) | Role::Unknown(_) => warnings.push(format!(
+                "not offered in the Image tab:\n  {}\n  {}",
+                f.path.display(),
+                f.role.describe()
+            )),
+            // A Wan transformer is the Video tab's, and it only looks for them
+            // in its own directory.
+            Role::Dit(_) => warnings.push(format!(
+                "a video model outside the video dir, so neither tab lists it:\n  {}\n  \
+                 move it under {}",
+                f.path.display(),
+                cfg.video_dir().display()
+            )),
+            other => parked.push(format!("  ○ {:<44} {}", name, other.describe())),
+        }
+    }
+    if !parked.is_empty() {
+        info.push(format!(
+            "{} other image-side file(s) — recognised, not runnable on their own yet:",
+            parked.len()
+        ));
+        info.extend(parked);
     }
 
     // 2b) LoRAs. Never an error and never a warning: an empty folder is the
@@ -243,7 +300,13 @@ pub fn check(cfg: &Config) -> Report {
         cfg.upscaler_dir().display()
     ));
     for u in &upscalers {
-        info.push(format!("  · {:<44} {}", u.name, human_size(u.bytes)));
+        info.push(format!(
+            "  · {:<44} {:<10} {}{}",
+            u.name,
+            u.arch,
+            human_size(u.bytes),
+            if u.supported { "" } else { "  (not supported)" }
+        ));
     }
 
     // 3) Video models: whatever the video dir was identified as, plus the

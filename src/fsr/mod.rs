@@ -152,10 +152,21 @@ impl Fsr {
 
         let adapter_name = adapter.get_info().name;
 
+        // The defaults cap one storage binding at 128 MiB, which the FSR passes
+        // never approach and `sr` does: a 4× SwinIR tail is 64 channels at 4×
+        // the tile, 340 MB for a 288² tile. Asking for what the adapter offers,
+        // capped at 1 GiB, lets `sr::plan_tile` pick tiles by the real limit.
+        let offered = adapter.limits();
+        let limits = wgpu::Limits {
+            max_storage_buffer_binding_size: offered.max_storage_buffer_binding_size.min(1 << 30),
+            max_buffer_size: offered.max_buffer_size.min(1 << 30),
+            ..wgpu::Limits::default()
+        };
+
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("rustimage-fsr"),
             required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
+            required_limits: limits,
             memory_hints: wgpu::MemoryHints::Performance,
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             trace: wgpu::Trace::Off,
@@ -230,6 +241,16 @@ impl Fsr {
 
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
+    }
+
+    /// The device and queue, for `sr`, which runs its networks on this same
+    /// device rather than opening a second one.
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
     }
 
     /// Bind group layout for a plain one-in one-out pass: sampled texture in,
