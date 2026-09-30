@@ -50,7 +50,7 @@ So, again. Anything is up for discussion.
   settings → family recipe → template; `base_cmd` emits `--diffusion-model` + parts; `Profile::missing` /
   `require_files` replace the "checkpoint not found" checks; convert offers a DiT as `--diffusion-model`;
   `doctor` shows the parts a DiT was assembled with.
-  Known gaps: SDXL LoRAs are not yet filtered out for a Z-Image (phase F); the Qwen-Image VAE still reads as a
+  Known gaps: the Qwen-Image VAE still reads as a
   Wan 2.1 VAE (same shape) and needs telling apart when Qwen-Image is added.
 - **Phase 3 — capabilities in the page: DONE** (verified). `/models` carries `family`, `family_label`
   and `missing` (paths). The six model selects group by family (`<optgroup>`, only when there is more than one)
@@ -90,8 +90,10 @@ So, again. Anything is up for discussion.
   reference to the old tab, `img2img.js`, `#i2go` and the three panes. README: *Get a model* (ComfyUI layout,
   Z-Image download table), *Model families* with the four layers, *Start from*, *Per-model settings*, the
   `/models` fields and `/model-settings` routes, and the roadmap.
-- **Left for later** (phase F, in the README roadmap): Flux and Qwen-Image as runnable families, LoRAs
-  filtered by family, the edit tab (instruction edit vs masked inpaint, as more *Start from* slots), LTX-2 on
+- **LoRAs filtered by family — done** (after the phases): `Role::Lora(LoraBase)` from the patched tensor
+  names (`discover::lora_base`), `family`/`base` on `GET /loras`, the picker greys mismatches and re-greys on a
+  model change, and `check_loras` refuses one at run time.
+- **Left for later** (phase F, in the README roadmap): Flux and Qwen-Image as runnable families, the edit tab (instruction edit vs masked inpaint, as more *Start from* slots), LTX-2 on
   the Video tab.
 
 ## Context

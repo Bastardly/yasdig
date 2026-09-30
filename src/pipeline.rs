@@ -704,7 +704,7 @@ impl Engine {
         profile.validate()?;
         // Before anything expensive: sd.cpp would warn and carry on without a
         // LoRA it can't find, which is two minutes spent on the wrong picture.
-        self.cfg.check_loras(&profile.loras)?;
+        self.cfg.check_loras(&profile.loras, profile.family)?;
         // Resolved here for the same reason: a deleted model file would
         // otherwise fail only after the render it was going to enlarge.
         let upscaler = self.cfg.check_upscaler(&profile.upscaler)?;
@@ -912,7 +912,7 @@ impl Engine {
             profile.loras = v.clone();
         }
         profile.validate()?;
-        self.cfg.check_loras(&profile.loras)?;
+        self.cfg.check_loras(&profile.loras, profile.family)?;
 
         profile.require_files()?;
         if req.prompt.trim().is_empty() {
@@ -1293,7 +1293,7 @@ impl Engine {
         // between is the same silent drop arriving late. Note a model swap has
         // already emptied the list by this point, since it replaces the whole
         // profile — correct, because a LoRA is trained against one base.
-        self.cfg.check_loras(&p.profile.loras)?;
+        self.cfg.check_loras(&p.profile.loras, p.profile.family)?;
         if !p.can_refine() {
             bail!("'{}' has no refine pass configured (refine_steps = 0)", p.profile.name);
         }
@@ -1373,7 +1373,7 @@ impl Engine {
         if let Some(name) = named(&over.template) {
             p.profile.hires_model = Some(name);
         }
-        self.cfg.check_loras(&p.profile.loras)?;
+        self.cfg.check_loras(&p.profile.loras, p.profile.family)?;
         if p.profile.hires_steps == 0 {
             bail!("'{}' has no hi-res pass configured (hires_steps = 0)", p.profile.name);
         }

@@ -15,7 +15,7 @@ use crate::settings::Settings;
 /// the same sentence would be wrong there.
 fn describe_role(role: &Role) -> String {
     match role {
-        Role::Lora => "LoRA (name it in a [[video]] entry's `loras` to use it)".into(),
+        Role::Lora(_) => "LoRA (name it in a [[video]] entry's `loras` to use it)".into(),
         other => other.describe(),
     }
 }
@@ -327,8 +327,10 @@ pub fn check(cfg: &Config) -> Report {
             "  {} {:<44} {}",
             if l.usable { "·" } else { "○" },
             l.name,
-            if l.usable {
-                human_size(l.bytes)
+            if l.usable && l.base.is_empty() {
+                format!("{}, base not recognised — offered for every model", human_size(l.bytes))
+            } else if l.usable {
+                format!("{}, for {}", human_size(l.bytes), l.base)
             } else {
                 l.note.clone()
             },

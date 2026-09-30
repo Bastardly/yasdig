@@ -175,9 +175,10 @@ pub enum Role {
     QwenVl,
     /// A CLIP-Vision tower, wanted by Wan 2.1 I2V and FLF2V.
     ClipVision,
-    /// A LoRA. Classified only so it isn't reported as a mystery; which model it
-    /// belongs to is not in the file and stays `models.toml`'s business.
-    Lora,
+    /// A LoRA, and the base it was trained against — read off the names of the
+    /// weights it patches, the same way a checkpoint's family is. See
+    /// [`lora_base`].
+    Lora(LoraBase),
     /// An image diffusion model — what the Image tab's select lists.
     ///
     /// `bundled` is whether its VAE and text encoder travel in the same file,
@@ -200,6 +201,46 @@ pub enum Role {
     Unsupported(String),
     /// Parsed, but nothing matched. Carries a short reason for `doctor`.
     Unknown(String),
+}
+
+/// What a LoRA patches.
+///
+/// Needed because sd.cpp takes a LoRA for the wrong model without complaint: it
+/// matches tensor names, logs the ones it couldn't place, and renders. An SDXL
+/// LoRA on a Z-Image run changes nothing; an SD 1 one on an SDXL run patches the
+/// one text encoder the two share and nothing else. Either way the picture comes
+/// back looking like the LoRA was there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoraBase {
+    /// An image family — runnable here or not; [`LoraBase::fits`] compares it
+    /// with the model it would be applied to.
+    Image(ImageFamily),
+    /// An architecture with no [`ImageFamily`] variant, named: a Wan LoRA
+    /// (video, named in a `[[video]]` entry instead), a Krea 2 one.
+    Other(&'static str),
+    /// No marker matched. Offered anyway: refusing a file that works because
+    /// this couldn't read it is worse than the mismatch the check exists for.
+    Unknown,
+}
+
+impl LoraBase {
+    /// Whether a LoRA for this base belongs on a `family` model.
+    pub fn fits(self, family: ImageFamily) -> bool {
+        match self {
+            LoraBase::Image(f) => f == family,
+            LoraBase::Other(_) => false,
+            LoraBase::Unknown => true,
+        }
+    }
+
+    /// The base as a name, for the picker and `doctor`; empty when unknown.
+    pub fn label(self) -> &'static str {
+        match self {
+            LoraBase::Image(f) => f.label(),
+            LoraBase::Other(name) => name,
+            LoraBase::Unknown => "",
+        }
+    }
 }
 
 /// The image-side VAEs, by latent channel count — which is what decides which
@@ -264,7 +305,8 @@ impl Role {
             Role::ClipVision => "CLIP-Vision tower (Wan 2.1 I2V/FLF2V)".into(),
             Role::Vae(VaeKind::Wan21) => "wan_2.1 VAE — every Wan except the TI2V-5B".into(),
             Role::Vae(VaeKind::Wan22) => "wan2.2 VAE — TI2V-5B only".into(),
-            Role::Lora => "LoRA".into(),
+            Role::Lora(LoraBase::Unknown) => "LoRA".into(),
+            Role::Lora(base) => format!("LoRA for {}", base.label()),
             Role::Dit(DitKind::WanOther { dim }) => {
                 format!("a Wan transformer of width {dim}, which is not a family this build runs")
             }
@@ -559,7 +601,7 @@ pub fn classify(t: &Tensors) -> Role {
         || t.has(".hada_w1_a")
         || t.has(".lokr_w1")
     {
-        return Role::Lora;
+        return Role::Lora(lora_base(t));
     }
     // Architectures sd.cpp names and this build doesn't run. Before everything
     // below, because two of them carry a generic marker a supported family
@@ -672,6 +714,104 @@ pub fn classify(t: &Tensors) -> Role {
         return Role::ClipVision;
     }
     Role::Unknown(format!("{} tensors, no known marker", t.tensors.len()))
+}
+
+/// The base a LoRA was trained against, from the names of what it patches.
+///
+/// **Never from the metadata.** kohya writes `ss_base_model_version` and
+/// `modelspec.architecture`, and they lie: a hand-fixing LoRA in the models dir
+/// says `stable-diffusion-v1/lora` and every one of its cross-attention keys is
+/// 2048 wide, which is SDXL. The names can't be wrong in that way — they are
+/// what sd.cpp matches against the model.
+///
+/// Each marker is tested in two spellings, because the trainers disagree: the
+/// dotted original (`diffusion_model.double_blocks.0.…`, what sd.cpp's own
+/// names look like) and kohya's flattened one (`lora_unet_double_blocks_0_…`).
+/// A substring test catches both when the marker has no separator in it, and
+/// the ones that do are spelled out twice.
+///
+/// Order matters in two places. Krea 2's blocks are `blocks.N.attn`, so it goes
+/// before Wan's `blocks.N.cross_attn` would matter; and the UNet test goes
+/// before Z-Image's, since a UNet LoRA's text-encoder keys have `layers` in
+/// them too.
+fn lora_base(t: &Tensors) -> LoraBase {
+    let either = |dotted: &str, flat: &str| t.has(dotted) || t.has(flat);
+
+    // `txtfusion` is sd.cpp's own Krea 2 marker; `attn.wq` catches a LoRA that
+    // left the text-fusion blocks alone. Nothing else here names a projection
+    // `wq` under `attn`.
+    if t.has("txtfusion") || either(".attn.wq.", "_attn_wq") {
+        return LoraBase::Other("Krea 2");
+    }
+    if t.has("double_blocks") || t.has("single_blocks") || t.has("single_transformer_blocks") {
+        return LoraBase::Image(ImageFamily::Flux);
+    }
+    // Qwen-Image's dual-stream MLPs. Flux's original naming has `img_mlp` too,
+    // inside `double_blocks`, which is why this comes second.
+    if t.has("img_mlp") || t.has("txt_mlp") || t.has("img_mod") {
+        return LoraBase::Image(ImageFamily::QwenImage);
+    }
+    // Flux in diffusers' spelling, which has no `double_blocks`: its text
+    // stream is `ff_context` and `add_q_proj`. Qwen-Image has `add_q_proj` too,
+    // and its `img_mlp` has already claimed it above.
+    if t.has("ff_context") || t.has("add_q_proj") {
+        return LoraBase::Image(ImageFamily::Flux);
+    }
+    if t.has("cross_attn") {
+        return LoraBase::Other("Wan");
+    }
+    if let Some(family) = unet_lora(t) {
+        return family;
+    }
+    // Z-Image: `layers.N.attention` and `layers.N.feed_forward`
+    // (`z_image.hpp`), plus its two refiner stacks. `attention` with a
+    // separator after it, since a diffusers UNet has `attentions`.
+    if t.has("noise_refiner")
+        || t.has("context_refiner")
+        || (t.has("layers") && (either(".attention.", "_attention_") || t.has("feed_forward")))
+    {
+        return LoraBase::Image(ImageFamily::ZImage);
+    }
+    LoraBase::Unknown
+}
+
+/// SD 1.x, SD 2.x or SDXL, for a LoRA with UNet or CLIP keys; `None` when it
+/// has neither.
+///
+/// The same test as the checkpoint's — the width the cross-attention keys are
+/// projected from — read off the LoRA's down projection, which is
+/// `[rank, context]`. A LoRA can leave cross-attention alone entirely (one in
+/// the models dir trains `attn1` only), so the text encoders are the fallback:
+/// a second one is SDXL, and a lone one is as wide as its hidden size, 768 for
+/// SD 1's CLIP-L and 1024 for SD 2's OpenCLIP-H.
+fn unet_lora(t: &Tensors) -> Option<LoraBase> {
+    let unet = ["input_blocks", "output_blocks", "down_blocks", "up_blocks", "mid_block"]
+        .iter()
+        .any(|m| t.has(m));
+    let te = t.has("lora_te") || t.has("text_encoder") || t.has("text_model");
+    if !unet && !te {
+        return None;
+    }
+    let down = |x: &&TensorInfo| x.name.contains("lora_down") || x.name.contains("lora_A");
+    let width = |a: &str, b: &str| {
+        t.tensors
+            .iter()
+            .filter(down)
+            .find(|x| x.name.contains(a) && x.name.contains(b))
+            .map(|x| x.inner_dim(t.layout))
+    };
+    let family = match width("attn2", "to_k") {
+        Some(768) => ImageFamily::Sd1,
+        Some(1024) => ImageFamily::Sd2,
+        Some(2048) => ImageFamily::Sdxl,
+        _ if t.has("lora_te2") || t.has("text_encoder_2") => ImageFamily::Sdxl,
+        _ => match width("self_attn", "k_proj") {
+            Some(768) => ImageFamily::Sd1,
+            Some(1024) => ImageFamily::Sd2,
+            _ => return Some(LoraBase::Unknown),
+        },
+    };
+    Some(LoraBase::Image(family))
 }
 
 /// The first tensor whose name ends in `suffix`.
@@ -1359,7 +1499,7 @@ mod tests {
             ("blocks.0.cross_attn.norm_k.weight.lora_down.weight", &[32, 5120]),
             ("blocks.0.cross_attn.norm_k.weight.lora_up.weight", &[5120, 32]),
         ]);
-        assert_eq!(classify(&lora), Role::Lora);
+        assert_eq!(classify(&lora), Role::Lora(LoraBase::Other("Wan")));
     }
 
     /// LyCORIS carries the base model's tensor names exactly as a LoRA does, so
@@ -1372,14 +1512,89 @@ mod tests {
             ("blocks.0.cross_attn.norm_k.hada_w1_a", &[32, 5120]),
             ("blocks.0.cross_attn.norm_k.hada_w1_b", &[5120, 32]),
         ]);
-        assert_eq!(classify(&loha), Role::Lora);
+        assert_eq!(classify(&loha), Role::Lora(LoraBase::Other("Wan")));
 
         let lokr = t(&[
             ("blocks.0.cross_attn.norm_k.weight", &[5120, 5120]),
             ("blocks.0.cross_attn.norm_k.lokr_w1", &[64, 64]),
             ("blocks.0.cross_attn.norm_k.lokr_w2", &[80, 80]),
         ]);
-        assert_eq!(classify(&lokr), Role::Lora);
+        assert_eq!(classify(&lokr), Role::Lora(LoraBase::Other("Wan")));
+    }
+
+    /// One case per LoRA in the models dir, keys and shapes as they are on disk,
+    /// plus the spellings the other trainers use for the families here.
+    #[test]
+    fn a_lora_names_the_base_it_patches() {
+        let base = |names: &[(&str, &[u64])]| match classify(&t(names)) {
+            Role::Lora(b) => b,
+            other => panic!("not a LoRA: {other:?}"),
+        };
+        // `hand 5.5`: metadata says SD 1, the cross-attention says SDXL.
+        assert_eq!(
+            base(&[
+                ("lora_te1_text_model_encoder_layers_0_mlp_fc1.lora_down.weight", &[128, 768]),
+                ("lora_unet_input_blocks_4_1_transformer_blocks_0_attn2_to_k.lora_down.weight", &[128, 2048]),
+            ]),
+            LoraBase::Image(ImageFamily::Sdxl)
+        );
+        // `dark`: diffusers block names, self-attention only, two text encoders.
+        assert_eq!(
+            base(&[
+                ("lora_te1_text_model_encoder_layers_0_self_attn_k_proj.lora_down.weight", &[16, 768]),
+                ("lora_te2_text_model_encoder_layers_0_self_attn_k_proj.lora_down.weight", &[16, 1280]),
+                ("lora_unet_down_blocks_1_attentions_0_transformer_blocks_0_attn1_to_k.lora_down.weight", &[16, 640]),
+            ]),
+            LoraBase::Image(ImageFamily::Sdxl)
+        );
+        assert_eq!(
+            base(&[("lora_unet_down_blocks_1_attentions_0_transformer_blocks_0_attn2_to_k.lora_down.weight", &[8, 768])]),
+            LoraBase::Image(ImageFamily::Sd1)
+        );
+        assert_eq!(
+            base(&[("lora_te_text_model_encoder_layers_0_self_attn_k_proj.lora_down.weight", &[8, 1024])]),
+            LoraBase::Image(ImageFamily::Sd2)
+        );
+        // The Krea 2 one: peft's lora_A/lora_B under sd.cpp's own names.
+        assert_eq!(
+            base(&[
+                ("diffusion_model.blocks.0.attn.wq.lora_A.weight", &[32, 6144]),
+                ("diffusion_model.txtfusion.refiner_blocks.0.attn.wq.lora_A.weight", &[32, 2560]),
+            ]),
+            LoraBase::Other("Krea 2")
+        );
+        for zimage in [
+            "diffusion_model.layers.0.attention.to_q.lora_A.weight",
+            "lora_unet_layers_0_attention_qkv.lora_down.weight",
+            "diffusion_model.layers.3.feed_forward.w1.lora_A.weight",
+        ] {
+            assert_eq!(base(&[(zimage, &[16, 3840])]), LoraBase::Image(ImageFamily::ZImage), "{zimage}");
+        }
+        for flux in [
+            "lora_unet_double_blocks_0_img_attn_qkv.lora_down.weight",
+            "transformer.single_transformer_blocks.0.attn.to_q.lora_A.weight",
+            "transformer.transformer_blocks.0.attn.add_q_proj.lora_A.weight",
+        ] {
+            assert_eq!(base(&[(flux, &[16, 3072])]), LoraBase::Image(ImageFamily::Flux), "{flux}");
+        }
+        assert_eq!(
+            base(&[
+                ("transformer_blocks.0.attn.add_q_proj.lora_A.weight", &[16, 3072]),
+                ("transformer_blocks.0.img_mlp.net.0.proj.lora_A.weight", &[16, 3072]),
+            ]),
+            LoraBase::Image(ImageFamily::QwenImage)
+        );
+        assert_eq!(base(&[("mystery.lora_down.weight", &[4, 4])]), LoraBase::Unknown);
+    }
+
+    #[test]
+    fn only_a_lora_for_the_family_fits_it() {
+        let sdxl = LoraBase::Image(ImageFamily::Sdxl);
+        assert!(sdxl.fits(ImageFamily::Sdxl));
+        assert!(!sdxl.fits(ImageFamily::ZImage));
+        assert!(!sdxl.fits(ImageFamily::Sd1));
+        assert!(!LoraBase::Other("Krea 2").fits(ImageFamily::Sdxl));
+        assert!(LoraBase::Unknown.fits(ImageFamily::ZImage));
     }
 
     #[test]

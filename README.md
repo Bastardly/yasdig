@@ -762,16 +762,24 @@ made from noise clears the slot.
 A LoRA is a small file that patches a checkpoint's weights: a style, a character, a
 4-step distillation. Drop them in `models/loras/` — subfolders are fine and are
 scanned, so `models/loras/sdxl/` and `models/loras/flux/` work — and they appear in
-the **LoRAs** block under the model select on both image tabs. Press **+ Add LoRA**,
+the **LoRAs** block under the model select on the Image tab. Press **+ Add LoRA**,
 pick one, set a strength, add another if you want. `doctor` prints the folder it is
 looking in and what it found there, which is the first thing to check if the list is
 empty.
 
 **Strength** is the multiplier. 1 is the weight the adapter was trained at, 0.5 is a
-hint of it, and negative subtracts — a real technique, so the range is -2 to 2. The
-one rule that isn't on screen: a LoRA has to match the *base* your checkpoint is
-built on. An SDXL LoRA does nothing to an SD1.5 model. It won't error; the picture
-just comes back as though you hadn't attached it.
+hint of it, and negative subtracts — a real technique, so the range is -2 to 2.
+
+**A LoRA has to match the family of the model it patches**, and the picker enforces
+it. An SDXL LoRA does nothing to a Z-Image, and stable-diffusion.cpp won't say so: it
+renders, and the picture comes back as though you hadn't attached it. So each LoRA is
+identified the way a checkpoint is — by the names of the weights inside it, never by
+its filename or its metadata, which is often wrong (one popular SDXL LoRA calls itself
+SD 1.5 in its own header) — and one for another family is listed greyed out with what
+it is *for*. Switch the model and the list re-greys; a LoRA already picked that no
+longer fits stays on its row with a line saying why, and Generate refuses it rather
+than running without it. A LoRA nothing could identify is offered for every model —
+refusing a file that works would be worse. `doctor` prints each LoRA's family.
 
 What you pick travels with the image. **Refine** and **Hi-res** run the same
 adapters, because they are passes over that picture and one that dropped the LoRA
@@ -1337,7 +1345,11 @@ needs a Vulkan device and nothing else.
   back as an error whose message ends in `cancelled by request`.
 - `GET /loras` — every file in the LoRA dir, recursive: `name` (what a request puts in
   `loras[].name`), `label` (the same without its extension, for a picker), `bytes`,
-  `usable`, and `note` — why not, when `usable` is false. Unusable entries are listed
+  `usable`, `note` — why not, when `usable` is false — and what it was trained for:
+  `family`, in the spelling `/models` uses for a model's (`sdxl`, `z_image`, …), and
+  `base`, the same as a name (`SDXL`). `base` without `family` is a LoRA for something
+  that is no image family here (a Wan or Krea 2 one) and fits no model; both empty is
+  a LoRA nothing identified, which fits every model. Unusable entries are listed
   rather than filtered out, because "my LoRA isn't in the list" is a much worse thing to
   debug than "my LoRA is in the list and says why". Filesystem only: it answers on the
   connection thread, and costs one header read per file.
@@ -1496,8 +1508,6 @@ the GPU worker is gone.
 - **More image families.** Flux (and Krea/Flex) and Qwen-Image are already recognised;
   each is a recipe, its parts (Flux: CLIP-L + T5-XXL; Qwen-Image: Qwen2.5-VL) and a
   switch in `ImageFamily`. See CLAUDE.md, *## Families*.
-- **LoRAs filtered by family.** A LoRA's tensor names say which base it patches; the
-  picker should grey out an SDXL LoRA on a Z-Image rather than send it.
 - **An edit tab.** Two different things share the name: *instruction* editing
   (Flux Kontext, Qwen-Image-Edit, Flux 2 — a reference image and "make the sky red",
   sd.cpp's `-r`) and *masked inpainting* (`--mask`). Both are more slots on the

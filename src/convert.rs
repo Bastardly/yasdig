@@ -194,7 +194,7 @@ impl Slot {
             Role::Dit(_) => Some(Slot::Diffusion),
             Role::Vae(_) => Some(Slot::Vae),
             Role::Umt5 => Some(Slot::T5xxl),
-            Role::QwenVl | Role::ClipVision | Role::Lora | Role::Unknown(_) => None,
+            Role::QwenVl | Role::ClipVision | Role::Lora(_) | Role::Unknown(_) => None,
             // Image files reach this list through the registry as
             // `Slot::Checkpoint`, not through the video dir's scan. A bare image
             // DiT or VAE gets a slot when the image side can assemble one.
@@ -599,7 +599,7 @@ mod tests {
         // every tensor in it.
         assert_eq!(Slot::for_role(&Role::QwenVl), None);
         assert_eq!(Slot::for_role(&Role::ClipVision), None);
-        assert_eq!(Slot::for_role(&Role::Lora), None);
+        assert_eq!(Slot::for_role(&Role::Lora(crate::discover::LoraBase::Unknown)), None);
         assert_eq!(
             Slot::for_role(&Role::Dit(DitKind::Wan22A14b)),
             Some(Slot::Diffusion)

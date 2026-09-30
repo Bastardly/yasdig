@@ -248,6 +248,31 @@ tag parser:
   `Path::components()` must be `Component::Normal`, which rejects `..`, a leading
   `/` and a bare `.` in one test.
 
+**A LoRA for the wrong family is the same silent failure a fourth time.** sd.cpp
+matches a LoRA's tensor names against the model, logs what it couldn't place and
+renders — an SDXL LoRA on a Z-Image changes nothing, and an SD 1 one on an SDXL
+patches the one CLIP-L the two share and nothing else. So `classify` carries a
+`LoraBase` on `Role::Lora`, read by `discover::lora_base` off the names of what the
+LoRA patches, and `check_loras` takes the profile's family and refuses a mismatch.
+Four things about it:
+
+- **Never the metadata.** kohya's `ss_base_model_version` and
+  `modelspec.architecture` are the tempting shortcut and they lie — `hand 5.5` in
+  the models dir says `stable-diffusion-v1/lora` over 2048-wide cross-attention.
+- **The UNet split is the checkpoint's, with a fallback.** The width of the
+  `attn2.to_k` down projection, as in `image_model`; but a LoRA can train
+  self-attention only (`dark` does), so a second text encoder then means SDXL
+  and a lone one's width says SD 1 or 2.
+- **Each marker has two spellings**, dotted and kohya's flattened
+  `lora_unet_…_…`. A marker without a separator in it catches both as a
+  substring; one with a separator (`attn.wq`, `.attention.`) is tested twice.
+- **`Unknown` fits everything.** Refusing a working file because the scan couldn't
+  read it would be worse than the mismatch this guards. `LoraBase::Other` (Wan,
+  Krea 2) is the opposite: named, and fits no image model.
+
+On the wire that is `family` (the `/models` spelling) and `base` (a label) on each
+`/loras` entry; `fits()` in `loras.js` is `LoraBase::fits` over those two strings.
+
 **`Profile.loras` is the only knob on `Profile` with no `Defaults`/`Template`
 pair**, and that is deliberate: a LoRA is reached for per picture, so it arrives
 on the request and `Settings::as_profile` builds the field empty for every model.
@@ -276,7 +301,7 @@ On the page, `loras.js` is a factory in `gridmark.js`'s shape and for the same
 reason — two copies of a control that builds a request body is two chances for
 one of them to send a different one. There is one instance today — the
 Image-to-image tab that had the second one is now the Image tab's *Start from* —
-and the factory stays one because the edit tab is the next likely second. Two
+and the factory stays one because the edit tab is the next likely second. Three
 things in it break silently:
 
 - **The module-level `available` list is shared; the picked rows are not.** One
@@ -287,6 +312,12 @@ things in it break silently:
   explicitly" and a missing key as "keep whatever the profile has"; the picker on
   screen is the complete answer to the question, so it must be able to say none.
   Dropping the key when the list is empty would make a removed row unremovable.
+- **A picked row that stops fitting stays.** Changing the model re-greys the lists
+  (`syncAdvanced` calls `refresh()`), and a row already on a LoRA for another family
+  keeps it, with a line under it saying so. Dropping it would lose a choice to a
+  select flipped by accident; sending it quietly is what the server refuses.
+  `refresh()` waits on the listing's fetch, because the model select fills first
+  and an early draw would show the empty-folder message as if it were true.
 
 ## Upscalers
 

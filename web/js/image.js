@@ -13,7 +13,9 @@ export let models = [];
 // This tab's attached LoRAs. Exported because `applyWorkItem` has to put a
 // reopened generation's back: the grid restores what made an image, and the
 // adapters are as much a part of that as the steps and the seed.
-export const imageLoras = loraPicker({ rows: 'loras', add: 'loraadd' });
+export const imageLoras = loraPicker({
+  rows: 'loras', add: 'loraadd', family: () => currentModel()?.family ?? null,
+});
 
 // "Start from". Nothing picked is text to image; a picked image makes Generate
 // run `/img2img` over it instead of `/generate`. This used to be a tab of its
@@ -56,6 +58,8 @@ function currentModel() {
 function syncAdvanced() {
   const m = currentModel();
   if (!m) return;
+  // Re-greys the LoRA lists against the new model's family.
+  imageLoras.refresh();
   $('steps').value = m.steps;
   $('cfg').value = m.cfg_scale;
   $('sampler').value = m.sampler;

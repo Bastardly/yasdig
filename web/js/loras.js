@@ -8,13 +8,13 @@ import { $, esc } from './dom.js';
 // this page never writes that spelling, it sends `[{name, strength}]` and lets
 // `base_cmd` assemble it. See `Profile::loras`.
 //
-// Two tabs have a picker and they are instances of the same factory, in
-// `gridmark.js`'s shape and for the same reason — two copies of a control that
-// builds a request body is two chances for one of them to send a subtly
-// different one.
+// A factory, in `gridmark.js`'s shape and for the same reason — two copies of a
+// control that builds a request body is two chances for one of them to send a
+// subtly different one. One instance today, on the Image tab; the edit tab is
+// the likely second.
 
-// The LoRA directory's contents, shared by both pickers: one request, two
-// consumers, the same argument `outputGrid` makes for the output tile.
+// The LoRA directory's contents, shared by every picker: one request, every
+// consumer, the same argument `outputGrid` makes for the output tile.
 let available = [];
 // The in-flight fetch, so two pickers initialising in the same tick share one
 // request instead of racing two. Cleared by `force`, which is what the Add
@@ -37,18 +37,33 @@ function fetchLoras(force) {
   return loading;
 }
 
+// Whether a LoRA belongs on a model of `family` (its `/models` wire id).
+// The server's rule (`LoraBase::fits`) on the two strings it serves: `base`
+// empty means nothing identified it, and that is offered everywhere — refusing
+// a working file because the scan couldn't read it would be worse than the
+// mismatch. A known base must be the model's family exactly; a Wan or Krea 2
+// LoRA has a `base` and no `family`, so it fits nothing on this tab.
+const fits = (l, family) => !family || !l.base || l.family === family;
+
 // Everything the picker knows how to render for. An unusable file is kept and
 // disabled rather than dropped, matching what the server publishes and why: "my
 // LoRA isn't in the list" is a much worse thing to debug than "my LoRA is in the
-// list and says why it can't be used".
-const options = (selected) => available.map((l) => `
-  <option value="${esc(l.name)}"${l.usable ? '' : ' disabled'}${
-    l.name === selected ? ' selected' : ''} title="${esc(l.note)}">${
-    esc(l.label)}${l.usable ? '' : ' — ' + esc(l.note)}</option>`).join('');
+// list and says why it can't be used". A LoRA for another family is the same
+// case, and says which family it is for.
+const why = (l, family) => (!l.usable ? l.note : fits(l, family) ? '' : 'for ' + l.base);
+const options = (selected, family) => available.map((l) => {
+  const no = why(l, family);
+  return `
+  <option value="${esc(l.name)}"${no ? ' disabled' : ''}${
+    l.name === selected ? ' selected' : ''} title="${esc(no)}">${
+    esc(l.label)}${no ? ' — ' + esc(no) : ''}</option>`;
+}).join('');
 
 // `rows` is the container the rows are drawn into, `add` the button that appends
 // one. Both are element ids, so an instance is one object literal per tab.
-export function loraPicker({ rows, add }) {
+// `family` returns the selected model's family, read at every draw, so
+// `refresh()` after a model change is all it takes to re-grey the lists.
+export function loraPicker({ rows, add, family = () => null }) {
   // The rows, in order. Held here rather than read back out of the DOM because a
   // re-render rebuilds the elements and would lose a half-typed strength.
   let picked = [];
@@ -63,14 +78,25 @@ export function loraPicker({ rows, add }) {
         + 'into models/loras/. <b>doctor</b> prints the folder it is looking in.</p>';
       return;
     }
-    el.innerHTML = picked.map((p, i) => `
+    const fam = family();
+    // A picked row that stops fitting — the model changed under it — stays,
+    // with a line saying why. Dropping it would lose a choice on a select
+    // change that may be flipped straight back; keeping it quietly would send
+    // it, and the server refuses a LoRA for the wrong family.
+    el.innerHTML = picked.map((p, i) => {
+      const l = available.find((a) => a.name === p.name);
+      const off = l && !fits(l, fam)
+        ? `<p class="err">${esc(l.label)} is for ${esc(l.base)} — remove it or pick another for this model.</p>`
+        : '';
+      return `
       <div class="lorarow">
-        <select data-i="${i}" aria-label="LoRA">${options(p.name)}</select>
+        <select data-i="${i}" aria-label="LoRA">${options(p.name, fam)}</select>
         <input type="number" data-i="${i}" step="0.05" min="-2" max="2"
           value="${p.strength}" aria-label="Strength" title="Multiplier. 1 is the weight it was trained at.">
         <button type="button" class="btn btn-danger" data-i="${i}"
           title="Remove this LoRA">&times;</button>
-      </div>`).join('');
+      </div>${off}`;
+    }).join('');
     for (const sel of el.querySelectorAll('select')) {
       sel.addEventListener('change', () => { picked[Number(sel.dataset.i)].name = sel.value; });
     }
@@ -92,6 +118,10 @@ export function loraPicker({ rows, add }) {
   }
 
   return {
+    // Waits for the listing, since a model select fills before it lands and
+    // drawing early would show the empty-folder message as if it were true.
+    refresh: () => fetchLoras().then(render),
+
     // What goes in the request body. Empty is a real answer — the server reads
     // `[]` as "none, explicitly" and a missing key as "keep what the profile
     // has", which are different things.
@@ -110,7 +140,7 @@ export function loraPicker({ rows, add }) {
     init() {
       $(add).addEventListener('click', async () => {
         await fetchLoras(true);
-        const first = available.find((l) => l.usable);
+        const first = available.find((l) => l.usable && fits(l, family()));
         if (first) picked.push({ name: first.name, strength: 1 });
         render();
       });

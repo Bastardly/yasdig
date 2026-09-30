@@ -231,6 +231,16 @@ pub struct LoraFile {
     pub usable: bool,
     /// Empty when `usable`; otherwise why not, in one phrase.
     pub note: String,
+    /// The base it was trained against, as [`ImageFamily::as_str`] — the
+    /// spelling `/models` uses for a model's `family`, so the page compares two
+    /// served strings rather than deciding anything itself. `None` for a base
+    /// that is no image family (a Wan or Krea 2 LoRA) *and* for one nothing
+    /// identified; `base` tells those apart.
+    pub family: Option<&'static str>,
+    /// The base as a name — "SDXL", "Krea 2" — or empty when unknown, which is
+    /// what makes a LoRA offered for every model. See
+    /// [`crate::discover::LoraBase::fits`], the rule this is the wire form of.
+    pub base: &'static str,
 }
 
 /// One file in the upscaler directory, as `GET /upscalers` publishes it.
@@ -1717,10 +1727,14 @@ impl Config {
                     "the name has a character sd.cpp's <lora:…> tag can't carry".to_string()
                 } else {
                     match &f.role {
-                        crate::discover::Role::Lora => String::new(),
+                        crate::discover::Role::Lora(_) => String::new(),
                         crate::discover::Role::Unknown(why) => why.clone(),
                         other => format!("looks like a {}, not a LoRA", other.describe()),
                     }
+                };
+                let base = match f.role {
+                    crate::discover::Role::Lora(b) => b,
+                    _ => crate::discover::LoraBase::Unknown,
                 };
                 LoraFile {
                     name,
@@ -1728,6 +1742,11 @@ impl Config {
                     bytes,
                     usable: note.is_empty(),
                     note,
+                    family: match base {
+                        crate::discover::LoraBase::Image(f) => Some(f.as_str()),
+                        _ => None,
+                    },
+                    base: base.label(),
                 }
             })
             .collect()
@@ -1746,7 +1765,13 @@ impl Config {
     /// Called from every entry point that is about to hand a profile to
     /// `SdRunner`, escalations included: a file deleted between the generate and
     /// the Refine is the same failure arriving later.
-    pub fn check_loras(&self, refs: &[LoraRef]) -> Result<()> {
+    ///
+    /// It also refuses a LoRA trained for another family, which sd.cpp takes
+    /// just as quietly: the tensor names don't match, the misses are a log line,
+    /// and the render comes back without the LoRA in it. The picker greys those
+    /// out, so this is for what reaches a run another way — a reopened work
+    /// item, a hand-written request.
+    pub fn check_loras(&self, refs: &[LoraRef], family: ImageFamily) -> Result<()> {
         if refs.is_empty() {
             return Ok(());
         }
@@ -1772,6 +1797,17 @@ impl Config {
                         known.join(", ")
                     }
                 );
+            }
+            match crate::discover::identify(&dir.join(&l.name)) {
+                crate::discover::Role::Lora(base) if !base.fits(family) => bail!(
+                    "'{}' is a LoRA for {}, and this is a {} model — its weights would \
+                     not match, and sd.cpp would render without it",
+                    l.name,
+                    base.label(),
+                    family.label()
+                ),
+                crate::discover::Role::Lora(_) => {}
+                other => bail!("'{}' looks like a {}, not a LoRA", l.name, other.describe()),
             }
         }
         Ok(())
