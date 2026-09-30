@@ -61,7 +61,8 @@ So, again. Anything is up for discussion.
   here (DiTs need 16), so generalising `snap64`/`fit_to` would buy at most 48 px of width for churn in tested
   code. `guidance`, `ref_images` and `inpaint` caps are not served yet — nothing uses them; they arrive with
   Flux and the edit tab.
-- **Phase 4 — settings layers: DONE, awaiting your check.** Layers: `user/settings.toml` → family recipe →
+- **Phase 4 — settings layers: DONE** (verified; a cyclic-import crash found in review was fixed and is now
+  guarded by `web/js/modules.test.js`). Layers: `user/settings.toml` → family recipe →
   `[templates.*]` → **`user/model-settings.toml`** (renamed from the planned `user/models.toml`, to not share a
   name with the root config). `settings::ModelSettings` (load/save, `[model."<name>"]` tables of
   `PartialSettings`, now `Serialize`); `settings::update_model` keeps only values that differ from the model's
@@ -76,7 +77,15 @@ So, again. Anything is up for discussion.
   form keeps width/height/steps/CFG/sampler, relabelled *SD 1.x, SD 2.x and SDXL* — they are the one place to
   change every SDXL at once, and other families' recipes already override them. Limitation: this layer can't
   pin FSR over a global ESRGAN upscaler (absent key and FSR are both "no name").
-- **Next: phase 5** (merge the image tabs via a "Start from" slot).
+- **Phase 5 — one Image tab: DONE, awaiting your check.** The Image-to-image tab is gone (`img2img.js`,
+  `#tab-img2img`, its PANES row, `i2go`/`i2prog`). `web/js/source-slot.js` is a factory (Choose… via the shared
+  `#picker` dialog, Upload…, drop, paste gated to its tab) used by the Image tab's *Start from* and the Video
+  tab's first frame — so a video can now start from an upload. With a source, `data-when` controls swap
+  (`syncMode` in `image.js`): base Steps, size and output upscale hide; Strength, Steps, Working size and img2img
+  CFG show. `genPayload` returns `[route, body]` — `/img2img` with a source, `/generate` without — so the run
+  panel (batch, loop, after-each) works over a source too, walking the seed. Reopening a work item sets or clears
+  the slot. No server change. Settings rows moved to the new ids (section renamed *Starting from an image*).
+- **Next: phase 6** (docs: CLAUDE.md sections for families / Start from / per-model settings, README).
 
 ## Context
 

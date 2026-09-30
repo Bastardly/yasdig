@@ -12,7 +12,6 @@ import { initViewer } from './viewer.js';
 import { initHints } from './hints.js';
 import { initImage } from './image.js';
 import { initWorkItems, markGrid } from './workitems.js';
-import { initI2, loadI2Outputs } from './img2img.js';
 import { initOutputs, loadOutputs } from './outputs.js';
 import { initVideo } from './video.js';
 import { initConvert } from './convert.js';
@@ -28,7 +27,6 @@ function showTab(name) {
     b.classList.toggle('active', b.dataset.tab === name);
   }
   $('tab-image').hidden = name !== 'image';
-  $('tab-img2img').hidden = name !== 'img2img';
   $('tab-outputs').hidden = name !== 'outputs';
   $('tab-video').hidden = name !== 'video';
   $('tab-convert').hidden = name !== 'convert';
@@ -44,11 +42,11 @@ function showTab(name) {
   // step.
   $('lbsave').hidden = name !== 'outputs';
 
-  // The three image panes share one `imageId`, so leaving one has to empty it.
+  // The two image panes share one `imageId`, so leaving one has to empty it.
   // Otherwise the picture stays on screen beside Refine and Hi-res buttons that
   // now address whatever the other tab produces next — which would work, and
   // would apply the pass to an image other than the one being looked at.
-  if (name === 'image' || name === 'img2img' || name === 'outputs') {
+  if (name === 'image' || name === 'outputs') {
     if (S.pane !== name) {
       clearPane(S.pane);
       S.imageId = null;
@@ -57,7 +55,6 @@ function showTab(name) {
       markGrid();
       S.pane = name;
     }
-    if (name === 'img2img') loadI2Outputs();
     // Re-read on entry: the Image tab's Save writes into this directory, so the
     // grid is stale the moment you come back from having used it.
     if (name === 'outputs') loadOutputs();
@@ -77,7 +74,6 @@ initViewer();
 initHints();
 initImage();
 initWorkItems();
-initI2();
 initOutputs();
 initVideo();
 initConvert();

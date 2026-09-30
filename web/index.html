@@ -14,7 +14,6 @@
   <div class="tabs">
     <h1>rustimage</h1>
     <button type="button" class="btn btn-choice tab active" data-tab="image">Image</button>
-    <button type="button" class="btn btn-choice tab" data-tab="img2img">Image to image</button>
     <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
     <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
     <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
@@ -72,6 +71,51 @@
       <p class="sub" id="runnote"></p>
     </div>
 
+    <!-- Where the picture begins: noise, or an image. The one thing that used to be
+         a whole second tab — a source image plus the same prompt, model, LoRAs and
+         ladder — so it is a slot here rather than a tab of its own. Nothing picked
+         is text to image; picking something runs /img2img instead of /generate,
+         and the controls that only mean something for one of the two follow
+         (`data-when`, see syncMode in image.js). Wired by source-slot.js, which
+         the Video tab's first frame shares. -->
+    <label class="grouphead" data-help="source">Start from</label>
+    <div id="srcdrop" class="drop">
+      <div class="picked">
+        <img id="srcthumb" alt="" hidden>
+        <div>
+          <span id="srcname" class="sub"></span>
+          <div class="btnrow">
+            <button type="button" id="srcpick" class="btn">Choose…</button>
+            <button type="button" id="srcupload" class="btn">Upload…</button>
+            <button type="button" id="srcclear" class="btn" hidden>Clear</button>
+          </div>
+        </div>
+      </div>
+      <!-- Anything the browser can decode. It is re-encoded to PNG in a canvas
+           before upload, which is why this build needs no JPEG decoder. -->
+      <input type="file" id="srcfile" accept="image/*" hidden>
+    </div>
+    <div class="row" data-when="source" hidden>
+      <div>
+        <label for="srcstrength">Strength</label>
+        <!-- The one knob that decides whether this is a re-render or a retouch.
+             Higher redraws more and keeps less of the source. -->
+        <input id="srcstrength" type="number" step="0.05" min="0.05" max="0.95">
+      </div>
+      <div>
+        <label for="srcsteps">Steps</label>
+        <input id="srcsteps" type="number" min="1" max="100">
+      </div>
+      <div>
+        <label for="srcmaxside">Working size</label>
+        <!-- A ceiling, not a target: a source already smaller than this is left
+             alone. It exists because a phone photo is 4000 px on its long side
+             and diffusing that takes the card out of memory. -->
+        <select id="srcmaxside"></select>
+      </div>
+    </div>
+    <p class="sub" id="srcnote" data-when="source" hidden></p>
+
     <label for="prompt">Prompt</label>
     <prompt-box>
       <!-- Empty, and filled from user/settings.toml once `/settings` answers.
@@ -106,13 +150,22 @@
     <button type="button" id="loraadd" class="btn spaced">+ Add LoRA</button>
 
       <div class="row">
-        <div>
+        <!-- The txt2img's own steps. With a source the pass takes Steps from
+             beside the source instead, so this one hides rather than sitting
+             there looking like it does something. -->
+        <div data-when="text">
           <label for="steps">Steps</label>
           <input id="steps" type="number" min="1" max="100">
         </div>
         <div>
           <label for="cfg">CFG scale</label>
           <input id="cfg" type="number" step="0.1" min="0">
+        </div>
+        <!-- The CFG of the pass over a source. Blank = follow CFG scale, and
+             the placeholder says what that is. -->
+        <div data-when="source" hidden>
+          <label for="icfg">img2img CFG</label>
+          <input id="icfg" type="number" step="0.1" min="0">
         </div>
         <div>
           <label for="sampler">Sampler</label>
@@ -125,7 +178,9 @@
           </select>
         </div>
       </div>
-      <div class="row">
+      <!-- Size and output upscale describe a txt2img: a source brings its own
+           size, and the pass over it has no enlarge stage. -->
+      <div class="row" data-when="text">
         <div>
           <label for="w">Base width</label>
           <input id="w" type="number" step="64" min="64">
@@ -138,7 +193,7 @@
       <!-- Its own row because it is the one box that decides what "the image"
            even is: the size above is what gets diffused, this is what comes out.
            1 is not a special case, it is FSR skipped — see the tooltip. -->
-      <div class="row">
+      <div class="row" data-when="text">
         <div>
           <label for="upscale">Output upscale</label>
           <input id="upscale" type="number" step="0.1" min="1" max="4">
@@ -152,9 +207,9 @@
         </div>
       </div>
       <!-- The arithmetic, live and under the row it is about — the same shape as
-           #runnote and #i2note. The model select quotes this sum for the model's
+           #runnote and #srcnote. The model select quotes this sum for the model's
            own factor; this box is what moves the right-hand half of it. -->
-      <p class="sub" id="outsize"></p>
+      <p class="sub" id="outsize" data-when="text"></p>
 
       <!-- Two passes, two of everything, and the rule between them is what says
            which half you are reading. Hi-res first: it is the pass that enlarges
@@ -275,181 +330,6 @@
   </div>
   </div>
 
-  <!-- ==================== Image to image ====================
-       One diffusion pass over a picture that already exists, and then the same
-       ladder the Image tab has. A separate panel rather than a mode of the first
-       one because almost nothing carries over: there is no base size (sd.cpp
-       takes the size from the init image), no upscale factor on the way in, and
-       the thing that decides the result is a source image rather than a prompt.
-       What it does share is the result column, and that sharing is real — see
-       PANES in the script. -->
-  <div class="layout" id="tab-img2img" hidden>
-  <div class="card col-controls">
-    <div class="gohead">
-      <button id="i2go" class="btn btn-run btn-block">Run img2img</button>
-      <button id="i2stop" class="btn btn-danger btn-block" hidden>Stop</button>
-      <p class="sub" id="i2prog"></p>
-      <div id="i2err" class="err"></div>
-    </div>
-
-    <label data-help="i2source">Source image</label>
-    <!-- The drop target is the whole zone, not just the button: dragging a file
-         onto a 90×30 button is a game of skill. Paste is bound to the document
-         and checks which tab is showing. -->
-    <div id="i2drop" class="drop">
-      <div class="picked">
-        <img id="i2srcthumb" alt="" hidden>
-        <div>
-          <span id="i2srcname" class="sub">Drop an image here, paste one, or pick one below.</span>
-          <div class="btnrow">
-            <button type="button" id="i2browse" class="btn">Choose a file…</button>
-            <button type="button" id="i2clear" class="btn" hidden>Clear</button>
-          </div>
-        </div>
-      </div>
-      <!-- Anything the browser can decode. It is re-encoded to PNG in a canvas
-           before upload, which is why this build needs no JPEG decoder. -->
-      <input type="file" id="i2file" accept="image/*" hidden>
-    </div>
-
-    <label for="i2prompt">Prompt</label>
-    <prompt-box>
-      <textarea id="i2prompt" placeholder="oil painting, thick impasto, warm light"></textarea>
-    </prompt-box>
-
-    <label for="i2negative">Negative prompt (optional)</label>
-    <prompt-box>
-      <input id="i2negative" placeholder="blurry, low quality">
-    </prompt-box>
-    <p class="sub" id="i2negnote" hidden>No negative prompt at CFG 1 — the model ignores it. Raise CFG to use one.</p>
-
-    <div class="row">
-      <div>
-        <label for="i2template">Model</label>
-        <select id="i2template"></select>
-      </div>
-      <div>
-        <label for="i2seed">Seed</label>
-        <input id="i2seed" type="number" value="-1">
-      </div>
-    </div>
-
-    <label data-help="loras">LoRAs</label>
-    <div id="i2loras"></div>
-    <button type="button" id="i2loraadd" class="btn spaced">+ Add LoRA</button>
-
-    <div class="row">
-      <div>
-        <label for="i2strength">Strength</label>
-        <!-- The one knob that decides whether this is a re-render or a retouch.
-             Higher redraws more and keeps less of the source. -->
-        <input id="i2strength" type="number" step="0.05" min="0.05" max="0.95">
-      </div>
-      <div>
-        <label for="i2steps">Steps</label>
-        <input id="i2steps" type="number" min="1" max="100">
-      </div>
-      <div>
-        <label for="i2maxside">Working size</label>
-        <!-- A ceiling, not a target: a source already smaller than this is left
-             alone. It exists because a phone photo is 4000 px on its long side
-             and diffusing that takes the card out of memory. -->
-        <select id="i2maxside"></select>
-      </div>
-    </div>
-
-    <details>
-      <summary>Advanced</summary>
-      <div class="row">
-        <div>
-          <label for="i2cfg">CFG scale</label>
-          <input id="i2cfg" type="number" step="0.1" min="0">
-        </div>
-        <div>
-          <label for="i2icfg">img2img CFG</label>
-          <input id="i2icfg" type="number" step="0.1" min="0">
-        </div>
-        <div>
-          <label for="i2sampler">Sampler</label>
-          <select id="i2sampler">
-            <option value="euler">euler</option>
-            <option value="euler_a">euler_a</option>
-            <option value="dpm++2m">dpm++2m</option>
-            <option value="dpm++2mv2">dpm++2mv2</option>
-            <option value="lcm">lcm</option>
-          </select>
-        </div>
-      </div>
-      <!-- The same two groups as the Image tab, and the same rule between them:
-           these buttons appear over a result here too. -->
-      <div class="pass">
-        <label class="grouphead">Hi-res pass</label>
-        <div class="row">
-          <div>
-            <label for="i2hsteps">Hi-res steps</label>
-            <input id="i2hsteps" type="number" min="0" max="100">
-          </div>
-          <div>
-            <label for="i2hstrength">Hi-res strength</label>
-            <input id="i2hstrength" type="number" step="0.05" min="0.05" max="0.95">
-          </div>
-          <div>
-            <label for="i2hcfg">Hi-res CFG</label>
-            <input id="i2hcfg" type="number" step="0.1" min="0">
-          </div>
-        </div>
-        <div class="row">
-          <div>
-            <label for="i2hiresmodel">Hi-res model</label>
-            <select id="i2hiresmodel"></select>
-          </div>
-        </div>
-      </div>
-      <div class="pass">
-        <label class="grouphead">Refine pass</label>
-        <div class="row">
-          <div>
-            <label for="i2rsteps">Refine steps</label>
-            <input id="i2rsteps" type="number" min="0" max="100">
-          </div>
-          <div>
-            <label for="i2rstrength">Refine strength</label>
-            <input id="i2rstrength" type="number" step="0.05" min="0.05" max="0.95">
-          </div>
-          <div>
-            <label for="i2rcfg">Refine CFG</label>
-            <input id="i2rcfg" type="number" step="0.1" min="0">
-          </div>
-        </div>
-        <div class="row">
-          <div>
-            <label for="i2refmodel">Refine model</label>
-            <select id="i2refmodel"></select>
-          </div>
-        </div>
-      </div>
-      <p class="sub" id="i2note"></p>
-    </details>
-  </div>
-
-  <!-- No slider card here either, and no second copy of one: the viewer is a
-       single dialog, so there is exactly one pair of sliders on the page. -->
-  <div class="col-result">
-    <div id="i2result" class="result"></div>
-  </div>
-
-  <!-- Everything in work/output/: what you saved, and what you dropped in. One
-       pool, because at the moment you are choosing something to diffuse the
-       difference between the two is not interesting. -->
-  <div class="workitems card">
-    <div class="wihead">
-      <b>Source images</b>
-      <button type="button" id="i2refresh" class="btn">Refresh</button>
-    </div>
-    <div id="i2grid" class="wigrid"></div>
-  </div>
-  </div>
-
   <!-- ==================== Outputs ====================
        Everything in work/output/, as a gallery rather than as a picker. The
        whole tab is the grid: clicking a tile opens the viewer on it full size
@@ -521,11 +401,21 @@
          keeping are the ones worth animating. Clearing it makes the same model
          run as plain text-to-video. -->
     <label class="grouphead" data-help="vfirstframe">First frame</label>
-    <div class="picked">
-      <img id="vsrcthumb" alt="" hidden>
-      <span class="sub" id="vsrcname">None — text to video</span>
-      <button type="button" id="vpick" class="btn">Choose…</button>
-      <button type="button" id="vclear" class="btn" hidden>Clear</button>
+    <!-- The Image tab's "Start from" slot, from the same factory
+         (source-slot.js), so an uploaded photo can be animated too. -->
+    <div id="vsrcdrop" class="drop">
+      <div class="picked">
+        <img id="vsrcthumb" alt="" hidden>
+        <div>
+          <span id="vsrcname" class="sub"></span>
+          <div class="btnrow">
+            <button type="button" id="vsrcpick" class="btn">Choose…</button>
+            <button type="button" id="vsrcupload" class="btn">Upload…</button>
+            <button type="button" id="vsrcclear" class="btn" hidden>Clear</button>
+          </div>
+        </div>
+      </div>
+      <input type="file" id="vsrcfile" accept="image/*" hidden>
     </div>
 
     <div class="row">

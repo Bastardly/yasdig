@@ -44,16 +44,14 @@ export const S = {
   // loop mode, `stop` is set by the Stop button and read between images. It is
   // also the flag everything else reads to know the GPU is spoken for.
   run: null,
-  // Which of the three image tabs is showing.
+  // Which of the two image panes is showing.
   pane: 'image',
 };
 
 export const PANES = {
   image:   { result: 'result',   err: 'err',
              refmodel: 'refmodel',   hiresmodel: 'hiresmodel' },
-  img2img: { result: 'i2result', err: 'i2err',
-             refmodel: 'i2refmodel', hiresmodel: 'i2hiresmodel' },
-  // Three tabs now, and the third has none of the other three keys. It has no
+  // The second row has none of the first row's other three keys. It has no
   // result block because its image only ever exists in the viewer, and no
   // escalation select because it deliberately offers no escalation — an output
   // is already-filtered pixels, and diffusing over those is invariant 1. The two

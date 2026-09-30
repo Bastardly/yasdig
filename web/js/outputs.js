@@ -31,9 +31,9 @@ export async function fetchOutputs() {
   }
 }
 
-// One tile, drawn the same in all three places it appears: this tab, the img2img
-// source strip and the video tab's first-frame picker. It was written out three
-// times before, which is three chances for the declared height to drift from
+// One tile, drawn the same wherever an output is shown: this tab, and the
+// picker dialog behind every "Start from" slot (`source-slot.js`). It was
+// written out three times before, which is three chances for the declared height to drift from
 // what `.wigrid` actually draws — and when it does, the strip reflows as the
 // thumbnails decode.
 //
@@ -106,7 +106,7 @@ export async function loadOutputs() {
   del.prune(outputs.map((o) => o.stem));
   outputGrid($('ogrid'), outputs, {
     empty: '<p class="sub">Nothing in work/output/ yet — press "Save to output" '
-         + 'under an image on the Image tab, or drop one on the Image-to-image tab.</p>',
+         + 'under an image on the Image tab, or upload one with Start from.</p>',
     onPick: pick,
   });
   markGrid();

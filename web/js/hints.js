@@ -29,12 +29,12 @@ const WEIGHTING =
   + 'rewrites itself as (word:1.2), and it disappears again at 1.0.';
 
 const HELP = [
-  { ids: ['prompt', 'i2prompt', 'vprompt'],
+  { ids: ['prompt', 'vprompt'],
     text: 'What you want to see. Subject first, then style, lighting and lens; '
         + 'commas separate ideas and the earlier words carry more weight. A list '
         + 'of tags works as well as a sentence — these models were trained on both.'
         + VARIABLES + WEIGHTING },
-  { ids: ['negative', 'i2negative'],
+  { ids: ['negative'],
     text: 'What to steer away from. It works on flaws that keep turning up — '
         + 'watermark, extra fingers, blurry — rather than on objects you simply '
         + 'did not ask for, which are already absent. It only works when CFG is '
@@ -45,25 +45,25 @@ const HELP = [
         + 'negative prompt, which for Wan is 400 characters of Chinese nobody '
         + 'should have to retype. Emptying the box means no negative at all.'
         + WEIGHTING },
-  { ids: ['template', 'i2template', 'vmodel'],
+  { ids: ['template', 'vmodel'],
     text: 'Which checkpoint does the work. Every model has its own house style '
         + 'and its own sensible steps, CFG and size — picking one refills the '
         + 'boxes below with the values it was measured at.' },
-  { ids: ['seed', 'i2seed', 'vseed'],
+  { ids: ['seed', 'vseed'],
     text: 'The random noise the picture is grown from, as a number. The same seed '
         + 'with the same settings gives the same image, so it is how you keep a '
         + 'result and change one thing about it. -1 draws a new one every time.' },
-  { ids: ['steps', 'i2steps', 'vsteps'],
+  { ids: ['steps', 'srcsteps', 'vsteps'],
     text: 'How many passes the sampler takes to turn noise into an image. More '
         + 'costs proportionally more time and stops helping after a point — and '
         + 'the right number belongs to the checkpoint: turbo and LCM models are '
         + 'trained to land in 1–4, a standard SDXL wants around 20.' },
-  { ids: ['cfg', 'i2cfg', 'vcfg'],
+  { ids: ['cfg', 'vcfg'],
     text: 'How hard the model is pushed towards your prompt. Low is loose and '
         + 'soft, high follows the words but goes harsh and over-saturated; 5–7 '
         + 'suits a standard SDXL. Turbo and LCM checkpoints are trained for CFG 1 '
         + 'and scorch at anything higher.' },
-  { ids: ['sampler', 'i2sampler', 'vsampler'],
+  { ids: ['sampler', 'vsampler'],
     text: 'The algorithm that removes the noise. They differ mostly in how '
         + 'quickly they settle: euler is the safe default, dpm++2m converges in '
         + 'fewer steps, and lcm belongs to LCM and turbo checkpoints and looks '
@@ -83,38 +83,38 @@ const HELP = [
         + '1024×1024 for SDXL, 512 for SD1.5 — and drifting far from it gives '
         + 'duplicated heads and stretched bodies. Go bigger with the hi-res pass, '
         + 'not here. Multiples of 64.' },
-  { ids: ['rsteps', 'i2rsteps'],
+  { ids: ['rsteps'],
     text: 'Refine re-diffuses the finished image at the same size, which sharpens '
         + 'and fills in detail the first pass only suggested. This is how many '
         + 'steps it gets; 0 removes the button.' },
-  { ids: ['rstrength', 'i2rstrength'],
+  { ids: ['rstrength'],
     text: 'How far into the noise the refine pass starts, and so how much it is '
         + 'allowed to change. Around 0.3 tightens what is already there; past '
         + '0.6 it starts redrawing the subject. 0.95 is the ceiling because at '
         + '1.0 the pass would throw your image away and start over.' },
-  { ids: ['hsteps', 'i2hsteps'],
+  { ids: ['hsteps'],
     text: 'The hi-res pass enlarges the image and re-diffuses it, which is where '
         + 'real detail at the bigger size comes from — an upscale alone can only '
         + 'interpolate what is there. This is its step count; 0 removes the button.' },
-  { ids: ['hstrength', 'i2hstrength'],
+  { ids: ['hstrength'],
     text: 'How far the hi-res pass may move the enlarged image. Low (~0.3) keeps '
         + 'the composition and adds texture; high invents new detail and can lose '
         + 'the likeness of what you had.' },
-  { ids: ['rcfg', 'i2rcfg'],
+  { ids: ['rcfg'],
     text: 'CFG for the refine pass alone. Empty follows the img2img CFG, and '
         + 'then the CFG box. A lower value here is the common trick: an image '
         + 'that already exists needs less pushing than one being invented.' },
-  { ids: ['hcfg', 'i2hcfg'],
+  { ids: ['hcfg'],
     text: 'CFG for the hi-res pass alone. Empty follows the img2img CFG, and '
         + 'then the CFG box. It is a separate number from the refine one because '
         + 'the two passes work on different pixels — hi-res is inventing detail '
         + 'at a new size, refine is tightening what is already there.' },
-  { ids: ['i2icfg'],
-    text: 'CFG for the pass this tab\'s button runs. Empty means follow the CFG '
+  { ids: ['icfg'],
+    text: 'CFG for a pass over a source image. Empty means follow the CFG '
         + 'box beside it. Lower is usually right, since the picture already '
         + 'exists and only has to be pushed a little. It is also what the two '
         + 'per-pass CFG boxes below fall back to when they are empty.' },
-  { ids: ['refmodel', 'i2refmodel', 'hiresmodel', 'i2hiresmodel'],
+  { ids: ['refmodel', 'hiresmodel'],
     text: 'The checkpoint this one pass uses, which need not be the one that '
         + 'drew the image: draft on a fast turbo model, finish on a detailed '
         + 'one. It brings its own steps and strengths with it. Costs no VRAM to '
@@ -160,17 +160,19 @@ const HELP = [
   { ids: ['optsave'],
     text: 'Copy every image of the run into work/output/. Everything is kept in '
         + 'the gallery either way; this is the folder to point other programs at, '
-        + 'and the pool the video tab and image-to-image start from.' },
-  { ids: ['i2source'],
-    text: 'The picture the pass starts from, chosen from work/output/ — anything '
-        + 'you have saved or uploaded. It is copied into scratch rather than '
-        + 'worked on in place, so the original is never touched.' },
-  { ids: ['i2strength'],
+        + 'and the pool Start from and the video tab\'s first frame pick from.' },
+  { ids: ['source'],
+    text: 'Nothing, to draw from noise — or a picture to start from instead: '
+        + 'Choose picks one you saved, and Upload, a drop or a paste brings one '
+        + 'in (it lands in work/output/ beside your saves). With a picture, '
+        + 'Generate redraws it with your prompt, and Strength decides how much. '
+        + 'The original is copied, never worked on in place.' },
+  { ids: ['srcstrength'],
     text: 'How far the model may travel from your source image. 0.2 is a retouch, '
         + '0.5 a reinterpretation, and 0.95 keeps little more than the layout. It '
         + 'stops there because at 1.0 the source is discarded entirely and this '
         + 'becomes a plain text-to-image.' },
-  { ids: ['i2maxside'],
+  { ids: ['srcmaxside'],
     text: 'The longest side the source is scaled to before diffusing. A phone '
         + 'photo is 4032 px wide and would run out of VRAM at full size. Images '
         + 'are only ever shrunk, never enlarged, and the aspect ratio is kept. '

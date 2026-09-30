@@ -7,15 +7,13 @@ import { setFiltersBusy } from './viewer.js';
 export const IDLE_LABELS = {
   go: 'Generate', refine: 'Refine image', hires: 'Hi-res pass',
   saveout: 'Save to output', lbsave: 'Save as new output',
-  i2go: 'Run img2img',
   vgo: 'Generate clip', venlarge: 'Enlarge frames',
   cgo: 'Convert',
 };
 
 // What else has to be re-synced when the worker frees up. `IDLE_LABELS` can say
 // what a button reads at rest; it cannot say whether the button should be
-// *pressable*, which for Generate depends on the run panel and for Run img2img on
-// whether a source is picked. A list, for the same reason IDLE_LABELS is one —
+// *pressable*, which for Generate depends on the run panel. A list, for the same reason IDLE_LABELS is one —
 // and it is what keeps this module free of imports from the two tabs that would
 // otherwise import it back.
 const idleHooks = [];
@@ -48,7 +46,7 @@ export function setBusy(active, label) {
   } else {
     clearInterval(progTimer);
     progTimer = null;
-    for (const id of ['prog', 'i2prog', 'vprog', 'cprog']) $(id).textContent = '';
+    for (const id of ['prog', 'vprog', 'cprog']) $(id).textContent = '';
   }
 }
 
@@ -70,7 +68,7 @@ async function pollProgress() {
       : '';
     // Written to both tabs' readouts rather than to whichever is showing: they
     // report the same worker, and only one of them is ever visible.
-    for (const id of ['prog', 'i2prog', 'vprog', 'cprog']) $(id).textContent = text;
+    for (const id of ['prog', 'vprog', 'cprog']) $(id).textContent = text;
   } catch {
     // A dropped poll needs no reporting — the next one is PROGRESS_MS away, and
     // the request that actually matters reports its own failure.

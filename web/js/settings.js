@@ -80,14 +80,14 @@ export const FIELDS = [
   { key: 'hires_cfg_scale', from: 'hcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
   { key: 'hires_scale', from: 'hiresscale', kind: 'upscale' },
 
-  SECTION('Image to image'),
-  { key: 'source_steps', from: 'i2steps', kind: 'int', min: 1, max: 100 },
-  { key: 'source_strength', from: 'i2strength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
+  SECTION('Starting from an image'),
+  { key: 'source_steps', from: 'srcsteps', kind: 'int', min: 1, max: 100 },
+  { key: 'source_strength', from: 'srcstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
   // In this section rather than the one above, because that is now all it
   // governs: the two escalations have their own CFG each and only fall back to
   // this one. It is also where the control it names lives.
-  { key: 'img2img_cfg_scale', from: 'i2icfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
-  { key: 'hires_max_side', from: 'i2maxside', kind: 'int', min: 64, step: 64 },
+  { key: 'img2img_cfg_scale', from: 'icfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
+  { key: 'hires_max_side', from: 'srcmaxside', kind: 'int', min: 64, step: 64 },
 
   SECTION('Advanced', { fold: true }),
   { key: 'hires_flash_attn', label: 'Flash attention', help: 'setflash', kind: 'check' },
@@ -314,7 +314,7 @@ function body() {
 // put there — which at boot is the empty string, since the markup no longer
 // ships a default in a `value=`. The fetch is async, and a default arriving
 // after someone has started typing must not take the sentence away from them.
-const SEEDS = [['prompt', ['prompt']], ['negative', ['negative', 'i2negative']]];
+const SEEDS = [['prompt', ['prompt']], ['negative', ['negative']]];
 const applied = { prompt: '', negative: '' };
 
 function applyPageDefaults(s) {

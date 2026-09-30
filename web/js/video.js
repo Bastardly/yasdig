@@ -2,7 +2,7 @@ import { $, esc, post, numOr } from './dom.js';
 import { S } from './state.js';
 import { setBusy, cancelRun } from './busy.js';
 import { clip, renderClip } from './player.js';
-import { fetchOutputs, outputGrid } from './outputs.js';
+import { sourceSlot } from './source-slot.js';
 
 // ---- Video ------------------------------------------------------------------
 //
@@ -19,8 +19,6 @@ import { fetchOutputs, outputGrid } from './outputs.js';
 // than watching.
 
 let videoModels = [];
-// The chosen first frame: a work/output/ stem, or null for text-to-video.
-let vsource = null;
 // The last /videos listing, and which clips are marked for deletion.
 let clips = [];
 const vselected = new Set();
@@ -136,7 +134,7 @@ function vidPayload() {
     // the same as "inherit the model's".
     negative: $('vnegative').value,
     seed: Number.isFinite(seed) ? seed : -1,
-    source: vsource,
+    source: vSource.get(),
     width: numOr('vw'),
     height: numOr('vh'),
     frames: numOr('vframes'),
@@ -294,7 +292,7 @@ function applyClip(c) {
   $('vmoe').hidden = !(currentVideoModel() || {}).is_moe;
   $('vhsteps').value = v.high_noise_steps ?? '';
   $('vhcfg').value = v.high_noise_cfg_scale ?? '';
-  setSource(c.source);
+  vSource.set(c.source);
   syncVideoNote();
 }
 
@@ -313,38 +311,21 @@ async function deleteClips() {
   }
 }
 
-// ---- The first-frame picker -------------------------------------------------
+// ---- The first frame --------------------------------------------------------
 
-function setSource(stem) {
-  vsource = stem || null;
-  $('vsrcthumb').hidden = !vsource;
-  $('vclear').hidden = !vsource;
-  if (vsource) $('vsrcthumb').src = `/outputs/${encodeURIComponent(vsource)}/thumb.png`;
-  $('vsrcname').textContent = vsource || 'None — text to video';
-}
-
-async function openPicker() {
-  const grid = $('pickgrid');
-  grid.innerHTML = '<p class="sub">Loading…</p>';
-  $('picker').showModal();
-  // The same tile as the other two output grids, from the same function — only
-  // the height differs, because this one is a dialog rather than a panel.
-  outputGrid(grid, await fetchOutputs(), {
-    height: 140,
-    empty: '<p class="sub">Nothing in work/output/ yet — '
-         + 'press "Save to output" under an image on the Image tab.</p>',
-    onPick: (stem) => {
-      setSource(stem);
-      $('picker').close();
-    },
-  });
-}
+// The Image tab's "Start from" slot, from the same factory. Its pick, upload,
+// drop and paste all end in a `work/output/` stem, which is what `/video` takes.
+export const vSource = sourceSlot({
+  prefix: 'vsrc',
+  tab: 'tab-video',
+  none: 'None — text to video. Choose, upload, drop or paste an image to animate it.',
+  err: 'verr',
+});
 
 export function initVideo() {
   $('vgo').addEventListener('click', startClip);
   $('vstop').addEventListener('click', cancelClip);
-  $('vpick').addEventListener('click', openPicker);
-  $('vclear').addEventListener('click', () => setSource(null));
+  vSource.init();
   $('pickclose').addEventListener('click', () => $('picker').close());
   $('vdelete').addEventListener('click', deleteClips);
   $('vmodel').addEventListener('change', syncVideo);

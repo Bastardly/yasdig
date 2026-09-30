@@ -1,8 +1,8 @@
 import { $, esc, post } from './dom.js';
 import { S } from './state.js';
 import { setBusy } from './busy.js';
-import { imageLoras, models, render, setUpscaler, syncCfgPlaceholders, syncOutSize } from './image.js';
-import { i2Loras, setI2Source, syncI2Note } from './img2img.js';
+import { imageLoras, imageSource, models, render, setUpscaler, syncCfgPlaceholders,
+         syncOutSize } from './image.js';
 import { gridMarks } from './gridmark.js';
 
 // The last listing. It carries each item's full settings, so opening one needs
@@ -215,28 +215,15 @@ function applyWorkItem(item) {
   // says — but a picker that disagreed would send the wrong set on the next
   // Generate, which is the same trap the boxes above are in.
   imageLoras.set(p.loras ?? []);
-  // An image-to-image generation remembers what it was diffused from, so
-  // reopening one puts the source back rather than quietly forgetting where the
-  // picture came from. Only the img2img panel is restored — the model and
-  // strength that made it live there, not in this tab's boxes.
-  if (item.source) {
-    $('i2prompt').value = item.typed_prompt ?? item.prompt;
-    $('i2negative').value = item.typed_negative ?? item.negative ?? '';
-    $('i2seed').value = item.seed;
-    if (models.some((m) => m.name === item.template)) $('i2template').value = item.template;
-    $('i2steps').value = p.source_steps;
-    $('i2strength').value = p.source_strength;
-    $('i2cfg').value = p.cfg_scale;
-    $('i2icfg').value = p.img2img_cfg_scale ?? '';
-    $('i2sampler').value = p.sampler;
-    $('i2rcfg').value = p.refine_cfg_scale ?? '';
-    $('i2hcfg').value = p.hires_cfg_scale ?? '';
-    setModel('i2refmodel', p.refine_model);
-    setModel('i2hiresmodel', p.hires_model);
-    i2Loras.set(p.loras ?? []);
-    setI2Source(item.source);
-    syncI2Note();
-  }
+  // The pass over a source, and the source itself. Set either way: reopening an
+  // image made from noise clears the slot, because what made it is "nothing",
+  // and leaving a source picked from before would turn the next Generate into
+  // a pass over that instead. Setting the slot runs syncMode, which shows the
+  // right half of the panel and refreshes the notes.
+  $('srcsteps').value = p.source_steps;
+  $('srcstrength').value = p.source_strength;
+  $('icfg').value = p.img2img_cfg_scale ?? '';
+  imageSource.set(item.source ?? null);
   // Not the sliders: render() sets those from what the server actually applied.
   syncCfgPlaceholders();
   syncOutSize();

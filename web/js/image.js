@@ -3,17 +3,50 @@ import { S, P, escErr } from './state.js';
 import { setBusy, onIdle } from './busy.js';
 import { setPost, setPostStart, setViewerImage, showFullSize } from './viewer.js';
 import { loadWorkItems, markGrid } from './workitems.js';
-import { loadI2Outputs, syncI2 } from './img2img.js';
 import { loraPicker } from './loras.js';
+import { sourceSlot } from './source-slot.js';
 
-// The checkpoint list the server published. Exported because the img2img tab and
-// the work-item grid both look a name up in it; only this module refills it.
+// The checkpoint list the server published. Exported because the work-item
+// grid looks a name up in it; only this module refills it.
 export let models = [];
 
 // This tab's attached LoRAs. Exported because `applyWorkItem` has to put a
 // reopened generation's back: the grid restores what made an image, and the
 // adapters are as much a part of that as the steps and the seed.
 export const imageLoras = loraPicker({ rows: 'loras', add: 'loraadd' });
+
+// "Start from". Nothing picked is text to image; a picked image makes Generate
+// run `/img2img` over it instead of `/generate`. This used to be a tab of its
+// own, which duplicated the prompt, model, LoRAs and the whole escalation
+// panel for the sake of one image slot — two copies of every control, and a
+// LoRA chosen on one tab silently absent on the other. Exported because a
+// reopened work item puts its source back.
+export const imageSource = sourceSlot({
+  prefix: 'src',
+  tab: 'tab-image',
+  none: 'Nothing — text to image. Choose, upload, drop or paste an image to start from it.',
+  err: 'err',
+  onChange: () => syncMode(),
+});
+
+// Which controls mean something depends on whether there is a source, so the
+// ones that don't are hidden rather than left looking live: base size, the
+// txt2img's own steps and the output upscale describe a render from noise, and
+// the strength, steps, working size and img2img CFG describe a pass over a
+// picture. `data-when` in the markup says which is which.
+function syncMode() {
+  const source = !!imageSource.get();
+  for (const el of $('tab-image').querySelectorAll('[data-when]')) {
+    el.hidden = (el.dataset.when === 'source') !== source;
+  }
+  syncCfgPlaceholders();
+  syncSrcNote();
+  syncRunNote();
+}
+
+// Both this and the pass itself round to 64, and they must agree: this is what
+// the picture is scaled to, that is what the latent grid allows.
+const WORKING_SIDES = [768, 1024, 1536, 2048, 3072];
 
 function currentModel() {
   return models.find((m) => m.name === $('template').value);
@@ -41,8 +74,44 @@ function syncAdvanced() {
   $('rcfg').value = m.refine_cfg_scale ?? '';
   $('hcfg').value = m.hires_cfg_scale ?? '';
   setPost({ sharpness: m.sharpness, clarity: m.clarity });
+  // The pass over a source. Filled whether or not one is picked, so picking one
+  // later finds the model's numbers already there.
+  $('srcsteps').value = m.source_steps;
+  $('srcstrength').value = m.source_strength;
+  $('icfg').value = m.img2img_cfg_scale ?? '';
+  // The working size starts at the model's hi-res budget: that is the same
+  // question — how large can this card afford to diffuse — already answered
+  // for this hardware, so the page doesn't invent a second answer to it. What
+  // was picked survives a model switch.
+  const want = parseInt($('srcmaxside').value, 10) || m.hires_max_side;
+  $('srcmaxside').innerHTML = WORKING_SIDES.map((v) =>
+    `<option value="${v}"${v === want ? ' selected' : ''}>${v} px${
+      v === m.hires_max_side ? ' (model budget)' : ''}</option>`).join('');
+  if (!WORKING_SIDES.includes(want)) $('srcmaxside').value = m.hires_max_side;
   syncCfgPlaceholders();
   syncOutSize();
+  syncSrcNote();
+}
+
+// What the pass over a source will actually do, in a line: the step floor
+// (`SdRunner::img2img` raises the count to `profile.steps × strength`), the CFG
+// it resolves to, and the working-size ceiling. `m.steps` rather than the Steps
+// box, because that box is the txt2img's and is hidden here — the floor is the
+// model's base step count.
+export function syncSrcNote() {
+  const m = currentModel();
+  if (!m || !imageSource.get()) return;
+  const n = parseFloat($('srcsteps').value) || 0;
+  const s = parseFloat($('srcstrength').value) || 0;
+  const eff = effectiveSteps(n, s, m.steps);
+  const base = parseFloat($('cfg').value);
+  const own = parseFloat($('icfg').value);
+  const cfg = Number.isFinite(own) ? own : base;
+  $('srcnote').textContent =
+    `Runs ${eff} step${eff === 1 ? '' : 's'} at strength ${s}`
+    + (eff > n ? ` (raised from ${n} — the floor is ${Math.ceil(m.steps * s)} at this strength)` : '')
+    + (Number.isFinite(cfg) ? ` · CFG ${cfg}` : '')
+    + ` · a source over ${$('srcmaxside').value} px on its long side is scaled down first`;
 }
 
 // What the base size becomes after the enlarge, and what does it. The model
@@ -81,26 +150,24 @@ export function effectiveSteps(steps, strength, base) {
 // following is one field away and editable.
 //
 // The chain is the server's (`Profile::refine_cfg`): this pass's box, then
-// `img2img_cfg_scale`, then the base CFG. On the Image tab that middle rung has
-// no control — it governs the *other* tab's pass — so it comes off the selected
-// model; on Image-to-image it is a box the user can see and is read from there.
+// `img2img_cfg_scale`, then the base CFG. That middle rung is the img2img CFG
+// box — but only a generate *from a source* sends it, so from noise it is the
+// model's value that the image retains, and that is what is read.
 export function syncCfgPlaceholders() {
   const num = (id) => {
     const v = parseFloat($(id).value);
     return Number.isFinite(v) ? v : null;
   };
-  const image = num('cfg') ?? '';
-  const mid = currentModel()?.img2img_cfg_scale;
-  for (const id of ['rcfg', 'hcfg']) $(id).placeholder = mid ?? image;
-
-  const i2 = num('i2icfg') ?? num('i2cfg') ?? '';
-  for (const id of ['i2rcfg', 'i2hcfg']) $(id).placeholder = i2;
+  const source = !!imageSource.get();
+  const base = num('cfg');
+  const mid = source ? num('icfg') : currentModel()?.img2img_cfg_scale;
+  for (const id of ['rcfg', 'hcfg']) $(id).placeholder = mid ?? base ?? '';
+  $('icfg').placeholder = base ?? '';
 
   // Here because this already runs everywhere a CFG box changes — typed, a
-  // model switch, a reopened work item — on both tabs. The Image-to-image
-  // tab's pass runs at its own CFG, which falls through to the base box.
-  syncNegative('negative', 'negnote', num('cfg'));
-  syncNegative('i2negative', 'i2negnote', num('i2icfg') ?? num('i2cfg'));
+  // model switch, a reopened work item, a source picked or cleared. A pass
+  // over a source runs at its own CFG, which falls through to the base box.
+  syncNegative('negative', 'negnote', source ? num('icfg') ?? base : base);
 }
 
 // A negative prompt does nothing at CFG exactly 1. sd.cpp only evaluates the
@@ -189,6 +256,10 @@ const MODEL_KNOBS = [
   ['upscale_factor', 'upscale'], ['upscaler', 'upscaler', 'choice'],
   ['hires_steps', 'hsteps'], ['hires_strength', 'hstrength'], ['hires_cfg_scale', 'hcfg', 'blank'],
   ['refine_steps', 'rsteps'], ['refine_strength', 'rstrength'], ['refine_cfg_scale', 'rcfg', 'blank'],
+  // The pass over a source. Sent with no source picked too: the boxes still
+  // hold the model's numbers, so they drop out as unchanged.
+  ['source_steps', 'srcsteps'], ['source_strength', 'srcstrength'],
+  ['img2img_cfg_scale', 'icfg', 'blank'],
 ];
 
 async function saveModelDefaults() {
@@ -227,17 +298,15 @@ export async function loadModels() {
     const upscalers = loadUpscalers();
     models = await (await fetch('/models')).json();
     await upscalers;
-    // Six selects off one list: the two that choose what generates, and two per
-    // tab for what escalates — refine and hi-res pick their own, because the two
-    // passes run at different sizes on different pixels and there is no reason
-    // one checkpoint should be right for both. The escalation four lead with a
+    // Three selects off one list: the one that chooses what generates, and one
+    // per escalation — refine and hi-res pick their own, because the two passes
+    // run at different sizes on different pixels and there is no reason one
+    // checkpoint should be right for both. The escalation two lead with a
     // blank option meaning "whatever made the image", which is what the server
     // reads an empty string as.
-    for (const [id, blank] of [['template', null], ['i2template', null],
+    for (const [id, blank] of [['template', null],
                                ['refmodel', '— same as generated —'],
-                               ['hiresmodel', '— same as generated —'],
-                               ['i2refmodel', '— same as generated —'],
-                               ['i2hiresmodel', '— same as generated —']]) {
+                               ['hiresmodel', '— same as generated —']]) {
       const sel = $(id);
       // Rebuilt after a save as well as at boot, and a rebuilt select falls
       // back to its first option — so saving a model's defaults, or the
@@ -290,7 +359,6 @@ export async function loadModels() {
       $('err').textContent = 'No models found. Drop a .safetensors into the models/ folder.';
     }
     syncAdvanced();
-    syncI2();
   } catch (e) {
     $('err').textContent = 'Could not load models: ' + e;
   }
@@ -360,7 +428,7 @@ export function render(data) {
   // reopened, which puts those braces back in the box and so shows the roll here
   // for as long as the image is up, or this is an escalation of an image made
   // from a prompt that has since been retyped.
-  const box = $(S.pane === 'img2img' ? 'i2prompt' : 'prompt');
+  const box = $('prompt');
   const rolled = data.prompt && data.prompt !== box.value
     ? `<div class="meta">${esc(data.prompt)}</div>` : '';
 
@@ -391,7 +459,7 @@ export function render(data) {
   // Opt-in reproducibility: pinning the seed is a thing you choose, not
   // something that happens to the box you just typed in.
   $('seedval').addEventListener('click', () => {
-    $(S.pane === 'image' ? 'seed' : 'i2seed').value = data.seed;
+    $('seed').value = data.seed;
   });
   if ($('refine')) $('refine').addEventListener('click', refine);
   if ($('hires')) $('hires').addEventListener('click', hires);
@@ -450,27 +518,25 @@ async function escalate(which, path, payload, label) {
 // has already run, and there is nothing a new value could do to the image in
 // hand. They stay as they are, and a later generate picks them up.
 //
-// Read from whichever pane is showing, because both tabs end in the same two
-// buttons. There is deliberately one function rather than a copy per tab: a run
-// that grew its own list of knobs is how the panel starts lying about what the
-// button will do.
+// One function, read by the two buttons, the run loop and both generate
+// bodies: a run that grew its own list of knobs is how the panel starts lying
+// about what the button will do.
 //
 // The checkpoint is *not* in here, and that is the split: it is per pass, so it
 // rides on the one request that runs that pass rather than in the object both
 // share. Which is also why nothing strips a stray `model` key out of this any
 // more on the way to /generate.
 export const escalateSettings = () => {
-  const p = (id) => (S.pane === 'image' ? id : 'i2' + id);
   return {
-    refine_steps: numOr(p('rsteps')),
-    refine_strength: numOr(p('rstrength')),
-    hires_steps: numOr(p('hsteps')),
-    hires_strength: numOr(p('hstrength')),
+    refine_steps: numOr('rsteps'),
+    refine_strength: numOr('rstrength'),
+    hires_steps: numOr('hsteps'),
+    hires_strength: numOr('hstrength'),
     // Here null is a value, not an omission: clearing the box unsets the override
     // so the pass follows the knob below it again. Sending nothing would pin
     // whatever was last set, which is the one thing these must never do.
-    refine_cfg_scale: numOr(p('rcfg')),
-    hires_cfg_scale: numOr(p('hcfg')),
+    refine_cfg_scale: numOr('rcfg'),
+    hires_cfg_scale: numOr('hcfg'),
   };
 };
 
@@ -529,36 +595,32 @@ function syncRunNote() {
   ].filter(Boolean);
   const seed = parseInt($('seed').value, 10);
   const walks = Number.isFinite(seed) && seed >= 0 && n > 1;
+  const source = imageSource.get();
   $('runnote').textContent =
     (n === Infinity ? 'Generates until you press Stop'
       : `Generates ${n} image${n > 1 ? 's' : ''}`)
+    + (source ? ` from ${source}` : '')
     + (after.length ? ` · after each: ${after.join(' → ')}` : '')
     + (walks ? ` · seeds ${seed}–${n === Infinity ? '…' : seed + n - 1}` : '');
 }
 
-// One image's request: exactly what a single Generate has always sent, plus the
-// seed walk. A pinned seed advances by one per image, because a batch at a fixed
-// seed is otherwise N copies of the same picture; image 0 is still precisely the
-// seed in the box, which is the reason to pin one. -1 stays -1 and the server
-// draws a fresh one each time.
+// One image's request, as `[route, body]`: from noise it is `/generate`, from a
+// source `/img2img`, and the two share everything that isn't about where the
+// picture starts. Plus the seed walk: a pinned seed advances by one per image,
+// because a batch at a fixed seed is otherwise N copies of the same picture;
+// image 0 is still precisely the seed in the box, which is the reason to pin
+// one. -1 stays -1 and the server draws a fresh one each time. A batch over one
+// source is therefore N seeds of one transform, which is a real use — pick the
+// best of eight.
 function genPayload(index) {
   const seed = parseInt($('seed').value, 10);
-  return {
+  const common = {
     prompt: $('prompt').value,
     template: $('template').value,
     negative: $('negative').value || null,
     seed: Number.isFinite(seed) && seed >= 0 ? seed + index : -1,
-    steps: numOr('steps'),
     cfg_scale: numOr('cfg'),
     sampler: $('sampler').value || null,
-    width: numOr('w'),
-    height: numOr('h'),
-    // The FSR enlarge on the way to the output size. An empty box sends nothing
-    // and the model's own factor runs; 1 is a real answer and means no upscale.
-    upscale_factor: numOr('upscale'),
-    // Always sent: `""` is FSR, explicitly, which has to be sayable over a
-    // saved default that names a model.
-    upscaler: $('upscaler').value,
     // The same six the escalations send, from the same place — they set where
     // this image's passes start, and `/refine` and `/hires` can move them
     // afterwards. The two CFGs are among them, and null for an empty box still
@@ -580,6 +642,30 @@ function genPayload(index) {
     // so a new image starts from the model's values rather than inheriting
     // wherever the last one's sliders were left.
   };
+  const source = imageSource.get();
+  if (source) {
+    return ['/img2img', {
+      ...common,
+      source,
+      max_side: numOr('srcmaxside'),
+      source_steps: numOr('srcsteps'),
+      source_strength: numOr('srcstrength'),
+      // The pass's own CFG; null follows `cfg_scale`, the same chain as ever.
+      img2img_cfg_scale: numOr('icfg'),
+    }];
+  }
+  return ['/generate', {
+    ...common,
+    steps: numOr('steps'),
+    width: numOr('w'),
+    height: numOr('h'),
+    // The FSR enlarge on the way to the output size. An empty box sends nothing
+    // and the model's own factor runs; 1 is a real answer and means no upscale.
+    upscale_factor: numOr('upscale'),
+    // Always sent: `""` is FSR, explicitly, which has to be sayable over a
+    // saved default that names a model.
+    upscaler: $('upscaler').value,
+  }];
 }
 
 async function startRun() {
@@ -596,7 +682,7 @@ async function startRun() {
         `${what} ${n}${S.run.total === Infinity ? '' : '/' + S.run.total}…`;
 
       setBusy('go', at('Generating'));
-      render(await post('/generate', genPayload(S.run.done)));
+      render(await post(...genPayload(S.run.done)));
       // Only a generate creates a work item — refine and hi-res escalate the one
       // that's already there, and adjust doesn't touch the disk at all. Per
       // image rather than once at the end, so the strip fills as the run goes.
@@ -672,9 +758,6 @@ async function saveOutput() {
   try {
     const data = await post('/save-output', { image_id: S.imageId });
     $('saved').textContent = `saved → ${data.path}`;
-    // work/output/ is also the img2img tab's source pool, so what was just
-    // saved is now something to start from.
-    loadI2Outputs();
   } catch (e) {
     escErr(String(e.message || e));
   } finally {
@@ -706,8 +789,14 @@ export function initImage() {
   // A note about the model that was selected is stale once another one is.
   $('template').addEventListener('change', () => { $('savemodelmsg').textContent = ''; });
   // What an empty per-pass CFG box resolves to is whatever the chain under it
-  // says, so the placeholders have to follow that field as it is typed in.
-  $('cfg').addEventListener('input', syncCfgPlaceholders);
+  // says, so the placeholders have to follow that field as it is typed in —
+  // and with a source, the img2img CFG is the middle of that chain.
+  for (const id of ['cfg', 'icfg']) $(id).addEventListener('input', syncCfgPlaceholders);
+  // The line under the source's boxes says what they add up to.
+  for (const id of ['srcsteps', 'srcstrength', 'srcmaxside', 'cfg', 'icfg']) {
+    $(id).addEventListener('input', syncSrcNote);
+  }
+  imageSource.init();
   // Three boxes decide the output size and the note under them states it.
   for (const id of ['upscale', 'w', 'h']) {
     $(id).addEventListener('input', syncOutSize);
