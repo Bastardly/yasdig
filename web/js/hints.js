@@ -37,7 +37,9 @@ const HELP = [
   { ids: ['negative', 'i2negative'],
     text: 'What to steer away from. It works on flaws that keep turning up — '
         + 'watermark, extra fingers, blurry — rather than on objects you simply '
-        + 'did not ask for, which are already absent.' + VARIABLES + WEIGHTING },
+        + 'did not ask for, which are already absent. It only works when CFG is '
+        + 'not 1: turbo models run at 1 and ignore it, which is why the box is hidden there.'
+        + VARIABLES + WEIGHTING },
   { ids: ['vnegative'],
     text: 'What to steer away from. Pre-filled with the model’s own published '
         + 'negative prompt, which for Wan is 400 characters of Chinese nobody '

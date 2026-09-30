@@ -42,18 +42,26 @@ So, again. Anything is up for discussion.
   models tree is scanned (`Config::scan_images`, excluding the video/LoRA/upscaler dirs) with a
   `(path, len, mtime)` memo (`discover::identify`), `ImageFamily` exists in `src/config.rs`, `doctor` tags
   families and names what it won't offer. The LTX file in the root is no longer listed.
-- **Phase 2 — components and Z-Image: DONE, awaiting your GPU check.** `Role::Llm(LlmKind::Qwen3 { dim })`;
+- **Phase 2 — components and Z-Image: DONE** (committed in `455b8c7`, verified on the GPU). `Role::Llm(LlmKind::Qwen3 { dim })`;
   `ImageFamily::{runnable, is_unet, recipe, flags}` (Z-Image runnable, turbo recipe 1024², 8 steps, CFG 1, euler;
   `--diffusion-fa` always on DiTs, no `--offload-to-cpu`); `Components { vae, llm, clip_l, t5xxl }` and
   `Profile.family` + `Profile.components` (None = bundled `-m`); `discover::image_components` picks the parts from
   the scan (encoder by width) or names the conventional path; `Config::profile()` layers
   settings → family recipe → template; `base_cmd` emits `--diffusion-model` + parts; `Profile::missing` /
   `require_files` replace the "checkpoint not found" checks; convert offers a DiT as `--diffusion-model`;
-  `doctor` shows the parts a DiT was assembled with. Deferred from the plan: `snap64` stays 64 for every family
-  (a multiple of 64 is valid for the DiTs too, only coarser) — revisit with the size inputs in phase 3.
+  `doctor` shows the parts a DiT was assembled with.
   Known gaps: SDXL LoRAs are not yet filtered out for a Z-Image (phase F); the Qwen-Image VAE still reads as a
   Wan 2.1 VAE (same shape) and needs telling apart when Qwen-Image is added.
-- **Next: phase 3** (capabilities in the page).
+- **Phase 3 — capabilities in the page: DONE, awaiting your check.** `/models` carries `family`, `family_label`
+  and `missing` (paths). The six model selects group by family (`<optgroup>`, only when there is more than one)
+  and list a model with missing files *disabled*, with the files in its tooltip. The negative prompt is hidden, with
+  a one-line note in its place, at CFG exactly 1 on both tabs (`syncNegative`, hung off `syncCfgPlaceholders`) — sd.cpp only runs the
+  unconditioned half when text CFG ≠ image CFG (1), `resolve_guidance` in `src/pipeline/request.cpp`.
+  **Dropped from the plan:** per-family size rounding (`size_multiple`). 64 is a valid multiple for every family
+  here (DiTs need 16), so generalising `snap64`/`fit_to` would buy at most 48 px of width for churn in tested
+  code. `guidance`, `ref_images` and `inpaint` caps are not served yet — nothing uses them; they arrive with
+  Flux and the edit tab.
+- **Next: phase 4** (settings layers: per-model overrides in `user/models.toml`, global form shrinks).
 
 ## Context
 

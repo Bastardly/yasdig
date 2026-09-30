@@ -95,6 +95,29 @@ export function syncCfgPlaceholders() {
 
   const i2 = num('i2icfg') ?? num('i2cfg') ?? '';
   for (const id of ['i2rcfg', 'i2hcfg']) $(id).placeholder = i2;
+
+  // Here because this already runs everywhere a CFG box changes — typed, a
+  // model switch, a reopened work item — on both tabs. The Image-to-image
+  // tab's pass runs at its own CFG, which falls through to the base box.
+  syncNegative('negative', 'negnote', num('cfg'));
+  syncNegative('i2negative', 'i2negnote', num('i2icfg') ?? num('i2cfg'));
+}
+
+// A negative prompt does nothing at CFG exactly 1. sd.cpp only evaluates the
+// unconditioned half when the text CFG differs from the image CFG, which is 1
+// unless an edit model sets it (`resolve_guidance`,
+// `src/pipeline/request.cpp:274`) — so the rule is "≠ 1", not "> 1", and it is
+// about the number rather than the family: SDXL-Turbo and a Z-Image turbo are
+// both at 1, and a Z-Image base at CFG 5 uses its negative.
+//
+// The field is hidden, not cleared: what is in it is still sent, and comes back
+// into force the moment CFG moves off 1. The note stays in its place, because a
+// field that vanishes with no word about why reads as a bug.
+function syncNegative(box, note, cfg) {
+  const idle = cfg === 1;
+  document.querySelector(`label[for="${box}"]`).hidden = idle;
+  $(box).closest('prompt-box').hidden = idle;
+  $(note).hidden = !idle;
 }
 
 // The files `GET /upscalers` lists, as the Upscaler select's options, behind an
@@ -176,16 +199,36 @@ export async function loadModels() {
         none.textContent = blank;
         sel.appendChild(none);
       }
-      for (const m of models) {
-        const opt = document.createElement('option');
-        opt.value = m.name;
-        const tag = m.discovered ? 'discovered' : 'preset';
-        opt.textContent = blank
-          // An escalation never uses a model's base size, so quoting it there
-          // would be a number that means nothing about what the button will do.
-          ? `${m.name} [${tag}]`
-          : `${m.name} [${tag}] — ${m.out_width}×${m.out_height}`;
-        sel.appendChild(opt);
+      // Grouped by family once there is more than one, because the family is
+      // what decides whether a model's numbers mean anything next to another's:
+      // 8 steps is a Z-Image's whole render and a third of an SDXL's.
+      const families = [...new Set(models.map((m) => m.family_label))].sort();
+      for (const family of families) {
+        const group = families.length > 1 ? document.createElement('optgroup') : sel;
+        if (group !== sel) {
+          group.label = family;
+          sel.appendChild(group);
+        }
+        for (const m of models.filter((x) => x.family_label === family)) {
+          const opt = document.createElement('option');
+          opt.value = m.name;
+          const tag = m.discovered ? 'discovered' : 'preset';
+          opt.textContent = blank
+            // An escalation never uses a model's base size, so quoting it there
+            // would be a number that means nothing about what the button will do.
+            ? `${m.name} [${tag}]`
+            : `${m.name} [${tag}] — ${m.out_width}×${m.out_height}`;
+          // Listed rather than hidden, the rule `doctor` follows: "my model
+          // isn't there" is worse to debug than "it's there, and here is the
+          // file it is waiting for". Disabled only stops *picking* it; a
+          // reopened work item can still put it back on screen.
+          if (!m.exists) {
+            opt.disabled = true;
+            opt.textContent += ' (missing files)';
+            opt.title = 'Waiting for:\n' + m.missing.join('\n');
+          }
+          group.appendChild(opt);
+        }
       }
     }
     if (!models.length) {

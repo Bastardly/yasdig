@@ -1576,6 +1576,7 @@ fn build_models_json(cfg: &Config) -> String {
             let out_h = ((p.height as f32) * p.upscale_factor).round() as u32;
             format!(
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
+                 \"family\":{},\"family_label\":{},\"missing\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
                  \"steps\":{},\"cfg_scale\":{},\"img2img_cfg_scale\":{},\"sampler\":{},\
                  \"upscale_factor\":{},\"upscaler\":{},\
@@ -1587,6 +1588,19 @@ fn build_models_json(cfg: &Config) -> String {
                 json_str(&p.description),
                 p.discovered,
                 p.exists,
+                json_str(p.family.as_str()),
+                json_str(p.family.label()),
+                // Every file standing between this model and a run, at the path
+                // it is expected at, so a greyed-out option can say what it is
+                // waiting for rather than only that it is waiting.
+                format!(
+                    "[{}]",
+                    p.missing()
+                        .iter()
+                        .map(|f| json_str(&f.display().to_string()))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ),
                 p.width,
                 p.height,
                 out_w,
