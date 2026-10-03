@@ -176,6 +176,17 @@ pub fn check(cfg: &Config) -> Report {
         ));
     }
 
+    // The same for the old [server]: `startup.toml` was seeded from it on the
+    // first start after the move, and reads nothing from it since.
+    if cfg.legacy_server.is_some() && crate::startup::path(&cfg.base_dir).exists() {
+        warnings.push(format!(
+            "models.toml still has a [server] block, and it is now ignored.\n\
+             The port and address live in\n  {}\n\
+             Delete the block so the two can't look like they disagree.",
+            crate::startup::path(&cfg.base_dir).display()
+        ));
+    }
+
     // 2) Model registry (explicit templates + discovered checkpoints).
     let registry = cfg.registry();
     // The per-model layer, read once here for the tags below and for the

@@ -109,6 +109,7 @@ The first start creates what it needs, and later starts never overwrite any of i
 
 ```
 rustimage(.exe)
+startup.toml       the port and address the page is on
 models.toml        settings the program needs to start; edit freely
 models/            checkpoints/  diffusion_models/  vae/  text_encoders/
                    loras/  upscalers/  video/      — each with a README.txt
@@ -228,7 +229,8 @@ stable-diffusion.cpp/build-rustimage/bin/sd-cli -M img_gen -m models/checkpoints
 
 | file | holds | written by |
 |---|---|---|
-| `models.toml` | what the program needs in order to start: the sd.cpp binary, the directories, the port, per-checkpoint presets, video models | you, by hand |
+| `startup.toml` | the port and address the page is on | you, by hand; created on first start |
+| `models.toml` | what the program needs in order to start: the sd.cpp binary, the directories, per-checkpoint presets, video models | you, by hand |
 | `user/settings.toml` | your defaults: steps, CFG, size, the refine and hi-res settings, the default prompt | the **Settings tab**, on every save |
 | `user/model-settings.toml` | what one model does differently — a turbo's 6 steps, say | *Save as defaults for this model* and the Settings tab's **Per model** card |
 
@@ -303,7 +305,9 @@ where it says something:
   This one *is* recursive, so `models/loras/sdxl/` works. See [LoRAs](#loras).
 - `[sd].upscaler_dir` — folder of ESRGAN upscaler models (default `upscalers/` inside
   the models dir). See [Upscalers](#upscalers).
-- `[server].host` / `[server].port` — default `127.0.0.1` and `8080`.
+- The port and address are not here any more: they are in `startup.toml`, beside this
+  file (see [Run](#run)). A `[server]` block left over from before is copied there on
+  the first start and ignored after that; `doctor` says so.
 - `[templates.<name>]` — a preset for one checkpoint. `model` is the only
   required field; everything else is any of the settings below except
   `prompt`, `negative` and `hires_scale`, which are not properties of a
@@ -501,10 +505,21 @@ mid-request — `doctor` below runs the same checks without starting the server.
 models at all is a warning rather than a stop: a fresh folder has none, and one
 dropped in while the server runs shows up on the next reload.
 
-The browser opens on the page by itself (set `RUSTIMAGE_NO_BROWSER=1` to stop that),
-and a second start of the same folder finds the first one running and just opens the
-page again. If the port is taken by anything else — another program, or rustimage
-running from another folder — it takes the next free one and says which. With no
+The browser opens on the page by itself (set `RUSTIMAGE_NO_BROWSER=1` to stop that).
+
+The port is in `startup.toml`, beside `models.toml` — created on the first start with
+`port = 8080`; edit it and restart to move. That port is kept, not just tried first:
+
+| holding the port | what a start does |
+|---|---|
+| nothing | listens there |
+| this same folder and build | opens the browser on it and ends — a second double-click |
+| any other rustimage — another folder, or an older build of this one | asks it to close (without its clear-on-close), then takes the port |
+| any other program | leaves it alone, and uses the next free port, saying which |
+
+Closing another rustimage goes through its own `/shutdown`, so it works the same on
+Linux and Windows, and nothing that isn't rustimage is ever closed. A rustimage built
+before this existed has no such route and is stepped past like any other program. With no
 `models.toml` argument it uses the one in the current directory, then the checkout a
 `target/` build belongs to, and otherwise the one beside the executable, creating that folder's layout on the way.
 

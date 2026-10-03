@@ -19,10 +19,7 @@
 # upscaler_dir = "models/upscalers"
 # video_dir    = "models/video"
 
-[server]
-# 127.0.0.1 keeps the page to this computer. Change the port if 8080 is taken.
-host = "127.0.0.1"
-port = 8080
+# The port and address the page is on are in startup.toml, beside this file.
 
 # ---------------------------------------------------------------------------
 # [templates.<name>] — optional tuned presets for one specific checkpoint,

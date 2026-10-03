@@ -80,6 +80,7 @@ mod preflight;
 mod sd;
 mod settings;
 mod shutdown;
+mod startup;
 mod sr;
 mod variables;
 mod videos;
@@ -92,8 +93,6 @@ use config::{Config, Filters, FiltersPatch, LoraRef};
 use pipeline::{Engine, EscalateRequest, GenRequest, GenResult, Img2ImgRequest, VideoRequest};
 use sd::Monitor;
 use settings::Settings;
-use std::io::{Read as _, Write as _};
-use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
@@ -181,6 +180,9 @@ fn main() -> Result<()> {
 }
 
 fn run(args: &[String]) -> Result<()> {
+    // First, before a minute of preflight and GPU start in which `cargo` may
+    // already be rebuilding the file — see `startup::build_id`.
+    startup::build_id();
 
     // Subcommands that run without the server. `fsr`, `fsr-selftest` and
     // `sr-selftest` exercise the wgpu path alone; `upscale` adds sd-cli for an
@@ -231,44 +233,22 @@ fn run(args: &[String]) -> Result<()> {
 
     // Before the GPU worker, not after it: `Engine::new` sweeps `work/`, and a
     // second copy of *this folder* started by a second double-click would do
-    // that under the feet of the first one's render. So a port held by a
-    // rustimage serving the same folder is handed over to — the browser opens
-    // on it and this start ends — and a port held by anything else, another
-    // rustimage folder included (a checkout beside a release), is stepped past
-    // to the next free one. The configured port is where it starts looking.
-    const TRIES: u16 = 20;
-    let home = cfg.base_dir.display().to_string();
-    let mut found = None;
-    for port in (cfg.server.port..=u16::MAX).take(TRIES as usize) {
-        let bind = format!("{}:{port}", cfg.server.host);
-        match TcpListener::bind(&bind) {
-            Ok(l) => {
-                found = Some((l, bind));
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                if instance_home(&bind).as_deref() == Some(home.as_str()) {
-                    let url = format!("http://{bind}/");
-                    println!("[rustimage] already running at {url} — opening it");
-                    open_browser(&url);
-                    return Ok(());
-                }
-                println!("[rustimage] port {port} is in use, trying {}", port.saturating_add(1));
-            }
-            Err(e) => {
-                return Err(e).with_context(|| {
-                    format!("can't listen on {bind} — check [server] in {}", config_path.display())
-                })
-            }
+    // that under the feet of the first one's render. `startup::bind` is the
+    // rule for a taken port: hand over to this same folder and build, close any
+    // other rustimage and take its port, and step past anything else.
+    let startup = startup::load(&cfg.base_dir, cfg.legacy_server.as_ref())?;
+    let me = startup::Instance {
+        home: cfg.base_dir.display().to_string(),
+        build: startup::build_id().to_string(),
+    };
+    let (listener, bind) = match startup::bind(&startup.server, &me)? {
+        startup::Bound::Listening(l, bind) => (l, bind),
+        startup::Bound::HandedOver(bind) => {
+            let url = format!("http://{bind}/");
+            println!("[rustimage] already running at {url} — opening it");
+            open_browser(&url);
+            return Ok(());
         }
-    }
-    let Some((listener, bind)) = found else {
-        anyhow::bail!(
-            "ports {} to {} are all in use — set another `port` under [server] in {}",
-            cfg.server.port,
-            cfg.server.port.saturating_add(TRIES - 1),
-            config_path.display()
-        );
     };
     let url = format!("http://{bind}/");
     // A checkout's `web/` when there is one, so edits show on reload; the
@@ -375,33 +355,6 @@ fn run(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// The folder the rustimage holding `bind` serves, or `None` when what holds
-/// it isn't one. A second start uses it to tell its own folder's server (hand
-/// over: open the browser on it) from anything else (step to the next port).
-/// The folder rather than "is it a rustimage", because a checkout and a release
-/// folder side by side are two rustimages that both want 8080, and opening the
-/// other one's page would be the wrong program with the wrong models.
-fn instance_home(bind: &str) -> Option<String> {
-    let probe = || -> std::io::Result<String> {
-        let addr = std::net::ToSocketAddrs::to_socket_addrs(bind)?
-            .next()
-            .ok_or(std::io::ErrorKind::NotFound)?;
-        let mut s = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2))?;
-        s.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
-        s.write_all(b"GET /instance HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
-        let mut body = String::new();
-        s.read_to_string(&mut body)?;
-        Ok(body)
-    };
-    let reply = probe().ok()?;
-    let (head, body) = reply.split_once("\r\n\r\n")?;
-    if !head.starts_with("HTTP/1.1 200") {
-        return None;
-    }
-    let v: serde_json::Value = serde_json::from_str(body).ok()?;
-    (v["app"] == "rustimage").then(|| v["home"].as_str().map(str::to_string))?
-}
-
 /// Show the page in the person's own browser. A double-click has no other way
 /// to find it, so this is the one thing a first run must not leave to a README.
 /// Not waited on — `xdg-open` can block until the browser exits — and a
@@ -480,8 +433,9 @@ fn handle_conn(
             200,
             "application/json",
             format!(
-                "{{\"app\":\"rustimage\",\"home\":{}}}",
-                json_str(&cfg.base_dir.display().to_string())
+                "{{\"app\":\"rustimage\",\"home\":{},\"build\":{}}}",
+                json_str(&cfg.base_dir.display().to_string()),
+                json_str(startup::build_id())
             )
             .as_bytes(),
         ),
@@ -495,7 +449,7 @@ fn handle_conn(
             "application/json",
             format!("{{\"cancelled\":{}}}", monitor.cancel()).as_bytes(),
         ),
-        ("POST", "/shutdown") => handle_shutdown(&mut conn, cfg, monitor),
+        ("POST", "/shutdown") => handle_shutdown(&mut conn, cfg, monitor, &req.body),
 
         // The archive. List, thumbnail and delete are answered right here rather
         // than through `submit` — they never touch the GPU, and the worker is
@@ -614,13 +568,32 @@ fn handle_conn(
 /// A worker in the middle of a job is not waited for: with its child killed
 /// the job is failing anyway, and nothing it would write is worth keeping a
 /// server open for.
-fn handle_shutdown(conn: &mut http::Connection, cfg: &Config, monitor: &Monitor) -> Result<()> {
+///
+/// `{"clear": false}` skips step 2. That is a newer start taking the port back
+/// (`startup::bind`): nobody pressed *Close server*, so nothing the settings
+/// tie to that button may happen. An empty body — the button — clears.
+fn handle_shutdown(
+    conn: &mut http::Connection,
+    cfg: &Config,
+    monitor: &Monitor,
+    body: &[u8],
+) -> Result<()> {
+    let clear = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["clear"].as_bool())
+        .unwrap_or(true);
     monitor.cancel();
-    let cleared = shutdown::clear(cfg);
-    println!(
-        "[rustimage] closed from the page (cleared {} work items, {} outputs, {} clips)",
-        cleared.workitems, cleared.outputs, cleared.videos
-    );
+    let cleared = if clear {
+        let c = shutdown::clear(cfg);
+        println!(
+            "[rustimage] closed from the page (cleared {} work items, {} outputs, {} clips)",
+            c.workitems, c.outputs, c.videos
+        );
+        c
+    } else {
+        println!("[rustimage] a newer start took over this port — closing");
+        shutdown::Cleared::default()
+    };
     let body = serde_json::json!({ "closed": true, "cleared": cleared });
     let _ = conn.respond(200, "application/json", body.to_string().as_bytes());
     std::process::exit(0);

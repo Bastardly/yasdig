@@ -131,6 +131,6 @@ mod tests {
     fn the_shipped_config_parses_and_names_no_binary() {
         let cfg: crate::config::Config = toml::from_str(TEMPLATE).unwrap();
         assert!(cfg.sd.binary.is_none());
-        assert_eq!(cfg.server.port, 8080);
+        assert!(cfg.legacy_server.is_none(), "the port lives in startup.toml now");
     }
 }

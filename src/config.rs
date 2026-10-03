@@ -27,8 +27,11 @@ pub struct Config {
     /// `[sd]` at all, and every field in it has a default.
     #[serde(default)]
     pub sd: SdConfig,
-    #[serde(default)]
-    pub server: ServerConfig,
+    /// The old `[server]` table. `startup.toml` holds this now; it is read once,
+    /// to seed that file on the first start after the move, and `preflight`
+    /// says it is ignored after that — the `legacy_defaults` arrangement.
+    #[serde(default, rename = "server")]
+    pub legacy_server: Option<crate::startup::Server>,
     /// Explicit tuned presets, keyed by name. Optional — discovery covers the
     /// common case.
     #[serde(default)]
@@ -111,29 +114,6 @@ fn default_models_dir() -> String {
     "models".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct ServerConfig {
-    #[serde(default = "default_host")]
-    pub host: String,
-    #[serde(default = "default_port")]
-    pub port: u16,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        ServerConfig {
-            host: default_host(),
-            port: default_port(),
-        }
-    }
-}
-
-fn default_host() -> String {
-    "127.0.0.1".to_string()
-}
-fn default_port() -> u16 {
-    8080
-}
 
 /// A tuned preset for one checkpoint: which file it is, and what is different
 /// about it.

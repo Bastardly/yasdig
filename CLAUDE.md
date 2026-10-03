@@ -15,7 +15,7 @@ part it doesn't cover.
 ```sh
 cargo test                                  # no GPU: naga-validates the 4 WGSL shaders, the band-measurement math,
                                             #   the escalation/upload DTOs and `fit_to`
-cargo run --release                         # server on 127.0.0.1:8080
+cargo run --release                         # server on startup.toml's port (127.0.0.1:8080)
 cargo run --release -- doctor               # preflight only: binary, checkpoints, web UI
 cargo run --release -- fsr-selftest         # full wgpu path; no sd.cpp or checkpoint needed
 cargo run --release -- fsr in.png out.png [scale] [sharpness] [clarity]
@@ -93,12 +93,21 @@ Five things break silently:
   only checks the files on disk when it is reading them.
 - **The listener binds before the GPU worker starts.** `Engine::new` sweeps `work/`,
   so a second copy started by a second double-click would sweep the first one's scratch
-  mid-render. Binding first is what notices it. A taken port is asked `GET /instance`,
-  which names the folder that server serves (`instance_home`): *this* folder's server is
-  handed over to (the browser opens on it and the start ends), and anything else —
-  another rustimage folder included, a checkout beside a release — is stepped past to
-  the next of 20 ports. It was "is it a rustimage" once, and a `cargo run` beside a
-  running release then opened the release's page and quit.
+  mid-render. Binding first is what notices it. The port is `startup.toml`'s
+  (`src/startup.rs`, its own file so it is findable; seeded once from a leftover
+  `[server]`), and it is kept rather than merely tried first. A taken one is asked
+  `GET /instance` — the folder *and* the build that server is — and `startup::bind`
+  decides: the same folder and build is handed over to (browser, start ends: a second
+  double-click must not kill a render); **any other rustimage is closed** through
+  `POST /shutdown {"clear":false}` and the port taken back; anything that isn't a
+  rustimage is never touched and the next of 20 ports is used. Two things here break
+  silently. **`build_id` is read once, first thing in `run`**: re-read later, a server
+  whose file `cargo` has since rebuilt reports the *new* build and is handed over to —
+  which is the stale-`cargo run` bug this rule exists for, back. And **the takeover
+  must send `clear:false`**, or another start taking the port would fire the
+  clear-on-close settings nobody pressed *Close server* for. Closing goes through our
+  own route rather than finding a PID, so it is one code path on both OSes and can't
+  reach a program that isn't ours.
 
 The sd.cpp flags in `build.rs` are what make the file run elsewhere —
 `GGML_NATIVE=OFF`, `GGML_OPENMP=OFF`, `/MT` on Windows — and the workflow's
@@ -850,7 +859,7 @@ file**, not the format — both are TOML, one parser:
 - `models.toml` is hand-written and mostly comments (the `[[video]]` block alone
   is 80 lines of them). The app only ever reads it, which is what lets those
   survive. It holds what the program needs in order to *start*: the binary, the
-  directories, the port, `[templates.*]`, `[[video]]`.
+  directories, `[templates.*]`, `[[video]]`. The port is `startup.toml`'s.
 - `user/settings.toml` is regenerated in full on every Save, so it carries one
   fixed header and nothing else. A settings *form* that deleted the explanation
   of what it just changed would be worse than no form.

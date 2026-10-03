@@ -31,9 +31,7 @@ models_dir = "models"
 # 4-step pair.)
 # lora_dir = "models/loras"
 
-[server]
-host = "127.0.0.1"
-port = 8080
+# The port and address are in startup.toml (created on first start, gitignored).
 
 # ---------------------------------------------------------------------------
 # [templates.<name>] — OPTIONAL tuned presets for one specific checkpoint,
