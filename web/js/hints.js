@@ -64,16 +64,19 @@ const HELP = [
     text: 'The random noise the picture is grown from, as a number. The same seed '
         + 'with the same settings gives the same image, so it is how you keep a '
         + 'result and change one thing about it. -1 draws a new one every time.' },
-  { ids: ['steps', 'srcsteps', 'vsteps'],
+  { ids: ['steps', 'vsteps'],
     text: 'How many passes the sampler takes to turn noise into an image. More '
         + 'costs proportionally more time and stops helping after a point — and '
         + 'the right number belongs to the checkpoint: turbo and LCM models are '
-        + 'trained to land in 1–4, a standard SDXL wants around 20.' },
+        + 'trained to land in 1–4, a standard SDXL wants around 20. On the Image '
+        + 'tab a pass over a picked image runs these too: all of them, with '
+        + 'Strength deciding how far up the schedule they start.' },
   { ids: ['cfg', 'vcfg'],
     text: 'How hard the model is pushed towards your prompt. Low is loose and '
         + 'soft, high follows the words but goes harsh and over-saturated; 5–7 '
         + 'suits a standard SDXL. Turbo and LCM checkpoints are trained for CFG 1 '
-        + 'and scorch at anything higher.' },
+        + 'and scorch at anything higher. On the Image tab it is '
+        + 'also the CFG of a pass over a picked image.' },
   { ids: ['sampler', 'vsampler'],
     text: 'The algorithm that removes the noise. They differ mostly in how '
         + 'quickly they settle: euler is the safe default, dpm++2m converges in '
@@ -112,23 +115,20 @@ const HELP = [
         + 'the composition and adds texture; high invents new detail and can lose '
         + 'the likeness of what you had.' },
   { ids: ['rcfg'],
-    text: 'CFG for the refine pass alone. Empty follows the img2img CFG, and '
-        + 'then the CFG box. A lower value here is the common trick: an image '
-        + 'that already exists needs less pushing than one being invented.' },
+    text: 'CFG for the refine pass alone. Empty follows the CFG scale box — '
+        + 'or, with a model picked for this pass, that model\'s own CFG. A lower '
+        + 'value here is the common trick: an image that already exists needs '
+        + 'less pushing than one being invented.' },
   { ids: ['hcfg'],
-    text: 'CFG for the hi-res pass alone. Empty follows the img2img CFG, and '
-        + 'then the CFG box. It is a separate number from the refine one because '
-        + 'the two passes work on different pixels — hi-res is inventing detail '
+    text: 'CFG for the hi-res pass alone. Empty follows the CFG scale box — '
+        + 'or, with a model picked for this pass, that model\'s own CFG. It is a '
+        + 'separate number from the refine one because the two passes work on different pixels — hi-res is inventing detail '
         + 'at a new size, refine is tightening what is already there.' },
-  { ids: ['icfg'],
-    text: 'CFG for a pass over a source image. Empty means follow the CFG '
-        + 'box beside it. Lower is usually right, since the picture already '
-        + 'exists and only has to be pushed a little. It is also what the two '
-        + 'per-pass CFG boxes below fall back to when they are empty.' },
   { ids: ['refmodel', 'hiresmodel'],
     text: 'The checkpoint this one pass uses, which need not be the one that '
         + 'drew the image: draft on a fast turbo model, finish on a detailed '
-        + 'one. It brings its own steps and strengths with it. Costs no VRAM to '
+        + 'one. Picking it fills the boxes under it with its own steps, strength '
+        + 'and CFG, which you can then change. Costs no VRAM to '
         + 'name a second — every pass is a separate sd-cli process that loads '
         + 'and frees its own weights — only the disk read if the file has fallen '
         + 'out of the page cache.' },
@@ -151,9 +151,9 @@ const HELP = [
     text: 'How many images this run makes. Each is a separate request, so results '
         + 'appear as they land and Stop only has to wait for the one in flight.' },
   { ids: ['hiresscale'],
-    text: 'How much the hi-res pass enlarges, when it runs. The same factor as '
-        + 'the box above a finished image, which does not exist yet before the '
-        + 'first render — hence a second copy of it here.' },
+    text: 'How much the hi-res pass enlarges, when it runs, from 1 to 4 — 2.5 is '
+        + 'fine. The same factor as the box above a finished image, which does not '
+        + 'exist yet before the first render — hence a second copy of it here.' },
   { ids: ['autorun'],
     text: 'Ignore the count and keep drawing new seeds until you press Stop. For '
         + 'leaving a prompt running and picking from the gallery afterwards.' },

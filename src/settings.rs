@@ -77,12 +77,6 @@ pub struct Settings {
     pub height: u32,
     pub steps: u32,
     pub cfg_scale: f32,
-    /// CFG for the Image-to-image tab's pass, and the fallback the two
-    /// escalations use when neither of the pair below is set. `None` = follow
-    /// `cfg_scale`, and it stays an `Option` all the way onto [`Profile`] so
-    /// raising the base CFG doesn't leave the passes behind at whatever it used
-    /// to be.
-    pub img2img_cfg_scale: Option<f32>,
     pub sampler: String,
     pub upscale_factor: f32,
     /// What performs that enlarge: `None` is FSR (EASU), a name is an ESRGAN
@@ -92,16 +86,14 @@ pub struct Settings {
     pub clarity: f32,
     pub refine_steps: u32,
     pub refine_strength: f32,
-    /// CFG for the refine pass alone; `None` falls through to
-    /// `img2img_cfg_scale` and then to `cfg_scale`. See [`Profile::refine_cfg`].
+    /// CFG for the refine pass alone; `None` follows `cfg_scale`. See [`Profile::refine_cfg`].
     pub refine_cfg_scale: Option<f32>,
     pub hires_steps: u32,
     pub hires_strength: f32,
     /// The same, for the hi-res pass. Declared here rather than beside
-    /// `img2img_cfg_scale` so each pass's three knobs — steps, strength, CFG —
+    /// `refine_cfg_scale` so each pass's three knobs — steps, strength, CFG —
     /// are written in the file in the order the panel shows them.
     pub hires_cfg_scale: Option<f32>,
-    pub source_steps: u32,
     pub source_strength: f32,
     pub hires_max_side: u32,
     pub hires_flash_attn: bool,
@@ -142,18 +134,12 @@ pub struct PartialSettings {
     pub steps: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cfg_scale: Option<f32>,
-    /// Doubly optional on purpose: absent means "inherit", and an explicit
-    /// `img2img_cfg_scale = ...` means "pin this". A template cannot express
-    /// "unset it back to following cfg_scale" and doesn't need to — it can name
-    /// `cfg_scale` instead.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub img2img_cfg_scale: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampler: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upscale_factor: Option<f32>,
-    /// Absent inherits, a name pins, the same one-way shape `img2img_cfg_scale`
-    /// above has: a template can name a model, and has no way to say "back to
+    /// Absent inherits, a name pins, the same one-way shape `refine_cfg_scale`
+    /// below has: a template can name a model, and has no way to say "back to
     /// FSR" over a setting that chose one — nor needs one, since the select on
     /// the page can.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -166,9 +152,10 @@ pub struct PartialSettings {
     pub refine_steps: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refine_strength: Option<f32>,
-    /// Doubly optional for the same reason `img2img_cfg_scale` above is: a
-    /// template says "pin this" or says nothing, and has `cfg_scale` to reach
-    /// for when it wants the link back.
+    /// Optional, not doubly so: a template says "pin this" or says nothing,
+    /// and has `cfg_scale` to reach for when it wants the link back. A
+    /// template cannot express "unset it back to following cfg_scale" and
+    /// doesn't need to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refine_cfg_scale: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -177,8 +164,6 @@ pub struct PartialSettings {
     pub hires_strength: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hires_cfg_scale: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_steps: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_strength: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -204,7 +189,6 @@ impl Default for Settings {
             height: 768,
             steps: 30,
             cfg_scale: 6.0,
-            img2img_cfg_scale: None,
             sampler: "euler".to_string(),
             upscale_factor: 2.0,
             // FSR: free, and needs no file. An ESRGAN model is a download.
@@ -217,21 +201,19 @@ impl Default for Settings {
             refine_steps: 0,
             refine_strength: 0.30,
             // Both unset, which is what makes this change invisible to an
-            // existing install: every pass keeps resolving through
-            // `img2img_cfg_scale` and then `cfg_scale`, exactly as before.
+            // existing install: every pass keeps following `cfg_scale`.
             refine_cfg_scale: None,
             hires_cfg_scale: None,
             hires_steps: 0,
             // Same denoise as the refine: enough to resolve real detail at the
             // larger size, low enough that the composition doesn't drift.
             hires_strength: 0.30,
-            // The Image-to-image tab's pass is a *transform*, not a finish, so it
+            // The pass over a source image is a *transform*, not a finish, so it
             // starts far higher than either escalation: at 0.30 a source comes
-            // back essentially unchanged and the tab looks broken. 0.55 keeps the
+            // back essentially unchanged and the feature looks broken. 0.55 keeps the
             // composition, the pose and the palette while redrawing the surface
-            // in the model's own idiom. Steps are a floor, and `SdRunner::img2img`
-            // raises them to `steps * strength` anyway.
-            source_steps: 12,
+            // in the model's own idiom. It runs the model's own `steps` at its own
+            // `cfg_scale`; there is no second step count to keep in step.
             source_strength: 0.55,
             // Longest side the hi-res pass may diffuse at. SDXL's quality falls
             // off past this and the cost climbs quadratically; beyond it a final
@@ -265,7 +247,6 @@ impl Settings {
             height: over.height.unwrap_or(self.height),
             steps: over.steps.unwrap_or(self.steps),
             cfg_scale: over.cfg_scale.unwrap_or(self.cfg_scale),
-            img2img_cfg_scale: over.img2img_cfg_scale.or(self.img2img_cfg_scale),
             sampler: over.sampler.clone().unwrap_or_else(|| self.sampler.clone()),
             upscale_factor: over.upscale_factor.unwrap_or(self.upscale_factor),
             upscaler: over.upscaler.clone().or_else(|| self.upscaler.clone()),
@@ -277,7 +258,6 @@ impl Settings {
             hires_steps: over.hires_steps.unwrap_or(self.hires_steps),
             hires_strength: over.hires_strength.unwrap_or(self.hires_strength),
             hires_cfg_scale: over.hires_cfg_scale.or(self.hires_cfg_scale),
-            source_steps: over.source_steps.unwrap_or(self.source_steps),
             source_strength: over.source_strength.unwrap_or(self.source_strength),
             hires_max_side: over.hires_max_side.unwrap_or(self.hires_max_side),
             hires_flash_attn: over.hires_flash_attn.unwrap_or(self.hires_flash_attn),
@@ -412,7 +392,6 @@ impl Settings {
             height: self.height,
             steps: self.steps,
             cfg_scale: self.cfg_scale,
-            img2img_cfg_scale: self.img2img_cfg_scale,
             sampler: self.sampler.clone(),
             upscale_factor: self.upscale_factor,
             upscaler: self.upscaler.clone(),
@@ -429,7 +408,6 @@ impl Settings {
             // there is no key for one here.
             refine_model: None,
             hires_model: None,
-            source_steps: self.source_steps,
             source_strength: self.source_strength,
             hires_max_side: self.hires_max_side,
             hires_flash_attn: self.hires_flash_attn,
@@ -737,7 +715,7 @@ mod tests {
         let s = Settings {
             prompt: "a crab # not a comment".to_string(),
             steps: 7,
-            img2img_cfg_scale: Some(2.5),
+            refine_cfg_scale: Some(2.5),
             extra_args: vec!["--diffusion-fa".to_string()],
             ..Settings::default()
         };
@@ -871,18 +849,18 @@ mod tests {
     fn a_missing_key_keeps_the_stored_value_and_null_clears_it() {
         let stored = Settings {
             steps: 12,
-            img2img_cfg_scale: Some(2.5),
+            refine_cfg_scale: Some(2.5),
             ..Settings::default()
         };
 
         let kept = patch(&stored, br#"{"cfg_scale":4.0}"#).unwrap();
         assert_eq!(kept.steps, 12);
         assert_eq!(kept.cfg_scale, 4.0);
-        assert_eq!(kept.img2img_cfg_scale, Some(2.5));
+        assert_eq!(kept.refine_cfg_scale, Some(2.5));
 
         // An explicit null is how the box says "unset", as opposed to "unchanged".
-        let cleared = patch(&stored, br#"{"img2img_cfg_scale":null}"#).unwrap();
-        assert_eq!(cleared.img2img_cfg_scale, None);
+        let cleared = patch(&stored, br#"{"refine_cfg_scale":null}"#).unwrap();
+        assert_eq!(cleared.refine_cfg_scale, None);
         assert_eq!(cleared.steps, 12);
     }
 

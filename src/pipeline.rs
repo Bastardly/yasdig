@@ -65,10 +65,6 @@ pub struct GenRequest {
     /// Turbo and standard checkpoints without editing config).
     pub steps: Option<u32>,
     pub cfg_scale: Option<f32>,
-    /// CFG for the Image-to-image pass, and the fallback the two escalations use
-    /// when neither of their own is set. `None` keeps the profile's setting,
-    /// which is itself usually unset and so follows `cfg_scale`.
-    pub img2img_cfg_scale: Option<f32>,
     pub sampler: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -104,7 +100,7 @@ pub struct GenRequest {
     pub clarity: Option<f32>,
     /// LoRAs for this generation. `None` is "the field wasn't sent", which keeps
     /// whatever the profile has; `Some(vec![])` is "none, explicitly". No
-    /// `double_option` needed here, unlike `img2img_cfg_scale` — an empty list
+    /// `double_option` needed here, unlike `refine_cfg_scale` on an escalation — an empty list
     /// is spellable, so the two states don't collide the way absent and `null`
     /// do for a number.
     ///
@@ -125,9 +121,10 @@ pub struct GenRequest {
 /// The same shape as [`GenRequest`] minus the two things a txt2img owns and this
 /// doesn't. There is no `width`/`height`, because `SdRunner::img2img` sends no
 /// `-W`/`-H` at all — sd.cpp takes the size from the init image, so the size of
-/// this pass is decided by `max_side` below and by nothing else. And the pass's
-/// own steps and strength are `source_steps`/`source_strength` rather than the
-/// base `steps`, which survives only as the step *floor* in `SdRunner::img2img`.
+/// this pass is decided by `max_side` below and by nothing else. The pass runs the
+/// base `steps` at the base `cfg_scale`, exactly as a txt2img would; its one knob
+/// of its own is `source_strength`, which decides how far up the schedule those
+/// steps start.
 #[derive(Debug, Clone)]
 pub struct Img2ImgRequest {
     pub prompt: String,
@@ -143,11 +140,9 @@ pub struct Img2ImgRequest {
     /// `hires_max_side`, which is the same budget question asked of the same
     /// hardware — see [`fit_to`] for what it does to a source bigger than that.
     pub max_side: Option<u32>,
-    pub source_steps: Option<u32>,
     pub source_strength: Option<f32>,
     pub steps: Option<u32>,
     pub cfg_scale: Option<f32>,
-    pub img2img_cfg_scale: Option<f32>,
     pub sampler: Option<String>,
     pub refine_steps: Option<u32>,
     pub refine_strength: Option<f32>,
@@ -264,13 +259,12 @@ pub struct EscalateRequest {
     pub refine_strength: Option<f32>,
     pub hires_steps: Option<u32>,
     pub hires_strength: Option<f32>,
-    /// Two levels deep on purpose. The outer `None` means the field wasn't sent;
-    /// `Some(None)` means it was sent empty, which *unsets* it so the pass
-    /// follows the knob below it again. Collapsing the two would make the box
-    /// one-way — once a number had been typed there, clearing it could never
-    /// restore the link the whole `Option` on `Profile` exists to preserve.
-    pub img2img_cfg_scale: Option<Option<f32>>,
-    /// The pass's own CFG, doubly optional for the reason above. Only one of
+    /// The pass's own CFG. Two levels deep on purpose. The outer `None` means
+    /// the field wasn't sent; `Some(None)` means it was sent empty, which
+    /// *unsets* it so the pass follows `cfg_scale` again. Collapsing the two
+    /// would make the box one-way — once a number had been typed there,
+    /// clearing it could never restore the link the whole `Option` on `Profile`
+    /// exists to preserve. Only one of
     /// these two is ever meaningful per route — `/refine` ignores the hi-res one
     /// and vice versa — but they ride in one struct because the page sends one
     /// panel and the boundary is the route, not the body.
@@ -293,9 +287,6 @@ impl EscalateRequest {
         }
         if let Some(v) = self.hires_strength {
             profile.hires_strength = v;
-        }
-        if let Some(v) = self.img2img_cfg_scale {
-            profile.img2img_cfg_scale = v;
         }
         if let Some(v) = self.refine_cfg_scale {
             profile.refine_cfg_scale = v;
@@ -564,7 +555,7 @@ impl Engine {
     ///
     /// The swap is **wholesale**: the named entry's profile replaces the
     /// retained one entirely, bringing its own `refine_*`, `hires_*`,
-    /// `img2img_cfg_scale`, `hires_max_side`, `weight_type`, `extra_args` and
+    /// `hires_max_side`, `weight_type`, `extra_args` and
     /// slider starting points with it. `EscalateRequest::apply` then folds the
     /// panel's explicit boxes on top, which is the right order — the page
     /// refills those boxes from the selected model, so what it sends is already
@@ -640,12 +631,6 @@ impl Engine {
         }
         if let Some(v) = req.cfg_scale {
             profile.cfg_scale = v;
-        }
-        // Stays an `Option` on the profile: an absent override leaves it absent,
-        // so a request that only raises `cfg_scale` raises what the escalations
-        // run at too. Pinning it here would silently break that.
-        if let Some(v) = req.img2img_cfg_scale {
-            profile.img2img_cfg_scale = Some(v);
         }
         if let Some(v) = &req.sampler {
             if !v.is_empty() {
@@ -878,16 +863,10 @@ impl Engine {
         if let Some(v) = req.cfg_scale {
             profile.cfg_scale = v;
         }
-        if let Some(v) = req.img2img_cfg_scale {
-            profile.img2img_cfg_scale = Some(v);
-        }
         if let Some(v) = &req.sampler {
             if !v.is_empty() {
                 profile.sampler = v.clone();
             }
-        }
-        if let Some(v) = req.source_steps {
-            profile.source_steps = v;
         }
         if let Some(v) = req.source_strength {
             profile.source_strength = v;
@@ -1000,8 +979,8 @@ impl Engine {
             &src,
             &raw,
             profile.source_strength,
-            profile.source_steps,
-            profile.img2img_cfg(),
+            profile.steps,
+            profile.cfg_scale,
             fw.max(fh) > BIG_IMAGE_SIDE,
             "img2img source",
         )?;
@@ -1106,7 +1085,7 @@ impl Engine {
         if let Some(v) = req.cfg_scale {
             m.cfg_scale = v;
         }
-        // Stays an `Option`, like `img2img_cfg_scale`: unset means the expert
+        // Stays an `Option`, like `refine_cfg_scale`: unset means the expert
         // follows `cfg_scale`, and pinning it here would sever that.
         if let Some(v) = req.high_noise_cfg_scale {
             m.high_noise_cfg_scale = Some(v);
@@ -2089,7 +2068,7 @@ mod tests {
         assert!(after_model((1024, 768), (2048, 768), 2.0).is_err());
     }
 
-    /// The Image-to-image tab's one piece of arithmetic, and the only part of
+    /// *Start from*'s one piece of arithmetic, and the only part of
     /// that pass decidable without a GPU or a checkpoint.
     ///
     /// It matters because the failure is quiet in both directions: fit a source

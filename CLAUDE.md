@@ -174,9 +174,50 @@ model without firing `change`, so it calls `syncParts` itself and then `setParts
 with the sidecar's `components`, matched on each option's absolute `data-path`: the
 sidecar records paths, the wire carries names.
 
-## Start from
+## The Image tab's folds
 
-The Image tab's source image: nothing picked is text to image, a picked image makes
+Below the run panel, the controls column is all `<details class="fold">`: Generation,
+After each generation, Prompts, Image to image, Models (LoRAs included — they only
+fit the family they were trained on, so they sit with the model), Hi-res pass, Refine
+pass. *Save as defaults* and the seed stay outside them: the seed is reached for between
+renders (pinned from a result, reset to vary it), so it stays beside the button. Images
+and *Keep going* are the last rows of Generation. There is no line
+summing up the run any more: the summaries say the same thing fold by fold.
+
+**Every summary says what is inside**, so folding a section never hides what Generate
+is about to do — the rule the Models fold started with. `syncSummaries` in `image.js`
+writes all of them, calling `syncModelsSummary` for the Models one, which `syncParts`
+also redraws. A summary turns `--accent-hi` (`.foldstate.on`) when its fold departs from the plain
+path: more than one image (or the loop), a source picked, any *After each* box ticked, or a model other than the diffusion
+model picked for Hi-res or Refine. Those are the settings that change what Generate *does*, and they were easy
+to miss as grey small print in a folded section. It runs from a
+delegated `input`/`change` listener on the column, so a new box in a fold needs no
+listener of its own. A redraw that fires no event has to call it itself, which is why
+`loraPicker` grew an `onChange` (an added or removed row is a re-render, not an event).
+
+Four things break silently:
+
+- **Open state is per fold and per browser** (`initFolds`, key `rustimage.fold.<id>`,
+  every access in a try/catch). Without a stored value a fold starts as the markup has
+  it, so `open` in `index.html` is the default and not decoration.
+- **Picking a hi-res or refine model refills that fold** (`fillPass`, from
+  `passModel`). `swap_model` replaces the profile wholesale and the boxes land on top,
+  so boxes filled from the *generating* model sent that model's numbers to run on
+  another. A blank pass CFG's placeholder follows the same choice: the picked model's
+  `cfg_scale`, not the CFG box.
+- **So *Save as defaults* skips a pass whose fold holds another model's numbers**
+  (`foreign` in `saveModelDefaults`). Otherwise saving the generating model would
+  quietly retune it with the hi-res model's escalation.
+- **Hi-res scale is a number box, and the selects that mirror it grow an option.**
+  `#upfactor` and `#vfactor` are still selects over `UPSCALES`, and a select shows its
+  first option when nothing matches — 2.5 would read as 1×. `upOptions` and
+  `setUpFactor` add the value when it isn't listed. The box clamps on `change`, not on
+  `input`, so typing "2.5" isn't cut off at "2.".
+
+## Image to image
+
+The Image tab's source image, in the fold of that name (it was *Start from*, which is
+still what the code and the Video tab's comments call the slot): nothing picked is text to image, a picked image makes
 Generate run `/img2img` instead of `/generate`. It used to be a tab of its own, which
 duplicated the prompt, model, LoRAs and the whole escalation panel for one image
 slot. `web/js/source-slot.js` is the factory, and the Video tab's first frame is a
@@ -223,21 +264,24 @@ all work and `image` stays compiled `features = ["png"]`.
 On the page, four things break silently:
 
 - **`data-when` is what swaps the panel, and `syncMode` is the only writer.** Base
-  Steps, base size and Output upscale are `data-when="text"` — they describe a render
-  from noise, and a pass over a source has no enlarge stage and takes Steps from
-  beside the source. Strength, Steps, Working size and img2img CFG are
-  `data-when="source"`. The slot's `onChange` calls `syncMode`, so every way a source
-  arrives — pick, upload, drop, paste, a reopened work item — flips the panel.
+  size and Output upscale are `data-when="text"` — they describe a render from noise,
+  and a pass over a source has no enlarge stage. Strength and Working size are
+  `data-when="source"`. Steps and CFG scale are neither: the pass over a source runs
+  them too, all of the steps with strength deciding where they start (the step floor
+  in `SdRunner::img2img` can't trigger at that count). There used to be a second
+  Steps and an img2img CFG beside the source, which was two numbers to keep in step
+  per model for no gain. The slot's `onChange` calls `syncMode`, so every way a source
+  arrives — pick, upload, drop, paste, a reopened work item — flips the panel, and
+  opens the fold.
 - **`genPayload` returns `[route, body]`**, and the run loop posts whatever it is
   given. That is what lets batch, loop and the after-each passes work over a source
   with no second loop: a batch over one source is N seeds of one transform.
 - **A reopened work item always sets the slot** — to its source, or to nothing.
   Leaving a previously picked source in place would turn the next Generate into a
   pass over *that*, beside boxes restored from an image made from noise.
-- **The img2img CFG is the middle of the escalation chain only when a source is
-  picked.** `/generate` doesn't send it, so from noise the retained value is the
-  model's, and `syncCfgPlaceholders` reads the model's; with a source it reads the
-  box. The negative-prompt rule (hidden at CFG exactly 1) follows the same choice.
+- **The source fold's summary says `from …` whenever a source is picked.** The fold
+  starts folded, and a folded slot with a picture in it would otherwise turn Generate
+  into a pass over that picture with nothing on screen saying so.
 
 Paste is a document listener per slot, each gated to its own tab being visible, so
 two slots never both take one paste.
@@ -632,7 +676,7 @@ resolves the imports itself. `index.html` loads exactly one of them:
 | `busy.js` | `IDLE_LABELS`, `setBusy`, `onIdle`, the progress poll, `cancelRun` |
 | `hints.js` | `HELP`, `HINTS`, `wireHints`, the tooltip bubble |
 | `viewer.js` | `FILTERS`, the sliders, `/adjust`, fit/1:1, panning |
-| `image.js` | the Image tab: models, Advanced, `render`, escalations, runs, Save |
+| `image.js` | the Image tab: models, the folds, `render`, escalations, runs, Save |
 | `workitems.js` | the work-item grid and reopening one |
 | `gridmark.js` | click-to-mark: the marks, the action table, the buttons, the requests |
 | `source-slot.js` | *Start from*: the source-image slot factory, the upload, drop and paste |
@@ -787,10 +831,9 @@ the same knobs and no second copy of any sentence, which is the rule `HELP`
 already states seen from the other end. Only the three with no control anywhere
 else (`hires_flash_attn`, `weight_type`, `extra_args`) carry their own label and
 their own `HELP` entry. There were four: `upscale_factor` has an *Output upscale*
-box on the Image tab now, so it is an ordinary row that names it. Note
-`img2img_cfg_scale`'s row points at `icfg` and sits in the *Starting from an
-image* section, because after the refine/hi-res split that is the only pass it governs
-outright — the other two fall through to it.
+box on the Image tab now, so it is an ordinary row that names it. The
+*Starting from an image* section has two rows only, strength and working size: the
+pass over a source runs the Steps and CFG scale rows above it.
 
 The *Prompt variables* section is the one part of that form which is not a
 default for a control at all, and the one field with no label of its own — its
@@ -834,8 +877,8 @@ pending edit.
 Three more on that module, all about order and timing:
 
 - **It is last in `boot()`.** After `initImage()`, because it applies the stored
-  hi-res scale through `setUpFactor`, which addresses a select that fills the
-  options of — and therefore after `initHints()`, which is why it is the one
+  hi-res scale through `setUpFactor`, which reaches the Hi-res scale box and
+  the select above a result — and therefore after `initHints()`, which is why it is the one
   caller that passes a root to `wireHints`.
 - **The prompt and negative defaults are only written into a box that still
   holds what the last apply put there.** The fetch is async, and a default
@@ -1234,7 +1277,7 @@ These break silently rather than loudly.
 
 ## Adding a per-model knob
 
-The most repeated change here. Follow `img2img_cfg_scale` end to end for a *generation*
+The most repeated change here. Follow `refine_cfg_scale` end to end for a *generation*
 knob, or `sharpness`/`clarity` for a *display* one — the two are not interchangeable, see
 the note below the table.
 
@@ -1246,9 +1289,9 @@ the note below the table.
 | 3 | `src/sd.rs` | consume it in `base_cmd` / `txt2img` / `img2img` |
 | 4 | `src/pipeline.rs` | `Option<T>` on `GenRequest`, applied onto the profile in `Engine::run()` **before** `profile.validate()` — and, for an *escalation* knob, on `EscalateRequest` + its `apply()` as well |
 | 5 | `src/main.rs` | field on the `/generate` `Dto`, plus `build_models_json` so the UI can pre-fill it — and, for a *display* knob, the `/adjust` `Dto` and `result_json` too; for an escalation knob, `EscalateDto` and `overrides()` |
-| 6 | `web/index.html` + `web/js/image.js` (or `video.js`) | input in the Advanced panel; `syncAdvanced()` and `applyWorkItem()` pre-fill it, `generate()` reads it — an escalation knob goes in `escalateSettings()`, which `generate()` spreads, so it is read once and sent by all three routes |
+| 6 | `web/index.html` + `web/js/image.js` (or `video.js`) | input in its fold on the Image tab; `syncAdvanced()` and `applyWorkItem()` pre-fill it, `generate()` reads it — an escalation knob goes in `escalateSettings()`, which `generate()` spreads, so it is read once and sent by all three routes |
 | 7 | `src/settings.rs` + `web/js/settings.js` + `README.md` | default in `Settings::default()`, a row in `FIELDS` so it is editable, and a row in the `user/settings.toml` field table |
-| 7b | `src/config.rs` + `web/js/image.js` | if its right value depends on the architecture, a value in each DiT family's `ImageFamily::recipe()` (the UNet ones stay empty); and if it has an Advanced box, a row in `MODEL_KNOBS` so *Save as defaults for this model* writes it — `PartialSettings` already carries it, so `user/model-settings.toml` and the *Per model* card (built from `FIELDS`) need nothing |
+| 7b | `src/config.rs` + `web/js/image.js` | if its right value depends on the architecture, a value in each DiT family's `ImageFamily::recipe()` (the UNet ones stay empty); and if it has a box on the Image tab, a row in `MODEL_KNOBS` so *Save as defaults for this model* writes it — `PartialSettings` already carries it, so `user/model-settings.toml` and the *Per model* card (built from `FIELDS`) need nothing |
 
 The trap this used to have — two structs with one field list, built in two arms of
 `registry()`, so adding to one and not the other compiled cleanly and ignored the
@@ -1281,18 +1324,18 @@ on the architecture belongs in `VideoFamily::recipe()` rather than in a `default
 function. Anything the page must *derive* from `family` goes on `VideoModelDto` instead
 of being reimplemented in JavaScript — see `frame_grid` below.
 
-The CFG is that pattern three deep — `refine_cfg_scale` → `img2img_cfg_scale` →
-`cfg_scale`, through `Profile::refine_cfg`, and the same for hi-res. The middle rung is
-not decoration: it is what makes the split invisible to an install that already pinned
-the old shared *Refine/hi-res CFG*, which keeps running both passes at that number until
-one of the two is set. `each_pass_falls_through_to_the_knob_below_it` is that under
+The CFG is that pattern two deep — `refine_cfg_scale` → `cfg_scale`, through
+`Profile::refine_cfg`, and the same for hi-res. It used to be three, with an
+`img2img_cfg_scale` rung between, which was removed with the source pass's own CFG box:
+an old settings file still carrying the key loads with it ignored (no struct here
+denies unknown fields) and the next Save drops it. `each_pass_falls_through_to_the_knob_below_it` is that under
 test, including that `Some(0.0)` is guidance off rather than unset. `SdRunner::img2img`
 takes the resolved number as an argument rather than asking the profile, because the
 three passes through it resolve it differently and a function that picked one of them
 would be right for two callers out of three.
 
 A knob that *defaults to another knob* stays `Option<T>` all the way onto `Profile` and
-resolves through a method — `img2img_cfg_scale` / `Profile::img2img_cfg()`. Resolving it
+resolves through a method — `refine_cfg_scale` / `Profile::refine_cfg()`. Resolving it
 to a number at load, or pinning it in `Engine::run` when the request omits it, both
 compile and both quietly sever the link: raising `cfg_scale` would leave the escalations
 at whatever the base CFG used to be. For the same reason `build_models_json` emits `null`
@@ -1309,7 +1352,7 @@ The retained profile is the **starting point** for an escalation, though, not a 
 `/refine` and `/hires` take an `EscalateRequest` (`src/pipeline.rs`) and fold it on top
 before the pass runs. Only the knobs that describe a pass which *hasn't happened yet* —
 `refine_steps`, `refine_strength`, `refine_cfg_scale`, `hires_steps`,
-`hires_strength`, `hires_cfg_scale`, `img2img_cfg_scale`, and **`template`**. `steps`, `cfg_scale`, `sampler` and the base
+`hires_strength`, `hires_cfg_scale`, and **`template`**. `steps`, `cfg_scale`, `sampler` and the base
 size are settings of a txt2img that already ran, so there is nothing a new value could
 do to the image in hand; they stay retained, and the next *generate* picks them up. Get
 that boundary wrong in either direction and the Advanced panel starts lying: honour a
@@ -1323,10 +1366,11 @@ name needs the registry — and it must run **before** `apply`, since the swap r
 the whole profile and would otherwise discard the boxes folded onto it.
 
 The swap is **wholesale**, and that is the decision, not an oversight. The named
-model brings its own `refine_*`, `hires_*`, `img2img_cfg_scale`, `hires_max_side`,
+model brings its own `refine_*`, `hires_*`, `hires_max_side`,
 `weight_type`, `extra_args` and slider start points, and the request's explicit knobs
-land on top — which is consistent, because `syncAdvanced()` already refills those
-boxes from whatever model is selected. A field-wise merge is the `Defaults`/`Template`
+land on top — which is consistent, because `fillPass` in `image.js` refills a pass's
+boxes from the model picked for it (or the generating one, with none picked). Before it
+did, the boxes held the generating model's numbers and sent them to run on the other. A field-wise merge is the `Defaults`/`Template`
 trap from the top of this file wearing a hat: every knob would have to become an
 `Option` so "unset" could be told from "set to the default". The replaced profile is
 what the new `Pending` retains, so `can_refine`, `can_hires` and where the sliders
@@ -1358,7 +1402,7 @@ recording two intentions rather than naming one pass.
 `an_escalation_may_name_a_different_checkpoint` pins the escalation half, and
 `escalateModels()` in `image.js` is the page's.
 
-`EscalateRequest.img2img_cfg_scale` is `Option<Option<f32>>` for the reason the
+`EscalateRequest.refine_cfg_scale` and `hires_cfg_scale` are `Option<Option<f32>>` for the reason the
 "defaults to another knob" paragraph above gives: absent = keep, `null` = unset it so
 the pass follows `cfg_scale` again, a
 number = pin. Serde collapses `null` into `None`, so the DTO needs

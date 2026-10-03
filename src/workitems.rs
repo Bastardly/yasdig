@@ -78,7 +78,7 @@ pub enum Shelf {
 /// Everything needed to put an image back on screen with the controls that made
 /// it. `profile` is the clone `Engine::run` retained — per-request overrides
 /// already applied — so reopening an item reproduces its settings exactly,
-/// including an `img2img_cfg_scale` that was left unset and therefore follows
+/// including a `refine_cfg_scale` that was left unset and therefore follows
 /// `cfg_scale` rather than being pinned to the number it happened to resolve to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkItem {

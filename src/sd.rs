@@ -90,9 +90,9 @@ impl<'a> SdRunner<'a> {
     /// needs proportionally more steps to resolve, so `strength` can raise it.
     ///
     /// `cfg` is the guidance this pass runs at, and it is the caller's rather
-    /// than `p.img2img_cfg()` because the three passes through here resolve it
-    /// differently — [`crate::config::Profile::refine_cfg`],
-    /// `hires_cfg` and `img2img_cfg`. The base render's CFG over-guides at
+    /// than read off the profile because the three passes through here resolve it
+    /// differently — [`crate::config::Profile::refine_cfg`], `hires_cfg`, and
+    /// plain `cfg_scale` for a pass over a *Start from* image. The base render's CFG over-guides at
     /// output resolution whichever pass it is: a low-strength pass has little
     /// freedom to begin with, and pushing it hard against the prompt spends that
     /// freedom on high-frequency artifacts — the same crunch the step floor
@@ -408,7 +408,7 @@ impl<'a> SdRunner<'a> {
     /// Flags common to both image modes.
     ///
     /// `cfg_scale` is passed in rather than read off the profile, because the two
-    /// modes want different ones — see [`Profile::img2img_cfg`]. Passing the
+    /// modes want different ones — see [`Profile::refine_cfg`]. Passing the
     /// value keeps this function from having to know which mode it's serving.
     fn base_cmd(
         &self,

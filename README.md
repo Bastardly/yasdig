@@ -23,11 +23,11 @@ Both escalations read the *unfiltered* image and write a new one; the grade, cla
 and RCAS run once on the way out. So no filter compounds, and no pass ever diffuses
 over pixels an earlier pass already sharpened or graded.
 
-**Start from** is the second way in: drop, paste or pick a picture above the prompt
+**Image to image** is the second way in: drop, paste or pick a picture in its fold
 and Generate runs one diffusion pass over it, after which it climbs the same ladder.
 And because a checkpoint describes the pass *about to* run rather than the one that
 already did, each rung can name its own — draft on a Turbo model, finish on a
-detailed one. See [Start from](#start-from).
+detailed one. See [Image to image](#image-to-image).
 
 Models are identified by **what is inside the file**, not by name or folder: SD 1.x,
 SD 2.x and SDXL checkpoints, and **Z-Image**, which arrives as three files (the
@@ -86,7 +86,7 @@ Node installed.
 Each stage is skipped when it would be a no-op — EASU at scale 1.0, the grade with all
 eight knobs at 0, contrast at clarity 0.0 — so `rustimage fsr in.png out.png 1.0 0.5`
 is an exact sharpen-only pass, and `rustimage fsr in.png out.png 1.0 0.0 0.0` is a
-byte-exact copy. That is also what **Output upscale** in the Advanced panel means by
+byte-exact copy. That is also what **Output upscale** in the *After each generation* fold means by
 `1`: not a small enlarge, but no EASU pass at all, which is how you see the pixels the
 checkpoint actually drew.
 
@@ -272,18 +272,17 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `prompt` / `negative` | what the prompt boxes contain when the page loads. Not per-model — a checkpoint has a house step count, none has an opinion about what you usually want to draw |
 | `width` / `height` | base generation size, default `768` each (small = fast) |
 | `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `30`, `6.0`, `euler` (Turbo → few steps, cfg 1) |
-| `img2img_cfg_scale` *(opt)* | CFG for a pass over a [*Start from*](#start-from) image, and what the two below fall back to; unset (the default) follows `cfg_scale`. `0` is legal and means guidance off |
-| `upscale_factor` | the enlarge every base render goes through, default `2.0` (768 → 1536) — not a diffusion pass. Also a box in the Advanced panel, where `1` means no enlarge at all |
+| `upscale_factor` | the enlarge every base render goes through, default `2.0` (768 → 1536) — not a diffusion pass. Also a box in the Image tab's *After each generation* fold, where `1` means no enlarge at all |
 | `upscaler` *(opt)* | what does that enlarge: unset (the default) is FSR's EASU; a file name under the upscaler dir, extension included, is an ESRGAN model. See [Upscalers](#upscalers) |
-| `hires_scale` | where the hi-res pass's enlarge factor starts, default `2.0`. The select above a finished image and the one in the Hi-res pass group are the same setting |
+| `hires_scale` | where the hi-res pass's enlarge factor starts, default `2.0`, 1 to 4. The select above a finished image and the *Hi-res scale* box in the Hi-res pass fold are the same setting |
 | `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the viewer's slider starts. The only display filter here besides `clarity`: the eight colour knobs are not per-model and always start neutral |
 | `clarity` | local contrast, -1..1, default `0.0` = off — positive adds mid-frequency depth, negative softens; likewise the slider's starting value |
 | `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size (0 steps = disabled) |
-| `refine_cfg_scale` *(opt)* | CFG for the refine pass alone; unset falls through to `img2img_cfg_scale` and then to `cfg_scale` |
-| `source_steps` / `source_strength` | the one pass over a [*Start from*](#start-from) image. Defaults `12` and `0.55` — far higher than the two escalations, because this one is asked to make a picture *out of* one rather than to finish one it made |
+| `refine_cfg_scale` *(opt)* | CFG for the refine pass alone; unset follows `cfg_scale` |
+| `source_strength` | the one pass over an [*Image to image*](#image-to-image) source. Default `0.55` — far higher than the two escalations, because this one is asked to make a picture *out of* one rather than to finish one it made. The pass runs `steps` at `cfg_scale`, like the txt2img would |
 | `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, after an enlarge (0 steps = disabled) |
 | `hires_cfg_scale` *(opt)* | the same, for the hi-res pass. Two knobs rather than one because the two passes work on different pixels at different sizes |
-| `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job. Does not limit refine. Also where *Start from*'s working size starts |
+| `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job. Does not limit refine. Also where *Image to image*'s working size starts |
 | `hires_flash_attn` | `--diffusion-fa` for the img2img passes when they run large (default true; worth 6× at 2048²) |
 | `weight_type` *(opt)* | on-the-fly quantization, e.g. `q8_0`, via sd-cli `--type` |
 | `extra_args` *(opt)* | arbitrary flags passed verbatim to sd-cli |
@@ -391,7 +390,7 @@ flow_shift = 3.0
 | `steps`, `cfg_scale`, `sampler` | defaults `20`, `6.0`, `euler` |
 | `flow_shift` *(opt)* | timestep shift. Unset lets sd.cpp choose, but every documented Wan run passes `3.0` |
 | `high_noise_steps` *(opt)* | steps for the high-noise expert. Unset hands sd.cpp `-1`, which splits the schedule itself at `moe_boundary` |
-| `high_noise_cfg_scale` *(opt)* | unset follows `cfg_scale`, the same live link `img2img_cfg_scale` has |
+| `high_noise_cfg_scale` *(opt)* | unset follows `cfg_scale`, the same live link `refine_cfg_scale` has |
 | `moe_boundary` *(opt)* | handover timestep, default `0.875`. **Only honoured while `high_noise_steps` is unset** — sd.cpp's own flag help says so |
 | `vace_strength` *(opt)* | VACE conditioning strength, for the frames-in/frames-out family |
 | `negative_prompt` | defaults to Wan's own published negative prompt, so you never retype 400 characters of Chinese |
@@ -503,10 +502,8 @@ begin with, and pushing it hard against the prompt spends that freedom on
 high-frequency artifacts — the same crunch under-stepping produces, arriving from the
 other direction. If a pass looks harsh, try ~2–3 there before reaching for more steps.
 
-Leave a box blank and it falls through to `img2img_cfg_scale`, and then to the CFG box
-above — so a setup that already pinned the old shared **Refine/hi-res CFG** keeps running
-both passes at exactly that number, and one that pinned nothing still follows the base
-CFG. The placeholder always shows what an empty box currently resolves to.
+Leave a box blank and it follows the CFG scale box — or, when a model is picked for the
+pass, that model's own CFG, since the pass then runs on its settings. The placeholder always shows what an empty box currently resolves to.
 
 **Each pass picks its own checkpoint too.** *Hi-res model* and *Refine model* are
 separate selects, both defaulting to *— same as generated —*: draft on a fast turbo
@@ -538,7 +535,7 @@ sampler and size are in a section named *SD 1.x, SD 2.x and SDXL*, because that 
 all they reach — other families start from their own (see
 [Model families](#model-families)).
 Press **Save settings** and it is written and takes effect immediately — the
-model list and the Advanced panel refill themselves, with no restart and no
+model list and the Image tab's boxes refill themselves, with no restart and no
 reload.
 
 *Prompt variables* is the one section that is not a set of defaults, and it sits
@@ -578,7 +575,7 @@ A file can't say whether it is an SDXL or an SDXL-Turbo, or a Z-Image turbo or i
 base model — same tensors, different training — so the difference is yours to say,
 once per model:
 
-- On the Image tab, set the Advanced boxes the way that model wants them and press
+- On the Image tab, set the boxes the way that model wants them and press
   **Save as defaults for this model**. It opens that way from then on, and is tagged
   *tuned* in the select.
 - Or on the Settings tab, the **Per model** card: pick a model, and each box shows
@@ -756,10 +753,10 @@ refines to keep every step.
 
 Everything else in `work/` is scratch and is still cleared at startup.
 
-### Start from
+### Image to image
 
-The Image tab can start from a picture instead of from noise. **Start from** sits
-above the prompt: **Choose…** picks one of your outputs (everything in
+The Image tab can start from a picture instead of from noise. The **Image to image**
+fold holds the slot: **Choose…** picks one of your outputs (everything in
 `work/output/` — what you have saved, and what you have uploaded), **Upload…** takes
 a file, and dropping or pasting an image onto the tab does the same. An upload lands
 in `work/output/` beside your saves, so it is in the picker next time, in the Outputs
@@ -769,9 +766,13 @@ Anything the browser can open works — JPEG, WebP, AVIF — because the page
 re-encodes it to PNG in a canvas before uploading. Nothing in the binary decodes
 anything but PNG, and that stays true.
 
-With a picture picked, the panel changes to match: base size, base steps and Output
-upscale hide, because they describe a render from noise, and three boxes appear under
-the picture, plus an **img2img CFG** beside CFG scale.
+With a picture picked, the fold opens and the panel changes to match: base size and
+Output upscale hide, because they describe a render from noise, and two boxes appear
+under the picture. The pass runs the Generation fold's **Steps** and **CFG scale** —
+all of the steps, with Strength deciding how far up the schedule they start — so a
+model's own numbers apply with no second set to keep in step. The fold's summary says
+*from …* whenever a picture is picked, so a folded slot never quietly turns Generate
+into a pass over a picture.
 
 **Strength** is the knob that matters. It decides whether this is a retouch or a
 re-render: 0.3 barely moves the picture, the default 0.55 keeps the composition,
@@ -786,7 +787,7 @@ Everything else is the Image tab as usual: the same prompt, model, LoRAs and
 escalation settings, and the same run panel — *Generate 8* over one picture is eight
 seeds of the same transform, a good way to pick the best of several. The result joins
 the ordinary ladder (Refine, Hi-res, the viewer, Save), and is archived as a work item
-with its source, so reopening it puts the picture back in *Start from*. Reopening one
+with its source, so reopening it puts the picture back in the slot. Reopening one
 made from noise clears the slot.
 
 ### LoRAs
@@ -834,7 +835,7 @@ nothing on this side is looking at it.
 ### Upscalers
 
 Every render is enlarged on its way to the output size, and the **Upscaler** select
-beside *Output upscale* in the Advanced panel picks what does it. **FSR (EASU)** is the
+beside *Output upscale* in the *After each generation* fold picks what does it. **FSR (EASU)** is the
 default: milliseconds, no file, and it only redistributes the pixels the checkpoint
 drew. A **model** draws new fine texture instead — hair, fabric, skin — at the cost of
 seconds. Drop one in `models/upscalers/` (subfolders work) and it appears in the select
@@ -905,15 +906,17 @@ so the sliders and Save keep working; it just has nothing to go back to.
 There is no Refine and no Hi-res here, on purpose. A saved image already has its grade
 and its sharpening in the pixels, and everything else in this program is built so that
 nothing ever diffuses over filtered pixels. If you want to take a saved image further,
-pick it in the Image tab's **Start from** — that starts a real pass from it, at a
+pick it in the Image tab's **Image to image** fold — that starts a real pass from it, at a
 strength you choose. Grading it further is exactly what this tab is for; re-rendering it is a
 different question, asked in a different place.
 
 ### Escalating with a different model
 
-**Hi-res model** and **Refine model**, in the Advanced panel of both tabs, run
+**Hi-res model** and **Refine model**, at the head of the Hi-res and Refine folds, run
 that one pass on a checkpoint other than the one the image was made with. Leave
-either on *same as generated* and that pass doesn't change.
+either on *same as generated* and that pass doesn't change. Picking one fills its
+fold's steps, strength and CFG from that model's own settings, since the pass runs
+on them; the boxes can then be changed as usual.
 
 Two pickers rather than one because the two passes are not the same job: hi-res
 is inventing detail at a size nothing has drawn yet, refine is tightening what is
@@ -932,9 +935,9 @@ reopening a work item brings back what you meant to finish it with along with
 everything else.
 
 The swap is **wholesale**: the chosen model brings its own refine and hi-res
-steps, strengths, img2img CFG, hi-res budget and slider starting points, and the
+steps, strengths, CFG, hi-res budget and slider starting points, and the
 boxes in the panel are then applied on top — which is what you'd expect, since
-those boxes already refill themselves from whichever model is selected. The two
+picking a model for a pass refills that pass's boxes from it. The two
 model choices themselves survive it, being no checkpoint's to state. It also
 means the buttons re-derive from the new model, so picking one with
 `hires_steps = 0` removes the Hi-res button for that image, and one with a
@@ -959,19 +962,19 @@ queue, so it keeps moving during a render rather than arriving once the render i
 
 A pinned seed **advances by one per image**, so a batch of eight isn't eight copies of
 the same picture; the first image is exactly the seed you pinned. `-1` keeps drawing a
-fresh seed per image, as always. The line under the panel states what the button will do
-before you press it, seed range included.
+fresh seed per image, as always.
 
-**After each image** adds three optional steps, all off by default, run in this order:
+The **After each generation** fold adds three optional steps, all off by default, run in
+this order:
 
-- **Hi-res pass** — at the factor in the panel's **Hi-res scale**, which is the same
-  value as the select above the image.
+- **Hi-res pass** — at the factor in the Hi-res fold's **Hi-res scale** (1 to 4, so
+  2.5 is fine), which is the same value as the select above the image.
 - **Refine** — after the hi-res pass, for the reason the buttons are in that order.
 - **Save to output** — writes the finished image to `work/output/`, so a run can fill a
   folder without a click per image.
 
 They apply to a run of one just as much as to a batch, which is how you queue a single
-generate-and-refine and walk away. Both passes read the same Advanced panel the buttons
+generate-and-refine and walk away. Both passes read the same boxes the buttons
 do, so a run uses whatever the boxes say when it starts.
 
 Any failure stops the run and reports it beside the controls — whatever killed image 3
@@ -1203,13 +1206,13 @@ needs a Vulkan device and nothing else.
   item's sidecar records —, `auto` — what the scan picks with nothing chosen, `null` on
   a checkpoint, meaning its own — and `options`, every file that fits the slot as
   `{name, path}`, already filtered for the family), `base_width` / `base_height`, `out_width` / `out_height`, and the profile's
-  `steps`, `cfg_scale`, `img2img_cfg_scale`, `sampler`, `upscale_factor`, `upscaler`, `refine_steps`,
-  `refine_strength`, `hires_steps`, `hires_strength`, `source_steps`,
+  `steps`, `cfg_scale`, `sampler`, `upscale_factor`, `upscaler`, `refine_steps`,
+  `refine_strength`, `refine_cfg_scale`, `hires_steps`, `hires_strength`, `hires_cfg_scale`,
   `source_strength`, `hires_max_side`, `sharpness`, `clarity` — which is
   what lets the UI pre-fill its controls when you pick a model. `hires_max_side` is
-  published because *Start from*'s working-size control starts there, and a
+  published because *Image to image*'s working-size control starts there, and a
   second answer to "how large can this card afford to diffuse" computed in JavaScript
-  would be a second answer free to disagree. `img2img_cfg_scale` is
+  would be a second answer free to disagree. The two pass CFGs are
   `null` when the profile doesn't set one; that is deliberately distinguishable from the
   same number as `cfg_scale`, because unset *follows* the base CFG rather than matching
   it once.
@@ -1233,7 +1236,7 @@ needs a Vulkan device and nothing else.
   Every generation setting may also be overridden per-request; each is optional, and
   omitting one uses the model's profile value:
   ```json
-  { "steps": 20, "cfg_scale": 5.0, "img2img_cfg_scale": 2.5, "sampler": "euler",
+  { "steps": 20, "cfg_scale": 5.0, "sampler": "euler",
     "width": 768, "height": 768, "upscale_factor": 2.0, "upscaler": "4x-UltraSharp.pth",
     "refine_steps": 2, "refine_strength": 0.3, "hires_steps": 8, "hires_strength": 0.3,
     "sharpness": 0.35, "clarity": 0.0,
@@ -1257,8 +1260,8 @@ needs a Vulkan device and nothing else.
   The overrides are applied to the profile *before* it is retained with the image, so a
   later `/refine` or `/hires` starts from the settings that generated it — the four
   escalation knobs can then be moved per pass, see below. Omitting
-  `img2img_cfg_scale` leaves it *unset* rather than pinning it, so the escalations keep
-  following whatever `cfg_scale` this request used. `sharpness` and
+  `refine_cfg_scale` or `hires_cfg_scale` leaves it *unset* rather than pinning it, so
+  that pass keeps following whatever `cfg_scale` this request used. `sharpness` and
   `clarity` are the exception, because they aren't generation settings: they set the
   image's starting filters, `/adjust` moves them from there, and every later pass resets
   them. The web UI leaves both out for that reason. The eight colour knobs aren't here
@@ -1303,10 +1306,10 @@ needs a Vulkan device and nothing else.
 - `POST /img2img` — one img2img pass over an image already in `work/output/`.
   `prompt`, `template` and `source` are required; the rest are the same per-request
   overrides `/generate` takes, minus `width`/`height` (sd.cpp derives the size from
-  the init image), plus:
+  the init image) — `steps` and `cfg_scale` are this pass's own — plus:
   ```json
   { "prompt": "…", "template": "sdxl-turbo", "source": "1758104523000-0-import",
-    "source_steps": 12, "source_strength": 0.55, "max_side": 2048 }
+    "source_strength": 0.55, "max_side": 2048 }
   ```
   `max_side` is a ceiling — a source already inside it is used untouched, and a
   larger one is scaled down (Lanczos3) first; omitted, it is the model's
@@ -1329,20 +1332,20 @@ needs a Vulkan device and nothing else.
   image at several refine strengths:
   ```json
   { "model": "sd_xl_base_1.0", "refine_steps": 4, "refine_strength": 0.35,
-    "hires_steps": 8, "hires_strength": 0.3, "img2img_cfg_scale": 2.5 }
+    "hires_steps": 8, "hires_strength": 0.3, "refine_cfg_scale": 2.5 }
   ```
   `model` runs the pass on a *different* checkpoint — a registry name from
   `/models`, or absent/empty for the one the image was made with. It belongs here
   for the same reason the others do: it describes a pass that hasn't happened yet.
   The swap is wholesale, so the named model's refine/hi-res steps, strengths,
-  img2img CFG, `hires_max_side`, `weight_type` and `extra_args` all come with it,
+  CFGs, `hires_max_side`, `weight_type` and `extra_args` all come with it,
   and the explicit fields in this body are then applied on top. The profile the
   pass actually ran with is what is retained, so `can_refine`, `can_hires` and the
   filter starting points in the reply describe the model that ran.
 
   Each is optional and an omitted one keeps the retained value, so a bare
-  `{ "image_id": 3 }` behaves exactly as it always has. `img2img_cfg_scale` is the one
-  field where sending `null` differs from leaving it out: `null` *unsets* it, so the
+  `{ "image_id": 3 }` behaves exactly as it always has. The two pass CFGs are
+  the fields where sending `null` differs from leaving it out: `null` *unsets* it, so the
   pass goes back to following `cfg_scale`. The base settings — `steps`, `cfg_scale`,
   `sampler`, `width`, `height` — are deliberately not accepted here: they describe a
   txt2img that has already run, and nothing they could say would change the image in
@@ -1364,7 +1367,7 @@ needs a Vulkan device and nothing else.
   image-to-image generation was diffused from, `null` for a txt2img), and a
   `profile` object holding the full resolved
   settings the image was generated with — per-request overrides already applied, and
-  `img2img_cfg_scale` still `null` if it was left unset. That is what lets the UI
+  the pass CFGs still `null` if they were left unset. That is what lets the UI
   restore an item's controls without a second request.
 - `GET /workitems/{id}/thumb.png` — the thumbnail. An id is digits and `-` only;
   anything else is `404`.
@@ -1559,7 +1562,7 @@ the GPU worker is gone.
 - **An edit tab.** Two different things share the name: *instruction* editing
   (Flux Kontext, Qwen-Image-Edit, Flux 2 — a reference image and "make the sky red",
   sd.cpp's `-r`) and *masked inpainting* (`--mask`). Both are more slots on the
-  *Start from* factory: a mask painter and a list of reference images.
+  source-slot factory (`source-slot.js`): a mask painter and a list of reference images.
 - **LTX-2 on the Video tab**, as a `VideoFamily` (`--llm` Gemma, `--audio-vae`,
   `--embeddings-connectors`). The classifier already names the file.
 - Keep the model resident via the sd.cpp C API (FFI) instead of per-request subprocess,

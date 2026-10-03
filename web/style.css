@@ -95,7 +95,7 @@
                             size, because they are the same strip of pictures
                             doing the same job on two tabs */
   --thumb-h-pick: 140px; /* the first-frame picker */
-  --thumb-h-tiny: 56px;  /* the one chosen image, beside its button */
+  --thumb-h-chosen: 120px; /* the one chosen image, above its buttons */
   --bar-name: 60px;
   --bar-val: 72px;
 }
@@ -187,7 +187,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 /* The one button per panel that starts the work. It sits at the *head* of its
    controls column — see `.gohead` — so the top margin is what parts it from the
    Stop under it rather than from the controls above it. */
-.btn-block { display: flex; width: 100%; margin-top: var(--sp-4); padding: var(--sp-3); font-size: var(--fs-body); }
+.btn-block { display: flex; width: 100%; margin: 0; padding: var(--sp-3); font-size: var(--fs-body); }
 /* Last, and deliberately: :disabled and :hover are the same specificity, so
    source order is what decides which a greyed-out button under the pointer
    gets. */
@@ -243,7 +243,6 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
    used to be above), and a hairline under the block so it reads as the panel's
    head rather than as the first of the settings. */
 .gohead { border-bottom: var(--line); padding-bottom: var(--sp-3); margin-bottom: var(--sp-1); }
-.gohead > .btn-block:first-child { margin-top: 0; }
 /* Edits in a form that are not on disk yet. Amber rather than red: nothing is
    wrong, there is just something left to do — and it is the same colour as the
    button that finishes it.
@@ -317,17 +316,33 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    margin exists to part it from the field above it, which here there isn't. */
 #setvarbox > .grouphead:first-child { margin-top: 0; }
 
-/* What pressing Generate will actually do — how many images, and what happens
-   to each one — as opposed to what any single image is made of. Hence the rule
-   above it: these are settings of a *run*. */
-.run { border-bottom: var(--line); margin-bottom: var(--sp-4); padding-bottom: var(--sp-1); }
 .grouphead { display: block; font-size: var(--fs-sm); color: var(--text); font-weight: bold; margin: var(--sp-3) 0 0; }
-/* Refine and hi-res are two passes with their own checkpoint, steps, strength
-   and CFG, so every one of those words is in the panel twice — the rule is what
-   says which half you are reading. `.run` above is the same argument. Only
-   *between* them: these two are the foot of the panel, and a border under the
-   last would read as an edge the column doesn't have. */
-.pass + .pass { border-top: var(--line); margin-top: var(--sp-3); padding-top: var(--sp-2); }
+/* The Image tab's folds. Each is a section of the panel with a line under
+   it, the way `.run` above has one; the summary is the section's heading and
+   carries a dim line saying what is inside, so a folded one still reads. */
+.fold { border-bottom: var(--line); padding: var(--sp-2) 0; }
+.fold > summary { cursor: pointer; font-size: var(--fs-sm); font-weight: bold; color: var(--text); padding: var(--sp-1) 0; }
+/* One line, cut with an ellipsis: the summary is a glance, and three lines of
+   file names under a heading read as content rather than as its label. The
+   whole line is in the span's `title`, so nothing is out of reach. */
+.fold > summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A label in a summary is there for its (i), not to be a block over a field. */
+.fold > summary label { display: inline; margin: 0; font-size: inherit; color: inherit; }
+.foldstate { font-weight: normal; color: var(--text-dim); }
+/* A summary that marks a departure from the plain path — a source picked,
+   steps after each image, another model finishing a pass — is not left in the
+   dim the others are. */
+.foldstate.on { color: var(--accent-hi); }
+.fold[open] > summary { margin-bottom: var(--sp-1); }
+/* Width, swap, height on one line: the two boxes share what is left after the
+   button, rather than each asking for the 160 px a `.row` cell wants and
+   wrapping the button onto a line of its own. */
+.sizerow > div { flex: 1 1 0; min-width: 0; }
+.sizerow > .swapcol { flex: 0 0 auto; align-self: flex-end; }
+/* A box with a small button glued to its right edge — the seed's -1. */
+.withbtn { display: flex; gap: var(--sp-2); }
+.withbtn > input { flex: 1 1 0; min-width: 0; }
+.withbtn > .btn { flex: 0 0 auto; }
 .checks { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-top: var(--sp-2); }
 /* `label` is a block with margins by default here — that's for the form column,
    not for a pair of radios, or a row of checkboxes, sitting on one line. */
@@ -498,9 +513,13 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 }
 .drop.over { border-color: var(--state); background: var(--ink-600); }
 .drop .picked { margin-top: 0; }
-/* The chosen first frame, beside the button that chose it. */
-.picked { display: flex; align-items: center; gap: 10px; margin-top: var(--sp-2); }
-.picked img { height: var(--thumb-h-tiny); width: auto; border-radius: 6px; border: var(--line); }
+/* The chosen image on top, its name and the buttons that chose it under it:
+   big enough to recognise, which beside the buttons it wasn't. Both source
+   slots, since they are one markup. */
+.picked { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); margin-top: var(--sp-2); }
+.picked .sub, .picked .btnrow { margin-top: 0; }
+.picked .sub:empty { display: none; }
+.picked img { height: var(--thumb-h-chosen); max-width: 100%; object-fit: contain; width: auto; border-radius: 6px; border: var(--line); }
 
 /* ============================ Hints ============================ */
 

@@ -37,124 +37,51 @@
       <button id="stop" class="btn btn-danger btn-block" hidden>Stop</button>
       <p class="sub" id="prog"></p>
       <div id="err" class="err"></div>
+
+
+
+    <!-- The seed, outside the folds: it is the one setting reached for between
+         renders — pinned from a result to keep a picture, reset to vary it — so
+         it stays beside the button. A pinned seed walks across a batch. -->
+    <div>
+      <label for="seed">Seed</label>
+      <!-- The button puts -1 back: a pinned seed is one click from the
+           result's seed, so getting back to random should be one too. -->
+      <div class="withbtn">
+        <input id="seed" type="number" value="-1">
+        <button type="button" id="seedrandom" class="btn" title="Back to -1: a new seed every image"
+                aria-label="Reset seed to -1">Reset</button>
+      </div>
     </div>
+       </div>
 
-
-    <!-- What the button does, as opposed to what the image is made of. Every
-         image in a run is a separate request from this page, which is what
-         lets results appear as they land and Stop wait only for the one in
-         flight — see the comment over startRun().
-
-         It stays at the foot of the panel although the button it describes is
-         now at the head, and that is the deliberate half of the split: a count
-         and three checkboxes are set once a session, the button is pressed
-         once an image. Only what is clicked every time is worth the top of
-         the column. -->
-    <div class="run">
-      <div class="row">
+    <!-- The panel is folds from here down, so the column is as long as what
+         you are working on and no longer. Every summary carries a line saying
+         what is inside (`syncSummaries` in image.js), so folding one hides
+         nothing — the rule the Models fold set. Open or folded is remembered
+         per browser, per fold. -->
+    <details id="fold-gen" class="fold" open>
+      <summary>Generation <span class="foldstate" id="sum-gen"></span></summary>
+      <!-- A base size describes a txt2img: a source brings its own size. -->
+      <div class="row sizerow" data-when="text">
         <div>
-          <label for="count">Images</label>
-          <input id="count" type="number" min="1" step="1" value="1">
+          <label for="w">Base width</label>
+          <input id="w" type="number" step="64" min="64">
+        </div>
+        <div class="swapcol">
+          <button type="button" id="swapwh" class="btn" title="Swap width and height"
+                  aria-label="Swap width and height">⇄</button>
+        </div>
+        <div>
+          <label for="h">Base height</label>
+          <input id="h" type="number" step="64" min="64">
         </div>
       </div>
-      <div class="checks">
-        <label><input type="checkbox" id="autorun"> Keep going until stopped</label>
-      </div>
-      <!-- Off by default, all three: a run that quietly refined and saved
-           everything would be spending GPU time nobody asked for. -->
-      <label class="grouphead" data-help="aftereach">After each image</label>
-      <div class="checks">
-        <label><input type="checkbox" id="opthires"> Hi-res pass</label>
-        <label><input type="checkbox" id="optrefine"> Refine</label>
-        <label><input type="checkbox" id="optsave"> Save to output</label>
-      </div>
-      <p class="sub" id="runnote"></p>
-    </div>
-
-    <!-- Where the picture begins: noise, or an image. The one thing that used to be
-         a whole second tab — a source image plus the same prompt, model, LoRAs and
-         ladder — so it is a slot here rather than a tab of its own. Nothing picked
-         is text to image; picking something runs /img2img instead of /generate,
-         and the controls that only mean something for one of the two follow
-         (`data-when`, see syncMode in image.js). Wired by source-slot.js, which
-         the Video tab's first frame shares. -->
-    <label class="grouphead" data-help="source">Start from</label>
-    <div id="srcdrop" class="drop">
-      <div class="picked">
-        <img id="srcthumb" alt="" hidden>
-        <div>
-          <span id="srcname" class="sub"></span>
-          <div class="btnrow">
-            <button type="button" id="srcpick" class="btn">Choose…</button>
-            <button type="button" id="srcupload" class="btn">Upload…</button>
-            <button type="button" id="srcclear" class="btn" hidden>Clear</button>
-          </div>
-        </div>
-      </div>
-      <!-- Anything the browser can decode. It is re-encoded to PNG in a canvas
-           before upload, which is why this build needs no JPEG decoder. -->
-      <input type="file" id="srcfile" accept="image/*" hidden>
-    </div>
-    <div class="row" data-when="source" hidden>
-      <div>
-        <label for="srcstrength">Strength</label>
-        <!-- The one knob that decides whether this is a re-render or a retouch.
-             Higher redraws more and keeps less of the source. -->
-        <input id="srcstrength" type="number" step="0.05" min="0.05" max="0.95">
-      </div>
-      <div>
-        <label for="srcsteps">Steps</label>
-        <input id="srcsteps" type="number" min="1" max="100">
-      </div>
-      <div>
-        <label for="srcmaxside">Working size</label>
-        <!-- A ceiling, not a target: a source already smaller than this is left
-             alone. It exists because a phone photo is 4000 px on its long side
-             and diffusing that takes the card out of memory. -->
-        <select id="srcmaxside"></select>
-      </div>
-    </div>
-    <p class="sub" id="srcnote" data-when="source" hidden></p>
-
-    <label for="prompt">Prompt</label>
-    <prompt-box>
-      <!-- Empty, and filled from user/settings.toml once `/settings` answers.
-           The default used to be written here twice, which meant the one place
-           you could change it was this file. -->
-      <textarea id="prompt" placeholder="a lovely fluffy crab, cinematic lighting, sharp, in focus"></textarea>
-    </prompt-box>
-
-    <label for="negative">Negative prompt (optional)</label>
-    <prompt-box>
-      <input id="negative" placeholder="blurry, low quality">
-    </prompt-box>
-    <p class="sub" id="negnote" hidden>No negative prompt at CFG 1 — the model ignores it. Raise CFG to use one.</p>
-
-    <!-- What does the work: the diffusion model, then one select per separate
-         file its family runs with (a VAE, a text encoder), drawn by
-         `syncParts` from the slots `/models` serves. A fold because once they
-         are picked they rarely change, and the summary says what is in it.
-         Refine and Hi-res pick their own model with their own pass. -->
-    <details id="modelsbox" class="spaced" open>
-      <summary id="modelsum">Models</summary>
-      <label for="template">Diffusion model</label>
-      <select id="template"></select>
-      <div id="partrows"></div>
-    </details>
-
-    <!-- Adapters that patch the checkpoint's weights, picked from
-         models/loras/. Not in the Advanced rows below: unlike Steps or CFG,
-         which model *is* and how it is tuned, this changes the subject of the
-         picture, so it belongs next to the prompt. -->
-    <label data-help="loras">LoRAs</label>
-    <div id="loras"></div>
-    <button type="button" id="loraadd" class="btn spaced">+ Add LoRA</button>
-
+      <!-- Both kinds of pass run these: from noise, and over a source image.
+           There used to be a second Steps and an img2img CFG beside the source,
+           which meant two numbers to keep in step for one model. -->
       <div class="row">
-        <!-- The txt2img's own steps. With a source the pass takes Steps from
-             beside the source instead, so this one hides rather than sitting
-             there looking like it does something. -->
-        <div data-when="text">
+        <div>
           <label for="steps">Steps</label>
           <input id="steps" type="number" min="1" max="100">
         </div>
@@ -162,16 +89,16 @@
           <label for="cfg">CFG scale</label>
           <input id="cfg" type="number" step="0.1" min="0">
         </div>
-        <!-- The CFG of the pass over a source. Blank = follow CFG scale, and
-             the placeholder says what that is. -->
-        <div data-when="source" hidden>
-          <label for="icfg">img2img CFG</label>
-          <input id="icfg" type="number" step="0.1" min="0">
-        </div>
       </div>
-      <!-- Sampler and seed: the two that say how the noise is walked, not how
-           much. -->
+      <!-- How many, and how the noise is walked. Every image in a run is a
+           separate request from this page, which is what lets results appear
+           as they land and Stop wait only for the one in flight — see the
+           comment over startRun(). -->
       <div class="row">
+        <div>
+          <label for="count">Images</label>
+          <input id="count" type="number" min="1" step="1" value="1">
+        </div>
         <div>
           <label for="sampler">Sampler</label>
           <select id="sampler">
@@ -182,26 +109,17 @@
             <option value="lcm">lcm</option>
           </select>
         </div>
-        <div>
-          <label for="seed">Seed</label>
-          <input id="seed" type="number" value="-1">
-        </div>
       </div>
-      <!-- Size and output upscale describe a txt2img: a source brings its own
-           size, and the pass over it has no enlarge stage. -->
-      <div class="row" data-when="text">
-        <div>
-          <label for="w">Base width</label>
-          <input id="w" type="number" step="64" min="64">
-        </div>
-        <div>
-          <label for="h">Base height</label>
-          <input id="h" type="number" step="64" min="64">
-        </div>
+      <div class="checks">
+        <label><input type="checkbox" id="autorun"> Keep going until stopped</label>
       </div>
-      <!-- Its own row because it is the one box that decides what "the image"
-           even is: the size above is what gets diffused, this is what comes out.
-           1 is not a special case, it is FSR skipped — see the tooltip. -->
+    </details>
+
+    <details id="fold-after" class="fold" open>
+      <summary><label data-help="aftereach">After each generation</label> <span class="foldstate" id="sum-after"></span></summary>
+      <!-- The output upscale describes a txt2img: the pass over a source has no
+           enlarge stage. 1 is not a special case, it is FSR skipped — see the
+           tooltip. -->
       <div class="row" data-when="text">
         <div>
           <label for="upscale">Output upscale</label>
@@ -216,83 +134,165 @@
         </div>
       </div>
       <!-- The arithmetic, live and under the row it is about — the same shape as
-           #runnote and #srcnote. The model select quotes this sum for the model's
+           #srcnote. The model select quotes this sum for the model's
            own factor; this box is what moves the right-hand half of it. -->
       <p class="sub" id="outsize" data-when="text"></p>
+      <!-- Off by default, all three: a run that quietly refined and saved
+           everything would be spending GPU time nobody asked for. The fold's
+           own heading is theirs too, which is why its (i) explains them. -->
+      <div class="checks">
+        <label><input type="checkbox" id="opthires"> Hi-res pass</label>
+        <label><input type="checkbox" id="optrefine"> Refine</label>
+        <label><input type="checkbox" id="optsave"> Save to output</label>
+      </div>
+    </details>
 
-      <!-- Two passes, two of everything, and the rule between them is what says
-           which half you are reading. Hi-res first: it is the pass that enlarges
-           and refine is the finishing touch you run at whatever size you end up
-           at, which is also the order the buttons above a result are in. -->
-      <div class="pass">
-        <label class="grouphead">Hi-res pass</label>
-        <div class="row">
-          <div>
-            <label for="hsteps">Hi-res steps</label>
-            <input id="hsteps" type="number" min="0" max="100">
-          </div>
-          <div>
-            <label for="hstrength">Hi-res strength</label>
-            <input id="hstrength" type="number" step="0.05" min="0.05" max="0.95">
-          </div>
-          <div>
-            <!-- Blank = follow the knob below it. The placeholder shows what that
-                 resolves to, so an empty field still says what it does. -->
-            <label for="hcfg">Hi-res CFG</label>
-            <input id="hcfg" type="number" step="0.1" min="0">
-          </div>
-          <div>
-            <!-- The same factor as the select above a finished image, which is
-                 rebuilt by every render and so isn't there before the first one
-                 — this is where it is set when there is nothing on screen yet.
-                 In this group because it is what the hi-res pass enlarges by,
-                 and it was in the run panel only because that panel happened to
-                 be the part of the column that always exists. -->
-            <label for="hiresscale">Hi-res scale</label>
-            <select id="hiresscale"></select>
+    <details id="fold-prompt" class="fold" open>
+      <summary>Prompts <span class="foldstate" id="sum-prompt"></span></summary>
+      <label for="prompt">Prompt</label>
+      <prompt-box>
+        <!-- Empty, and filled from user/settings.toml once `/settings` answers.
+             The default used to be written here twice, which meant the one place
+             you could change it was this file. -->
+        <textarea id="prompt" placeholder="a lovely fluffy crab, cinematic lighting, sharp, in focus"></textarea>
+      </prompt-box>
+
+      <label for="negative">Negative prompt (optional)</label>
+      <prompt-box>
+        <input id="negative" placeholder="blurry, low quality">
+      </prompt-box>
+      <p class="sub" id="negnote" hidden>No negative prompt at CFG 1 — the model ignores it. Raise CFG to use one.</p>
+    </details>
+
+    <!-- Where the picture begins: noise, or an image. The one thing that used to
+         be a whole second tab — a source image plus the same prompt, model, LoRAs
+         and ladder — so it is a slot here rather than a tab of its own. Nothing
+         picked is text to image; picking something runs /img2img instead of
+         /generate, and the controls that only mean something for one of the two
+         follow (`data-when`, see syncMode in image.js). Wired by source-slot.js,
+         which the Video tab's first frame shares.
+
+         Folded by default, and opened by a source arriving: the summary says
+         "from …" whenever one is picked, so a folded slot can't quietly turn
+         Generate into a pass over a picture. -->
+    <details id="fold-src" class="fold">
+      <summary><label data-help="source">Image to image</label> <span class="foldstate" id="sum-src"></span></summary>
+      <div id="srcdrop" class="drop">
+        <div class="picked">
+          <img id="srcthumb" alt="" hidden>
+          <span id="srcname" class="sub"></span>
+          <div class="btnrow">
+            <button type="button" id="srcpick" class="btn">Choose…</button>
+            <button type="button" id="srcupload" class="btn">Upload…</button>
+            <button type="button" id="srcclear" class="btn" hidden>Clear</button>
           </div>
         </div>
-        <div class="row">
-          <div>
-            <!-- A checkpoint is a setting of the pass about to run, not of the
-                 one that made the image — so unlike Steps or CFG above, changing
-                 this after a generate does something. Draft on a Turbo model,
-                 finish on a detailed one. -->
-            <label for="hiresmodel">Hi-res model</label>
-            <select id="hiresmodel"></select>
-          </div>
+        <!-- Anything the browser can decode. It is re-encoded to PNG in a canvas
+             before upload, which is why this build needs no JPEG decoder. -->
+        <input type="file" id="srcfile" accept="image/*" hidden>
+      </div>
+      <div class="row" data-when="source" hidden>
+        <div>
+          <label for="srcstrength">Strength</label>
+          <!-- The one knob that decides whether this is a re-render or a retouch.
+               Higher redraws more and keeps less of the source. -->
+          <input id="srcstrength" type="number" step="0.05" min="0.05" max="0.95">
+        </div>
+        <div>
+          <label for="srcmaxside">Working size</label>
+          <!-- A ceiling, not a target: a source already smaller than this is left
+               alone. It exists because a phone photo is 4000 px on its long side
+               and diffusing that takes the card out of memory. -->
+          <select id="srcmaxside"></select>
         </div>
       </div>
-      <div class="pass">
-        <label class="grouphead">Refine pass</label>
-        <div class="row">
-          <div>
-            <label for="rsteps">Refine steps</label>
-            <input id="rsteps" type="number" min="0" max="100">
-          </div>
-          <div>
-            <label for="rstrength">Refine strength</label>
-            <input id="rstrength" type="number" step="0.05" min="0.05" max="0.95">
-          </div>
-          <div>
-            <label for="rcfg">Refine CFG</label>
-            <input id="rcfg" type="number" step="0.1" min="0">
-          </div>
+      <p class="sub" id="srcnote" data-when="source" hidden></p>
+    </details>
+
+    <!-- What does the work: the diffusion model, then one select per separate
+         file its family runs with (a VAE, a text encoder), drawn by
+         `syncParts` from the slots `/models` serves, then the LoRAs that patch
+         it — adapters from models/loras/, which only fit the family they were
+         trained on, so they sit with the model they are for. Once picked they
+         rarely change, and the summary says what is in it. Refine and Hi-res
+         pick their own model with their own pass. -->
+    <details id="modelsbox" class="fold" open>
+      <summary>Models <span class="foldstate" id="modelsum"></span></summary>
+      <label for="template">Diffusion model</label>
+      <select id="template"></select>
+      <div id="partrows"></div>
+      <label data-help="loras">LoRAs</label>
+      <div id="loras"></div>
+      <button type="button" id="loraadd" class="btn spaced">+ Add LoRA</button>
+    </details>
+
+    <!-- Two passes, two of everything. Hi-res first: it is the pass that
+         enlarges and refine is the finishing touch you run at whatever size you
+         end up at, which is also the order the buttons above a result are in.
+
+         The model comes first in each, because the boxes under it follow it:
+         picking a checkpoint refills its steps, strength and CFG from that
+         model's own settings (`fillPass` in image.js). A checkpoint is a setting
+         of the pass about to run, not of the one that made the image — so unlike
+         Steps or CFG above, changing it after a generate does something. Draft
+         on a Turbo model, finish on a detailed one. -->
+    <details id="fold-hires" class="fold">
+      <summary>Hi-res pass <span class="foldstate" id="sum-hires"></span></summary>
+      <label for="hiresmodel">Hi-res model</label>
+      <select id="hiresmodel"></select>
+      <div class="row">
+        <div>
+          <label for="hsteps">Hi-res steps</label>
+          <input id="hsteps" type="number" min="0" max="100">
         </div>
-        <div class="row">
-          <div>
-            <label for="refmodel">Refine model</label>
-            <select id="refmodel"></select>
-          </div>
+        <div>
+          <!-- Blank = follow the generating CFG. The placeholder shows what that
+               resolves to, so an empty field still says what it does. -->
+          <label for="hcfg">Hi-res CFG</label>
+          <input id="hcfg" type="number" step="0.1" min="0">
         </div>
       </div>
+      <div class="row">
+        <div>
+          <label for="hstrength">Hi-res strength</label>
+          <input id="hstrength" type="number" step="0.05" min="0.05" max="0.95">
+        </div>
+        <div>
+          <!-- The same factor as the select above a finished image, which is
+               rebuilt by every render and so isn't there before the first one
+               — this is where it is set when there is nothing on screen yet.
+               A number rather than a select, so 2.5 is sayable; the selects
+               that mirror it grow an option for whatever this holds. -->
+          <label for="hiresscale">Hi-res scale</label>
+          <input id="hiresscale" type="number" step="0.1" min="1" max="4">
+        </div>
+      </div>
+    </details>
 
-      <!-- Writes the boxes above to user/model-settings.toml for the selected
-           model, keeping only what differs from where it would start anyway.
-           Neutral, not amber: it spends no GPU time and is not what this panel
-           is for. -->
-      <button type="button" id="savemodel" class="btn btn-block spaced">Save as defaults for this model</button>
-      <p class="sub" id="savemodelmsg"></p>
+    <details id="fold-refine" class="fold">
+      <summary>Refine pass <span class="foldstate" id="sum-refine"></span></summary>
+      <label for="refmodel">Refine model</label>
+      <select id="refmodel"></select>
+      <div class="row">
+        <div>
+          <label for="rsteps">Refine steps</label>
+          <input id="rsteps" type="number" min="0" max="100">
+        </div>
+        <div>
+          <label for="rcfg">Refine CFG</label>
+          <input id="rcfg" type="number" step="0.1" min="0">
+        </div>
+      </div>
+      <label for="rstrength">Refine strength</label>
+      <input id="rstrength" type="number" step="0.05" min="0.05" max="0.95">
+    </details>
+
+    <!-- Writes the boxes above to user/model-settings.toml for the selected
+         model, keeping only what differs from where it would start anyway.
+         Neutral, not amber: it spends no GPU time and is not what this panel
+         is for. -->
+    <button type="button" id="savemodel" class="btn btn-block spaced">Save as defaults for this model</button>
+    <p class="sub" id="savemodelmsg"></p>
 
   </div>
 
@@ -410,18 +410,16 @@
          keeping are the ones worth animating. Clearing it makes the same model
          run as plain text-to-video. -->
     <label class="grouphead" data-help="vfirstframe">First frame</label>
-    <!-- The Image tab's "Start from" slot, from the same factory
+    <!-- The Image tab's source slot (Image to image), from the same factory
          (source-slot.js), so an uploaded photo can be animated too. -->
     <div id="vsrcdrop" class="drop">
       <div class="picked">
         <img id="vsrcthumb" alt="" hidden>
-        <div>
-          <span id="vsrcname" class="sub"></span>
-          <div class="btnrow">
-            <button type="button" id="vsrcpick" class="btn">Choose…</button>
-            <button type="button" id="vsrcupload" class="btn">Upload…</button>
-            <button type="button" id="vsrcclear" class="btn" hidden>Clear</button>
-          </div>
+        <span id="vsrcname" class="sub"></span>
+        <div class="btnrow">
+          <button type="button" id="vsrcpick" class="btn">Choose…</button>
+          <button type="button" id="vsrcupload" class="btn">Upload…</button>
+          <button type="button" id="vsrcclear" class="btn" hidden>Clear</button>
         </div>
       </div>
       <input type="file" id="vsrcfile" accept="image/*" hidden>

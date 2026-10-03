@@ -1136,8 +1136,6 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         #[serde(default)]
         cfg_scale: Option<f32>,
         #[serde(default)]
-        img2img_cfg_scale: Option<f32>,
-        #[serde(default)]
         sampler: Option<String>,
         #[serde(default)]
         width: Option<u32>,
@@ -1196,7 +1194,6 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         seed: dto.seed.unwrap_or(-1),
         steps: dto.steps,
         cfg_scale: dto.cfg_scale,
-        img2img_cfg_scale: dto.img2img_cfg_scale,
         sampler: dto.sampler,
         width: dto.width,
         height: dto.height,
@@ -1245,15 +1242,11 @@ fn handle_img2img(
         #[serde(default)]
         max_side: Option<u32>,
         #[serde(default)]
-        source_steps: Option<u32>,
-        #[serde(default)]
         source_strength: Option<f32>,
         #[serde(default)]
         steps: Option<u32>,
         #[serde(default)]
         cfg_scale: Option<f32>,
-        #[serde(default)]
-        img2img_cfg_scale: Option<f32>,
         #[serde(default)]
         sampler: Option<String>,
         #[serde(default)]
@@ -1312,11 +1305,9 @@ fn handle_img2img(
         negative: dto.negative,
         seed: dto.seed.unwrap_or(-1),
         max_side: dto.max_side,
-        source_steps: dto.source_steps,
         source_strength: dto.source_strength,
         steps: dto.steps,
         cfg_scale: dto.cfg_scale,
-        img2img_cfg_scale: dto.img2img_cfg_scale,
         sampler: dto.sampler,
         refine_steps: dto.refine_steps,
         refine_strength: dto.refine_strength,
@@ -1409,14 +1400,11 @@ struct EscalateDto {
     hires_steps: Option<u32>,
     #[serde(default)]
     hires_strength: Option<f32>,
-    /// `deserialize_with` rather than a plain `Option<Option<f32>>`: serde folds
-    /// an explicit `null` into `None` otherwise, and this is the one field where
-    /// "sent empty" and "not sent" have to mean different things — empty unsets
-    /// it so the pass follows `cfg_scale` again.
-    #[serde(default, deserialize_with = "double_option")]
-    img2img_cfg_scale: Option<Option<f32>>,
-    /// The pass's own CFG, doubly optional for the same reason. Only the one
-    /// belonging to this route does anything; the page sends one panel.
+    /// The pass's own CFG. `deserialize_with` rather than a plain
+    /// `Option<Option<f32>>`: serde folds an explicit `null` into `None`
+    /// otherwise, and here "sent empty" and "not sent" have to mean different
+    /// things — empty unsets it so the pass follows `cfg_scale` again. Only the
+    /// one belonging to this route does anything; the page sends one panel.
     #[serde(default, deserialize_with = "double_option")]
     refine_cfg_scale: Option<Option<f32>>,
     #[serde(default, deserialize_with = "double_option")]
@@ -1431,7 +1419,6 @@ impl EscalateDto {
             refine_strength: self.refine_strength,
             hires_steps: self.hires_steps,
             hires_strength: self.hires_strength,
-            img2img_cfg_scale: self.img2img_cfg_scale,
             refine_cfg_scale: self.refine_cfg_scale,
             hires_cfg_scale: self.hires_cfg_scale,
         }
@@ -1687,11 +1674,11 @@ fn build_models_json(cfg: &Config) -> String {
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
                  \"family\":{},\"family_label\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
-                 \"steps\":{},\"cfg_scale\":{},\"img2img_cfg_scale\":{},\"sampler\":{},\
+                 \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\
                  \"upscale_factor\":{},\"upscaler\":{},\
                  \"refine_steps\":{},\"refine_strength\":{},\"refine_cfg_scale\":{},\
                  \"hires_steps\":{},\"hires_strength\":{},\"hires_cfg_scale\":{},\
-                 \"source_steps\":{},\"source_strength\":{},\"hires_max_side\":{},\
+                 \"source_strength\":{},\"hires_max_side\":{},\
                  \"sharpness\":{},\"clarity\":{}}}",
                 json_str(&p.name),
                 json_str(&p.description),
@@ -1708,10 +1695,6 @@ fn build_models_json(cfg: &Config) -> String {
                 out_h,
                 p.steps,
                 p.cfg_scale,
-                // `null`, not the resolved number: the UI has to tell "unset" from
-                // "set to exactly the base CFG", because they look the same and
-                // behave differently the moment the CFG box moves.
-                opt_num(p.img2img_cfg_scale),
                 json_str(&p.sampler),
                 // The panel's Output upscale box starts here. It is the one
                 // generation knob that changes what "the image" is, so the page
@@ -1725,17 +1708,15 @@ fn build_models_json(cfg: &Config) -> String {
                     .unwrap_or_else(|| "null".to_string()),
                 p.refine_steps,
                 p.refine_strength,
-                // `null`, not the resolved number, for the reason
-                // `img2img_cfg_scale` above is: "unset" and "set to the same
-                // number" look identical and diverge the moment the box it
-                // follows moves.
+                // `null`, not the resolved number: the UI has to tell "unset"
+                // from "set to exactly the base CFG", because they look the same
+                // and diverge the moment the CFG box moves.
                 opt_num(p.refine_cfg_scale),
                 p.hires_steps,
                 p.hires_strength,
                 opt_num(p.hires_cfg_scale),
-                p.source_steps,
                 p.source_strength,
-                // Published because the Image-to-image tab's working-size control
+                // Published because *Start from*'s working-size control
                 // starts there: it is the same budget question — how large can
                 // this card afford to diffuse — asked of the same hardware, so
                 // the page has no business inventing a second answer to it.
@@ -2434,7 +2415,7 @@ mod tests {
 
     /// An escalation body has three states per knob, and two of them look the
     /// same in JSON unless the deserializer is told otherwise: absent means
-    /// "keep what the image was made with", `null` on `img2img_cfg_scale` means
+    /// "keep what the image was made with", `null` on a pass's CFG means
     /// "unset it so the pass follows cfg_scale again", and a number pins it.
     /// Serde folds `null` into `None` by default, which would make an emptied
     /// box unclearable — and `/hires` routes the whole struct through
@@ -2444,33 +2425,33 @@ mod tests {
     fn escalate_body_tells_an_empty_cfg_box_from_a_missing_one() {
         let bare: EscalateDto = serde_json::from_str(r#"{"image_id":7}"#).unwrap();
         assert_eq!(bare.image_id, 7);
-        assert_eq!(bare.overrides().img2img_cfg_scale, None);
+        assert_eq!(bare.overrides().refine_cfg_scale, None);
         assert_eq!(bare.overrides().refine_strength, None);
 
         let cleared: EscalateDto =
-            serde_json::from_str(r#"{"image_id":7,"img2img_cfg_scale":null}"#).unwrap();
-        assert_eq!(cleared.overrides().img2img_cfg_scale, Some(None));
+            serde_json::from_str(r#"{"image_id":7,"refine_cfg_scale":null}"#).unwrap();
+        assert_eq!(cleared.overrides().refine_cfg_scale, Some(None));
 
         let set: EscalateDto = serde_json::from_str(
-            r#"{"image_id":7,"img2img_cfg_scale":8.5,"refine_steps":12,"refine_strength":0.35}"#,
+            r#"{"image_id":7,"refine_cfg_scale":8.5,"refine_steps":12,"refine_strength":0.35}"#,
         )
         .unwrap();
         let o = set.overrides();
-        assert_eq!(o.img2img_cfg_scale, Some(Some(8.5)));
+        assert_eq!(o.refine_cfg_scale, Some(Some(8.5)));
         assert_eq!(o.refine_steps, Some(12));
         assert_eq!(o.refine_strength, Some(0.35));
 
         // The same three states, seen through the flatten.
         let h: HiresDto = serde_json::from_str(
-            r#"{"image_id":7,"upscale":2.0,"img2img_cfg_scale":null,"hires_strength":0.5}"#,
+            r#"{"image_id":7,"upscale":2.0,"hires_cfg_scale":null,"hires_strength":0.5}"#,
         )
         .unwrap();
         assert_eq!(h.upscale, Some(2.0));
-        assert_eq!(h.esc.overrides().img2img_cfg_scale, Some(None));
+        assert_eq!(h.esc.overrides().hires_cfg_scale, Some(None));
         assert_eq!(h.esc.overrides().hires_strength, Some(0.5));
 
         let h2: HiresDto = serde_json::from_str(r#"{"image_id":7,"upscale":2.0}"#).unwrap();
-        assert_eq!(h2.esc.overrides().img2img_cfg_scale, None);
+        assert_eq!(h2.esc.overrides().hires_cfg_scale, None);
 
         // The two per-pass boxes are the same three states again, and each is a
         // separate `deserialize_with` that a copy-paste can leave pointing at the

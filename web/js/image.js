@@ -16,6 +16,7 @@ export let models = [];
 // adapters are as much a part of that as the steps and the seed.
 export const imageLoras = loraPicker({
   rows: 'loras', add: 'loraadd', family: () => currentModel()?.family ?? null,
+  onChange: () => syncSummaries(),
 });
 
 // "Start from". Nothing picked is text to image; a picked image makes Generate
@@ -27,16 +28,23 @@ export const imageLoras = loraPicker({
 export const imageSource = sourceSlot({
   prefix: 'src',
   tab: 'tab-image',
-  none: 'Nothing — text to image. Choose, upload, drop or paste an image to start from it.',
+  // Nothing to say with nothing picked: the fold's summary already says "off".
+  none: '',
   err: 'err',
-  onChange: () => syncMode(),
+  // A source arriving opens its fold — a pick, upload, drop, paste or reopened
+  // work item. The summary would say "from …" anyway; opening it also puts
+  // Strength in front of the person who just asked for a pass over a picture.
+  onChange: (stem) => {
+    if (stem) $('fold-src').open = true;
+    syncMode();
+  },
 });
 
 // Which controls mean something depends on whether there is a source, so the
-// ones that don't are hidden rather than left looking live: base size, the
-// txt2img's own steps and the output upscale describe a render from noise, and
-// the strength, steps, working size and img2img CFG describe a pass over a
-// picture. `data-when` in the markup says which is which.
+// ones that don't are hidden rather than left looking live: base size and the
+// output upscale describe a render from noise, and the strength and working
+// size describe a pass over a picture. Steps and CFG serve both. `data-when` in
+// the markup says which is which.
 function syncMode() {
   const source = !!imageSource.get();
   for (const el of $('tab-image').querySelectorAll('[data-when]')) {
@@ -44,7 +52,7 @@ function syncMode() {
   }
   syncCfgPlaceholders();
   syncSrcNote();
-  syncRunNote();
+  syncSummaries();
 }
 
 // Both this and the pass itself round to 64, and they must agree: this is what
@@ -126,27 +134,112 @@ function partsPicked() {
 function syncModelsSummary() {
   const m = currentModel();
   if (!m) {
-    $('modelsum').textContent = 'Models';
+    $('modelsum').textContent = '';
     return;
   }
   const bits = partSelects().map((s) => {
     const label = m.parts.find((p) => p.slot === s.dataset.slot)?.label ?? s.dataset.slot;
     return `${label}: ${s.value ? baseName(s.value) : 'built in'}`;
   });
-  $('modelsum').textContent = ['Models — ' + m.name, ...bits].join(' · ');
+  // The LoRAs live in this fold too, so the line names them — by file name
+  // without its extension, the way the rows' own labels read.
+  const loras = imageLoras.get();
+  if (loras.length) {
+    bits.push(`LoRA: ${loras.map((l) => baseName(l.name).replace(/\.[^.]+$/, '')).join(', ')}`);
+  }
+  $('modelsum').textContent = '— ' + [m.name, ...bits].join(' · ');
+  // The line is cut to fit (`.fold > summary`), so the whole of it is the title.
+  $('modelsum').title = [m.name, ...bits].join('\n');
+}
+
+// ---- The folds ---------------------------------------------------------------
+//
+// Every section of the panel is a <details>, and every summary carries a line
+// saying what is inside — the rule the Models fold set, applied to all of them,
+// so folding a section never hides what Generate is about to do. One function
+// writes every line, calling out for the Models one, which `syncParts` also
+// redraws. It runs from a delegated `input`/`change` on the column, so a new
+// box in a fold needs no listener of its own.
+
+// The checkpoint a pass will run: the one picked for it, or the one generating.
+const passModel = (sel) => models.find((m) => m.name === $(sel).value) ?? currentModel();
+
+function syncSummaries() {
+  // Before `/models` answers every box is empty, and "× · steps" says nothing.
+  if (!currentModel()) return;
+  // The line is cut to fit (`.fold > summary`), so the whole of it is the title.
+  const say = (id, text) => {
+    $(id).textContent = text ? '— ' + text : '';
+    $(id).title = text ? text.split(' · ').join('\n') : '';
+  };
+  const source = imageSource.get();
+
+  // The count rides here now that Images and the loop are in this fold, and in
+  // the accent when it is more than one: a folded fold must not hide that the
+  // next press starts a batch, or a loop that runs until Stop.
+  const n = runTotal();
+  say('sum-gen', [
+    n === Infinity ? 'until stopped' : n > 1 ? `${n} images` : null,
+    source ? null : `${$('w').value}×${$('h').value}`,
+    `${$('steps').value} steps`, `CFG ${$('cfg').value}`, $('sampler').value,
+  ].filter(Boolean).join(' · '));
+  $('sum-gen').classList.toggle('on', n > 1);
+
+  const after = [
+    $('opthires').checked ? 'hi-res' : null,
+    $('optrefine').checked ? 'refine' : null,
+    $('optsave').checked ? 'save' : null,
+  ].filter(Boolean);
+  const sel = $('upscaler');
+  const by = sel.value ? sel.options[sel.selectedIndex]?.textContent ?? sel.value : 'FSR';
+  say('sum-after', [
+    source ? null : `${$('upscale').value}× via ${by}`,
+    after.length ? after.join(' → ') : 'nothing after',
+  ].filter(Boolean).join(' · '));
+  // Each of these spends a pass of GPU time on every image of a run.
+  $('sum-after').classList.toggle('on', after.length > 0);
+
+  say('sum-src', source ? `from ${source} · strength ${$('srcstrength').value}` : 'off');
+  // In the accent rather than dim, like every summary below that marks a
+  // departure from the plain path: a picked source changes what Generate
+  // *does*, and read as just more grey small print.
+  $('sum-src').classList.toggle('on', !!source);
+
+  // Whole: the summary line cuts it to the width there is, and the title holds
+  // all of it.
+  say('sum-prompt', $('prompt').value.trim());
+
+  syncModelsSummary();
+
+  for (const [id, steps, sel] of [['sum-hires', 'hsteps', 'hiresmodel'],
+                                  ['sum-refine', 'rsteps', 'refmodel']]) {
+    const n = parseInt($(steps).value, 10) || 0;
+    say(id, n > 0
+      ? `${n} steps${id === 'sum-hires' ? ` · ${S.upFactor}×` : ''} · ${$(sel).value || 'same model'}`
+      : 'off');
+    // Another checkpoint finishing the picture is easy to forget once folded.
+    // Compared with the diffusion model rather than tested for being set: a
+    // pick that names the generating model is the same model, and stays dim.
+    $(id).classList.toggle('on', !!$(sel).value && $(sel).value !== $('template').value);
+  }
 }
 
 // Open or folded is a per-viewer convenience, so it lives in this browser;
-// storage can be missing or throw, and the fold then simply starts open.
-const FOLD_KEY = 'rustimage.modelsOpen';
-function initModelsFold() {
-  try {
-    const v = localStorage.getItem(FOLD_KEY);
-    if (v !== null) $('modelsbox').open = v === '1';
-  } catch { /* starts open */ }
-  $('modelsbox').addEventListener('toggle', () => {
-    try { localStorage.setItem(FOLD_KEY, $('modelsbox').open ? '1' : '0'); } catch { /* ignore */ }
-  });
+// storage can be missing or throw, and a fold then simply starts as the markup
+// has it — Generation, After each, Prompts and Models open, the source
+// slot and the two passes folded, since those are reached for rather than used
+// every time.
+function initFolds() {
+  for (const d of $('tab-image').querySelectorAll('details.fold[id]')) {
+    const key = `rustimage.fold.${d.id}`;
+    try {
+      const v = localStorage.getItem(key);
+      if (v !== null) d.open = v === '1';
+    } catch { /* as the markup has it */ }
+    d.addEventListener('toggle', () => {
+      try { localStorage.setItem(key, d.open ? '1' : '0'); } catch { /* ignore */ }
+    });
+  }
 }
 
 // Pre-fill the Advanced controls from the selected model's defaults.
@@ -163,22 +256,13 @@ function syncAdvanced() {
   $('h').value = m.base_height;
   $('upscale').value = m.upscale_factor;
   setUpscaler(m.upscaler);
-  $('rsteps').value = m.refine_steps;
-  $('rstrength').value = m.refine_strength;
-  $('hsteps').value = m.hires_steps;
-  $('hstrength').value = m.hires_strength;
-  // Left empty when the model doesn't set one, rather than pre-filled with the
-  // number it resolves to. Pre-filling would look friendlier and would be a lie:
-  // it pins the value, so moving the box it follows would silently stop carrying
-  // over to this pass.
-  $('rcfg').value = m.refine_cfg_scale ?? '';
-  $('hcfg').value = m.hires_cfg_scale ?? '';
+  fillPass('hires');
+  fillPass('refine');
   setPost({ sharpness: m.sharpness, clarity: m.clarity });
   // The pass over a source. Filled whether or not one is picked, so picking one
-  // later finds the model's numbers already there.
-  $('srcsteps').value = m.source_steps;
+  // later finds the model's number already there. Its steps and CFG are the
+  // Steps and CFG scale boxes above.
   $('srcstrength').value = m.source_strength;
-  $('icfg').value = m.img2img_cfg_scale ?? '';
   // The working size starts at the model's hi-res budget: that is the same
   // question — how large can this card afford to diffuse — already answered
   // for this hardware, so the page doesn't invent a second answer to it. What
@@ -191,25 +275,42 @@ function syncAdvanced() {
   syncCfgPlaceholders();
   syncOutSize();
   syncSrcNote();
+  syncSummaries();
 }
 
-// What the pass over a source will actually do, in a line: the step floor
-// (`SdRunner::img2img` raises the count to `profile.steps × strength`), the CFG
-// it resolves to, and the working-size ceiling. `m.steps` rather than the Steps
-// box, because that box is the txt2img's and is hidden here — the floor is the
-// model's base step count.
+// Fill one escalation's three boxes from the checkpoint that will run it: the
+// one picked in its fold, or the generating model with nothing picked. The
+// server swaps the whole profile for the picked model's (`swap_model`) and
+// folds these boxes on top, so filling them from the generating model — which
+// is what this did before the pickers moved into the folds — sent that model's
+// numbers to run on another.
+//
+// The CFG is left empty when the model doesn't set one, rather than pre-filled
+// with the number it resolves to. Pre-filling would look friendlier and would
+// be a lie: it pins the value, so moving the box it follows would silently stop
+// carrying over to this pass.
+function fillPass(which) {
+  const [steps, strength, cfg, sel] = which === 'hires'
+    ? ['hsteps', 'hstrength', 'hcfg', 'hiresmodel']
+    : ['rsteps', 'rstrength', 'rcfg', 'refmodel'];
+  const m = passModel(sel);
+  if (!m) return;
+  $(steps).value = m[`${which}_steps`];
+  $(strength).value = m[`${which}_strength`];
+  $(cfg).value = m[`${which}_cfg_scale`] ?? '';
+}
+
+// What the pass over a source will actually do, in a line. It runs the Steps
+// box's count — all of them, with strength deciding how far up the schedule
+// they start — at the CFG scale box, and a source bigger than the working size
+// is scaled down first.
 export function syncSrcNote() {
-  const m = currentModel();
-  if (!m || !imageSource.get()) return;
-  const n = parseFloat($('srcsteps').value) || 0;
+  if (!currentModel() || !imageSource.get()) return;
+  const n = parseInt($('steps').value, 10) || 0;
   const s = parseFloat($('srcstrength').value) || 0;
-  const eff = effectiveSteps(n, s, m.steps);
-  const base = parseFloat($('cfg').value);
-  const own = parseFloat($('icfg').value);
-  const cfg = Number.isFinite(own) ? own : base;
+  const cfg = parseFloat($('cfg').value);
   $('srcnote').textContent =
-    `Runs ${eff} step${eff === 1 ? '' : 's'} at strength ${s}`
-    + (eff > n ? ` (raised from ${n} — the floor is ${Math.ceil(m.steps * s)} at this strength)` : '')
+    `Runs ${n} step${n === 1 ? '' : 's'} at strength ${s}`
     + (Number.isFinite(cfg) ? ` · CFG ${cfg}` : '')
     + ` · a source over ${$('srcmaxside').value} px on its long side is scaled down first`;
 }
@@ -235,39 +336,26 @@ export function syncOutSize() {
     : `${w} × ${h} → ${Math.round(w * f)} × ${Math.round(h * f)} via ${by}`;
 }
 
-// Mirror the step floor the server applies (see SdRunner::img2img): a pass that
-// starts further up the noise schedule needs proportionally more steps, so the
-// count in the box is a minimum. Showing the real number keeps the extra time a
-// higher strength costs from being a surprise.
-export function effectiveSteps(steps, strength, base) {
-  if (!(steps > 0)) return 0;
-  return Math.max(steps, Math.ceil(base * strength));
-}
-
-// A blank per-pass CFG box means "whatever the box below it says", which is a
+// A blank per-pass CFG box means "whatever the CFG it follows says", which is a
 // thing the field has to admit to rather than decide quietly — so the number it
-// resolves to goes in the placeholder, live, because the base CFG it ends up
-// following is one field away and editable.
+// resolves to goes in the placeholder, live, because the CFG it ends up
+// following is often one field away and editable.
 //
-// The chain is the server's (`Profile::refine_cfg`): this pass's box, then
-// `img2img_cfg_scale`, then the base CFG. That middle rung is the img2img CFG
-// box — but only a generate *from a source* sends it, so from noise it is the
-// model's value that the image retains, and that is what is read.
+// The chain is the server's (`Profile::refine_cfg`): this pass's box, then the
+// profile's `cfg_scale`. Which profile that is depends on the pass's model: the
+// generating one retains the CFG scale box, while a model picked for the pass
+// replaces the profile wholesale and brings its own.
 export function syncCfgPlaceholders() {
-  const num = (id) => {
-    const v = parseFloat($(id).value);
-    return Number.isFinite(v) ? v : null;
-  };
-  const source = !!imageSource.get();
-  const base = num('cfg');
-  const mid = source ? num('icfg') : currentModel()?.img2img_cfg_scale;
-  for (const id of ['rcfg', 'hcfg']) $(id).placeholder = mid ?? base ?? '';
-  $('icfg').placeholder = base ?? '';
+  const v = parseFloat($('cfg').value);
+  const base = Number.isFinite(v) ? v : null;
+  for (const [id, sel] of [['rcfg', 'refmodel'], ['hcfg', 'hiresmodel']]) {
+    const own = $(sel).value && passModel(sel);
+    $(id).placeholder = (own ? own.cfg_scale : base) ?? '';
+  }
 
   // Here because this already runs everywhere a CFG box changes — typed, a
-  // model switch, a reopened work item, a source picked or cleared. A pass
-  // over a source runs at its own CFG, which falls through to the base box.
-  syncNegative('negative', 'negnote', source ? num('icfg') ?? base : base);
+  // model switch, a reopened work item, a source picked or cleared.
+  syncNegative('negative', 'negnote', base);
 }
 
 // A negative prompt does nothing at CFG exactly 1. sd.cpp only evaluates the
@@ -356,17 +444,23 @@ const MODEL_KNOBS = [
   ['upscale_factor', 'upscale'], ['upscaler', 'upscaler', 'choice'],
   ['hires_steps', 'hsteps'], ['hires_strength', 'hstrength'], ['hires_cfg_scale', 'hcfg', 'blank'],
   ['refine_steps', 'rsteps'], ['refine_strength', 'rstrength'], ['refine_cfg_scale', 'rcfg', 'blank'],
-  // The pass over a source. Sent with no source picked too: the boxes still
-  // hold the model's numbers, so they drop out as unchanged.
-  ['source_steps', 'srcsteps'], ['source_strength', 'srcstrength'],
-  ['img2img_cfg_scale', 'icfg', 'blank'],
+  // The pass over a source. Sent with no source picked too: the box still
+  // holds the model's number, so it drops out as unchanged.
+  ['source_strength', 'srcstrength'],
 ];
 
 async function saveModelDefaults() {
   const m = currentModel();
   if (!m) return;
+  // A pass with another checkpoint picked for it has that checkpoint's numbers
+  // in its boxes (`fillPass`), and they are not this model's to keep — saving
+  // them would quietly retune it with another model's escalation.
+  const foreign = (key) =>
+    (key.startsWith('hires_') && passModel('hiresmodel') !== m)
+    || (key.startsWith('refine_') && passModel('refmodel') !== m);
   const values = {};
   for (const [key, id, kind] of MODEL_KNOBS) {
+    if (foreign(key)) continue;
     const raw = $(id).value.trim();
     if (kind === 'text') values[key] = raw;
     // The empty option is FSR, which is "no upscaler named" — so it clears.
@@ -474,15 +568,40 @@ export const UPSCALES = [[1, '1× (same size)'], [1.5, '1.5×'], [2, '2×'], [3,
 // clip's frames. All three are views of `upFactor`; this keeps them saying the
 // same thing, which matters because two of them are on tabs you can't see at
 // once.
-export const upOptions = () => UPSCALES.map(([v, label]) =>
-  `<option value="${v}"${v === S.upFactor ? ' selected' : ''}>${label}</option>`).join('');
+//
+// The Hi-res scale box is a number, so the factor can be one the list doesn't
+// offer — 2.5, say. The two selects then get an option for it: a select
+// silently shows its first option when nothing matches, which would display
+// 1× while the pass ran 2.5×.
+const factorLabel = (v) => UPSCALES.find(([x]) => x === v)?.[1] ?? `${v}×`;
+export const upOptions = () => {
+  const list = UPSCALES.some(([x]) => x === S.upFactor)
+    ? UPSCALES : [...UPSCALES, [S.upFactor, factorLabel(S.upFactor)]].sort((a, b) => a[0] - b[0]);
+  return list.map(([v, label]) =>
+    `<option value="${v}"${v === S.upFactor ? ' selected' : ''}>${label}</option>`).join('');
+};
 
 export function setUpFactor(v) {
   S.upFactor = v;
   for (const id of ['upfactor', 'hiresscale', 'vfactor']) {
-    if ($(id) && parseFloat($(id).value) !== v) $(id).value = v;
+    const el = $(id);
+    if (!el || parseFloat(el.value) === v) continue;
+    if (el.tagName === 'SELECT' && ![...el.options].some((o) => parseFloat(o.value) === v)) {
+      el.innerHTML = upOptions();
+    }
+    el.value = v;
   }
-  syncRunNote();
+  syncSummaries();
+}
+
+// The box's own rule, the server's (`pipeline::MAX_UPSCALE`): 1 to 4, and a
+// tenth is as fine as it is worth being. Applied on `change`, not per
+// keystroke, so typing "2.5" isn't clamped at "2." on the way.
+function takeHiresScale() {
+  const v = parseFloat($('hiresscale').value);
+  const f = Number.isFinite(v) ? Math.round(Math.min(4, Math.max(1, v)) * 10) / 10 : S.upFactor;
+  $('hiresscale').value = f;
+  setUpFactor(f);
 }
 
 // Info first, image last: on a narrow screen the metadata and the action
@@ -686,26 +805,6 @@ function syncGoLabel() {
     n === Infinity ? 'Start loop generation' : n > 1 ? `Generate ${n}` : 'Generate';
 }
 
-// State what the button will do, in a line, before it is pressed. Four controls
-// interact here, and working out what they add up to isn't the user's job.
-function syncRunNote() {
-  const n = runTotal();
-  const after = [
-    $('opthires').checked ? `hi-res ${S.upFactor}×` : null,
-    $('optrefine').checked ? 'refine' : null,
-    $('optsave').checked ? 'save to output' : null,
-  ].filter(Boolean);
-  const seed = parseInt($('seed').value, 10);
-  const walks = Number.isFinite(seed) && seed >= 0 && n > 1;
-  const source = imageSource.get();
-  $('runnote').textContent =
-    (n === Infinity ? 'Generates until you press Stop'
-      : `Generates ${n} image${n > 1 ? 's' : ''}`)
-    + (source ? ` from ${source}` : '')
-    + (after.length ? ` · after each: ${after.join(' → ')}` : '')
-    + (walks ? ` · seeds ${seed}–${n === Infinity ? '…' : seed + n - 1}` : '');
-}
-
 // One image's request, as `[route, body]`: from noise it is `/generate`, from a
 // source `/img2img`, and the two share everything that isn't about where the
 // picture starts. Plus the seed walk: a pinned seed advances by one per image,
@@ -721,6 +820,8 @@ function genPayload(index) {
     template: $('template').value,
     negative: $('negative').value || null,
     seed: Number.isFinite(seed) && seed >= 0 ? seed + index : -1,
+    // Both routes: a pass over a source runs these too.
+    steps: numOr('steps'),
     cfg_scale: numOr('cfg'),
     sampler: $('sampler').value || null,
     // The same six the escalations send, from the same place — they set where
@@ -753,15 +854,11 @@ function genPayload(index) {
       ...common,
       source,
       max_side: numOr('srcmaxside'),
-      source_steps: numOr('srcsteps'),
       source_strength: numOr('srcstrength'),
-      // The pass's own CFG; null follows `cfg_scale`, the same chain as ever.
-      img2img_cfg_scale: numOr('icfg'),
     }];
   }
   return ['/generate', {
     ...common,
-    steps: numOr('steps'),
     width: numOr('w'),
     height: numOr('h'),
     // The FSR enlarge on the way to the output size. An empty box sends nothing
@@ -872,22 +969,36 @@ async function saveOutput() {
 
 export function initImage() {
   imageLoras.init();
-  initModelsFold();
+  initFolds();
   $('go').addEventListener('click', startRun);
   $('stop').addEventListener('click', stopRun);
-  // The Advanced panel's view of the shared upscale factor. Built here rather
-  // than in the markup so there is one list of factors on the page.
-  $('hiresscale').innerHTML = upOptions();
-  $('hiresscale').addEventListener('change', (e) => setUpFactor(parseFloat(e.target.value)));
+  // The Hi-res fold's view of the shared upscale factor.
+  $('hiresscale').value = S.upFactor;
+  $('hiresscale').addEventListener('change', takeHiresScale);
+  // Portrait for landscape. Through `input` events rather than straight to the
+  // notes, so everything that listens to the two boxes hears it.
+  $('swapwh').addEventListener('click', () => {
+    [$('w').value, $('h').value] = [$('h').value, $('w').value];
+    for (const id of ['w', 'h']) $(id).dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  // Back to a random seed. Through an `input` event, the way Swap does it, so
+  // anything listening to the box hears it.
+  $('seedrandom').addEventListener('click', () => {
+    $('seed').value = -1;
+    $('seed').dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  // Every fold's summary follows its boxes, from one listener on the column.
+  for (const ev of ['input', 'change']) {
+    $('tab-image').querySelector('.col-controls').addEventListener(ev, syncSummaries);
+  }
+  // Each pass's boxes follow the checkpoint picked for it.
+  for (const [sel, which] of [['hiresmodel', 'hires'], ['refmodel', 'refine']]) {
+    $(sel).addEventListener('change', () => { fillPass(which); syncCfgPlaceholders(); });
+  }
   // 'input' covers the checkboxes too, and keeps the count responsive per keystroke
   // rather than on blur — the button's own label is the feedback.
   for (const id of ['count', 'autorun']) {
-    $(id).addEventListener('input', () => { syncGoLabel(); syncRunNote(); });
-  }
-  // The seed is in here because a pinned one walks across a batch, and the note is
-  // where that's stated.
-  for (const id of ['opthires', 'optrefine', 'optsave', 'seed']) {
-    $(id).addEventListener('input', syncRunNote);
+    $(id).addEventListener('input', syncGoLabel);
   }
   // Each model carries its own defaults, so re-fill the controls on switch.
   $('template').addEventListener('change', syncAdvanced);
@@ -895,11 +1006,11 @@ export function initImage() {
   // A note about the model that was selected is stale once another one is.
   $('template').addEventListener('change', () => { $('savemodelmsg').textContent = ''; });
   // What an empty per-pass CFG box resolves to is whatever the chain under it
-  // says, so the placeholders have to follow that field as it is typed in —
-  // and with a source, the img2img CFG is the middle of that chain.
-  for (const id of ['cfg', 'icfg']) $(id).addEventListener('input', syncCfgPlaceholders);
-  // The line under the source's boxes says what they add up to.
-  for (const id of ['srcsteps', 'srcstrength', 'srcmaxside', 'cfg', 'icfg']) {
+  // says, so the placeholders have to follow that field as it is typed in.
+  $('cfg').addEventListener('input', syncCfgPlaceholders);
+  // The line under the source's boxes says what they add up to, and two of the
+  // numbers in it are the Generation fold's.
+  for (const id of ['steps', 'srcstrength', 'srcmaxside', 'cfg']) {
     $(id).addEventListener('input', syncSrcNote);
   }
   imageSource.init();
@@ -915,8 +1026,7 @@ export function initImage() {
   onIdle(syncGoLabel);
 
   loadModels();
-  // Both are labels for controls that start with a value, so neither can wait for
-  // the first edit to say what it does.
+  // A label for controls that start with a value, so it can't wait for the
+  // first edit to say what it does.
   syncGoLabel();
-  syncRunNote();
 }

@@ -1,5 +1,5 @@
 import { $, esc, post } from './dom.js';
-import { UPSCALES, setUpFactor, loadModels, upscalersReady, upscalerOptions } from './image.js';
+import { setUpFactor, loadModels, upscalersReady, upscalerOptions } from './image.js';
 import { wireHints } from './hints.js';
 import { loadModelSettings } from './modelsettings.js';
 
@@ -78,15 +78,12 @@ export const FIELDS = [
   { key: 'hires_steps', from: 'hsteps', kind: 'int', min: 0, max: 100 },
   { key: 'hires_strength', from: 'hstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
   { key: 'hires_cfg_scale', from: 'hcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
-  { key: 'hires_scale', from: 'hiresscale', kind: 'upscale' },
+  { key: 'hires_scale', from: 'hiresscale', kind: 'num', min: 1, max: 4, step: 0.1 },
 
+  // The pass over a source runs the Steps and CFG scale above; its strength
+  // and working size are the two numbers of its own.
   SECTION('Starting from an image'),
-  { key: 'source_steps', from: 'srcsteps', kind: 'int', min: 1, max: 100 },
   { key: 'source_strength', from: 'srcstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
-  // In this section rather than the one above, because that is now all it
-  // governs: the two escalations have their own CFG each and only fall back to
-  // this one. It is also where the control it names lives.
-  { key: 'img2img_cfg_scale', from: 'icfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
   { key: 'hires_max_side', from: 'srcmaxside', kind: 'int', min: 64, step: 64 },
 
   SECTION('Advanced', { fold: true }),
@@ -158,9 +155,6 @@ function control(f) {
     case 'vars':
       return `<button type="button" class="btn varadd" data-varadd>Add variable</button>
         <div id="${id}" class="vars"></div>`;
-    case 'upscale':
-      return `<select id="${id}">${UPSCALES.map(([v, label]) =>
-        `<option value="${v}">${label}</option>`).join('')}</select>`;
     // The real control's own options, cloned rather than listed again — the
     // sampler list is declared in the markup and this is a view of it.
     case 'mirror':
@@ -242,7 +236,7 @@ function put(f, v) {
     return;
   }
   // A select silently falls back to its first option when the stored value
-  // isn't one of them — so a hand-edited `hires_scale = 2.5`, or a sampler this
+  // isn't one of them — so a sampler this
   // build doesn't list, would be displayed as something else and then *saved*
   // as it. Carry the stray value as an option of its own instead: the form then
   // shows what is really stored, and changing it is a deliberate act.
@@ -324,7 +318,7 @@ function applyPageDefaults(s) {
     }
     applied[key] = s[key] ?? '';
   }
-  // Only the select's starting point, so it is safe to reapply after a save: the
+  // Only the box's starting point, so it is safe to reapply after a save: the
   // factor the user picked for the image in hand is the same control.
   if (s.hires_scale) setUpFactor(s.hires_scale);
 }

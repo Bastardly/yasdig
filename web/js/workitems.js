@@ -207,7 +207,7 @@ function applyWorkItem(item) {
   $('rstrength').value = p.refine_strength;
   $('hsteps').value = p.hires_steps;
   $('hstrength').value = p.hires_strength;
-  // Blank stays blank, for the reason syncAdvanced gives: a pre-filled number
+  // Blank stays blank, for the reason fillPass gives: a pre-filled number
   // pins the value and quietly stops it following the box below it.
   $('rcfg').value = p.refine_cfg_scale ?? '';
   $('hcfg').value = p.hires_cfg_scale ?? '';
@@ -222,14 +222,12 @@ function applyWorkItem(item) {
   // says — but a picker that disagreed would send the wrong set on the next
   // Generate, which is the same trap the boxes above are in.
   imageLoras.set(p.loras ?? []);
-  // The pass over a source, and the source itself. Set either way: reopening an
+  // The source pass's strength, and the source itself. Set either way: reopening an
   // image made from noise clears the slot, because what made it is "nothing",
   // and leaving a source picked from before would turn the next Generate into
   // a pass over that instead. Setting the slot runs syncMode, which shows the
   // right half of the panel and refreshes the notes.
-  $('srcsteps').value = p.source_steps;
   $('srcstrength').value = p.source_strength;
-  $('icfg').value = p.img2img_cfg_scale ?? '';
   imageSource.set(item.source ?? null);
   // Not the sliders: render() sets those from what the server actually applied.
   syncCfgPlaceholders();

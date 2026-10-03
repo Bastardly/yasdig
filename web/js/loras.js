@@ -63,7 +63,9 @@ const options = (selected, family) => available.map((l) => {
 // one. Both are element ids, so an instance is one object literal per tab.
 // `family` returns the selected model's family, read at every draw, so
 // `refresh()` after a model change is all it takes to re-grey the lists.
-export function loraPicker({ rows, add, family = () => null }) {
+// `onChange` runs after every redraw — an added or removed row; an edit inside
+// a row is an ordinary `input` event that bubbles to whoever is listening.
+export function loraPicker({ rows, add, family = () => null, onChange = () => {} }) {
   // The rows, in order. Held here rather than read back out of the DOM because a
   // re-render rebuilds the elements and would lose a half-typed strength.
   let picked = [];
@@ -81,7 +83,15 @@ export function loraPicker({ rows, add, family = () => null }) {
       : 'No LoRA in models/loras/ is for this model\'s family';
   }
 
+  // Every redraw is a change to what is picked, or to whether it fits, so it
+  // reports once the rows are on screen — the Image tab's fold summary
+  // counts them.
   function render() {
+    draw();
+    onChange();
+  }
+
+  function draw() {
     const el = $(rows);
     syncAdd(family());
     if (!available.length) {
