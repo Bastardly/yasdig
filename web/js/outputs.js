@@ -19,19 +19,24 @@ import { gridMarks } from './gridmark.js';
 
 // ---- Shared: the output grid ------------------------------------------------
 
-// Everything in work/output/, newest first. `[]` on failure rather than a throw:
+// Everything in one gallery, newest first: `outputs` is work/output/,
+// `favorite-outputs` is user/favorite_outputs/ — the route's first segment, the
+// way the work-item grid's shelf is. `[]` on failure rather than a throw:
 // three callers draw a grid from this and an empty one reads correctly as
 // "nothing to pick", which is also what a fresh install has.
-export async function fetchOutputs() {
+export async function fetchOutputs(gallery = 'outputs') {
   try {
-    const list = await (await fetch('/outputs')).json();
+    const list = await (await fetch(`/${gallery}`)).json();
     return Array.isArray(list) ? list : [];
   } catch {
     return [];
   }
 }
 
-// One tile, drawn the same wherever an output is shown: this tab, and the
+// One tile, drawn the same wherever an output is shown, from either gallery.
+// The thumbnail is always the `/outputs` route: the server finds a stem in
+// whichever gallery holds it, so a favourite needs no route of its own.
+//: this tab, and the
 // picker dialog behind every "Start from" slot (`source-slot.js`). It was
 // written out three times before, which is three chances for the declared height to drift from
 // what `.wigrid` actually draws — and when it does, the strip reflows as the
@@ -57,6 +62,12 @@ export function outputGrid(el, list, { height = 200, empty = '', onPick }) {
 
 // ---- The tab ----------------------------------------------------------------
 
+// Which gallery the grid shows, as the first segment of its routes. See
+// `Gallery` in `src/workitems.rs`, and `shelf` in workitems.js, which this is
+// one directory along.
+let gallery = 'outputs';
+const onFavorites = () => gallery === 'favorite-outputs';
+
 let outputs = [];
 // Which tile is open in the viewer, and the only cursor the arrow keys move.
 // -1 when nothing has been opened yet.
@@ -68,12 +79,11 @@ let index = -1;
 let opening = false;
 let queued = null;
 
-// Marking, the two buttons and the request, shared with the work-item grid.
+// Marking, the buttons and the requests, shared with the work-item grid.
 // These are the two places on the page that remove a file, and a fix to one that
-// missed the other would be a fix that only half worked.
-// One action, because this gallery only destroys: a favourite is a *work item*
-// kept as a workflow, and an output is a finished picture with nowhere further
-// to go. See the Outputs section of CLAUDE.md for the same argument about Refine.
+// missed the other would be a fix that only half worked. The same two actions
+// too: keep (a copy into user/favorite_outputs/) and delete, which follows the
+// gallery.
 const del = gridMarks({
   grid: 'ogrid',
   mode: 'omode',
@@ -82,31 +92,68 @@ const del = gridMarks({
   err: (msg) => { $('oerr').textContent = msg; },
   onMode: () => markGrid(),
   actions: [{
+    value: 'favorite',
+    button: 'ofavorite',
+    mark: 'keep',
+    label: (n) => `Favorite ${n} selected`,
+    route: () => '/favorite-outputs/add',
+    key: 'stems',
+  }, {
     value: 'delete',
     button: 'odelete',
     mark: 'sel',
     label: (n) => `Delete ${n} selected`,
-    route: () => '/outputs/delete',
+    route: () => `/${gallery}/delete`,
     key: 'stems',
     all: {
       button: 'odeleteall',
       noun: 'saved image',
       label: (n) => `Delete all ${n}`,
+      // Not on Favorites: emptying that in one press is what it exists to
+      // prevent. The same rule as the work-item shelf.
+      when: () => !onFavorites(),
     },
   }],
 });
+
+// Flip which gallery the grid reads — `setShelf` in workitems.js, and for the
+// same reasons: the mode goes back to open (marks belong to the gallery they
+// were made on, and favouriting a favourite means nothing), and the image open
+// in the viewer stays open, since it is a copy in scratch either way.
+function setGallery(next) {
+  gallery = next;
+  $('ocurrent').classList.toggle('active', !onFavorites());
+  $('ofavorites').classList.toggle('active', onFavorites());
+  $('ofavlabel').hidden = onFavorites();
+  $('owhere').textContent = (onFavorites() ? 'user/favorite_outputs/' : 'work/output/')
+    + ' — click one to open it in the viewer, then ← / → to step';
+  const open = document.querySelector('input[name=omode][value=open]');
+  if (!open.checked) {
+    open.checked = true;
+    open.dispatchEvent(new Event('change'));
+  }
+  loadOutputs();
+}
 
 export async function loadOutputs() {
   // Which image is open, by name rather than by number: a save lands at the
   // head of a newest-first list and shifts every index below it, and a refresh
   // can drop an entry entirely. `-1` if it has gone.
   const open = outputs[index]?.stem;
-  outputs = await fetchOutputs();
+  // The gallery can be flipped mid-flight, and the loser of that race must not
+  // draw one gallery's tiles under the other's buttons.
+  const from = gallery;
+  const list = await fetchOutputs(from);
+  if (from !== gallery) return;
+  outputs = list;
   index = open ? outputs.findIndex((o) => o.stem === open) : -1;
   del.prune(outputs.map((o) => o.stem));
   outputGrid($('ogrid'), outputs, {
-    empty: '<p class="sub">Nothing in work/output/ yet — press "Save to output" '
-         + 'under an image on the Image tab, or upload one with Start from.</p>',
+    empty: onFavorites()
+      ? '<p class="sub">No favorites yet — pick "Click to favorite" on Current, '
+        + 'mark some images and keep them.</p>'
+      : '<p class="sub">Nothing in work/output/ yet — press "Save to output" '
+        + 'under an image on the Image tab, or upload one with Start from.</p>',
     onPick: pick,
   });
   markGrid();
@@ -217,6 +264,8 @@ async function saveEdit() {
 export function initOutputs() {
   del.init();
   $('orefresh').addEventListener('click', loadOutputs);
+  $('ocurrent').addEventListener('click', () => setGallery('outputs'));
+  $('ofavorites').addEventListener('click', () => setGallery('favorite-outputs'));
   $('lbsave').addEventListener('click', saveEdit);
 
   // On `document`, because a modal <dialog>'s keydown still bubbles out of it —

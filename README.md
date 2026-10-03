@@ -112,13 +112,17 @@ rustimage(.exe)
 models.toml        settings the program needs to start; edit freely
 models/            checkpoints/  diffusion_models/  vae/  text_encoders/
                    loras/  upscalers/  video/      — each with a README.txt
-user/              your settings and favourites
+user/              your settings and favourites — never cleared
 work/              generations, and work/output/ for what you save
 bin/               stable-diffusion.cpp, unpacked from the executable
 ```
 
 The console window (Windows) or terminal (Linux) shows what it is doing, and closing it
-stops rustimage. Starting it a second time just opens the browser again. To update,
+stops rustimage. So does the red **Close server** button at the end of the tab row —
+the way out when you started it from a file manager and there is no window to close.
+It asks first, stops a render in progress, frees the port, and replaces the page with
+a note saying it has stopped (browsers don't let a page close a tab it didn't open, so
+that tab is yours to close). Starting it a second time just opens the browser again. To update,
 replace the executable; the new stable-diffusion.cpp is unpacked on its next start.
 
 ## Building from source
@@ -332,6 +336,9 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `hires_flash_attn` | `--diffusion-fa` for the img2img passes when they run large (default true; worth 6× at 2048²) |
 | `weight_type` *(opt)* | on-the-fly quantization, e.g. `q8_0`, via sd-cli `--type` |
 | `extra_args` *(opt)* | arbitrary flags passed verbatim to sd-cli |
+| `clear_workitems_on_close` | when **Close server** is pressed, delete every work item on the Current shelf. Default `false`. Favorites are never touched |
+| `clear_outputs_on_close` | the same for `work/output/` — saved images and uploads. Default `false`. Favorite outputs are never touched |
+| `clear_videos_on_close` | the same for `work/videos/`, and the enlarged frames made from each clip. Default `false` |
 | `[variables]` | named word lists a prompt draws from — `animal = ["crab", "horse"]` makes `{animal}` in any prompt one of them. See [Prompt variables](#prompt-variables) |
 
 All three denoise strengths must be between **0.05 and 0.95** — a
@@ -954,11 +961,20 @@ back to the gallery.
 original. It never overwrites: an output can descend from a refine, and those aren't
 archived, so the pixels you started from exist nowhere else.
 
-The same **Click to open / Click to delete** toggle the work-item grid has is above
-this one, and behaves identically: a click marks, `Delete N selected` removes the set,
-and **Delete all N** empties `work/output/` behind a confirmation. Deleting the image
-the viewer is showing is safe — the server is holding a copy of it in its scratch dir,
-so the sliders and Save keep working; it just has nothing to go back to.
+The same **Click to open / Click to favorite / Click to delete** toggle the work-item
+grid has is above this one, and behaves identically: a click marks, `Delete N
+selected` removes the set, and **Delete all N** empties `work/output/` behind a
+confirmation. Deleting the image the viewer is showing is safe — the server is holding
+a copy of it in its scratch dir, so the sliders and Save keep working; it just has
+nothing to go back to.
+
+**Current** and **Favorites** flip the gallery, as they do for work items.
+`Favorite N selected` **copies** the marked images to `user/favorite_outputs/`, so
+`Delete all` and the clear-on-close settings can't reach them; on Favorites, *Delete
+all* is gone and deleting removes only the favourite. A favourite opens in the viewer,
+and can be picked as an *Image to image* source or a video's first frame — the picker
+behind **Choose…** has the same Current / Favorites toggle. A new save never takes
+the name of a favourite, so one name always means one picture.
 
 There is no Refine and no Hi-res here, on purpose. A saved image already has its grade
 and its sharpening in the pixels, and everything else in this program is built so that
@@ -1439,6 +1455,12 @@ needs a Vulkan device and nothing else.
   `POST /favorites/delete` — the four routes above, over `user/favorite/` instead.
   Same shapes, same ids, same guard. There is no separate "unfavorite": deleting
   from that shelf is one, and it touches nothing under `work/`.
+- `POST /favorite-outputs/add` — `{ "stems": ["…"] }`. Copies those saved images into
+  `user/favorite_outputs/`. Returns `{ "favorited": 1 }`. `GET /favorite-outputs` lists
+  them in the `/outputs` shape and `POST /favorite-outputs/delete` removes them from
+  there only. There is no open or thumbnail route of their own: a stem names one
+  picture in either gallery, so `/outputs/open`, `/outputs/{stem}/thumb.png` and a
+  `source` on `/img2img` or `/video` find a favourite by stem as well.
 - `GET /progress` — what the worker is doing right now:
   `{ "busy": true, "label": "hi-res", "phase": "sampling", "step": 7, "steps": 20,
   "rate": "1.23s/it" }`, or `{ "busy": false }` when nothing is running. `phase` is
@@ -1451,6 +1473,10 @@ needs a Vulkan device and nothing else.
   the pass was writing to a scratch file that is cleaned up on failure either way, so
   the image on screen is never a half-written one. The cancelled request itself comes
   back as an error whose message ends in `cancelled by request`.
+- `POST /shutdown` — the *Close server* button. Stops the run in flight, deletes what
+  the three `clear_*_on_close` settings in the *saved* `user/settings.toml` ask for,
+  answers `{ "closed": true, "cleared": { "workitems": 0, "outputs": 3, "videos": 0 } }`
+  and exits, freeing the port.
 - `GET /loras` — every file in the LoRA dir, recursive: `name` (what a request puts in
   `loras[].name`), `label` (the same without its extension, for a picker), `bytes`,
   `usable`, `note` — why not, when `usable` is false — and what it was trained for:
@@ -1593,7 +1619,9 @@ the GPU worker is gone.
   models/video/    video components, scanned recursively and identified by header
   user/settings.toml  the defaults every generation starts from
   user/model-settings.toml  what individual models do differently
-  user/favorite/   work items you kept — the one place nothing here sweeps
+  user/favorite/   work items you kept — nothing here sweeps user/
+  user/favorite_outputs/  saved images you kept
+  src/shutdown.rs  what Close server clears on the way out
   work/            scratch, cleared at startup
   work/workitems/  every generation + its settings — kept
   work/output/     what you pressed "Save to output" on — kept

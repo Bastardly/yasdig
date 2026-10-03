@@ -272,6 +272,17 @@ const HELP = [
         + 'reaches everything this model has no opinion about. Saved to '
         + 'user/model-settings.toml. The Image tab’s “Save as defaults for this '
         + 'model” writes here too.' },
+  { ids: ['setclearwi'],
+    text: 'When you press Close server, delete every work item on the Current '
+        + 'shelf. Favorites are never touched. Only Close server does this — '
+        + 'closing the window or pressing Ctrl+C leaves everything in place.' },
+  { ids: ['setclearout'],
+    text: 'When you press Close server, delete every image in work/output/ — '
+        + 'saved images and uploads alike. Favorite outputs are never touched. '
+        + 'Only Close server does this.' },
+  { ids: ['setclearvid'],
+    text: 'When you press Close server, delete every clip on the Video tab, and '
+        + 'the enlarged frames made from them. Only Close server does this.' },
   { ids: ['setflash'],
     text: 'Pass --diffusion-fa to the refine and hi-res passes when they run '
         + 'large. Worth about 6× at 2048² on this card (122 s → 20 s), so leave '

@@ -20,7 +20,10 @@ import { wireHints } from './hints.js';
 // changes" mean two things.
 
 // Page-level rows, which no model has an opinion about.
-const PAGE_ONLY = new Set(['prompt', 'negative', 'variables', 'hires_scale']);
+const PAGE_ONLY = new Set([
+  'prompt', 'negative', 'variables', 'hires_scale',
+  'clear_workitems_on_close', 'clear_outputs_on_close', 'clear_videos_on_close',
+]);
 // A function, not a constant, and that is load-bearing: `settings.js` imports
 // this module back, so reading `FIELDS` at the top level runs before that
 // module has declared it — a ReferenceError that takes the whole module graph,

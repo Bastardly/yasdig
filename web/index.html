@@ -18,6 +18,11 @@
     <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
     <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
     <button type="button" class="btn btn-choice tab" data-tab="settings">Settings</button>
+    <!-- The way out of a release started from a file manager, which has no
+         console to close. Red because it stops a render in flight; never
+         disabled while busy, for #stop's reason. Pushed to the far end so it
+         isn't one slip away from a tab. -->
+    <button type="button" id="closeserver" class="btn btn-danger tabs-end">Close server</button>
   </div>
 
   <div class="layout" id="tab-image">
@@ -352,17 +357,27 @@
   <div class="card col-full">
     <div class="wihead">
       <b>Outputs</b>
-      <!-- The same two modes the work-item grid has, and the same rule: in
-           delete mode a click marks, and nothing goes until the button says so. -->
+      <!-- The work-item grid's two shelves, one directory along: work/output/,
+           which "Delete all" and the clear-on-close settings empty, and
+           user/favorite_outputs/, which nothing touches unasked. -->
+      <span class="wishelf">
+        <button type="button" id="ocurrent" class="btn btn-choice active">Current</button>
+        <button type="button" id="ofavorites" class="btn btn-choice">Favorites</button>
+      </span>
+      <!-- The same modes the work-item grid has, and the same rule: in a
+           marking mode a click marks, and nothing happens until the button
+           says so. -->
       <span class="wimodes">
         <label><input type="radio" name="omode" value="open" checked> Click to open</label>
+        <label id="ofavlabel"><input type="radio" name="omode" value="favorite"> Click to favorite</label>
         <label><input type="radio" name="omode" value="delete"> Click to delete</label>
       </span>
       <button type="button" id="orefresh" class="btn">Refresh</button>
+      <button id="ofavorite" class="btn" hidden></button>
       <button id="odelete" class="btn btn-danger" hidden></button>
       <button id="odeleteall" class="btn btn-danger" hidden></button>
     </div>
-    <div class="sub">work/output/ — click one to open it in the viewer, then ← / → to step</div>
+    <div id="owhere" class="sub">work/output/ — click one to open it in the viewer, then ← / → to step</div>
     <div id="oerr" class="err"></div>
     <div id="ogrid" class="wigrid"></div>
   </div>
@@ -668,7 +683,12 @@
 <dialog id="picker">
   <div class="wihead">
     <b>Pick a first frame</b>
-    <span class="sub">from work/output/</span>
+    <!-- Either gallery: a favourite is a stem like any other, and the server
+         looks in both (`Store::find_output`). -->
+    <span class="wishelf">
+      <button type="button" id="pickcurrent" class="btn btn-choice active">Current</button>
+      <button type="button" id="pickfavorites" class="btn btn-choice">Favorites</button>
+    </span>
     <button type="button" id="pickclose" class="btn">Close</button>
   </div>
   <div id="pickgrid" class="wigrid"></div>

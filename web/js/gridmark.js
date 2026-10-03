@@ -116,8 +116,8 @@ export function gridMarks({ grid, mode, ids, reload, err, onMode, actions }) {
       for (const a of actions) {
         $(a.button).addEventListener('click', () => send(a, [...marked]));
         if (!a.all) continue;
-        // The one place on the page with a confirm box, because it is the one
-        // action with nothing in front of it: marking is reversible and visible,
+        // A confirm box — one of two on the page, with Close server — because
+        // it is the one grid action with nothing in front of it: marking is reversible and visible,
         // "all" is neither. The count is in the question because "delete
         // everything" reads very differently at 3 items and at 300.
         $(a.all.button).addEventListener('click', () => {

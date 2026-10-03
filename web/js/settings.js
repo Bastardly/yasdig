@@ -86,6 +86,13 @@ export const FIELDS = [
   { key: 'source_strength', from: 'srcstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
   { key: 'hires_max_side', from: 'srcmaxside', kind: 'int', min: 64, step: 64 },
 
+  // Not a default for any control either: what *Close server* deletes on the
+  // way out (`src/shutdown.rs`). Off unless ticked, and favourites never.
+  SECTION('When the server is closed'),
+  { key: 'clear_workitems_on_close', label: 'Clear work items', help: 'setclearwi', kind: 'check' },
+  { key: 'clear_outputs_on_close', label: 'Clear outputs', help: 'setclearout', kind: 'check' },
+  { key: 'clear_videos_on_close', label: 'Clear videos', help: 'setclearvid', kind: 'check' },
+
   SECTION('Advanced', { fold: true }),
   { key: 'hires_flash_attn', label: 'Flash attention', help: 'setflash', kind: 'check' },
   { key: 'weight_type', label: 'Weight type', help: 'setwtype', kind: 'text', blank: BLANK },
@@ -452,8 +459,11 @@ export function initSettings() {
     markDirty();
   });
   // The page holds the only copy of an unsaved edit, so a reload would take it
-  // with no way back. Only armed while there is something to lose.
+  // with no way back. Only armed while there is something to lose — and not
+  // once Close server has replaced the page, when there is no server left to
+  // save to and the form itself is gone.
   window.addEventListener('beforeunload', (e) => {
+    if (!$('tab-settings')) return;
     if (markDirty()) e.preventDefault();
   });
   load();

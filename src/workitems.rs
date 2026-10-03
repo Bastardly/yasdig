@@ -10,6 +10,7 @@
 //!   work/output/{id}-s{step}.png    "Save to output": the filtered image on screen
 //!   work/output/{id}-s{step}.json   the same sidecar, with the pass counts filled in
 //!   work/output/{id}-s{step}-thumb.png   for the picker; see `ensure_output_thumb`
+//!   user/favorite_outputs/{stem}.png     the same three files, kept on purpose
 //! ```
 //!
 //! The first two are the same shelf twice over — same trio, same ids, read by
@@ -72,6 +73,22 @@ const MAX_ID_LEN: usize = 64;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shelf {
     Work,
+    Favorites,
+}
+
+/// Which gallery of saved images a call is about: [`Shelf`]'s argument again,
+/// one directory along. `Output` is `work/output/`, which `Delete all` and the
+/// clear-on-close settings empty; `Favorites` is `user/favorite_outputs/`, which
+/// nothing touches unasked. A favourite is a copy (see
+/// [`Store::favorite_output`]).
+///
+/// Only listing and deleting take one. **Reading by stem doesn't**: a stem names
+/// one picture wherever it lives — [`Store::free_stem`] never mints a name either
+/// gallery holds — so [`Store::find_output`] can look in both, and every *Start
+/// from* slot, the viewer and the thumbnail route work on a favourite unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gallery {
+    Output,
     Favorites,
 }
 
@@ -171,6 +188,7 @@ pub struct Store {
     items: PathBuf,
     favorites: PathBuf,
     output: PathBuf,
+    favorite_outputs: PathBuf,
 }
 
 impl Store {
@@ -182,10 +200,12 @@ impl Store {
             items: work_dir.join("workitems"),
             favorites: user_dir.join("favorite"),
             output: work_dir.join("output"),
+            favorite_outputs: user_dir.join("favorite_outputs"),
         };
         std::fs::create_dir_all(&store.items).ok();
         std::fs::create_dir_all(&store.favorites).ok();
         std::fs::create_dir_all(&store.output).ok();
+        std::fs::create_dir_all(&store.favorite_outputs).ok();
         store
     }
 
@@ -195,6 +215,14 @@ impl Store {
         match shelf {
             Shelf::Work => &self.items,
             Shelf::Favorites => &self.favorites,
+        }
+    }
+
+    /// [`Store::shelf_dir`] for a [`Gallery`], and the same promise.
+    fn gallery_dir(&self, gallery: Gallery) -> &Path {
+        match gallery {
+            Gallery::Output => &self.output,
+            Gallery::Favorites => &self.favorite_outputs,
         }
     }
 
@@ -358,19 +386,50 @@ impl Store {
     /// *copy* in the scratch dir (invariant 8), so deleting the file out from
     /// under the viewer leaves the picture on screen working — it just has
     /// nowhere to go back to.
-    pub fn delete_output(&self, stem: &str) -> Result<()> {
+    ///
+    /// One gallery only, for the reason [`Store::delete`] is one shelf: a
+    /// delete that reached both would take the favourites with the rest.
+    pub fn delete_output(&self, gallery: Gallery, stem: &str) -> Result<()> {
         if !valid_id(stem) {
             bail!("'{stem}' is not an output name");
         }
+        let dir = self.gallery_dir(gallery);
         for p in [
-            self.output_path(stem),
-            self.output_thumb_path(stem),
-            self.output_sidecar_path(stem),
+            dir.join(format!("{stem}.png")),
+            dir.join(format!("{stem}-thumb.png")),
+            dir.join(format!("{stem}.json")),
         ] {
             match std::fs::remove_file(&p) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e).with_context(|| format!("deleting {}", p.display())),
+            }
+        }
+        Ok(())
+    }
+
+    /// Keep a saved image: copy its files into `user/favorite_outputs/`.
+    ///
+    /// [`Store::favorite`] one directory along, and a copy for its reason: the
+    /// original stays in the gallery, so `Delete all` there stays the blunt
+    /// instrument it is. Overwriting needs no `free_stem` — stems are unique
+    /// across both galleries, so the only thing that can land on a favourite is
+    /// that same picture. A missing sidecar is fine here, unlike a work item's:
+    /// a PNG dropped into `work/output/` by hand is listed, so it can be kept.
+    pub fn favorite_output(&self, stem: &str) -> Result<()> {
+        if !valid_id(stem) {
+            bail!("'{stem}' is not an output name");
+        }
+        std::fs::create_dir_all(&self.favorite_outputs)
+            .with_context(|| format!("creating {}", self.favorite_outputs.display()))?;
+        let from = self.output_path(stem);
+        std::fs::copy(&from, self.favorite_outputs.join(format!("{stem}.png")))
+            .with_context(|| format!("keeping {}", from.display()))?;
+        for name in [format!("{stem}.json"), format!("{stem}-thumb.png")] {
+            let from = self.output.join(&name);
+            if from.is_file() {
+                std::fs::copy(&from, self.favorite_outputs.join(&name))
+                    .with_context(|| format!("keeping {}", from.display()))?;
             }
         }
         Ok(())
@@ -403,7 +462,14 @@ impl Store {
         Ok(png)
     }
 
-    /// The first `{base}`, `{base}-2`, `{base}-3`… whose PNG doesn't exist yet.
+    /// The first `{base}`, `{base}-2`, `{base}-3`… whose PNG exists in neither
+    /// gallery.
+    ///
+    /// Both, not just `work/output/`: that is what lets a stem name one picture
+    /// wherever it lives (see [`Gallery`]). Checking only the gallery being
+    /// written would let a refine saved after its favourited original was
+    /// deleted take the original's name, and a *Start from* naming that stem
+    /// would then mean two different pictures.
     ///
     /// Shared by `save_output` and `import` because both mint a name that is
     /// *almost* unique and must never overwrite: step counts restart at 0 when a
@@ -411,7 +477,7 @@ impl Store {
     fn free_stem(&self, base: &str) -> String {
         let mut stem = base.to_string();
         for n in 2.. {
-            if !self.output.join(format!("{stem}.png")).exists() {
+            if self.find_output(&stem).is_none() {
                 break;
             }
             stem = format!("{base}-{n}");
@@ -486,12 +552,24 @@ impl Store {
         self.output.join(format!("{stem}.png"))
     }
 
-    pub fn output_thumb_path(&self, stem: &str) -> PathBuf {
+    #[cfg(test)]
+    fn output_thumb_path(&self, stem: &str) -> PathBuf {
         self.output.join(format!("{stem}-thumb.png"))
     }
 
-    fn output_sidecar_path(&self, stem: &str) -> PathBuf {
-        self.output.join(format!("{stem}.json"))
+    /// The saved image a stem names, from whichever gallery holds it —
+    /// `work/output/` first, though by [`Store::free_stem`] a stem in both is
+    /// the same picture twice. Every reader by stem goes through this, which is
+    /// what makes a favourite work as a *Start from*, in the viewer and in the
+    /// picker with no routes of its own. `None` for a stem that isn't valid.
+    pub fn find_output(&self, stem: &str) -> Option<PathBuf> {
+        if !valid_id(stem) {
+            return None;
+        }
+        [&self.output, &self.favorite_outputs]
+            .into_iter()
+            .map(|d| d.join(format!("{stem}.png")))
+            .find(|p| p.is_file())
     }
 
     /// The sidecar beside an output PNG, or `None`.
@@ -501,7 +579,7 @@ impl Store {
     /// lists it anyway — the file on disk is the thing the user saved, and a
     /// listing that hid it would be lying. Callers supply their own defaults.
     pub fn load_output(&self, stem: &str) -> Option<WorkItem> {
-        std::fs::read(self.output_sidecar_path(stem))
+        std::fs::read(self.find_output(stem)?.with_extension("json"))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
     }
@@ -521,11 +599,16 @@ impl Store {
         if !valid_id(stem) {
             bail!("'{stem}' is not an output name");
         }
-        let thumb = self.output_thumb_path(stem);
+        // Beside whichever copy was found, so a favourite whose original has
+        // been deleted still gets — and keeps — a tile.
+        let Some(src) = self.find_output(stem) else {
+            bail!("no saved image '{stem}'");
+        };
+        let dir = src.parent().unwrap_or(&self.output);
+        let thumb = dir.join(format!("{stem}-thumb.png"));
         if thumb.is_file() {
             return Ok(thumb);
         }
-        let src = self.output_path(stem);
         let img = image::open(&src)
             .with_context(|| format!("loading {} for a thumbnail", src.display()))?;
         let tw = ((img.width() as f32) * (THUMB_HEIGHT as f32) / (img.height().max(1) as f32))
@@ -540,7 +623,7 @@ impl Store {
         // The counter is what makes the name unique, not the pid: both racing
         // writers are *this* process, so a pid would have given them the same
         // temp file and re-created the problem one step earlier.
-        let tmp = self.output.join(format!(
+        let tmp = dir.join(format!(
             "{stem}-thumb.{}.tmp",
             TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
@@ -568,8 +651,8 @@ impl Store {
     /// sidecar is missing is still listed, because the file on disk is the thing
     /// the user saved and a picker that hides it would be lying. Such an entry
     /// just has no prompt to show.
-    pub fn list_outputs(&self) -> Vec<Output> {
-        let Ok(entries) = std::fs::read_dir(&self.output) else {
+    pub fn list_outputs(&self, gallery: Gallery) -> Vec<Output> {
+        let Ok(entries) = std::fs::read_dir(self.gallery_dir(gallery)) else {
             return Vec::new();
         };
         let mut out: Vec<Output> = entries
@@ -818,7 +901,7 @@ mod tests {
         std::fs::copy(&src, store.output_path("100-7-s2")).unwrap();
         assert!(!store.output_thumb_path("100-7-s2").is_file());
 
-        let list = store.list_outputs();
+        let list = store.list_outputs(Gallery::Output);
         let stems: Vec<&str> = list.iter().map(|o| o.stem.as_str()).collect();
         assert_eq!(stems.len(), 3, "{stems:?}");
         // Companion thumbnails are not entries — the trap this listing exists to
@@ -837,7 +920,7 @@ mod tests {
         // A sidecar-less save is still listed; it just has nothing to say.
         std::fs::copy(&src, store.output_path("999-7-s0")).unwrap();
         let bare = store
-            .list_outputs()
+            .list_outputs(Gallery::Output)
             .into_iter()
             .find(|o| o.stem == "999-7-s0")
             .expect("a PNG with no sidecar is still the user's image");
@@ -853,7 +936,7 @@ mod tests {
         let again = store.ensure_output_thumb("100-7-s2").unwrap();
         assert_eq!(thumb, again);
         // No temp file left behind by the rename.
-        assert!(!store.list_outputs().iter().any(|o| o.stem.contains(".tmp")));
+        assert!(!store.list_outputs(Gallery::Output).iter().any(|o| o.stem.contains(".tmp")));
 
         assert!(store.ensure_output_thumb("../etc").is_err());
         assert!(store.ensure_output_thumb("nope-s0").is_err());
@@ -880,17 +963,17 @@ mod tests {
         assert!(store.output_path("600-7-s0").is_file());
         assert!(store.output_thumb_path("600-7-s0").is_file());
 
-        store.delete_output("600-7-s0").unwrap();
+        store.delete_output(Gallery::Output, "600-7-s0").unwrap();
         assert!(!store.output_path("600-7-s0").exists());
         assert!(!store.output_thumb_path("600-7-s0").exists());
         assert!(store.load_output("600-7-s0").is_none());
-        assert!(store.list_outputs().is_empty());
+        assert!(store.list_outputs(Gallery::Output).is_empty());
 
         // Deleting what is already gone is how "delete all" behaves when two
         // tabs are open on the same directory, so it is not an error.
-        store.delete_output("600-7-s0").unwrap();
+        store.delete_output(Gallery::Output, "600-7-s0").unwrap();
         // The traversal guard is the same whitelist as everywhere else.
-        assert!(store.delete_output("../models.toml").is_err());
+        assert!(store.delete_output(Gallery::Output, "../models.toml").is_err());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1024,6 +1107,54 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The same guarantee for saved images, plus the rule that lets a favourite
+    /// be read by stem alone: no new save may take a stem a favourite holds.
+    #[test]
+    fn a_favourite_output_survives_its_gallery_and_keeps_its_name() {
+        let dir = std::env::temp_dir().join(format!("rustimage-favout-{}", new_id(4)));
+        let store = Store::new(&dir, &dir.join("user"));
+        let src = dir.join("src.png");
+        image::RgbaImage::from_pixel(64, 32, image::Rgba([7, 7, 7, 255]))
+            .save(&src)
+            .unwrap();
+        let it = item("900-7", 900);
+        let saved = store.save_output(&src, &it).unwrap();
+        assert!(saved.ends_with("900-7-s0.png"));
+
+        store.favorite_output("900-7-s0").unwrap();
+        let fav = dir.join("user/favorite_outputs/900-7-s0.png");
+        assert!(fav.is_file() && fav.with_extension("json").is_file());
+        // A copy: still in the gallery it was picked from.
+        assert_eq!(store.list_outputs(Gallery::Output).len(), 1);
+        assert_eq!(store.list_outputs(Gallery::Favorites).len(), 1);
+
+        // Deleting all of the gallery leaves the favourite, and reading by stem
+        // now finds it there — sidecar, thumbnail and all.
+        store.delete_output(Gallery::Output, "900-7-s0").unwrap();
+        assert!(store.list_outputs(Gallery::Output).is_empty());
+        assert_eq!(store.find_output("900-7-s0").as_deref(), Some(fav.as_path()));
+        assert_eq!(store.load_output("900-7-s0").unwrap().seed, it.seed);
+        let thumb = store.ensure_output_thumb("900-7-s0").unwrap();
+        assert!(thumb.starts_with(dir.join("user/favorite_outputs")));
+
+        // The next save of the same step must not reuse the favourite's name,
+        // or one stem would mean two pictures.
+        let next = store.save_output(&src, &it).unwrap();
+        assert!(next.ends_with("900-7-s0-2.png"), "{}", next.display());
+
+        // And the other direction: deleting the favourite leaves the gallery.
+        store.delete_output(Gallery::Favorites, "900-7-s0").unwrap();
+        assert!(store.list_outputs(Gallery::Favorites).is_empty());
+        assert_eq!(store.list_outputs(Gallery::Output).len(), 1);
+        assert!(store.find_output("900-7-s0").is_none());
+
+        assert!(store.favorite_output("nope-s0").is_err());
+        assert!(store.favorite_output("../models.toml").is_err());
+        assert!(store.find_output("../models.toml").is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// An import is the one image whose name the *user* chose, and the answer is
     /// that it doesn't get to: the stem is minted here, because `valid_id` is the
     /// whole traversal guard for `/outputs/{stem}/thumb.png` and a filename that
@@ -1056,7 +1187,7 @@ mod tests {
         // It appears in the picker like anything else in work/output/, with its
         // real dimensions and an origin that can't be mistaken for a model name.
         let entry = store
-            .list_outputs()
+            .list_outputs(Gallery::Output)
             .into_iter()
             .find(|o| o.stem == a)
             .expect("an import is listed as a source image");

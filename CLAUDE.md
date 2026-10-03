@@ -608,6 +608,46 @@ exactly one action is live at a time, and changing mode already clears the marks
 `route` is a thunk because the work-item grid's route moves with the shelf, and
 `all.when()` is what takes **Delete all** away on the favourites shelf.
 
+### Favourite outputs
+
+The Outputs tab has the same toggle over `user/favorite_outputs/`
+(`workitems::Gallery`, `Store::favorite_output`, a copy for the same reason), and
+the picker behind every *Start from* slot has it too. It costs three routes, not
+eight, because of one rule: **a stem names one picture, wherever it lives.**
+`Store::free_stem` refuses a name *either* gallery holds, so
+`Store::find_output` can look in both — and `output_source` (img2img and a
+video's first frame), `open_output`, `load_output` and the `/outputs` thumbnail
+all read through it. A favourite therefore opens, starts a generation and gets a
+tile through the ordinary `/outputs` routes; only listing, adding and deleting
+name the gallery. Two things break silently:
+
+- **`free_stem` must keep checking both.** Checking only `work/output/` lets a
+  refine saved after its favourited original was deleted take the original's
+  name, and a reopened work item's `source` would then quietly start from a
+  different picture.
+- **`delete_output` takes a `Gallery` and touches only it**, for `Store::delete`'s
+  reason. `ensure_output_thumb` writes beside whichever copy it found, so a
+  favourite whose original is gone still keeps its tile.
+
+## Close server
+
+`POST /shutdown` (`handle_shutdown`) and `src/shutdown.rs`: the way out of a
+release with no console. It runs on the connection thread beside `/cancel`,
+never through the queue, and in this order: **kill the child**, clear, answer,
+`process::exit(0)`. Exiting without the cancel would orphan sd-cli holding the
+VRAM. The clear reads the *saved* `user/settings.toml`, and the page's confirm
+quotes that same file rather than the form, so it never promises a delete the
+server won't do. It deletes only what the app lists, through the existing
+`Store::delete`/`delete_output`/`VideoStore::delete` — never `remove_dir_all` on a
+folder the user can also reach — and favourites are never named there at all. The
+three `clear_*_on_close` fields are page-level (`PAGE_ONLY`, both copies), declared
+before `variables`.
+
+The page then replaces itself with a "stopped" note and calls `window.close()`,
+which browsers ignore for a tab a script didn't open (ours was opened by
+`xdg-open`/`start`), so the note is what the user actually sees. Settings'
+`beforeunload` stands down once its form is gone.
+
 ## The Outputs tab
 
 `work/output/` as a gallery rather than as a picker. `web/js/outputs.js` and
@@ -659,9 +699,9 @@ Four things in it break silently:
 
   **`Delete all` is the same request with every id in it**, not a route of its own —
   which is what keeps `valid_id` the only guard there is. A route that emptied a
-  directory wholesale would need a different kind of check entirely. It is also the
-  one `confirm()` on the page, and it only appears in delete mode: marking is visible
-  and reversible, "all" is neither.
+  directory wholesale would need a different kind of check entirely. It is one of
+  the page's two `confirm()`s (the other is *Close server*), and it only appears in
+  delete mode: marking is visible and reversible, "all" is neither.
 - **`outputGrid` is the one tile.** It was written out three times — this grid, the
   old img2img source strip, the video tab's first-frame picker; now this grid and the
   picker dialog behind every *Start from* slot — and the declared height

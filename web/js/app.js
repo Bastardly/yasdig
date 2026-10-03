@@ -65,6 +65,46 @@ function initTabs() {
   for (const b of document.querySelectorAll('.tab')) {
     b.addEventListener('click', () => showTab(b.dataset.tab));
   }
+  $('closeserver').addEventListener('click', closeServer);
+}
+
+// ---- Close server -----------------------------------------------------------
+//
+// `POST /shutdown` kills a render in flight, clears what the *saved* settings
+// say to, and exits (`handle_shutdown`). The confirm quotes that saved file
+// rather than the Settings form, because a box ticked and not saved is not what
+// the server will read — and a confirm that listed it would be promising a
+// delete that never happens.
+async function closeServer() {
+  let s = {};
+  try { s = await (await fetch('/settings')).json(); } catch { /* the plain question below */ }
+  const doomed = [
+    s.clear_workitems_on_close && 'work items (Current, not Favorites)',
+    s.clear_outputs_on_close && 'outputs in work/output/ (not Favorites)',
+    s.clear_videos_on_close && 'video clips',
+  ].filter(Boolean);
+  const msg = 'Close the rustimage server?\n\n'
+    + 'If an image or video is being made, it is stopped. '
+    + (doomed.length
+      ? `These are deleted, as your saved settings ask:\n• ${doomed.join('\n• ')}`
+      : 'Nothing is deleted.');
+  if (!confirm(msg)) return;
+  try {
+    const resp = await fetch('/shutdown', { method: 'POST' });
+    await resp.json();
+  } catch {
+    // The server exits right after answering, so a connection that drops here
+    // has done what was asked. Either way it is gone.
+  }
+  // Replaced first: that is also what stands Settings' "unsaved changes"
+  // prompt down (it checks the form is still there), since with no server
+  // there is nothing left to save to.
+  document.querySelector('.app').innerHTML =
+    '<div class="card stopped"><h1>rustimage has stopped</h1>'
+    + '<p class="sub">You can close this tab. Start rustimage again to come back.</p></div>';
+  // Browsers only let a script close a tab a script opened; this one was
+  // opened by the OS. So try; when it is ignored, the message above stays.
+  window.close();
 }
 
 // The viewer first, because it builds the slider markup that wireHints() then

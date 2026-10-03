@@ -208,6 +208,13 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   margin: 0 0 var(--sp-4); border-bottom: var(--line); padding-bottom: var(--sp-2);
 }
 
+/* The one control in the tab row that isn't a tab: as far from them as the
+   row allows. */
+.tabs-end { margin-left: auto; }
+
+/* What the page becomes once Close server has stopped the server. */
+.stopped { max-width: 32rem; margin: 20vh auto 0; text-align: center; }
+
 /* Three columns that flow: controls, result, work items. Flex rather than a
    grid with a breakpoint, because each column has a different *useful* width
    and they should wrap independently — the work items drop under the other two

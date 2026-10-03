@@ -43,6 +43,11 @@
 //!   POST /outputs/open -> {stem}     open a saved image as a live image_id,
 //!                        so the viewer's sliders can work on it
 //!   POST /outputs/delete -> {stems:[..]} remove them from work/output/
+//!   POST /favorite-outputs/add -> {stems:[..]} copy them to user/favorite_outputs/
+//!   GET  /favorite-outputs     -> the same listing, read from there
+//!   POST /favorite-outputs/delete -> {stems:[..]}
+//!                        (a favourite opens, starts a generation and gets its
+//!                        thumbnail through the /outputs routes, by stem)
 //!   GET  /video-models -> the [[video]] table, with each family's grid rules
 //!   POST /video       -> generate a clip (minutes; watch GET /progress)
 //!   GET  /videos      -> every archived clip, newest first
@@ -54,6 +59,7 @@
 //!   POST /save-output      -> {image_id} keep the image on screen
 //!   GET  /progress    -> what the worker is rendering right now, step by step
 //!   POST /cancel      -> kill the run in flight (the only stop sd-cli offers)
+//!   POST /shutdown    -> stop the run, clear what the settings say, and exit
 //!
 //! The archive listing, the thumbnail, the delete, and both of the last two are
 //! answered on the connection thread rather than the GPU worker. The first
@@ -73,6 +79,7 @@ mod pipeline;
 mod preflight;
 mod sd;
 mod settings;
+mod shutdown;
 mod sr;
 mod variables;
 mod videos;
@@ -90,7 +97,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
-use workitems::Shelf;
+use workitems::{Gallery, Shelf};
 
 /// A unit of GPU work plus a channel to send the result back to the HTTP thread.
 ///
@@ -347,7 +354,7 @@ fn run(args: &[String]) -> Result<()> {
     if std::env::var_os("RUSTIMAGE_NO_BROWSER").is_none() {
         open_browser(&url);
     }
-    println!("[rustimage] close this window, or press Ctrl+C, to stop");
+    println!("[rustimage] to stop: Close server on the page, Ctrl+C, or close this window");
 
     for stream in listener.incoming() {
         let stream = match stream {
@@ -488,6 +495,7 @@ fn handle_conn(
             "application/json",
             format!("{{\"cancelled\":{}}}", monitor.cancel()).as_bytes(),
         ),
+        ("POST", "/shutdown") => handle_shutdown(&mut conn, cfg, monitor),
 
         // The archive. List, thumbnail and delete are answered right here rather
         // than through `submit` — they never touch the GPU, and the worker is
@@ -563,9 +571,19 @@ fn handle_conn(
             }
         }
         ("POST", "/videos/delete") => handle_delete_clips(&mut conn, cfg, &req.body),
-        ("GET", "/outputs") => handle_list_outputs(&mut conn, cfg),
+        ("GET", "/outputs") => handle_list_outputs(&mut conn, cfg, Gallery::Output),
         ("POST", "/outputs/open") => handle_open_output(&mut conn, job_tx, &req.body),
-        ("POST", "/outputs/delete") => handle_delete_outputs(&mut conn, cfg, &req.body),
+        ("POST", "/outputs/delete") => {
+            handle_delete_outputs(&mut conn, cfg, Gallery::Output, &req.body)
+        }
+        // The kept half of the gallery. Only a listing, an add and a delete:
+        // opening one, its thumbnail and starting from it all go by stem through
+        // the `/outputs` routes above, which look in both (`Store::find_output`).
+        ("GET", "/favorite-outputs") => handle_list_outputs(&mut conn, cfg, Gallery::Favorites),
+        ("POST", "/favorite-outputs/add") => handle_favorite_outputs(&mut conn, cfg, &req.body),
+        ("POST", "/favorite-outputs/delete") => {
+            handle_delete_outputs(&mut conn, cfg, Gallery::Favorites, &req.body)
+        }
         ("GET", p) if p.starts_with("/outputs/") && p.ends_with("/thumb.png") => {
             let stem = p
                 .trim_start_matches("/outputs/")
@@ -575,6 +593,37 @@ fn handle_conn(
 
         _ => conn.respond(404, "text/plain", b"not found"),
     }
+}
+
+/// *Close server*: the way out of a release started by a double-click, which
+/// has no console to close.
+///
+/// On the connection thread beside `/cancel`, never through the queue — a
+/// render would hold it for minutes, and "close" that waits for the thing it is
+/// closing is the Stop-button mistake again. In order:
+///
+/// 1. **Kill the child first.** The process exiting would leave sd-cli running
+///    on its own, holding the VRAM, with no server left to stop it.
+/// 2. Clear what `user/settings.toml` says to ([`shutdown::clear`]). The *saved*
+///    file, which is what the page's confirm box quotes.
+/// 3. Answer, so the page can say it has stopped rather than seeing a dropped
+///    connection it can't tell from a crash.
+/// 4. Exit. That frees the port and closes a Windows console window. It never
+///    reaches `main`'s "press Enter" wait, which is for errors.
+///
+/// A worker in the middle of a job is not waited for: with its child killed
+/// the job is failing anyway, and nothing it would write is worth keeping a
+/// server open for.
+fn handle_shutdown(conn: &mut http::Connection, cfg: &Config, monitor: &Monitor) -> Result<()> {
+    monitor.cancel();
+    let cleared = shutdown::clear(cfg);
+    println!(
+        "[rustimage] closed from the page (cleared {} work items, {} outputs, {} clips)",
+        cleared.workitems, cleared.outputs, cleared.videos
+    );
+    let body = serde_json::json!({ "closed": true, "cleared": cleared });
+    let _ = conn.respond(200, "application/json", body.to_string().as_bytes());
+    std::process::exit(0);
 }
 
 /// The archive, for a connection thread. Cheap to build — it is two `PathBuf`s
@@ -1071,8 +1120,8 @@ fn handle_delete_clips(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -
     }
 }
 
-fn handle_list_outputs(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
-    let items = store(cfg).list_outputs();
+fn handle_list_outputs(conn: &mut http::Connection, cfg: &Config, gallery: Gallery) -> Result<()> {
+    let items = store(cfg).list_outputs(gallery);
     match serde_json::to_vec(&items) {
         Ok(body) => conn.respond(200, "application/json", &body),
         Err(e) => conn.respond(
@@ -1220,7 +1269,12 @@ fn handle_favorite(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Re
 /// request with every stem in it rather than a route of its own, which is what
 /// keeps `valid_id` the only guard there is — a route that deleted a directory
 /// wholesale would need a different kind of check entirely.
-fn handle_delete_outputs(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+fn handle_delete_outputs(
+    conn: &mut http::Connection,
+    cfg: &Config,
+    gallery: Gallery,
+    body: &[u8],
+) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
         stems: Vec<String>,
@@ -1232,7 +1286,7 @@ fn handle_delete_outputs(conn: &mut http::Connection, cfg: &Config, body: &[u8])
     let store = store(cfg);
     let mut deleted = 0usize;
     for stem in &dto.stems {
-        match store.delete_output(stem) {
+        match store.delete_output(gallery, stem) {
             Ok(()) => deleted += 1,
             Err(e) => eprintln!("[rustimage] {e:#}"),
         }
@@ -1241,6 +1295,33 @@ fn handle_delete_outputs(conn: &mut http::Connection, cfg: &Config, body: &[u8])
         200,
         "application/json",
         format!("{{\"deleted\":{deleted}}}").as_bytes(),
+    )
+}
+
+/// Keep saved images: copy them to `user/favorite_outputs/`. [`handle_favorite`]
+/// for the Outputs tab, and the same shape for the same reasons — a list,
+/// answered here, a failure logged and skipped.
+fn handle_favorite_outputs(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        stems: Vec<String>,
+    }
+
+    let Some(dto) = parse_json::<Dto>(conn, body)? else {
+        return Ok(());
+    };
+    let store = store(cfg);
+    let mut favorited = 0usize;
+    for stem in &dto.stems {
+        match store.favorite_output(stem) {
+            Ok(()) => favorited += 1,
+            Err(e) => eprintln!("[rustimage] {e:#}"),
+        }
+    }
+    conn.respond(
+        200,
+        "application/json",
+        format!("{{\"favorited\":{favorited}}}").as_bytes(),
     )
 }
 
@@ -1423,7 +1504,7 @@ fn handle_img2img(
         None => return Ok(()),
     };
 
-    if !workitems::valid_id(&dto.source) || !store(cfg).output_path(&dto.source).is_file() {
+    if store(cfg).find_output(&dto.source).is_none() {
         return conn.respond(
             400,
             "application/json",

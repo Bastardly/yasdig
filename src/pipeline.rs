@@ -543,11 +543,11 @@ impl Engine {
         if !workitems::valid_id(stem) {
             bail!("'{stem}' is not an output name");
         }
-        let path = self.items.output_path(stem);
-        if !path.is_file() {
-            bail!("no saved image '{stem}' in work/output/");
-        }
-        Ok(path)
+        // Either gallery: a favourite is a source like any other, and a stem
+        // names one picture wherever it lives (`workitems::Gallery`).
+        self.items
+            .find_output(stem)
+            .with_context(|| format!("no saved image '{stem}' in work/output/ or your favourites"))
     }
 
     /// Point a pending result at a different checkpoint before an escalation

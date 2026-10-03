@@ -100,6 +100,15 @@ pub struct Settings {
     pub weight_type: Option<String>,
     pub extra_args: Vec<String>,
 
+    // ---- What *Close server* clears on the way out. Page-level, like the
+    // three at the top: no checkpoint has an opinion about your disk. ----
+    /// Empty `work/workitems/` — the Current shelf, never Favorites.
+    pub clear_workitems_on_close: bool,
+    /// Empty `work/output/`, uploads included — never `user/favorite_outputs/`.
+    pub clear_outputs_on_close: bool,
+    /// Empty `work/videos/`, and the enlarged frames of each clip.
+    pub clear_videos_on_close: bool,
+
     /// The `[variables]` table: `{animal}` in a prompt and the words it can
     /// stand for. See [`crate::variables`].
     ///
@@ -222,6 +231,10 @@ impl Default for Settings {
             hires_flash_attn: true,
             weight_type: None,
             extra_args: Vec::new(),
+            // Off: deleting files is something to ask for, never a default.
+            clear_workitems_on_close: false,
+            clear_outputs_on_close: false,
+            clear_videos_on_close: false,
             variables: Variables::new(),
         }
     }
@@ -269,6 +282,9 @@ impl Settings {
                 .extra_args
                 .clone()
                 .unwrap_or_else(|| self.extra_args.clone()),
+            clear_workitems_on_close: self.clear_workitems_on_close,
+            clear_outputs_on_close: self.clear_outputs_on_close,
+            clear_videos_on_close: self.clear_videos_on_close,
             variables: self.variables.clone(),
         }
     }
@@ -698,7 +714,15 @@ pub fn update_model(
 }
 
 /// The fields of [`Settings`] that are the page's rather than a model's.
-const PAGE_ONLY: &[&str] = &["prompt", "negative", "hires_scale", "variables"];
+const PAGE_ONLY: &[&str] = &[
+    "prompt",
+    "negative",
+    "hires_scale",
+    "variables",
+    "clear_workitems_on_close",
+    "clear_outputs_on_close",
+    "clear_videos_on_close",
+];
 
 /// `GET /model-settings`: every model's base and overrides.
 ///

@@ -11,7 +11,8 @@ import { fetchOutputs, outputGrid } from './outputs.js';
 // the server published, and `workitems::valid_id` is the whitelist the server
 // holds it to. There are three ways to get one, and they all end in a stem:
 //
-// - **Choose…** opens the shared `#picker` dialog over `GET /outputs`.
+// - **Choose…** opens the shared `#picker` dialog over `GET /outputs`, or over
+//   `GET /favorite-outputs` — a favourite is a stem like any other.
 // - **Upload…**, a drop on the zone, or a paste while the tab is showing sends
 //   the file to `POST /upload`, which puts it in `work/output/` under a minted
 //   name and answers with that stem. So an upload is also in the picker next
@@ -62,6 +63,47 @@ async function upload(file) {
   return data.stem;
 }
 
+// ---- The picker dialog -----------------------------------------------------
+//
+// One `#picker` for every slot, so its state is here rather than per slot: who
+// opened it (`pickFor`, that slot's `set`) and which gallery it shows. The
+// gallery is remembered between opens — whoever went to Favorites once is
+// likely to go there again. The toggle's listeners go on once, from whichever
+// slot initialises first.
+let pickFor = null;
+let pickGallery = 'outputs';
+let pickerWired = false;
+
+async function drawPicker() {
+  const grid = $('pickgrid');
+  const fav = pickGallery === 'favorite-outputs';
+  $('pickcurrent').classList.toggle('active', !fav);
+  $('pickfavorites').classList.toggle('active', fav);
+  grid.innerHTML = '<p class="sub">Loading…</p>';
+  const from = pickGallery;
+  const list = await fetchOutputs(from);
+  if (from !== pickGallery) return;
+  outputGrid(grid, list, {
+    height: 140,
+    empty: fav
+      ? '<p class="sub">No favorite outputs yet — keep some on the Outputs tab.</p>'
+      : '<p class="sub">Nothing in work/output/ yet — save an image, or '
+        + 'upload one with the button beside Choose.</p>',
+    onPick: (picked) => {
+      pickFor?.(picked);
+      $('picker').close();
+    },
+  });
+}
+
+function wirePicker() {
+  if (pickerWired) return;
+  pickerWired = true;
+  for (const [btn, g] of [['pickcurrent', 'outputs'], ['pickfavorites', 'favorite-outputs']]) {
+    $(btn).addEventListener('click', () => { pickGallery = g; drawPicker(); });
+  }
+}
+
 // `tab` is the tab's container id, for the paste guard; `none` is what the name
 // line says with nothing picked; `err` is where a failed upload is reported;
 // `onChange(stem | null)` runs after every change, including a clear.
@@ -91,22 +133,15 @@ export function sourceSlot({ prefix, tab, none, err, onChange = () => {} }) {
 
   // The same tile as the Outputs tab, from the same function — only the height
   // differs, because this one is a dialog rather than a panel.
-  async function openPicker() {
-    const grid = $('pickgrid');
-    grid.innerHTML = '<p class="sub">Loading…</p>';
+  // The stem is all a slot keeps, whichever gallery it came from.
+  function openPicker() {
+    pickFor = set;
     $('picker').showModal();
-    outputGrid(grid, await fetchOutputs(), {
-      height: 140,
-      empty: '<p class="sub">Nothing in work/output/ yet — save an image, or '
-           + 'upload one with the button beside Choose.</p>',
-      onPick: (picked) => {
-        set(picked);
-        $('picker').close();
-      },
-    });
+    drawPicker();
   }
 
   function init() {
+    wirePicker();
     $(id('pick')).addEventListener('click', openPicker);
     $(id('upload')).addEventListener('click', () => $(id('file')).click());
     $(id('clear')).addEventListener('click', () => set(null));
