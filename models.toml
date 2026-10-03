@@ -8,17 +8,11 @@
 # You usually don't need to touch [templates] either — just drop model files
 # into the models dir and they're auto-detected.
 
-[templates.foo]
-model = "Foo"
-steps = 22
-
-
-
 [sd]
-# Path to the compiled stable-diffusion.cpp CLI. Newer builds name it `sd-cli`;
-# older ones `sd`. Point this at whatever your build produced (absolute or
-# relative to this project root).
-binary = "../stable-diffusion.cpp/build/bin/sd-cli"
+# Path to the compiled stable-diffusion.cpp CLI (absolute, or relative to this
+# file). This is where `cargo build` builds the checkout in stable-diffusion.cpp/
+# (see build.rs); a release executable has its own inside and needs no line.
+binary = "stable-diffusion.cpp/build-rustimage/bin/sd-cli"
 # Mode flag value. Newer sd.cpp uses "img_gen" for both txt2img and img2img
 # (img2img is triggered by an init image). Older builds used "txt2img".
 mode = "img_gen"

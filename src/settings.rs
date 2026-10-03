@@ -487,6 +487,16 @@ pub fn patch(base: &Settings, body: &[u8]) -> Result<Settings> {
 /// the hand-written startup config, and two files of one name with two
 /// different owners is a mistake waiting to be made in a text editor.
 const MODELS_FILE: &str = "model-settings.toml";
+/// Where [`ModelSettings::reconcile`] parks the entries of a model that is gone.
+const PARKED_FILE: &str = "model-settings.removed.toml";
+
+const PARKED_HEADER: &str = "\
+# rustimage — per-model defaults for models that weren't there at the last start.
+# Kept rather than deleted: a model moved out for a while gets its settings back
+# on the first start that finds it again. Delete an entry, or the file, to drop
+# them for good. Rewritten whole on every start that moves something.
+
+";
 
 const MODELS_HEADER: &str = "\
 # rustimage — per-model defaults. Written by the Image tab's \"Save as defaults
@@ -510,8 +520,9 @@ const MODELS_HEADER: &str = "\
 /// something a person says, and saying it should not need a text editor.
 ///
 /// Keyed by registry name, which for a discovered model is its file stem. A
-/// renamed file therefore loses its entry, and `doctor` names entries that no
-/// longer match a model rather than dropping them silently.
+/// renamed file therefore loses its entry, and every start parks entries that
+/// no longer match a model in `user/model-settings.removed.toml` — see
+/// [`ModelSettings::reconcile`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelSettings {
@@ -534,13 +545,75 @@ impl ModelSettings {
     /// Read it. A missing file is an empty one — the ordinary state, since
     /// nothing is written until somebody saves a model's defaults.
     pub fn load(user_dir: &Path) -> Result<ModelSettings> {
-        let path = Self::path(user_dir);
+        Self::read(&Self::path(user_dir))
+    }
+
+    fn read(path: &Path) -> Result<ModelSettings> {
         if !path.exists() {
             return Ok(ModelSettings::default());
         }
-        let text = std::fs::read_to_string(&path)
+        let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    pub fn parked_path(user_dir: &Path) -> PathBuf {
+        user_dir.join(PARKED_FILE)
+    }
+
+    /// Move the entries of models that no longer exist out of the live file,
+    /// and back in for models that exist again. Run once per server start.
+    ///
+    /// **Parked, not deleted**, in `user/model-settings.removed.toml`. An entry
+    /// is keyed by file stem, so "the model is gone" is indistinguishable from
+    /// "the file is in another folder for an afternoon" — which is exactly what
+    /// happens when you try a release in a fresh folder. Deleting would make
+    /// that afternoon cost every tuned model its settings; parking makes it
+    /// cost nothing, because the first start that finds the file again puts
+    /// the entry back. An entry already live wins over a parked one of the same
+    /// name: it was saved more recently.
+    ///
+    /// Returns (parked, restored) names, for the start-up log.
+    pub fn reconcile(
+        user_dir: &Path,
+        exists: impl Fn(&str) -> bool,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let mut live = Self::load(user_dir)?;
+        let parked_path = Self::parked_path(user_dir);
+        let mut parked = Self::read(&parked_path)?;
+
+        let gone: std::collections::BTreeSet<String> =
+            live.model.keys().chain(live.parts.keys()).filter(|n| !exists(n)).cloned().collect();
+        let back: std::collections::BTreeSet<String> =
+            parked.model.keys().chain(parked.parts.keys()).filter(|n| exists(n)).cloned().collect();
+        if gone.is_empty() && back.is_empty() {
+            return Ok((vec![], vec![]));
+        }
+        for name in &gone {
+            if let Some(e) = live.model.remove(name) {
+                parked.model.insert(name.clone(), e);
+            }
+            if let Some(p) = live.parts.remove(name) {
+                parked.parts.insert(name.clone(), p);
+            }
+        }
+        for name in &back {
+            if let Some(e) = parked.model.remove(name) {
+                live.model.entry(name.clone()).or_insert(e);
+            }
+            if let Some(p) = parked.parts.remove(name) {
+                live.parts.entry(name.clone()).or_insert(p);
+            }
+        }
+        // The parked file first: if the second write fails, an entry is in
+        // both files rather than in neither.
+        if parked == ModelSettings::default() {
+            let _ = std::fs::remove_file(&parked_path);
+        } else {
+            parked.write(&parked_path, PARKED_HEADER)?;
+        }
+        live.save(user_dir)?;
+        Ok((gone.into_iter().collect(), back.into_iter().collect()))
     }
 
     /// Read it, or nothing. The same decision [`Settings::load_or_default`]
@@ -552,16 +625,20 @@ impl ModelSettings {
 
     /// Write it whole, through a rename, as [`Settings::save`] does.
     pub fn save(&self, user_dir: &Path) -> Result<()> {
-        std::fs::create_dir_all(user_dir)
-            .with_context(|| format!("creating {}", user_dir.display()))?;
+        self.write(&Self::path(user_dir), MODELS_HEADER)
+    }
+
+    fn write(&self, path: &Path, header: &str) -> Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
         let body = format!(
-            "{MODELS_HEADER}{}",
+            "{header}{}",
             toml::to_string_pretty(self).context("serializing model settings")?
         );
-        let path = Self::path(user_dir);
         let tmp = path.with_extension("toml.tmp");
         std::fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))?;
+        std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
         Ok(())
     }
 }
@@ -674,6 +751,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// A model moved out for one start and back for the next loses nothing:
+    /// its entry leaves the live file, waits in the parked one, and returns.
+    /// And a live entry beats a parked one of the same name, being newer.
+    #[test]
+    fn a_missing_model_s_settings_are_parked_and_come_back() {
+        let dir = tmpdir("reconcile");
+        let mut s = ModelSettings::default();
+        let tuned = PartialSettings { steps: Some(12), ..Default::default() };
+        s.model.insert("kept".into(), tuned.clone());
+        s.model.insert("moved".into(), tuned.clone());
+        s.parts.insert("moved".into(), [("vae".into(), "vae/x.safetensors".into())].into());
+        s.save(&dir).unwrap();
+
+        let (parked, back) = ModelSettings::reconcile(&dir, |n| n == "kept").unwrap();
+        assert_eq!((parked, back), (vec!["moved".to_string()], vec![]));
+        let live = ModelSettings::load(&dir).unwrap();
+        assert!(live.model.contains_key("kept") && !live.model.contains_key("moved"));
+        assert!(live.parts.is_empty());
+
+        // Nothing to move: the files are left alone.
+        assert_eq!(ModelSettings::reconcile(&dir, |n| n == "kept").unwrap(), (vec![], vec![]));
+
+        let (parked, back) = ModelSettings::reconcile(&dir, |_| true).unwrap();
+        assert_eq!((parked, back), (vec![], vec!["moved".to_string()]));
+        assert_eq!(ModelSettings::load(&dir).unwrap(), s);
+        assert!(!ModelSettings::parked_path(&dir).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The whole point of the overlay: a preset for a new architecture says what

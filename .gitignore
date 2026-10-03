@@ -5,3 +5,5 @@
 !/work/.gitkeep
 *.png
 /user/
+/stable-diffusion.cpp/
+/bin/

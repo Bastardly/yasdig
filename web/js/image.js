@@ -551,8 +551,11 @@ export async function loadModels() {
       }
       if ([...sel.options].some((o) => o.value === keep && !o.disabled)) sel.value = keep;
     }
+    // What a first run looks like: the folders exist, nothing is in them. The
+    // server rescans per request, so a reload is all it takes after the copy.
     if (!models.length) {
-      $('err').textContent = 'No models found. Drop a .safetensors into the models/ folder.';
+      $('err').textContent = 'No image models yet. Put a .safetensors or .gguf model into '
+        + 'models/checkpoints (in the folder rustimage is in), then reload this page.';
     }
     syncAdvanced();
   } catch (e) {

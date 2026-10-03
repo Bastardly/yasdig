@@ -426,10 +426,7 @@ fn describe(role: &Role) -> String {
 /// matched against [`candidates`] — never joined onto anything — so a `..` in it
 /// can't escape, it just fails to match.
 fn rel(cfg: &Config, p: &Path) -> String {
-    p.strip_prefix(&cfg.base_dir)
-        .unwrap_or(p)
-        .to_string_lossy()
-        .into_owned()
+    crate::config::slash_name(&cfg.base_dir, p)
 }
 
 /// A validated conversion, ready to hand to [`crate::sd::SdRunner::convert`].

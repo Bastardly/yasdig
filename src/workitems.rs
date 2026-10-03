@@ -549,7 +549,16 @@ impl Store {
         small
             .save_with_format(&tmp, image::ImageFormat::Png)
             .with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &thumb).with_context(|| format!("publishing {}", thumb.display()))?;
+        // On Windows the loser's rename can fail outright instead, because the
+        // winner's file may already be open for the response — and a file open
+        // there can't be replaced. The race was for identical bytes, so a tile
+        // that exists by now is the answer either way.
+        if let Err(e) = std::fs::rename(&tmp, &thumb) {
+            let _ = std::fs::remove_file(&tmp);
+            if !thumb.is_file() {
+                return Err(e).with_context(|| format!("publishing {}", thumb.display()));
+            }
+        }
         Ok(thumb)
     }
 

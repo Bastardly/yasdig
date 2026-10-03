@@ -80,8 +80,17 @@ pub fn check(cfg: &Config) -> Report {
     let mut info = Vec::new();
 
     // 1) sd.cpp binary.
-    let bin = cfg.resolve(&cfg.sd.binary);
-    if !bin.exists() {
+    let bin = cfg.sd_binary();
+    if !bin.exists() && cfg.sd.binary.is_none() {
+        // Only reachable from a source build: a release carries its own and
+        // `Config::load` has already written it out.
+        errors.push(format!(
+            "this build of rustimage has no stable-diffusion.cpp inside it, and\n\
+             models.toml names none. Either build one with RUSTIMAGE_SD_CLI set\n\
+             (see README.md), or build sd.cpp and set [sd].binary:\n  {}",
+            bin.display()
+        ));
+    } else if !bin.exists() {
         errors.push(format!(
             "stable-diffusion.cpp binary not found:\n  {}\n\n\
              Build it (cmake, glslc and the SPIR-V/Vulkan dev packages are needed):\n\
@@ -98,6 +107,15 @@ pub fn check(cfg: &Config) -> Report {
             "[sd].binary points at a directory, not an executable:\n  {}",
             bin.display()
         ));
+    } else {
+        // Which of the two it is, because "my build isn't being used" and "the
+        // bundled one is stale" are both questions this line answers.
+        let whose = match (&cfg.sd.binary, crate::bundle::BUNDLED) {
+            (Some(_), _) => "[sd].binary",
+            (None, true) => "built in",
+            (None, false) => "left in bin/ by an earlier build",
+        };
+        info.push(format!("stable-diffusion.cpp ({whose}): {}", bin.display()));
     }
 
     // 1b) The settings file. `Config::load` creates it if it is missing, so by
@@ -174,14 +192,15 @@ pub fn check(cfg: &Config) -> Report {
         }
     };
     // Keyed by name, and a discovered model's name is its file stem — so a
-    // renamed or deleted file leaves an entry that applies to nothing. Named
-    // rather than dropped: it is somebody's tuning, and the fix may be to
-    // rename the key.
+    // renamed or deleted file leaves an entry that applies to nothing. A server
+    // start sets those aside (`ModelSettings::reconcile`) and says so; `doctor`
+    // only reports, so it says what the next start will do.
     let saved: std::collections::BTreeSet<&String> = tuned.model.keys().chain(tuned.parts.keys()).collect();
     for name in saved.into_iter().filter(|n| !registry.contains_key(*n)) {
         warnings.push(format!(
-            "per-model settings for '{name}' in {} apply to no model — was the file renamed?",
-            crate::settings::ModelSettings::path(&cfg.user_dir()).display()
+            "model '{name}' no longer exists; the next start moves its saved settings to {}\n\
+             (renamed the file? rename the entry instead, and it keeps them)",
+            crate::settings::ModelSettings::parked_path(&cfg.user_dir()).display()
         ));
     }
     // What each image file was identified as, so a checkpoint's line can name
@@ -198,14 +217,18 @@ pub fn check(cfg: &Config) -> Report {
     let missing: Vec<_> = registry.values().filter(|p| !p.exists).collect();
     let models_dir = cfg.models_dir();
 
+    // A warning, not a refusal: a first run has an empty models folder by
+    // definition, and the registry is rescanned on every request, so a file
+    // dropped in while the server runs shows up on the next reload. Refusing
+    // to start would make the very first double-click end in an error.
     if usable.is_empty() {
-        errors.push(format!(
-            "no usable checkpoints.\n\n\
-             Drop a .safetensors / .ckpt / .gguf file into:\n  {}\n\
+        warnings.push(format!(
+            "no image models yet.\n\n\
+             Drop a .safetensors / .gguf file into:\n  {}\n\
              and it will be auto-detected (single-file safetensors load directly —\n\
              no conversion needed). Distilled models (SDXL-Turbo, SD-Turbo, LCM) give\n\
              the fastest results.",
-            models_dir.display()
+            models_dir.join("checkpoints").display()
         ));
     } else {
         info.push(format!(
@@ -421,10 +444,16 @@ pub fn check(cfg: &Config) -> Report {
     // Every file the page is made of, read off the same table the route serves
     // from — a missing stylesheet or module doesn't read as a missing UI, it
     // reads as a broken one, and one absent module blanks the whole page.
+    // Only when there is a `web/` to serve from: without one the page is the
+    // copy built into this executable, which can't be missing a file.
     let web = cfg.base_dir.join("web");
+    if !web.is_dir() {
+        info.push("web UI: built in".into());
+    }
     let missing: Vec<_> = crate::web::WEB_FILES
         .iter()
-        .map(|(name, _)| web.join(name))
+        .filter(|_| web.is_dir())
+        .map(|f| web.join(f.name))
         .filter(|path| !path.exists())
         .collect();
     if !missing.is_empty() {

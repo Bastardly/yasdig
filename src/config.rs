@@ -23,6 +23,9 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    /// Optional as a table: a `models.toml` the first run wrote may have no
+    /// `[sd]` at all, and every field in it has a default.
+    #[serde(default)]
     pub sd: SdConfig,
     #[serde(default)]
     pub server: ServerConfig,
@@ -52,8 +55,13 @@ pub struct Config {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SdConfig {
-    /// Path to the compiled stable-diffusion.cpp binary (`sd-cli` or `sd`).
-    pub binary: String,
+    /// Path to a compiled stable-diffusion.cpp binary (`sd-cli` or `sd`).
+    ///
+    /// Unset means the copy baked into this executable, written to `bin/` on
+    /// start (see [`crate::bundle`]). Set it to run your own build instead —
+    /// which is what a source checkout does, and what wins when both exist.
+    #[serde(default)]
+    pub binary: Option<String>,
     /// Value for the `-M/--mode` flag. Newer sd.cpp: "img_gen"; older: "txt2img".
     #[serde(default = "default_mode")]
     pub mode: String,
@@ -81,6 +89,19 @@ pub struct SdConfig {
     /// [`SdConfig::models_dir`], for the reason [`SdConfig::lora_dir`] gives.
     #[serde(default)]
     pub upscaler_dir: Option<String>,
+}
+
+impl Default for SdConfig {
+    fn default() -> Self {
+        SdConfig {
+            binary: None,
+            mode: default_mode(),
+            models_dir: default_models_dir(),
+            video_dir: None,
+            lora_dir: None,
+            upscaler_dir: None,
+        }
+    }
 }
 
 fn default_mode() -> String {
@@ -213,6 +234,27 @@ pub fn valid_lora_name(name: &str) -> bool {
     let p = Path::new(name);
     p.components()
         .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// `path` as a name relative to `root`, spelled with `/` on every platform —
+/// or the whole path when it isn't under `root`.
+///
+/// Every name the page is handed for a file under a models subdirectory goes
+/// through this: LoRAs, upscalers, parts. On Windows `to_string_lossy` would
+/// give `sdxl\detail`, which then lands in a `<lora:…>` tag, in a sidecar and
+/// in `user/model-settings.toml`, and a folder copied between the two systems
+/// would stop matching its own saved picks. `/` is a separator Windows accepts
+/// everywhere a name is joined back onto a directory, so one spelling serves
+/// both and [`valid_lora_name`] still splits it into `Normal` components.
+pub fn slash_name(root: &Path, path: &Path) -> String {
+    match path.strip_prefix(root) {
+        Ok(rel) => rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
 }
 
 /// One file in the LoRA directory, as `GET /loras` publishes it.
@@ -1594,6 +1636,13 @@ impl Config {
         // where the built-in is 1.5.
         Settings::ensure(&cfg.user_dir(), cfg.legacy_defaults.as_ref())?;
 
+        // Write the baked-in sd-cli out beside us when it isn't there yet or is
+        // from another build. Only when nothing else was named: a checkout's
+        // `[sd].binary` is the developer's own build and must stay the one run.
+        if cfg.sd.binary.is_none() {
+            crate::bundle::ensure(&cfg.base_dir)?;
+        }
+
         // Catch unusable denoise settings at startup rather than on the first
         // refine, where they'd surface as a pass that silently does nothing.
         for p in cfg.registry().values() {
@@ -1628,6 +1677,19 @@ impl Config {
             p.to_path_buf()
         } else {
             self.base_dir.join(p)
+        }
+    }
+
+    /// The sd.cpp binary every run shells out to: `[sd].binary` when it is set,
+    /// otherwise the copy baked into this executable ([`crate::bundle::path`]).
+    ///
+    /// One function rather than a resolve at each of the four call sites, so
+    /// "which binary" is a single decision `doctor` and the runner can't
+    /// disagree about.
+    pub fn sd_binary(&self) -> PathBuf {
+        match &self.sd.binary {
+            Some(b) => self.resolve(b),
+            None => crate::bundle::path(&self.base_dir),
         }
     }
 
@@ -1726,11 +1788,7 @@ impl Config {
                 if !matches!(ext.as_str(), "pth" | "pt" | "safetensors" | "gguf") {
                     continue;
                 }
-                let name = path
-                    .strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .into_owned();
+                let name = slash_name(root, &path);
                 // A name the whitelist refuses could never be selected, so it
                 // is not offered rather than offered and then rejected.
                 if !valid_lora_name(&name) {
@@ -1818,12 +1876,7 @@ impl Config {
         crate::discover::scan(&dir)
             .into_iter()
             .map(|f| {
-                let name = f
-                    .path
-                    .strip_prefix(&dir)
-                    .unwrap_or(&f.path)
-                    .to_string_lossy()
-                    .into_owned();
+                let name = slash_name(&dir, &f.path);
                 let label = match name.rsplit_once('.') {
                     Some((stem, _)) => stem.to_string(),
                     None => name.clone(),
@@ -2171,10 +2224,7 @@ impl Config {
     /// What the page names a part by: its path under the models dir, or the
     /// whole path for one outside it (a template may point anywhere).
     pub fn part_name(&self, path: &Path) -> String {
-        path.strip_prefix(self.models_dir())
-            .unwrap_or(path)
-            .to_string_lossy()
-            .into_owned()
+        slash_name(&self.models_dir(), path)
     }
 
     /// Every file on disk that fits `slot`, for its select.

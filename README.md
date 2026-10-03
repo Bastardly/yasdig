@@ -90,44 +90,87 @@ byte-exact copy. That is also what **Output upscale** in the *After each generat
 `1`: not a small enlarge, but no EASU pass at all, which is how you see the pixels the
 checkpoint actually drew.
 
-## Requirements
+## Quick start
 
-Verified target: AMD Radeon RX 7900 XTX (RADV), Vulkan 1.4, Fedora. Any Vulkan-capable
-GPU should work.
+rustimage is **one file** with stable-diffusion.cpp built into it. Nothing to install
+besides a GPU driver with Vulkan, which every current AMD, NVIDIA and Intel driver
+includes.
 
-- Rust (stable) — for building this crate.
-- A Vulkan driver (Fedora: `mesa-vulkan-drivers`, already present with RADV).
+1. Download `rustimage-linux-x86_64` or `rustimage-windows-x86_64.exe` from the
+   [releases](https://github.com/Bastardly/rustimage/releases).
+2. Put it in **a folder of its own**, somewhere you can write to — `Documents/rustimage`,
+   say, not Program Files. It keeps everything it makes beside itself.
+3. Start it. On Windows, double-click it. On Linux, `chmod +x` it once and run it
+   (from a terminal, or a file manager that runs executables).
+4. Your browser opens on the app. Put a model into `models/checkpoints/` — any SD 1.5 or
+   SDXL `.safetensors` works; a Turbo or Lightning one is the quickest — and reload.
 
-## One-time setup
+The first start creates what it needs, and later starts never overwrite any of it:
 
-### 1. Build stable-diffusion.cpp (Vulkan)
-
-Its Vulkan backend (ggml-vulkan) compiles GLSL compute shaders at build time, so it needs
-CMake, a GLSL compiler, and the SPIR-V / Vulkan dev packages:
-
-```sh
-sudo dnf install cmake glslc vulkan-loader-devel \
-                 spirv-headers-devel spirv-tools-devel glslang-devel
-
-git clone --recursive https://github.com/leejet/stable-diffusion.cpp
-cd stable-diffusion.cpp
-cmake -B build -DSD_VULKAN=ON
-cmake --build build -j
+```
+rustimage(.exe)
+models.toml        settings the program needs to start; edit freely
+models/            checkpoints/  diffusion_models/  vae/  text_encoders/
+                   loras/  upscalers/  video/      — each with a README.txt
+user/              your settings and favourites
+work/              generations, and work/output/ for what you save
+bin/               stable-diffusion.cpp, unpacked from the executable
 ```
 
-This produces the CLI binary (`build/bin/sd-cli` on recent checkouts, `sd` on older ones).
+The console window (Windows) or terminal (Linux) shows what it is doing, and closing it
+stops rustimage. Starting it a second time just opens the browser again. To update,
+replace the executable; the new stable-diffusion.cpp is unpacked on its next start.
+
+## Building from source
+
+Verified target: AMD Radeon RX 7900 XTX (RADV), Vulkan 1.4, Fedora. Any Vulkan-capable
+GPU should work. You need Rust (stable), a Vulkan driver, and what stable-diffusion.cpp's
+Vulkan backend needs to compile its shaders:
+
+```sh
+sudo dnf install cmake gcc-c++ glslc vulkan-loader-devel \
+                 spirv-headers-devel spirv-tools-devel glslang-devel
+```
+
+Then, once, put stable-diffusion.cpp **inside** this repo, where `build.rs` looks for
+it (the folder is gitignored):
+
+```sh
+git clone --recursive https://github.com/leejet/stable-diffusion.cpp
+```
+
+After that it is only:
+
+```sh
+cargo build --release      # target/release/rustimage, sd-cli inside — the file to hand out
+cargo run --release        # or run it straight from the checkout
+```
+
+`build.rs` builds sd.cpp's `sd-cli` into `stable-diffusion.cpp/build-rustimage/` and a
+release build carries it. The first build takes a few minutes, most of it ggml's Vulkan
+shaders; after that an unchanged sd.cpp costs nothing. A debug build (`cargo build`,
+`cargo test`) builds sd-cli too but doesn't embed it, so tests stay quick.
+
+To update sd.cpp, `git -C stable-diffusion.cpp pull && git -C stable-diffusion.cpp
+submodule update --recursive`, then build as usual — the next build notices the new
+commit. `RUSTIMAGE_SD_CLI=/path/to/sd-cli` embeds a binary built elsewhere instead.
+
+A checkout runs the sd-cli named by `[sd].binary` in the repo's `models.toml` — the one
+above — and serves the page straight from `web/`, so an edit shows on reload.
+
+**What you build here runs on machines like yours.** sd.cpp is built portable
+(`GGML_NATIVE=OFF`, OpenMP off), but the binary still needs your distribution's glibc and
+libstdc++ or newer. `.github/workflows/release.yml` makes the files to publish: the same
+`cargo build --release`, on Ubuntu 22.04 with libstdc++ linked in, and on Windows.
 
 > If configure fails with *"Could not find a package configuration file provided by
-> SPIRV-Headers"*, you're missing `spirv-headers-devel` / `spirv-tools-devel` — install
-> them and re-run `cmake -B build ...` (delete `build/` first).
->
-> A `pnpm not found; frontend build disabled` warning is harmless — it only skips sd.cpp's
-> own example web UI, which rustimage doesn't use.
+> SPIRV-Headers"*, install `spirv-headers-devel` / `spirv-tools-devel` and build again —
+> a failed configure is retried. `rustimage` itself does **not** need `glslc`; its own
+> shaders are WGSL, compiled in-process by `wgpu`/naga.
 
-> Note: `rustimage` itself does **not** need `glslc` — its FSR shaders are WGSL, compiled
-> in-process by `wgpu`/naga. `glslc` is only needed to build sd.cpp.
+## Models
 
-### 2. Get a model
+### Get a model
 
 Put model files anywhere under `models/`. Every file is **identified by reading its
 header** — the tensor names inside it — so neither the file name nor the folder
@@ -166,12 +209,12 @@ is the answer on a smaller one. The turbo runs at 8 steps and CFG 1, which is wh
 arrives set to; the base Z-Image wants ~28 steps at CFG 4-5, which is a per-model
 setting.
 
-### 3. Smoke-test sd.cpp on its own
+### Smoke-test sd.cpp on its own
 
-Before involving Rust, confirm generation works:
+If a generation fails and you want to rule rustimage out, run sd-cli by hand:
 
 ```sh
-./build/bin/sd-cli -M img_gen -m models/sdxl-turbo.safetensors \
+stable-diffusion.cpp/build-rustimage/bin/sd-cli -M img_gen -m models/checkpoints/sdxl-turbo.safetensors \
   -p "a lovely cat" --steps 4 --cfg-scale 1 --sampling-method euler -o test.png
 ```
 
@@ -244,7 +287,10 @@ where it says something:
 
 ### `models.toml`
 
-- `[sd].binary` — path to your `sd-cli` (or `sd`) binary.
+- `[sd].binary` — path to your `sd-cli` (or `sd`) binary. Leave it out to use the one
+  built into a release executable (unpacked to `bin/`). A checkout sets it.
+- `[sd]` and every key in it are optional; the file a release writes on its first run
+  sets only the server address.
 - `[sd].mode` — `img_gen` for recent sd.cpp; `txt2img` for older builds.
 - `[sd].models_dir` — folder scanned for checkpoints (default `models`).
   Recursive, and identified by header rather than extension; the video, LoRA and
@@ -444,7 +490,16 @@ Startup runs a preflight first: it checks the sd.cpp binary, creates
 steps and CFG they resolve to — which is how you see what a template inherited —
 and warns about templates pointing at files that aren't there. If something is
 missing it prints copy-pasteable fix instructions and exits rather than failing later,
-mid-request — `doctor` below runs the same checks without starting the server.
+mid-request — `doctor` below runs the same checks without starting the server. No
+models at all is a warning rather than a stop: a fresh folder has none, and one
+dropped in while the server runs shows up on the next reload.
+
+The browser opens on the page by itself (set `RUSTIMAGE_NO_BROWSER=1` to stop that),
+and a second start of the same folder finds the first one running and just opens the
+page again. If the port is taken by anything else — another program, or rustimage
+running from another folder — it takes the next free one and says which. With no
+`models.toml` argument it uses the one in the current directory, then the checkout a
+`target/` build belongs to, and otherwise the one beside the executable, creating that folder's layout on the way.
 
 Open <http://127.0.0.1:8080>, pick a model, type a prompt, Generate. The result shows
 output resolution, seed, and per-stage timings (generate / upscale / fsr / refine / hi-res —
@@ -603,8 +658,10 @@ running on something else. Picking the file the scan would have picked anyway sa
 nothing.
 
 A model is remembered by its name, which for a discovered one is its file name
-without the extension — rename the file and `doctor` points out the settings that no
-longer apply to anything.
+without the extension. When a model is gone, the next start moves its settings to
+`user/model-settings.removed.toml` and says so, and moves them back if the file returns
+— so taking a model out for a while costs nothing. Renamed a file? Rename its entry in
+`user/model-settings.toml` to match (before starting rustimage) and it keeps them.
 
 ### Prompt variables
 

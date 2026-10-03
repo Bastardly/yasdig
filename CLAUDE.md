@@ -47,6 +47,70 @@ the measurement — that the DFT reports a planted amplitude correctly and doesn
 between bins — is in `cargo test`, since a plausible-looking table that says nothing
 true is the failure worth guarding against.
 
+## Packaging
+
+A release is **one executable** per OS with sd-cli and the page inside it, made by
+`.github/workflows/release.yml` on a `v*` tag. Double-clicked, it creates its folders
+beside itself, starts, and opens the browser. Not Tauri: on Linux its webview is
+WebKitGTK, which would have to be installed — the one dependency a one-file build
+exists to avoid — and it would render this page in an engine nobody tests it in.
+**`cargo build --release` is the whole recipe**, and CI runs exactly that. sd.cpp is
+a gitignored clone at `./stable-diffusion.cpp/`; `build.rs` configures and builds its
+`sd-cli` target into `build-rustimage/` there (a separate dir, so a hand-made native
+`build/` is left alone) and a *release* build embeds it. A debug build builds it but
+never embeds it — 93 MB in every test binary is link time on every `cargo test`. A
+failed sd.cpp build is a warning in debug, so the Rust half still tests, and an error in
+release. `RUSTIMAGE_SD_CLI=<path>` overrides it with a binary from elsewhere.
+
+**sd.cpp is still a subprocess, never FFI.** The bytes travel inside us
+(`build.rs` → `src/bundle.rs`) and are written to `bin/sd-cli` on start, then run
+exactly as `[sd].binary` would be. The repo's `models.toml` names
+`build-rustimage/bin/sd-cli`, so a checkout runs the binary `cargo build` just made.
+
+Two things about `build.rs` break silently: it **reruns on `.git/logs/HEAD`, not on
+the source tree** (walking 1 GB per build is what it avoids) — so a pull is noticed, a
+hand edit to sd.cpp needs `touch build.rs`. And **configure is stamped on success**
+(`.rustimage-configured`), not judged by `CMakeCache.txt`, which a failed configure
+leaves behind and which then made every later build fail on "no Makefile".
+
+Five things break silently:
+
+- **Which folder is home is `home::config_path`**: an argument, else a `models.toml`
+  in the working directory (a checkout, and every install made before this), else this
+  checkout when the executable is still inside its `target/` (an IDE's run button starts
+  it anywhere), else the executable's own folder — never the working directory alone, which a file manager sets
+  to `$HOME` or `System32`. `home::ensure` creates only what is missing; a second start
+  writing over an edited `models.toml` is the failure it exists to prevent.
+- **`[sd].binary` wins over the bundle**, and `Config::load` only unpacks when it is
+  unset. A checkout's own sd.cpp build must stay the one that runs.
+- **The unpack is keyed on a stamp, `bin/sd-cli.version`**, holding the hash `build.rs`
+  computed — not on hashing the file, which would cost 93 MB of reading per start. The
+  binary goes through a `.part` and a rename and the stamp is written last, so a start
+  killed halfway can't leave a truncated binary that the stamp vouches for.
+- **The page is served from `web/` when there is one, and from the bytes in
+  `WEB_FILES` otherwise** (`web::serve`). A checkout keeps edit-and-reload; a release
+  folder never has a `web/`, so nothing there can shadow the built-in copy. `doctor`
+  only checks the files on disk when it is reading them.
+- **The listener binds before the GPU worker starts.** `Engine::new` sweeps `work/`,
+  so a second copy started by a second double-click would sweep the first one's scratch
+  mid-render. Binding first is what notices it. A taken port is asked `GET /instance`,
+  which names the folder that server serves (`instance_home`): *this* folder's server is
+  handed over to (the browser opens on it and the start ends), and anything else —
+  another rustimage folder included, a checkout beside a release — is stepped past to
+  the next of 20 ports. It was "is it a rustimage" once, and a `cargo run` beside a
+  running release then opened the release's page and quit.
+
+The sd.cpp flags in `build.rs` are what make the file run elsewhere —
+`GGML_NATIVE=OFF`, `GGML_OPENMP=OFF`, `/MT` on Windows — and the workflow's
+*Dependencies* step fails the build when sd-cli links anything but the Vulkan loader
+and libc. Linux's static libstdc++ is the one flag that lives in the workflow (as
+`LDFLAGS`, which cmake's first configure reads) rather than in `build.rs`: Fedora
+doesn't ship `libstdc++.a`, and a binary built on a new distro needs its glibc anyway,
+so a local build is for machines like yours and CI's Ubuntu 22.04 is what travels. Names the page gets for a file under a models folder
+(LoRAs, upscalers, parts) go through `config::slash_name`, so they read `sdxl/x` on
+Windows as well, and a folder moved between the two systems still matches its saved
+picks.
+
 ## The four GPU passes
 
 `Fsr::process()` in `src/fsr/mod.rs` is the single entry point for all four, and takes
@@ -816,8 +880,12 @@ Four things break silently:
   key silently, so a typo would read as saved and do nothing; `prompt`,
   `negative`, `hires_scale` and `variables` are the page's, not a model's.
 - **An entry is keyed by registry name**, which for a discovered model is its file
-  stem — a renamed file orphans it. `doctor` warns about an entry naming no model
-  rather than dropping it: it is somebody's tuning, and the fix may be a rename.
+  stem — a renamed file orphans it. Each server start **parks** an entry naming no
+  model in `user/model-settings.removed.toml` and says so, and puts it back on the
+  first start that finds the model again (`ModelSettings::reconcile`). Parked, not
+  deleted: a model moved out for an afternoon — trying a release in a fresh folder —
+  is indistinguishable from one that is gone, and it is somebody's tuning. `doctor`
+  only reports, so it says what the next start will do.
 - **The FSR-versus-no-override ambiguity is real.** `upscaler: None` means both
   "FSR" and "not set", so this layer can't pin FSR over a global ESRGAN upscaler.
   Documented rather than fixed; fixing it means an explicit FSR name in the file.

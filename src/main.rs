@@ -62,10 +62,12 @@
 //! two are *about* the render in flight, so going through the queue would make
 //! them arrive only once there was nothing left to report or to stop.
 
+mod bundle;
 mod config;
 mod convert;
 mod discover;
 mod fsr;
+mod home;
 mod http;
 mod pipeline;
 mod preflight;
@@ -83,7 +85,8 @@ use config::{Config, Filters, FiltersPatch, LoraRef};
 use pipeline::{Engine, EscalateRequest, GenRequest, GenResult, Img2ImgRequest, VideoRequest};
 use sd::Monitor;
 use settings::Settings;
-use std::net::TcpListener;
+use std::io::{Read as _, Write as _};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
@@ -153,6 +156,24 @@ enum JobKind {
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    let double_clicked = args.len() == 1;
+    let result = run(&args);
+    // A double-clicked console closes the moment the process exits, taking the
+    // one message that said what to fix with it. Windows only: a Linux file
+    // manager starts it with no terminal at all, and in a terminal the message
+    // stays on screen by itself.
+    if let Err(e) = &result {
+        if double_clicked && cfg!(windows) {
+            eprintln!("[rustimage] {e:#}");
+            eprintln!("\nPress Enter to close.");
+            let _ = std::io::stdin().read_line(&mut String::new());
+            std::process::exit(1);
+        }
+    }
+    result
+}
+
+fn run(args: &[String]) -> Result<()> {
 
     // Subcommands that run without the server. `fsr`, `fsr-selftest` and
     // `sr-selftest` exercise the wgpu path alone; `upscale` adds sd-cli for an
@@ -166,26 +187,86 @@ fn main() -> Result<()> {
         _ => {}
     }
 
-    let config_path = args
-        .get(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("models.toml"));
+    let config_path = home::config_path(args.get(1).map(String::as_str))?;
 
     let cfg = Arc::new(
         Config::load(&config_path)
             .with_context(|| format!("loading {}", config_path.display()))?,
     );
 
+    // Settings for models that are gone are set aside, and brought back for
+    // ones that returned, before anything reads them. Said once, here, rather
+    // than as a warning on every start that nobody can act on but by hand.
+    let registry = cfg.registry();
+    match settings::ModelSettings::reconcile(&cfg.user_dir(), |n| registry.contains_key(n)) {
+        Ok((parked, restored)) => {
+            let removed = settings::ModelSettings::parked_path(&cfg.user_dir());
+            for name in parked {
+                println!(
+                    "[rustimage] warning: model '{name}' no longer exists, so its saved settings \
+                     were removed (kept in {} — they come back if the model does)",
+                    removed.display()
+                );
+            }
+            for name in restored {
+                println!("[rustimage] model '{name}' is back — its saved settings are restored");
+            }
+        }
+        Err(e) => eprintln!("[rustimage] warning: couldn't tidy per-model settings: {e:#}"),
+    }
+
     // Validate the environment before touching the GPU, so missing prerequisites
     // produce clear, actionable instructions instead of a mid-request failure.
     let report = preflight::check(&cfg);
     if !report.print() {
-        eprintln!("[rustimage] run `rustimage doctor` after fixing the above to re-check.");
-        std::process::exit(1);
+        anyhow::bail!("fix the above and start rustimage again (`rustimage doctor` re-checks)");
     }
 
-    let bind = format!("{}:{}", cfg.server.host, cfg.server.port);
-    let web_dir = cfg.base_dir.join("web");
+    // Before the GPU worker, not after it: `Engine::new` sweeps `work/`, and a
+    // second copy of *this folder* started by a second double-click would do
+    // that under the feet of the first one's render. So a port held by a
+    // rustimage serving the same folder is handed over to — the browser opens
+    // on it and this start ends — and a port held by anything else, another
+    // rustimage folder included (a checkout beside a release), is stepped past
+    // to the next free one. The configured port is where it starts looking.
+    const TRIES: u16 = 20;
+    let home = cfg.base_dir.display().to_string();
+    let mut found = None;
+    for port in (cfg.server.port..=u16::MAX).take(TRIES as usize) {
+        let bind = format!("{}:{port}", cfg.server.host);
+        match TcpListener::bind(&bind) {
+            Ok(l) => {
+                found = Some((l, bind));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                if instance_home(&bind).as_deref() == Some(home.as_str()) {
+                    let url = format!("http://{bind}/");
+                    println!("[rustimage] already running at {url} — opening it");
+                    open_browser(&url);
+                    return Ok(());
+                }
+                println!("[rustimage] port {port} is in use, trying {}", port.saturating_add(1));
+            }
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!("can't listen on {bind} — check [server] in {}", config_path.display())
+                })
+            }
+        }
+    }
+    let Some((listener, bind)) = found else {
+        anyhow::bail!(
+            "ports {} to {} are all in use — set another `port` under [server] in {}",
+            cfg.server.port,
+            cfg.server.port.saturating_add(TRIES - 1),
+            config_path.display()
+        );
+    };
+    let url = format!("http://{bind}/");
+    // A checkout's `web/` when there is one, so edits show on reload; the
+    // copy built in otherwise. See `web::serve`.
+    let web_dir = Some(cfg.base_dir.join("web")).filter(|d| d.is_dir());
 
     // Shared with every connection thread: the worker publishes progress into
     // it, and a Stop reaches the running child through it.
@@ -259,14 +340,14 @@ fn main() -> Result<()> {
                  sharpen=rcas"
             );
         }
-        Err(e) => {
-            eprintln!("[rustimage] startup failed:\n{e:#}");
-            std::process::exit(1);
-        }
+        Err(e) => return Err(e.context("startup failed")),
     }
 
-    let listener = TcpListener::bind(&bind).with_context(|| format!("binding {bind}"))?;
-    println!("[rustimage] listening on http://{bind}");
+    println!("[rustimage] listening on {url}");
+    if std::env::var_os("RUSTIMAGE_NO_BROWSER").is_none() {
+        open_browser(&url);
+    }
+    println!("[rustimage] close this window, or press Ctrl+C, to stop");
 
     for stream in listener.incoming() {
         let stream = match stream {
@@ -278,7 +359,7 @@ fn main() -> Result<()> {
         let web_dir = web_dir.clone();
         let monitor = monitor.clone();
         std::thread::spawn(move || {
-            if let Err(e) = handle_conn(stream, &job_tx, &cfg, &web_dir, &monitor) {
+            if let Err(e) = handle_conn(stream, &job_tx, &cfg, web_dir.as_deref(), &monitor) {
                 eprintln!("[rustimage] connection error: {e:#}");
             }
         });
@@ -287,11 +368,56 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// The folder the rustimage holding `bind` serves, or `None` when what holds
+/// it isn't one. A second start uses it to tell its own folder's server (hand
+/// over: open the browser on it) from anything else (step to the next port).
+/// The folder rather than "is it a rustimage", because a checkout and a release
+/// folder side by side are two rustimages that both want 8080, and opening the
+/// other one's page would be the wrong program with the wrong models.
+fn instance_home(bind: &str) -> Option<String> {
+    let probe = || -> std::io::Result<String> {
+        let addr = std::net::ToSocketAddrs::to_socket_addrs(bind)?
+            .next()
+            .ok_or(std::io::ErrorKind::NotFound)?;
+        let mut s = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2))?;
+        s.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+        s.write_all(b"GET /instance HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
+        let mut body = String::new();
+        s.read_to_string(&mut body)?;
+        Ok(body)
+    };
+    let reply = probe().ok()?;
+    let (head, body) = reply.split_once("\r\n\r\n")?;
+    if !head.starts_with("HTTP/1.1 200") {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    (v["app"] == "rustimage").then(|| v["home"].as_str().map(str::to_string))?
+}
+
+/// Show the page in the person's own browser. A double-click has no other way
+/// to find it, so this is the one thing a first run must not leave to a README.
+/// Not waited on — `xdg-open` can block until the browser exits — and a
+/// failure only costs the person a click, so it prints the address and moves on.
+fn open_browser(url: &str) {
+    let spawned = if cfg!(windows) {
+        // `start`'s first quoted argument is a window title, hence the "".
+        std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(url).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(url).spawn()
+    };
+    if spawned.is_err() {
+        println!("[rustimage] open {url} in your browser");
+    }
+}
+
 fn handle_conn(
     stream: std::net::TcpStream,
     job_tx: &Sender<Job>,
     cfg: &Config,
-    web_dir: &std::path::Path,
+    web_dir: Option<&std::path::Path>,
     monitor: &Monitor,
 ) -> Result<()> {
     let mut conn = http::Connection::new(stream)?;
@@ -307,8 +433,8 @@ fn handle_conn(
     // `workitems::valid_id` and the reason there is no generic static handler to
     // traverse out of.
     if req.method == "GET" {
-        if let Some((name, content_type)) = web::lookup(&req.path) {
-            return web::serve(&mut conn, web_dir, name, content_type);
+        if let Some(file) = web::lookup(&req.path) {
+            return web::serve(&mut conn, web_dir, file);
         }
     }
 
@@ -340,6 +466,18 @@ fn handle_conn(
         // queueing them behind it would mean a progress bar that only updates
         // once the render it reports on has finished, and a Stop button that
         // can't be pressed until there is nothing left to stop.
+        // Which folder this server is, for a second start deciding whether to
+        // hand over to it or take the next port (`instance_home`). On the
+        // connection thread so it answers mid-render.
+        ("GET", "/instance") => conn.respond(
+            200,
+            "application/json",
+            format!(
+                "{{\"app\":\"rustimage\",\"home\":{}}}",
+                json_str(&cfg.base_dir.display().to_string())
+            )
+            .as_bytes(),
+        ),
         ("GET", "/progress") => conn.respond(
             200,
             "application/json",
@@ -1736,10 +1874,7 @@ fn error_json(msg: &str) -> String {
 /// `rustimage doctor [models.toml]`
 /// Run the same startup checks and report, without starting the server.
 fn run_doctor(args: &[String]) -> Result<()> {
-    let config_path = args
-        .get(0)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("models.toml"));
+    let config_path = home::config_path(args.get(0).map(String::as_str))?;
     let cfg = Config::load(&config_path)
         .with_context(|| format!("loading {}", config_path.display()))?;
 
@@ -1776,10 +1911,7 @@ fn run_upscale_cli(args: &[String]) -> Result<()> {
     if !(1.0..=pipeline::MAX_UPSCALE).contains(&factor) {
         anyhow::bail!("factor must be between 1 and {}", pipeline::MAX_UPSCALE);
     }
-    let config_path = args
-        .get(4)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("models.toml"));
+    let config_path = home::config_path(args.get(4).map(String::as_str))?;
     let cfg = Config::load(&config_path)
         .with_context(|| format!("loading {}", config_path.display()))?;
     let model = match PathBuf::from(&args[2]) {

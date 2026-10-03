@@ -1,0 +1,45 @@
+# rustimage configuration — what the program needs in order to start.
+#
+# rustimage wrote this file on its first run, and never rewrites it: edit away.
+# Everything in it is optional; delete a line and its default comes back.
+#
+# You usually don't need to touch it at all. Drop model files into the folders
+# under `models/` and they are found by what is inside them, not by their name.
+# Your *defaults* — steps, CFG, size, the refine and hi-res settings, the
+# default prompt — are set in the Settings tab, which writes user/settings.toml.
+
+[sd]
+# The stable-diffusion.cpp binary. Leave this unset to use the one built into
+# rustimage (unpacked to bin/ on start). Set it to run your own build:
+# binary = "/path/to/your/sd-cli"
+#
+# Where models are looked for. Relative paths are relative to this file.
+# models_dir   = "models"
+# lora_dir     = "models/loras"
+# upscaler_dir = "models/upscalers"
+# video_dir    = "models/video"
+
+[server]
+# 127.0.0.1 keeps the page to this computer. Change the port if 8080 is taken.
+host = "127.0.0.1"
+port = 8080
+
+# ---------------------------------------------------------------------------
+# [templates.<name>] — optional tuned presets for one specific checkpoint,
+# matched by `model` path. A template states only what is *different* about that
+# checkpoint and inherits everything else from your settings. The Image tab's
+# "Save as defaults for this model" does the same job without editing a file.
+# ---------------------------------------------------------------------------
+# [templates.sdxl-turbo]
+# description = "SDXL-Turbo — fast draft (512 → 1024)"
+# model       = "models/checkpoints/sdxl-turbo.safetensors"
+# width       = 512
+# height      = 512
+# steps       = 4
+# cfg_scale   = 1.0
+
+# ---------------------------------------------------------------------------
+# [[video]] — optional video model entries. Video models in models/video/ are
+# found by reading their headers, so this is only for naming files you haven't
+# downloaded yet, or for pinning settings. See README.md for the fields.
+# ---------------------------------------------------------------------------

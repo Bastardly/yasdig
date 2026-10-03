@@ -15,58 +15,89 @@ use std::path::Path;
 /// `doctor` reads the same table (see `preflight`), so a module added here is a
 /// module `doctor` checks for.
 ///
+/// **Each row carries its bytes**, so a release is one file with the page
+/// inside it. They are read from disk instead whenever there is a `web/` beside
+/// `models.toml` — see [`serve`].
+///
 /// The content type is load-bearing for the `js/` rows in a way it wasn't for the
 /// stylesheet: a browser refuses to execute a `type="module"` script served as
 /// anything but a JavaScript MIME type, and the failure is a console error with a
 /// blank page behind it.
-pub const WEB_FILES: &[(&str, &str)] = &[
-    ("index.html", "text/html; charset=utf-8"),
-    ("style.css", "text/css; charset=utf-8"),
-    ("js/app.js", "text/javascript; charset=utf-8"),
-    ("js/busy.js", "text/javascript; charset=utf-8"),
-    ("js/convert.js", "text/javascript; charset=utf-8"),
-    ("js/dom.js", "text/javascript; charset=utf-8"),
-    ("js/gridmark.js", "text/javascript; charset=utf-8"),
-    ("js/hints.js", "text/javascript; charset=utf-8"),
-    ("js/image.js", "text/javascript; charset=utf-8"),
-    ("js/loras.js", "text/javascript; charset=utf-8"),
-    ("js/modelsettings.js", "text/javascript; charset=utf-8"),
-    ("js/outputs.js", "text/javascript; charset=utf-8"),
-    ("js/player.js", "text/javascript; charset=utf-8"),
-    ("js/prompt-box.js", "text/javascript; charset=utf-8"),
-    ("js/prompt-weight.js", "text/javascript; charset=utf-8"),
-    ("js/settings.js", "text/javascript; charset=utf-8"),
-    ("js/source-slot.js", "text/javascript; charset=utf-8"),
-    ("js/state.js", "text/javascript; charset=utf-8"),
-    ("js/video.js", "text/javascript; charset=utf-8"),
-    ("js/viewer.js", "text/javascript; charset=utf-8"),
-    ("js/workitems.js", "text/javascript; charset=utf-8"),
+pub struct WebFile {
+    pub name: &'static str,
+    pub content_type: &'static str,
+    pub bytes: &'static [u8],
+}
+
+/// One row: the name, its type, and the file itself, embedded at build time.
+/// A macro because `include_bytes!` needs a literal, and spelling the name
+/// twice per row is how the two would come to disagree.
+macro_rules! row {
+    ($name:literal, $ty:literal) => {
+        WebFile {
+            name: $name,
+            content_type: $ty,
+            bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/web/", $name)),
+        }
+    };
+}
+
+pub const WEB_FILES: &[WebFile] = &[
+    row!("index.html", "text/html; charset=utf-8"),
+    row!("style.css", "text/css; charset=utf-8"),
+    row!("js/app.js", "text/javascript; charset=utf-8"),
+    row!("js/busy.js", "text/javascript; charset=utf-8"),
+    row!("js/convert.js", "text/javascript; charset=utf-8"),
+    row!("js/dom.js", "text/javascript; charset=utf-8"),
+    row!("js/gridmark.js", "text/javascript; charset=utf-8"),
+    row!("js/hints.js", "text/javascript; charset=utf-8"),
+    row!("js/image.js", "text/javascript; charset=utf-8"),
+    row!("js/loras.js", "text/javascript; charset=utf-8"),
+    row!("js/modelsettings.js", "text/javascript; charset=utf-8"),
+    row!("js/outputs.js", "text/javascript; charset=utf-8"),
+    row!("js/player.js", "text/javascript; charset=utf-8"),
+    row!("js/prompt-box.js", "text/javascript; charset=utf-8"),
+    row!("js/prompt-weight.js", "text/javascript; charset=utf-8"),
+    row!("js/settings.js", "text/javascript; charset=utf-8"),
+    row!("js/source-slot.js", "text/javascript; charset=utf-8"),
+    row!("js/state.js", "text/javascript; charset=utf-8"),
+    row!("js/video.js", "text/javascript; charset=utf-8"),
+    row!("js/viewer.js", "text/javascript; charset=utf-8"),
+    row!("js/workitems.js", "text/javascript; charset=utf-8"),
 ];
 
 /// The file a GET path asks for, or `None` if it isn't one of ours. `/` is the
 /// page, which is the only name the client ever has to know.
-pub fn lookup(path: &str) -> Option<(&'static str, &'static str)> {
+pub fn lookup(path: &str) -> Option<&'static WebFile> {
     let name = match path {
         "/" => "index.html",
         p => p.strip_prefix('/')?,
     };
-    WEB_FILES.iter().copied().find(|(n, _)| *n == name)
+    WEB_FILES.iter().find(|f| f.name == name)
 }
 
-/// Read fresh per request so an edit needs no restart — and answered `no-cache`,
-/// because without a validator a browser may cache heuristically, and an edited
-/// stylesheet or module that doesn't appear on reload is a trap that costs an
-/// hour to find.
-pub fn serve(
-    conn: &mut http::Connection,
-    web_dir: &Path,
-    name: &str,
-    content_type: &str,
-) -> Result<()> {
-    match std::fs::read(web_dir.join(name)) {
-        Ok(body) => conn.respond_with(200, content_type, "Cache-Control: no-cache\r\n", &body),
-        Err(_) => conn.respond(500, "text/plain", format!("web/{name} not found").as_bytes()),
-    }
+/// From disk when there is a `web/` to read — a source checkout, where reading
+/// fresh per request is what lets an edit show on reload with no restart — and
+/// otherwise the copy built in. A release's folder never gets a `web/`, so the
+/// built-in copy can't be shadowed by a stale one there.
+///
+/// Answered `no-cache` either way: without a validator a browser may cache
+/// heuristically, and an edited stylesheet or module that doesn't appear on
+/// reload is a trap that costs an hour to find. After an upgrade the same rule
+/// is what makes the new page load instead of the old one.
+pub fn serve(conn: &mut http::Connection, web_dir: Option<&Path>, file: &WebFile) -> Result<()> {
+    let body = match web_dir {
+        Some(dir) => match std::fs::read(dir.join(file.name)) {
+            Ok(b) => std::borrow::Cow::Owned(b),
+            Err(_) => {
+                let msg = format!("web/{} not found", file.name);
+                return conn.respond(500, "text/plain", msg.as_bytes());
+            }
+        },
+        None => std::borrow::Cow::Borrowed(file.bytes),
+    };
+    conn.respond_with(200, file.content_type, "Cache-Control: no-cache
+", &body)
 }
 
 #[cfg(test)]
@@ -78,8 +109,8 @@ mod tests {
     /// else. A `..` that resolved would reach the checkpoints directory.
     #[test]
     fn only_the_listed_names_resolve() {
-        assert_eq!(lookup("/").unwrap().0, "index.html");
-        assert_eq!(lookup("/js/app.js").unwrap().0, "js/app.js");
+        assert_eq!(lookup("/").unwrap().name, "index.html");
+        assert_eq!(lookup("/js/app.js").unwrap().name, "js/app.js");
         for bad in [
             "/../models.toml",
             "/js/../../models.toml",
@@ -122,7 +153,7 @@ mod tests {
             }
         }
         found.sort();
-        let mut listed: Vec<String> = WEB_FILES.iter().map(|(n, _)| n.to_string()).collect();
+        let mut listed: Vec<String> = WEB_FILES.iter().map(|f| f.name.to_string()).collect();
         listed.sort();
         listed.dedup();
         assert_eq!(listed, found);

@@ -47,7 +47,7 @@ impl<'a> SdRunner<'a> {
     }
 
     fn binary(&self) -> PathBuf {
-        self.cfg.resolve(&self.cfg.sd.binary)
+        self.cfg.sd_binary()
     }
 
     /// Verify the sd binary exists; returns a friendly error if not.
@@ -55,9 +55,7 @@ impl<'a> SdRunner<'a> {
         let bin = self.binary();
         if !bin.exists() {
             bail!(
-                "sd binary not found at {} — build stable-diffusion.cpp \
-                 (cmake -B build -DSD_VULKAN=ON && cmake --build build) and set \
-                 [sd].binary in models.toml",
+                "sd binary not found at {} — `rustimage doctor` says why and what to do",
                 bin.display()
             );
         }

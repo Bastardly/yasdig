@@ -1,0 +1,156 @@
+# The one-file release: stable-diffusion.cpp's sd-cli built static, then baked
+# into rustimage (see build.rs and src/bundle.rs), for Linux and Windows.
+#
+# Push a tag `v*` to publish a release with both executables attached, or run it
+# by hand from the Actions tab to get them as workflow artifacts only.
+#
+# Three flags on the sd.cpp build are what make the result travel, and all three
+# fail on *someone else's* machine rather than here:
+#   GGML_NATIVE=OFF   a native build uses this runner's CPU instructions and dies
+#                     with "illegal instruction" on an older CPU.
+#   GGML_OPENMP=OFF   OpenMP is a runtime library (libgomp, vcomp140.dll) that
+#                     isn't on every system. ggml's own thread pool replaces it.
+#   static runtime    -static-libstdc++ on Linux, /MT on Windows — no libstdc++
+#                     version mismatch, no VC++ redistributable to install.
+# What is left is the Vulkan loader, which every GPU driver installs, and libc.
+# The "dependencies" step checks exactly that, so a regression fails here.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  # The sd.cpp commit rustimage is tested against. Bump deliberately: rustimage
+  # parses sd-cli's progress output and reads its source for several behaviours
+  # (see CLAUDE.md), so a newer commit is a change to test, not a free upgrade.
+  SD_CPP_REF: 59c23bce0d82be3a922023ab811194f05b3e2faa
+  VULKAN_VERSION: 1.4.328.1
+
+jobs:
+  linux:
+    # The oldest supported runner: glibc is linked dynamically, and a binary
+    # runs on systems with the glibc it was built against *or newer*.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vulkan SDK
+        # The LunarG SDK rather than apt: 22.04's Vulkan headers are older than
+        # ggml-vulkan wants, and the SDK brings glslc with it.
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sL -o vulkansdk.tar.xz \
+            "https://sdk.lunarg.com/sdk/download/${VULKAN_VERSION}/linux/vulkansdk-linux-x86_64-${VULKAN_VERSION}.tar.xz"
+          tar -xf vulkansdk.tar.xz
+          SDK="$RUNNER_TEMP/${VULKAN_VERSION}/x86_64"
+          echo "VULKAN_SDK=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$SDK/lib" >> "$GITHUB_ENV"
+
+      - name: Fetch stable-diffusion.cpp
+        # Where build.rs looks for it, so the build below is the same
+        # `cargo build --release` as on a desk.
+        run: |
+          git clone https://github.com/leejet/stable-diffusion.cpp
+          git -C stable-diffusion.cpp checkout "$SD_CPP_REF"
+          git -C stable-diffusion.cpp submodule update --init --recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        # LDFLAGS is read by cmake's first configure: a static libstdc++ here,
+        # where the runner has it, and not in build.rs, because Fedora doesn't.
+        env:
+          LDFLAGS: -static-libstdc++ -static-libgcc
+        run: |
+          cargo build --release
+          cp target/release/rustimage rustimage-linux-x86_64
+          echo "SD_CLI=stable-diffusion.cpp/build-rustimage/bin/sd-cli" >> "$GITHUB_ENV"
+
+      - name: Dependencies
+        # Anything beyond the Vulkan loader and glibc's own libraries is a
+        # library the person running this may not have.
+        run: |
+          ldd "$SD_CLI"
+          if ldd "$SD_CLI" | grep -vE 'linux-vdso|ld-linux|lib(c|m|dl|pthread|rt)\.so|libvulkan\.so'; then
+            echo "::error::sd-cli links a library that won't be on every system"; exit 1
+          fi
+
+      - name: Test
+        run: cargo test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustimage-linux-x86_64
+          path: rustimage-linux-x86_64
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vulkan SDK
+        # The installer and flags upstream's own CI uses.
+        run: |
+          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Fetch stable-diffusion.cpp
+        run: |
+          git clone https://github.com/leejet/stable-diffusion.cpp
+          git -C stable-diffusion.cpp checkout $env:SD_CPP_REF
+          git -C stable-diffusion.cpp submodule update --init --recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        # The static CRT for rustimage itself too; build.rs gives sd-cli /MT.
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: |
+          cargo build --release
+          Copy-Item target\release\rustimage.exe rustimage-windows-x86_64.exe
+          $exe = Get-ChildItem -Recurse stable-diffusion.cpp\build-rustimage\bin -Filter sd-cli.exe | Select-Object -First 1
+          Add-Content $env:GITHUB_ENV "SD_CLI=$($exe.FullName)"
+
+      - name: Dependencies
+        # vulkan-1.dll comes with every GPU driver; KERNEL32 and the rest are
+        # Windows itself. A VCRUNTIME/MSVCP or vcomp DLL here means /MT or the
+        # OpenMP switch didn't take.
+        run: |
+          $deps = dumpbin /dependents $env:SD_CLI | Select-String '\.dll' | ForEach-Object { $_.ToString().Trim() }
+          $deps
+          $bad = $deps | Where-Object { $_ -match '^(vcruntime|msvcp|vcomp|libgomp|libstdc)' }
+          if ($bad) { Write-Error "sd-cli needs a runtime DLL users won't have: $bad"; exit 1 }
+
+      - name: Test
+        run: cargo test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustimage-windows-x86_64
+          path: rustimage-windows-x86_64.exe
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes \
+            rustimage-linux-x86_64 rustimage-windows-x86_64.exe
