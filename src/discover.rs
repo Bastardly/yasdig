@@ -519,19 +519,19 @@ fn gguf_dtype(ty: u32) -> String {
     .to_string()
 }
 
-fn read_u32(r: &mut impl Read) -> Result<u32> {
+pub(crate) fn read_u32(r: &mut impl Read) -> Result<u32> {
     let mut b = [0u8; 4];
     r.read_exact(&mut b)?;
     Ok(u32::from_le_bytes(b))
 }
 
-fn read_u64(r: &mut impl Read) -> Result<u64> {
+pub(crate) fn read_u64(r: &mut impl Read) -> Result<u64> {
     let mut b = [0u8; 8];
     r.read_exact(&mut b)?;
     Ok(u64::from_le_bytes(b))
 }
 
-fn read_gguf_string(r: &mut impl Read) -> Result<String> {
+pub(crate) fn read_gguf_string(r: &mut impl Read) -> Result<String> {
     let len = read_u64(r)?;
     if len > MAX_HEADER {
         bail!("a GGUF string claims to be {len} bytes long");
@@ -546,7 +546,7 @@ fn read_gguf_string(r: &mut impl Read) -> Result<String> {
 /// The type numbers are GGUF's own enum. Arrays carry an element type and a
 /// count and can hold strings, so this recurses exactly one level — GGUF has no
 /// array of arrays.
-fn skip_gguf_value(r: &mut impl Read, ty: u32) -> Result<()> {
+pub(crate) fn skip_gguf_value(r: &mut impl Read, ty: u32) -> Result<()> {
     let width = match ty {
         0..=1 | 7 => 1, // uint8, int8, bool
         2..=3 => 2,     // uint16, int16

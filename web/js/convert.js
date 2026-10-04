@@ -104,6 +104,7 @@ async function startConvert() {
     $('cresult').innerHTML =
       `<div class="meta spaced"><b>Done in ${mins} min.</b><br>` +
       `${esc(r.out)}<br>${gb(r.source_bytes)} → <b>${gb(r.bytes)}</b>${esc(off)}<br>` +
+      (r.folded ? `Folded ${r.folded} fp8 scales into their weights.<br>` : '') +
       `It is picked up on the next restart — the model list is read at startup.</div>`;
     // So the new file appears in the list, and the old one now shows a sibling.
     loadConvertModels();

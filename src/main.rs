@@ -72,6 +72,7 @@ mod bundle;
 mod config;
 mod convert;
 mod discover;
+mod foldscale;
 mod fsr;
 mod home;
 mod http;
@@ -193,6 +194,7 @@ fn run(args: &[String]) -> Result<()> {
         Some("sr-selftest") => return run_sr_selftest(),
         Some("doctor") => return run_doctor(&args[2..]),
         Some("upscale") => return run_upscale_cli(&args[2..]),
+        Some("fold-scales") => return run_fold_scales(&args[2..]),
         _ => {}
     }
 
@@ -1940,6 +1942,39 @@ fn run_doctor(args: &[String]) -> Result<()> {
     } else {
         std::process::exit(1);
     }
+}
+
+/// `rustimage fold-scales <file.gguf>...`
+///
+/// The repair for a GGUF converted from a scaled-fp8 checkpoint before
+/// `Engine::convert` folded the scales itself — see `foldscale`. In place and
+/// in seconds to minutes, where re-converting a 14B at `-t 1` takes hours. No
+/// config, no sd-cli, no GPU.
+fn run_fold_scales(args: &[String]) -> Result<()> {
+    if args.is_empty() {
+        eprintln!("usage: rustimage fold-scales <file.gguf>...");
+        std::process::exit(2);
+    }
+    for a in args {
+        let path = PathBuf::from(a);
+        let start = std::time::Instant::now();
+        let r = foldscale::fold(&path)?;
+        if r.recovered {
+            println!("[fold] {}: undid an interrupted fold first", path.display());
+        }
+        println!(
+            "[fold] {}: folded {}, already folded {}, left alone {} — {} ms",
+            path.display(),
+            r.folded,
+            r.already,
+            r.skipped.len(),
+            start.elapsed().as_millis()
+        );
+        for s in &r.skipped {
+            println!("  left alone: {s}");
+        }
+    }
+    Ok(())
 }
 
 /// `rustimage upscale <in.png> <out.png> <model> [factor] [models.toml]`

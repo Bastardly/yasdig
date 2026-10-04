@@ -219,6 +219,8 @@ pub struct ConvertResult {
     pub bytes: u64,
     pub ty: String,
     pub ms: u128,
+    /// fp8 scales folded into their weights after sd-cli wrote the file.
+    pub folded: usize,
 }
 
 /// Where [`Engine::enlarge_clip`] put the frames it wrote.
@@ -509,6 +511,16 @@ impl Engine {
             let _ = std::fs::remove_file(&plan.out);
             return Err(e);
         }
+        // sd.cpp copies a scaled-fp8 file's per-tensor scales across unfolded,
+        // and the raw-magnitude matmul overflows Vulkan's fp16 accumulators
+        // (`foldscale`). A file nothing was scaled in is untouched.
+        let fold = match crate::foldscale::fold(&plan.out) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = std::fs::remove_file(&plan.out);
+                return Err(e.context("folding the fp8 scales into the converted file"));
+            }
+        };
         let bytes = std::fs::metadata(&plan.out)
             .with_context(|| {
                 format!(
@@ -524,6 +536,7 @@ impl Engine {
             bytes,
             ty: plan.ty.clone(),
             ms: t.elapsed().as_millis(),
+            folded: fold.folded,
         })
     }
 

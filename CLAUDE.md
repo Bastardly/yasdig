@@ -21,6 +21,7 @@ cargo run --release -- fsr-selftest         # full wgpu path; no sd.cpp or check
 cargo run --release -- fsr in.png out.png [scale] [sharpness] [clarity]
 cargo run --release -- upscale in.png out.png <model> [factor]  # model enlarge alone + consistency dB; no checkpoint
 cargo run --release -- sr-selftest          # `src/sr/` shader ops vs CPU references, plus matmul TFLOPS
+cargo run --release -- fold-scales f.gguf   # fold a scaled-fp8 GGUF's scales into its weights, in place
 
 node --test 'web/js/*.test.js'              # the prompt-weighting string maths, and that the page's module
                                             #   graph evaluates (a cyclic import read at top level blanks every tab).
@@ -1746,6 +1747,23 @@ again.
     `square_dim` on the weight kept only as a fallback. `Tensors::vector_len` is for
     exactly this, and `a_vae_survives_the_trip_through_gguf` is the regression. Biases
     are never quantized (`model_loader.cpp:1517`), so they are always there to read.
+  - **sd.cpp's convert keeps a scaled-fp8 file's scales separate, and that renders
+    as a mesh.** ComfyUI's `fp8_scaled` stores raw e4m3 weights (±448) beside a
+    one-element `X.scale_weight`; it is under every block size, so it is copied
+    across, and `Linear::forward` (`ggml_block.hpp:273`) applies it *after* the
+    matmul. A Wan 2.2 A14B at q4_K had 400 pairs with scales of 9e-5..4e-3, so
+    every matmul ran 250–11 000× its real magnitude. The likely mechanism is
+    ggml-vulkan's fp16 accumulators, and the clip was a mesh on frame 0 and a
+    mosaic by frame 32. `Engine::convert` therefore runs `foldscale::fold` on
+    the output: it rescales each block's fp16 `d`/`dmin` in place and sets the
+    scale to 1, so nothing is re-quantised and the file isn't rewritten. The
+    `fold-scales` subcommand repairs older files, and `doctor` names them.
+    Two things about it break silently. **The block field offsets in
+    `foldscale::layout` are ggml's `block_*` structs**, so a wrong offset folds
+    a quant nibble instead and the file still loads; `a_scaled_fp8_file_folds_into_its_weights`
+    dequantises q8_0 and q4_K to check. And **a pair is written under a
+    journal**: weight and scale are two writes, and either half on its own is a
+    file that renders wrong with nothing saying why.
   - The size shown before the button is `estimate`, which transcribes
     `ModelLoader::tensor_should_be_converted` (`model_loader.cpp:1509`) rather than
     assuming everything is quantized — a transformer keeps every bias, norm scale and

@@ -59,6 +59,21 @@ fn indent(s: &str) -> String {
         .join("\n")
 }
 
+/// Every `.gguf` under `dir`, as deep as the model scan goes.
+fn gguf_files(dir: &std::path::Path, depth: usize, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() && depth < 6 {
+            gguf_files(&p, depth + 1, out);
+        } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("gguf")) {
+            out.push(p);
+        }
+    }
+}
+
 fn human_size(bytes: u64) -> String {
     const U: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut v = bytes as f64;
@@ -449,6 +464,26 @@ pub fn check(cfg: &Config) -> Report {
             u.path.display(),
             u.why
         ));
+    }
+
+    // 3b) GGUFs converted from scaled fp8 before the convert folded the scales.
+    // They load and render, as a mesh that worsens every step, so the file is
+    // named with the command that repairs it (`foldscale`).
+    let mut ggufs = Vec::new();
+    gguf_files(&models_dir, 0, &mut ggufs);
+    if cfg.video_dir().strip_prefix(&models_dir).is_err() {
+        gguf_files(&cfg.video_dir(), 0, &mut ggufs);
+    }
+    for p in &ggufs {
+        if let Ok(n @ 1..) = crate::foldscale::pending(p) {
+            warnings.push(format!(
+                "{n} fp8 scale(s) in this GGUF were never folded into its weights, which\n\
+                 overflows on Vulkan and renders as a mesh or mosaic:\n  {}\n\
+                 repair it in place with:\n  rustimage fold-scales \"{}\"",
+                p.display(),
+                p.display()
+            ));
+        }
     }
 
     // 4) Web UI (API still works without it, so this is only a warning).

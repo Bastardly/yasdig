@@ -1160,6 +1160,16 @@ alone — every bias, every norm scale, every embedding — so an estimate that 
 otherwise would under-predict by enough to matter. Measured against real conversions it
 lands within 0.01%.
 
+**A scaled-fp8 file has its scales folded in afterwards.** ComfyUI's "fp8_scaled"
+checkpoints store each weight as raw fp8 numbers (up to ±448) next to one multiplier that
+sd.cpp applies *after* the matrix multiply, and `-M convert` copies that layout across
+unchanged. Each multiply then adds up values hundreds to thousands of times their real
+size, which overflows on Vulkan and comes out as a mesh over the picture that gets worse
+every step. So once sd-cli finishes, the converter rewrites the per-block multipliers in
+place and sets each scale to 1 (`src/foldscale.rs`). The result says how many it folded.
+A file converted before this existed is repaired with `rustimage fold-scales <file.gguf>`,
+in seconds to minutes rather than another conversion; `doctor` names any file that needs it.
+
 **It runs single-threaded on purpose.** sd.cpp's streaming converter starts one worker
 per physical core and has them all call `ModelLoader::load_tensor` on a single shared
 loader, which re-enters `load_tensors` → `process_model_files` and mutates that loader's
@@ -1264,6 +1274,7 @@ in isolation.
 ```sh
 rustimage doctor [models.toml]      # run the startup checks and report, without starting
 rustimage upscale in.png out.png <model> [factor=2.0] [models.toml]  # the model enlarge alone
+rustimage fold-scales <file.gguf>...  # fold a scaled-fp8 GGUF's scales into its weights
 rustimage fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]  # no colour knobs: UI only
 rustimage fsr-selftest [out.png]    # synthesize patterns and check the filters
 rustimage sr-selftest               # the upscaler shaders against CPU references, plus speed
@@ -1618,6 +1629,7 @@ the GPU worker is gone.
   src/config.rs    models.toml -> typed profiles (templates + discovery), image families
   src/discover.rs  identify model files by their tensor headers, image and video
   src/convert.rs   requantize a model file (-M convert) — types, size estimate, slots
+  src/foldscale.rs fold a scaled-fp8 GGUF's per-tensor scales into its weights
   src/preflight.rs startup environment checks, shared with `doctor`
   src/sd.rs        sd-cli subprocess wrapper (txt2img + img2img + vid_gen)
   src/settings.rs  user/settings.toml and user/model-settings.toml
