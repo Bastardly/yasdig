@@ -57,9 +57,21 @@ const HELP = [
         + 'original overflows at half precision. Only VAEs this model can decode '
         + 'are listed.' },
   { ids: ['part-llm', 'pmpart-llm'],
-    text: 'The language model that reads your prompt for this model. Z-Image is '
-        + 'trained against Qwen3 4B and nothing else will do, so only files of '
-        + 'that size are listed.' },
+    text: 'The language model that reads your prompt for this model. Each family '
+        + 'is trained against exactly one — Qwen3 4B for Z-Image and Flux.2 Klein 4B, '
+        + 'Qwen3 8B for Klein 9B, Qwen3-VL 4B for Krea 2, Qwen2.5-VL 7B for '
+        + 'Qwen-Image — and another one loads without complaint and conditions '
+        + 'on nonsense, so only the one that fits is listed. A Q8 GGUF of it '
+        + 'is indistinguishable in practice and half the size.' },
+  { ids: ['part-clip_l', 'pmpart-clip_l'],
+    text: 'Flux.1\'s short text encoder: CLIP-L, which reads the gist of the '
+        + 'prompt. There is one file for it and it is small, so this rarely '
+        + 'needs changing.' },
+  { ids: ['part-t5xxl', 'pmpart-t5xxl'],
+    text: 'Flux.1\'s long text encoder, T5-XXL, which reads the detail of the '
+        + 'prompt and any text to render. The fp16 file is 9.5 GB, and beside a '
+        + 'Q8 Flux (12 GB) that is tight on a 24 GB card — a Q8 GGUF of it '
+        + '(about 5 GB) is the fix, at no visible cost.' },
   { ids: ['seed', 'vseed'],
     text: 'The random noise the picture is grown from, as a number. The same seed '
         + 'with the same settings gives the same image, so it is how you keep a '

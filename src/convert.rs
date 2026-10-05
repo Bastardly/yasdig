@@ -181,7 +181,7 @@ impl Slot {
     /// The slot a discovered role belongs in, or `None` for a role `-M convert`
     /// has no component flag for.
     ///
-    /// `QwenVl` and `ClipVision` are the `None`s that matter: H3's LLM goes in
+    /// `Llm` and `ClipVision` are the `None`s that matter: H3's Qwen3-VL goes in
     /// through `--llm` and the CLIP-Vision tower through `--clip_vision`, and
     /// neither is a parameter of `convert_with_components`. Converting them
     /// through some *other* slot would rename every tensor, so they are left off
@@ -193,8 +193,8 @@ impl Slot {
         match role {
             Role::Dit(_) => Some(Slot::Diffusion),
             Role::Vae(_) => Some(Slot::Vae),
-            Role::Umt5 => Some(Slot::T5xxl),
-            Role::QwenVl | Role::ClipVision | Role::Lora(_) | Role::Unknown(_) => None,
+            Role::Umt5 | Role::T5xxl => Some(Slot::T5xxl),
+            Role::ClipL | Role::ClipVision | Role::Lora(_) | Role::Unknown(_) => None,
             // Image files reach this list through the registry as
             // `Slot::Checkpoint`, not through the video dir's scan. A bare image
             // DiT or VAE gets a slot when the image side can assemble one.
@@ -417,6 +417,7 @@ fn describe(role: &Role) -> String {
         Role::Vae(VaeKind::Wan21) => "Wan 2.1 VAE".into(),
         Role::Vae(VaeKind::Wan22) => "Wan 2.2 VAE".into(),
         Role::Umt5 => "umt5-xxl text encoder".into(),
+        Role::T5xxl => "T5-XXL text encoder".into(),
         other => format!("{other:?}"),
     }
 }
@@ -511,6 +512,7 @@ mod tests {
                 })
                 .collect(),
             layout,
+            arch: None,
         }
     }
 
@@ -594,7 +596,10 @@ mod tests {
         // Qwen3-VL goes in through `--llm`, which `convert_with_components` has
         // no parameter for. Offering it through some other slot would rename
         // every tensor in it.
-        assert_eq!(Slot::for_role(&Role::QwenVl), None);
+        assert_eq!(
+            Slot::for_role(&Role::Llm(crate::discover::LlmKind::Qwen3Vl { dim: 5120 })),
+            None
+        );
         assert_eq!(Slot::for_role(&Role::ClipVision), None);
         assert_eq!(Slot::for_role(&Role::Lora(crate::discover::LoraBase::Unknown)), None);
         assert_eq!(
@@ -603,6 +608,7 @@ mod tests {
         );
         assert_eq!(Slot::for_role(&Role::Vae(VaeKind::Wan21)), Some(Slot::Vae));
         assert_eq!(Slot::for_role(&Role::Umt5), Some(Slot::T5xxl));
+        assert_eq!(Slot::for_role(&Role::T5xxl), Some(Slot::T5xxl));
     }
 
     #[test]

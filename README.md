@@ -30,10 +30,11 @@ already did, each rung can name its own — draft on a Turbo model, finish on a
 detailed one. See [Image to image](#image-to-image).
 
 Models are identified by **what is inside the file**, not by name or folder: SD 1.x,
-SD 2.x and SDXL checkpoints, and **Z-Image**, which arrives as three files (the
-model, a text encoder and a VAE) that are found and put together for you. Each
-family starts at its own sensible settings, and any model can be given its own. See
-[Model families](#model-families).
+SD 2.x and SDXL checkpoints, and the newer models that arrive as three or four files
+(the model, its text encoders and a VAE) — Flux.1, Flux.2 Klein, Z-Image, Krea 2 and
+Qwen-Image — which are found and put together for you. Each family starts at its own
+sensible settings, and any model can be given its own. See
+[Supported models](#supported-models).
 
 There is a **Video** tab too, over the same subprocess and the same GPU queue: Wan 2.2
 through sd.cpp's `vid_gen` mode, animating either a prompt or one of your finished
@@ -42,6 +43,36 @@ enlarge it frame by frame — a fixed kernel can't flicker, so that stays stable
 per-frame diffusion boils. See [Video](#video).
 
 A tiny std-only HTTP server glues it together and serves a single static HTML page.
+
+## Supported models
+
+| family | status | files | starts at |
+|---|---|---|---|
+| **SD 1.x, SD 2.x, SDXL** | runs | one checkpoint | your settings |
+| **Flux.1** dev, and finetunes — Krea dev, Kontext¹ | runs | model + CLIP-L + T5-XXL + Flux `ae` VAE | 1024², 20 steps, CFG 1 |
+| **Flux.1 schnell** | runs | the same four | 1024², 4 steps, CFG 1 |
+| **Flux.2 Klein 4B** | runs | model + Qwen3-4B + Flux.2 VAE | 1024², 4 steps, CFG 1 |
+| **Flux.2 Klein 9B** | runs | model + Qwen3-8B + Flux.2 VAE | 1024², 4 steps, CFG 1 |
+| **Z-Image** (Turbo) | runs | model + Qwen3-4B + Flux `ae` VAE | 1024², 8 steps, CFG 1 |
+| **Krea 2** (Turbo) | runs | model + Qwen3-VL-4B + Wan 2.1 VAE | 1024², 8 steps, CFG 1 |
+| **Qwen-Image** | runs | model + Qwen2.5-VL-7B + Wan 2.1 VAE | 1024², 20 steps, CFG 2.5 |
+| **Wan 2.2** (video) | runs, on the Video tab | see [Video models](#video-models) | |
+| Flux.2 dev | recognised, not offered | its 24B Mistral encoder doesn't fit beside it on a consumer card | |
+| Flux Fill / Controls, Flex.2, SD3, Chroma, LongCat, Ovis, ERNIE, Mage-Flow, Anima, LTX-2, Hunyuan Video | recognised, not offered | `doctor` names them | |
+| Flux 3 | not yet | no open weights, and no support in stable-diffusion.cpp | |
+
+¹ Kontext and Qwen-Image-Edit are *editing* models. Until the edit feature exists they
+are listed under their base family and run as text-to-image.
+
+- **What a file is gets read from inside it**, so file names and folders don't matter.
+  A model missing one of its parts is listed greyed out, and `doctor` prints the path
+  it is waiting for.
+- **Distilled releases are what a family starts at** — Klein, Z-Image Turbo, Krea 2
+  Turbo — because the file can't say which it is. A base model (Klein base, Z-Image,
+  Krea 2 Raw) wants ~20-30 steps and CFG 4: set that once with *Save as defaults for
+  this model*.
+- **What fits a 24 GB card** — the download links and the sizes to pick are in
+  [Get a model](#get-a-model).
 
 ## Why not FidelityFX-CLI?
 
@@ -189,7 +220,7 @@ works as-is:
 ```
 models/
   checkpoints/         SD 1.x / 2.x / SDXL single-file checkpoints
-  diffusion_models/    a model that comes without its text encoder and VAE (Z-Image)
+  diffusion_models/    a model that comes without its text encoder and VAE (Flux, Z-Image, …)
   text_encoders/       their text encoders
   vae/                 their VAEs
   loras/   upscalers/  video/
@@ -213,6 +244,58 @@ it is waiting for. The bf16 set is ~20 GB and fits a 24 GB card; a GGUF quantiza
 is the answer on a smaller one. The turbo runs at 8 steps and CFG 1, which is what it
 arrives set to; the base Z-Image wants ~28 steps at CFG 4-5, which is a per-model
 setting.
+
+The other families follow the same pattern. The sizes below are the picks that fit a
+**24 GB card with the model and its encoders resident together**. The model and the
+text encoder are both on the card for the whole render, so it is their sum that has to
+fit, and a smaller quantization of either is the lever. An fp8 file is a false
+economy on Vulkan: no Vulkan device can multiply fp8, so sd.cpp casts it to bf16 and
+it needs about twice its size (the [Convert](#convert) tab turns one into a GGUF).
+
+**Flux.1** (dev, schnell, Krea dev, Kontext) — about 18.5 GB at Q8:
+
+| file | where to get it |
+|---|---|
+| the model | dev [GGUF](https://huggingface.co/leejet/FLUX.1-dev-gguf/tree/main) (`q8_0`, 12.8 GB), schnell [GGUF](https://huggingface.co/leejet/FLUX.1-schnell-gguf/tree/main), Kontext [GGUF](https://huggingface.co/QuantStack/FLUX.1-Kontext-dev-GGUF/tree/main) |
+| CLIP-L | [`clip_l.safetensors`](https://huggingface.co/comfyanonymous/flux_text_encoders/tree/main) |
+| T5-XXL | [GGUF](https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf/tree/main) (`Q8_0`, 5 GB). The fp16 file (9.5 GB) works too, beside a Q4 model |
+| the VAE — Flux's `ae.safetensors` | the same one Z-Image uses |
+
+**Flux.2 Klein** — the 4B is about 12 GB, the 9B about 19 GB at Q8. Both are fast
+enough to be worth trying first, and both can edit — which the Image tab will be able
+to use once it has an edit mode:
+
+| file | where to get it |
+|---|---|
+| the model | 4B [GGUF](https://huggingface.co/leejet/FLUX.2-klein-4B-GGUF/tree/main) or [safetensors](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/tree/main); 9B [GGUF](https://huggingface.co/leejet/FLUX.2-klein-9B-GGUF/tree/main) (`Q8_0`, 9.9 GB) |
+| the text encoder | 4B: Qwen3-4B, the same file as Z-Image's. 9B: Qwen3-8B, [GGUF](https://huggingface.co/unsloth/Qwen3-8B-GGUF/tree/main) (`Q8_0`) |
+| the VAE — Flux.2's | [`flux2-vae.safetensors`](https://huggingface.co/Comfy-Org/flux2-dev/tree/main/split_files/vae) |
+
+**Krea 2** — about 15 GB:
+
+| file | where to get it |
+|---|---|
+| the model — Krea 2 Turbo | [GGUF](https://huggingface.co/realrebelai/KREA-2_GGUFs/tree/main/TURBO) (`Q6_K`, 10.5 GB) |
+| the text encoder — Qwen3-VL-4B | [GGUF](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/tree/main) (`Q8_0`, 4.3 GB; not the `mmproj` file). **Not** Comfy's `qwen3vl_4b_bf16.safetensors`, though sd.cpp's own Krea 2 doc links it: it nests the language half under `model.language_model.`, which sd.cpp can't load, and `doctor` says so |
+| the VAE — Wan 2.1's | the `wan_2.1_vae.safetensors` the Video tab uses, or [`qwen_image_vae.safetensors`](https://huggingface.co/Comfy-Org/Krea-2/tree/main/vae), which is the same file |
+
+**Qwen-Image** — about 17 GB with these picks; it is a 20B model, the largest here:
+
+| file | where to get it |
+|---|---|
+| the model | [GGUF](https://huggingface.co/QuantStack/Qwen-Image-GGUF/tree/main) (`Q4_K_S`, 12.1 GB) |
+| the text encoder — Qwen2.5-VL-7B | [GGUF](https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/tree/main) (`Q4_K_M`, 4.7 GB) |
+| the VAE | [`qwen_image_vae.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/tree/main/split_files/vae), or the Video tab's `wan_2.1_vae` |
+
+**A VAE in `models/video/` counts.** Krea 2 and Qwen-Image decode with the Wan 2.1
+VAE, so the copy the Video tab already has is found and offered — there is no need for
+a second one under `vae/`. Everything else in the video folder stays the Video tab's.
+
+If a model still runs out of memory, `--offload-to-cpu` keeps the weights in system RAM
+and moves each part to the card only while it runs. Add it to that one model's
+`extra_args` (see [Per-model settings](#per-model-settings)) rather than to every
+model: it costs RAM equal to the whole set, which on most machines is the scarcer of
+the two.
 
 ### Smoke-test sd.cpp on its own
 
@@ -255,20 +338,26 @@ Either way, **adding a model never needs a code change.**
 A model's **family** is read from its file, and it decides two things: which files
 sd.cpp is handed, and what the model starts at.
 
-| family | files | starts at |
-|---|---|---|
-| SD 1.x, SD 2.x, SDXL | one checkpoint (`-m`) | your settings — the *SD 1.x, SD 2.x and SDXL* section of the Settings tab |
-| Z-Image | model + Qwen3-4B text encoder + Flux VAE | 1024², 8 steps, CFG 1, euler — the turbo's recipe from sd.cpp's docs |
+The families, their files and their starting numbers are the table under
+[Supported models](#supported-models). The SD families start at *your* settings — the
+*SD 1.x, SD 2.x and SDXL* section of the Settings tab — and every other family at a
+recipe of its own (size, steps, CFG, sampler; euler throughout), from sd.cpp's docs or
+the model's card. An architecture this build doesn't run is named by `doctor` ("…
+which this build doesn't run yet") rather than offered and then failing minutes into a
+render. The model select groups models by family.
 
-Flux, Qwen-Image, SD3, Chroma, LTX and several more are recognised and named by
-`doctor` ("… which this build doesn't run yet") rather than offered and then failing
-minutes into a render. The model select groups models by family.
+Flux.1 dev and schnell are separate families because the file says which it is — dev
+carries the distilled guidance and schnell doesn't — and their right step counts are
+20 and 4. A Flux LoRA fits both.
 
 **Choosing the separate files.** The Image tab's **Models** fold holds the
 *Diffusion model* select and, under it, one select per file that model's family runs
-with — the VAE for SD and SDXL; the VAE and the text encoder for Z-Image. Each lists
-only the files that fit (a Flux VAE is never offered to an SDXL, whose latents it
-can't decode), identified by what is inside them like everything else here.
+with — the VAE for SD and SDXL; the VAE, CLIP-L and T5-XXL for Flux.1; the VAE and
+the text encoder for the rest. Each lists only the files that fit, identified by what
+is inside them like everything else here: a Flux VAE is never offered to an SDXL, whose
+latents it can't decode, and a text encoder is offered only to the family trained
+against it, by kind *and* size — Klein 4B and Krea 2 both want a 4B Qwen, and a
+Qwen3-VL in Klein's slot would load without complaint and condition on nonsense.
 
 - On a single-file checkpoint the VAE defaults to **Built into the checkpoint**.
   Picking a file replaces it — the usual reason on SDXL is
@@ -893,6 +982,12 @@ longer fits stays on its row with a line saying why, and Generate refuses it rat
 than running without it. A LoRA nothing could identify is offered for every model —
 refusing a file that works would be worse. `doctor` prints each LoRA's family.
 
+The Flux LoRAs are the case where the names say least: Flux.1 and every Flux.2 share
+`double_blocks`, so a Flux LoRA is placed by how wide the model it patches is (Klein 9B
+and Flux.2 dev are wider) and, for the two the same width, by which blocks it touches —
+Flux.1 has 19 double blocks, Klein 4B five. One that only touches blocks both have is
+offered for both rather than guessed. A Flux.1 LoRA fits dev and schnell alike.
+
 What you pick travels with the image. **Refine** and **Hi-res** run the same
 adapters, because they are passes over that picture and one that dropped the LoRA
 would redraw the surface in the base model's idiom and undo the look — so there is
@@ -1506,10 +1601,12 @@ needs a Vulkan device and nothing else.
 - `GET /loras` — every file in the LoRA dir, recursive: `name` (what a request puts in
   `loras[].name`), `label` (the same without its extension, for a picker), `bytes`,
   `usable`, `note` — why not, when `usable` is false — and what it was trained for:
-  `family`, in the spelling `/models` uses for a model's (`sdxl`, `z_image`, …), and
-  `base`, the same as a name (`SDXL`). `base` without `family` is a LoRA for something
-  that is no image family here (a Wan or Krea 2 one) and fits no model; both empty is
-  a LoRA nothing identified, which fits every model. Unusable entries are listed
+  `base`, as a name (`SDXL`, `Flux.1`), and `families`, every family it fits in the
+  spelling `/models` uses for a model's (`sdxl`, `flux`, `flux_schnell`, …). A list
+  rather than one family because the rule is more than equality: a Flux.1 LoRA fits
+  dev and schnell. `families` empty is a LoRA for something that is no image family
+  here (a Wan or Flux.2 dev one) and fits no model; `base` empty is a LoRA nothing
+  identified, and `families` then lists them all. Unusable entries are listed
   rather than filtered out, because "my LoRA isn't in the list" is a much worse thing to
   debug than "my LoRA is in the list and says why". Filesystem only: it answers on the
   connection thread, and costs one header read per file.
@@ -1668,12 +1765,14 @@ the GPU worker is gone.
 
 ## Roadmap
 
-- **More image families.** Flux (and Krea/Flex) and Qwen-Image are already recognised;
-  each is a recipe, its parts (Flux: CLIP-L + T5-XXL; Qwen-Image: Qwen2.5-VL) and a
-  switch in `ImageFamily`. See CLAUDE.md, *## Families*.
+- **More image families.** Flux 3, once it has open weights and sd.cpp runs it; Chroma
+  and SD3 are already recognised. Each is a recipe, its parts and a switch in
+  `ImageFamily`. See CLAUDE.md, *## Families*.
 - **An edit tab.** Two different things share the name: *instruction* editing
-  (Flux Kontext, Qwen-Image-Edit, Flux 2 — a reference image and "make the sky red",
-  sd.cpp's `-r`) and *masked inpainting* (`--mask`). Both are more slots on the
+  (Flux Kontext, Qwen-Image-Edit, Flux.2 Klein, Krea 2 with an edit LoRA — a reference
+  image and "make the sky red", sd.cpp's `-r` and `--ref-image-args`; Qwen-Image-Edit
+  2509 and later also want the encoder's vision projector as an optional `--llm_vision`
+  part) and *masked inpainting* (`--mask`). Both are more slots on the
   source-slot factory (`source-slot.js`): a mask painter and a list of reference images.
 - **LTX-2 on the Video tab**, as a `VideoFamily` (`--llm` Gemma, `--audio-vae`,
   `--embeddings-connectors`). The classifier already names the file.

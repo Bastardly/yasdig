@@ -253,15 +253,16 @@ pub struct LoraFile {
     pub usable: bool,
     /// Empty when `usable`; otherwise why not, in one phrase.
     pub note: String,
-    /// The base it was trained against, as [`ImageFamily::as_str`] — the
-    /// spelling `/models` uses for a model's `family`, so the page compares two
-    /// served strings rather than deciding anything itself. `None` for a base
-    /// that is no image family (a Wan or Krea 2 LoRA) *and* for one nothing
-    /// identified; `base` tells those apart.
-    pub family: Option<&'static str>,
-    /// The base as a name — "SDXL", "Krea 2" — or empty when unknown, which is
-    /// what makes a LoRA offered for every model. See
-    /// [`crate::discover::LoraBase::fits`], the rule this is the wire form of.
+    /// Every family it fits, as [`ImageFamily::as_str`] — the spelling
+    /// `/models` uses for a model's `family` — so the page asks whether a
+    /// served list holds a served string rather than deciding anything itself.
+    /// It is [`crate::discover::LoraBase::fits`] evaluated here, which matters
+    /// once the rule is more than equality: a Flux.1 LoRA fits dev and schnell.
+    /// Empty for a base that is no image family (a Wan or Flux.2 dev LoRA),
+    /// every family for one nothing identified.
+    pub families: Vec<&'static str>,
+    /// The base as a name — "SDXL", "Krea 2" — or empty when unknown; what the
+    /// picker says a LoRA is "for".
     pub base: &'static str,
 }
 
@@ -820,7 +821,7 @@ impl FiltersPatch {
 /// anything.
 ///
 /// Only the families the classifier can name are here. An architecture sd.cpp
-/// knows and this build doesn't list — SD3, Flux 2, Chroma, LTX — is a
+/// knows and this build doesn't list — SD3, Flux.2 dev, Chroma, LTX — is a
 /// [`crate::discover::Role::Unsupported`] rather than a variant, so `doctor` can
 /// say what it is without the registry having to decide what to do with it.
 ///
@@ -836,29 +837,59 @@ pub enum ImageFamily {
     #[default]
     #[serde(rename = "sdxl")]
     Sdxl,
-    /// Flux.1 dev/schnell, and the Krea and Flex finetunes that keep its
-    /// tensor layout. CLIP-L + T5-XXL + the 16-channel `ae` VAE.
+    /// Flux.1 dev, and every finetune that keeps its distilled guidance —
+    /// Krea dev, Kontext. CLIP-L + T5-XXL + the 16-channel `ae` VAE.
+    ///
+    /// Kontext is an editing model with dev's exact tensors, so it lands here
+    /// and runs as a text-to-image dev. Only a filename or a per-model flag can
+    /// tell it apart; that is decided when the edit feature is, not guessed now.
     #[serde(rename = "flux")]
     Flux,
+    /// Flux.1 schnell: Flux's layout without `guidance_in`, distilled to four
+    /// steps. Its own family because its right step count is a fifth of dev's
+    /// and the header says which one a file is; a Flux LoRA fits both.
+    #[serde(rename = "flux_schnell")]
+    FluxSchnell,
+    /// Flux.2 Klein 4B. Qwen3-4B — Z-Image's encoder — and Flux.2's 32-channel
+    /// VAE.
+    ///
+    /// The two Kleins are two families rather than one with a width because
+    /// they take different encoders and their LoRAs don't cross: 3072 wide
+    /// against 4096.
+    #[serde(rename = "flux2_klein_4b")]
+    Flux2Klein4b,
+    /// Flux.2 Klein 9B. Qwen3-8B and the Flux.2 VAE.
+    #[serde(rename = "flux2_klein_9b")]
+    Flux2Klein9b,
     /// Z-Image (Tongyi). One Qwen3-4B as the text encoder, and Flux's `ae` VAE.
     #[serde(rename = "z_image")]
     ZImage,
-    /// Qwen-Image. Qwen2.5-VL-7B as the text encoder, and its own Wan-shaped
-    /// VAE.
+    /// Krea 2, 12B. Qwen3-VL-4B as the text encoder and the Wan 2.1 VAE — the
+    /// same file Qwen-Image ships as `qwen_image_vae`.
+    #[serde(rename = "krea2")]
+    Krea2,
+    /// Qwen-Image, 20B. Qwen2.5-VL-7B as the text encoder, and the Wan 2.1 VAE
+    /// under the name `qwen_image_vae`.
+    ///
+    /// Qwen-Image-Edit has the same tensors, so until the edit feature exists
+    /// one lists here and runs as a text-to-image Qwen-Image.
     #[serde(rename = "qwen_image")]
     QwenImage,
 }
 
 impl ImageFamily {
-    /// Every variant, for the tests that have to hold across all of them. The
-    /// same tripwire arrangement as [`VideoFamily::ALL`].
-    #[cfg(test)]
-    pub const ALL: [ImageFamily; 6] = [
+    /// Every variant. Tests hold across it, and [`Config::scan_images`] asks it
+    /// which roles some family has a slot for.
+    pub const ALL: [ImageFamily; 10] = [
         ImageFamily::Sd1,
         ImageFamily::Sd2,
         ImageFamily::Sdxl,
         ImageFamily::Flux,
+        ImageFamily::FluxSchnell,
+        ImageFamily::Flux2Klein4b,
+        ImageFamily::Flux2Klein9b,
         ImageFamily::ZImage,
+        ImageFamily::Krea2,
         ImageFamily::QwenImage,
     ];
 
@@ -869,11 +900,21 @@ impl ImageFamily {
     /// hand it) and a [`ImageFamily::recipe`], because `user/settings.toml`'s
     /// SDXL-tuned steps and CFG are a wrong answer for every DiT here. Until
     /// then it is identified, named by `doctor`, and kept out of the select
-    /// rather than offered and then failing minutes in.
+    /// rather than offered and then failing minutes in. Every family listed
+    /// today has both; the match stays exhaustive so a new variant has to
+    /// decide.
     pub fn runnable(self) -> bool {
         match self {
-            ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl | ImageFamily::ZImage => true,
-            ImageFamily::Flux | ImageFamily::QwenImage => false,
+            ImageFamily::Sd1
+            | ImageFamily::Sd2
+            | ImageFamily::Sdxl
+            | ImageFamily::Flux
+            | ImageFamily::FluxSchnell
+            | ImageFamily::Flux2Klein4b
+            | ImageFamily::Flux2Klein9b
+            | ImageFamily::ZImage
+            | ImageFamily::Krea2
+            | ImageFamily::QwenImage => true,
         }
     }
 
@@ -897,24 +938,42 @@ impl ImageFamily {
     /// fall through to this `cfg_scale`, so a turbo model's refine runs at the
     /// CFG 1 it needs, and raising CFG for a base model carries them along.
     ///
-    /// Z-Image's is the **turbo**'s, from sd.cpp's `docs/z_image.md` — the
-    /// release people actually run. A header can't tell turbo from base (same
-    /// tensors, different training), so the base model wants a template: about
-    /// 28 steps at CFG 4-5.
+    /// Where a header can't tell a distilled release from its base — the same
+    /// tensors, different training — the recipe is the **distilled** one,
+    /// because that is the release people run, and the base wants a template
+    /// or *Save as defaults for this model*:
+    ///
+    /// - Z-Image turbo, from sd.cpp's `docs/z_image.md`. Base: ~28 steps at
+    ///   CFG 4-5.
+    /// - Flux.2 Klein, from `docs/flux2.md`. Klein base: 20 steps at CFG 4.
+    /// - Krea 2 Turbo, from its model card (8 steps, guidance 0, which is
+    ///   sd.cpp's CFG 1). Krea 2 Raw is the base.
+    ///
+    /// Flux.1 is the exception — `guidance_in` says dev from schnell — so each
+    /// gets its own: dev's 20 steps at CFG 1 with sd.cpp's default distilled
+    /// guidance of 3.5, schnell's 4. Qwen-Image's is `docs/qwen_image.md`'s
+    /// CFG 2.5 at a modest 20 steps; its flow shift of 3 is sd.cpp's default
+    /// for the family already.
+    ///
+    /// Every size is 1024², the size each was trained around. Krea 2's card
+    /// shows 2048², which here is what the hi-res pass is for.
     pub fn recipe(self) -> PartialSettings {
+        let dit = |steps: u32, cfg_scale: f32| PartialSettings {
+            width: Some(1024),
+            height: Some(1024),
+            steps: Some(steps),
+            cfg_scale: Some(cfg_scale),
+            sampler: Some("euler".into()),
+            ..PartialSettings::default()
+        };
         match self {
             ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl => PartialSettings::default(),
-            ImageFamily::ZImage => PartialSettings {
-                width: Some(1024),
-                height: Some(1024),
-                steps: Some(8),
-                cfg_scale: Some(1.0),
-                sampler: Some("euler".into()),
-                ..PartialSettings::default()
-            },
-            // Not runnable yet, so nothing reads these; a recipe arrives with
-            // the family.
-            ImageFamily::Flux | ImageFamily::QwenImage => PartialSettings::default(),
+            ImageFamily::ZImage => dit(8, 1.0),
+            ImageFamily::Flux => dit(20, 1.0),
+            ImageFamily::FluxSchnell => dit(4, 1.0),
+            ImageFamily::Flux2Klein4b | ImageFamily::Flux2Klein9b => dit(4, 1.0),
+            ImageFamily::Krea2 => dit(8, 1.0),
+            ImageFamily::QwenImage => dit(20, 2.5),
         }
     }
 
@@ -926,7 +985,8 @@ impl ImageFamily {
     /// so it is the difference at 1024² too — and every example in sd.cpp's
     /// DiT docs passes it. No `--offload-to-cpu`: a Z-Image turbo is 12.3 GB of
     /// DiT and 8 GB of Qwen3, which fits a 24 GB card, while offloading would
-    /// hold all 20 GB in system RAM, the thing this box runs out of first.
+    /// hold all 20 GB in system RAM, the thing this box runs out of first. A
+    /// model too big for the card gets it per model, in `extra_args`.
     pub fn flags(self) -> &'static [&'static str] {
         if self.is_unet() {
             &[]
@@ -941,10 +1001,14 @@ impl ImageFamily {
     /// The UNet families list their VAE only: every checkpoint of theirs is
     /// bundled, so the slot is an override, and the VAE is the one part people
     /// actually swap — SDXL's own overflows in fp16, which is what the
-    /// fp16-fix VAE exists for. Flux (VAE, `clip_l`, `t5xxl`) and Qwen-Image
-    /// get rows when they become runnable.
+    /// fp16-fix VAE exists for.
+    ///
+    /// Every encoder slot fits by kind **and width**, since sd.cpp picks the
+    /// language model's architecture from the *diffusion* model and loads
+    /// whatever file it is handed into it. A Qwen3-VL in a Z-Image's slot
+    /// would load, condition on the wrong embedding space, and render.
     pub fn slots(self) -> &'static [PartSlot] {
-        use crate::discover::{ImageVaeKind, LlmKind, Role};
+        use crate::discover::{ImageVaeKind, LlmKind, Role, VaeKind};
         const SD_VAE: PartSlot = PartSlot {
             key: "vae",
             label: "VAE",
@@ -959,6 +1023,38 @@ impl ImageFamily {
             dir: "vae",
             file: "ae.safetensors",
         };
+        const FLUX2_VAE: PartSlot = PartSlot {
+            key: "vae",
+            label: "VAE",
+            fits: |r| matches!(r, Role::ImageVae(ImageVaeKind::Flux2)),
+            dir: "vae",
+            file: "flux2-vae.safetensors",
+        };
+        // Krea 2 and Qwen-Image both decode with the Wan 2.1 VAE — the one the
+        // Video tab uses, which `scan_images` shares from the video dir.
+        // Qwen-Image's release names it `qwen_image_vae`, and so does Comfy's
+        // Krea 2 repackage, so that is the name to wait for.
+        const WAN21_VAE: PartSlot = PartSlot {
+            key: "vae",
+            label: "VAE",
+            fits: |r| matches!(r, Role::Vae(VaeKind::Wan21)),
+            dir: "vae",
+            file: "qwen_image_vae.safetensors",
+        };
+        const CLIP_L: PartSlot = PartSlot {
+            key: "clip_l",
+            label: "CLIP-L",
+            fits: |r| matches!(r, Role::ClipL),
+            dir: "text_encoders",
+            file: "clip_l.safetensors",
+        };
+        const T5XXL: PartSlot = PartSlot {
+            key: "t5xxl",
+            label: "T5-XXL",
+            fits: |r| matches!(r, Role::T5xxl),
+            dir: "text_encoders",
+            file: "t5xxl_fp16.safetensors",
+        };
         const QWEN3_4B: PartSlot = PartSlot {
             key: "llm",
             label: "Text encoder",
@@ -966,10 +1062,35 @@ impl ImageFamily {
             dir: "text_encoders",
             file: "qwen_3_4b.safetensors",
         };
+        const QWEN3_8B: PartSlot = PartSlot {
+            key: "llm",
+            label: "Text encoder",
+            fits: |r| matches!(r, Role::Llm(LlmKind::Qwen3 { dim: 4096 })),
+            dir: "text_encoders",
+            file: "qwen_3_8b.safetensors",
+        };
+        const QWEN3_VL_4B: PartSlot = PartSlot {
+            key: "llm",
+            label: "Text encoder",
+            fits: |r| matches!(r, Role::Llm(LlmKind::Qwen3Vl { dim: 2560 })),
+            dir: "text_encoders",
+            file: "Qwen3VL-4B-Instruct-Q8_0.gguf",
+        };
+        const QWEN25_VL_7B: PartSlot = PartSlot {
+            key: "llm",
+            label: "Text encoder",
+            fits: |r| matches!(r, Role::Llm(LlmKind::Qwen25Vl { dim: 3584 })),
+            dir: "text_encoders",
+            file: "qwen_2.5_vl_7b.safetensors",
+        };
         match self {
             ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl => &[SD_VAE],
+            ImageFamily::Flux | ImageFamily::FluxSchnell => &[FLUX_VAE, CLIP_L, T5XXL],
+            ImageFamily::Flux2Klein4b => &[FLUX2_VAE, QWEN3_4B],
+            ImageFamily::Flux2Klein9b => &[FLUX2_VAE, QWEN3_8B],
             ImageFamily::ZImage => &[FLUX_VAE, QWEN3_4B],
-            ImageFamily::Flux | ImageFamily::QwenImage => &[],
+            ImageFamily::Krea2 => &[WAN21_VAE, QWEN3_VL_4B],
+            ImageFamily::QwenImage => &[WAN21_VAE, QWEN25_VL_7B],
         }
     }
 
@@ -979,8 +1100,12 @@ impl ImageFamily {
             ImageFamily::Sd1 => "SD 1.x",
             ImageFamily::Sd2 => "SD 2.x",
             ImageFamily::Sdxl => "SDXL",
-            ImageFamily::Flux => "Flux",
+            ImageFamily::Flux => "Flux.1",
+            ImageFamily::FluxSchnell => "Flux.1 schnell",
+            ImageFamily::Flux2Klein4b => "Flux.2 Klein 4B",
+            ImageFamily::Flux2Klein9b => "Flux.2 Klein 9B",
             ImageFamily::ZImage => "Z-Image",
+            ImageFamily::Krea2 => "Krea 2",
             ImageFamily::QwenImage => "Qwen-Image",
         }
     }
@@ -992,7 +1117,11 @@ impl ImageFamily {
             ImageFamily::Sd2 => "sd2",
             ImageFamily::Sdxl => "sdxl",
             ImageFamily::Flux => "flux",
+            ImageFamily::FluxSchnell => "flux_schnell",
+            ImageFamily::Flux2Klein4b => "flux2_klein_4b",
+            ImageFamily::Flux2Klein9b => "flux2_klein_9b",
             ImageFamily::ZImage => "z_image",
+            ImageFamily::Krea2 => "krea2",
             ImageFamily::QwenImage => "qwen_image",
         }
     }
@@ -1709,11 +1838,25 @@ impl Config {
     /// are the Video tab's, and whose encoders `discover::build` assembles), and
     /// the LoRA and upscaler dirs, which `list_loras` and `list_upscalers`
     /// already describe.
+    ///
+    /// The video dir's *parts* are let back in: whatever there some image
+    /// family has a slot for. Krea 2 and Qwen-Image decode with the Wan 2.1
+    /// VAE, which is already sitting in the video dir for the Video tab, and a
+    /// second copy of it under `vae/` would be 250 MB for nothing. Its
+    /// transformers and umt5 stay out because no slot fits them. Only when the
+    /// video dir is inside the models dir, which is the default: a part is
+    /// named relative to the models dir (`resolve_part` joins the name back
+    /// onto it), so one outside it has no name to be picked by.
     pub fn scan_images(&self) -> Vec<crate::discover::Found> {
-        crate::discover::scan_excluding(
-            &self.models_dir(),
-            &[self.video_dir(), self.lora_dir(), self.upscaler_dir()],
-        )
+        let models = self.models_dir();
+        let video = self.video_dir();
+        let mut found = crate::discover::scan_excluding(&models, &[video.clone(), self.lora_dir(), self.upscaler_dir()]);
+        if video.starts_with(&models) {
+            let fits_a_slot =
+                |r: &crate::discover::Role| ImageFamily::ALL.iter().flat_map(|f| f.slots()).any(|s| (s.fits)(r));
+            found.extend(crate::discover::scan(&video).into_iter().filter(|f| fits_a_slot(&f.role)));
+        }
+        found
     }
 
     /// Directory holding video model components.
@@ -1883,10 +2026,7 @@ impl Config {
                     bytes,
                     usable: note.is_empty(),
                     note,
-                    family: match base {
-                        crate::discover::LoraBase::Image(f) => Some(f.as_str()),
-                        _ => None,
-                    },
+                    families: ImageFamily::ALL.iter().filter(|f| base.fits(**f)).map(|f| f.as_str()).collect(),
                     base: base.label(),
                 }
             })
@@ -2564,6 +2704,56 @@ t5xxl = "v/umt5.gguf"
     /// it, arrives on its recipe rather than on the SDXL-tuned settings, and a
     /// template still has the last word. Without its encoder it is listed and
     /// not runnable, naming the file it is waiting for.
+    /// Krea 2 and Qwen-Image decode with the Wan 2.1 VAE, which the Video tab
+    /// already keeps under `video/`. The image side takes that file as a part
+    /// without listing anything else of the video dir's — its transformers
+    /// stay the Video tab's.
+    #[test]
+    fn an_image_family_takes_its_vae_from_the_video_dir() {
+        let root = std::env::temp_dir().join(format!("rustimage-cfg-krea-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let models = root.join("models");
+        fake_model(
+            &models.join("diffusion_models").join("krea2.safetensors"),
+            &[("txtfusion.projector.weight", "[1,12]")],
+        );
+        fake_model(
+            &models.join("text_encoders").join("qwen3vl.safetensors"),
+            &[
+                ("model.embed_tokens.weight", "[151936,2560]"),
+                ("model.layers.0.self_attn.q_norm.weight", "[128]"),
+                ("model.norm.weight", "[2560]"),
+                ("visual.blocks.0.attn.qkv.weight", "[3072,1024]"),
+            ],
+        );
+        let wan_vae = models.join("video").join("vae").join("wan_2.1_vae.safetensors");
+        fake_model(&wan_vae, &[("decoder.conv1.weight", "[96]"), ("conv2.bias", "[16]")]);
+        fake_model(
+            &models.join("video").join("diffusion_models").join("wan.safetensors"),
+            &[("blocks.0.cross_attn.norm_k.weight", "[3072]"), ("blocks.0.self_attn.q.weight", "[3072,3072]")],
+        );
+        std::fs::write(root.join("models.toml"), "[sd]\nbinary = \"sd-cli\"\n").unwrap();
+
+        let cfg = Config::load(&root.join("models.toml")).unwrap();
+        let p = cfg.registry().remove("krea2").unwrap();
+        assert_eq!(p.family, ImageFamily::Krea2);
+        assert!(p.exists, "missing: {:?}", p.missing());
+        let parts = p.components.as_ref().unwrap();
+        assert_eq!(parts.vae.as_ref(), Some(&wan_vae));
+        assert_eq!(parts.llm, Some(models.join("text_encoders").join("qwen3vl.safetensors")));
+        let scan = cfg.scan_images();
+        assert!(
+            !scan.iter().any(|f| f.path.ends_with("wan.safetensors")),
+            "a video transformer leaked into the image scan"
+        );
+        // And it is pickable by name, which is how the Models fold sends it.
+        assert_eq!(
+            cfg.resolve_part(ImageFamily::Krea2, "vae", "video/vae/wan_2.1_vae.safetensors", &scan).unwrap(),
+            wan_vae
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn a_z_image_is_assembled_and_arrives_on_its_recipe() {
         let root =

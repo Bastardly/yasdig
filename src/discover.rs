@@ -86,6 +86,12 @@ pub enum Layout {
 pub struct Tensors {
     pub tensors: Vec<TensorInfo>,
     pub layout: Layout,
+    /// A GGUF file's `general.architecture`, and `None` for every other
+    /// container. Read because the tensor names alone can't tell a text-only
+    /// Qwen3-VL GGUF from a Qwen3 one: llama.cpp writes both as `token_embd` and
+    /// `blk.N.attn_q_norm` at the same 2560 width, and only this string — `qwen3vl`
+    /// against `qwen3` — says which one sd.cpp's Krea 2 or Z-Image would get.
+    pub arch: Option<String>,
 }
 
 impl Tensors {
@@ -171,8 +177,13 @@ pub enum Role {
     Vae(VaeKind),
     /// The umt5-xxl text encoder every Wan family shares.
     Umt5,
-    /// A Qwen3-VL vision-language model — MiniMax H3's text encoder.
-    QwenVl,
+    /// T5 v1.1 XXL, Flux.1's long text encoder (`--t5xxl`). The same block
+    /// layout as umt5 and a different vocabulary — 32128 tokens against
+    /// 256384 — which is the only thing that tells the two apart, and the
+    /// wrong one is a silent garbage prompt rather than an error.
+    T5xxl,
+    /// CLIP-L's text tower (`--clip_l`), 768 wide: Flux.1's short encoder.
+    ClipL,
     /// A CLIP-Vision tower, wanted by Wan 2.1 I2V and FLF2V.
     ClipVision,
     /// A LoRA, and the base it was trained against — read off the names of the
@@ -189,8 +200,8 @@ pub enum Role {
     /// A VAE in the Stable Diffusion (LDM) layout — `decoder.conv_in`,
     /// `decoder.mid` — told apart by latent width.
     ImageVae(ImageVaeKind),
-    /// A plain causal language model used as a text encoder (`--llm`), with no
-    /// vision tower — that one is [`Role::QwenVl`].
+    /// A causal language model used as a text encoder (`--llm`) — which one,
+    /// and how wide, being what decides the family it can condition.
     Llm(LlmKind),
     /// An architecture sd.cpp knows and this build does not run yet, named.
     ///
@@ -216,7 +227,7 @@ pub enum LoraBase {
     /// with the model it would be applied to.
     Image(ImageFamily),
     /// An architecture with no [`ImageFamily`] variant, named: a Wan LoRA
-    /// (video, named in a `[[video]]` entry instead), a Krea 2 one.
+    /// (video, named in a `[[video]]` entry instead), a Flux.2 dev one.
     Other(&'static str),
     /// No marker matched. Offered anyway: refusing a file that works because
     /// this couldn't read it is worse than the mismatch the check exists for.
@@ -225,8 +236,12 @@ pub enum LoraBase {
 
 impl LoraBase {
     /// Whether a LoRA for this base belongs on a `family` model.
+    ///
+    /// Flux.1 dev and schnell are one architecture distilled two ways, so a Flux
+    /// LoRA — which [`flux_lora`] can only ever call `Flux` — fits both.
     pub fn fits(self, family: ImageFamily) -> bool {
         match self {
+            LoraBase::Image(ImageFamily::Flux) => matches!(family, ImageFamily::Flux | ImageFamily::FluxSchnell),
             LoraBase::Image(f) => f == family,
             LoraBase::Other(_) => false,
             LoraBase::Unknown => true,
@@ -253,15 +268,25 @@ pub enum ImageVaeKind {
     Sd,
     /// 16 latent channels: Flux's `ae`, which Z-Image and Chroma share.
     Flux,
+    /// 32 latent channels: Flux.2's own VAE, for every Flux.2 including Klein.
+    Flux2,
 }
 
 /// The language models the image families use as text encoders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmKind {
-    /// Qwen3, at the hidden width read from its final norm. Z-Image wants the
-    /// 4B, which is 2560 wide; Flux 2 Klein takes the same file, which is why
-    /// the width is carried rather than the family decided here.
+    /// Qwen3, at the hidden width read from its final norm. Z-Image and Flux.2
+    /// Klein 4B want the 4B, which is 2560 wide; Klein 9B wants the 8B (4096).
+    /// The width is carried rather than the family decided here, because one
+    /// file serves two families.
     Qwen3 { dim: u64 },
+    /// Qwen3-VL. Krea 2 wants the 4B (2560); MiniMax H3 the 32B (5120). The
+    /// language half is Qwen3's shape exactly, so a text-only GGUF of one is
+    /// told from Qwen3 by its `general.architecture` and nothing else.
+    Qwen3Vl { dim: u64 },
+    /// Qwen2.5-VL — Qwen-Image's encoder, the 7B (3584 wide). Told from Qwen3
+    /// by having no `q_norm` on its attention.
+    Qwen25Vl { dim: u64 },
 }
 
 /// The transformer architectures worth telling apart.
@@ -301,9 +326,10 @@ impl Role {
     pub fn describe(&self) -> String {
         match self {
             Role::Umt5 => "umt5-xxl text encoder (shared by every Wan family)".into(),
-            Role::QwenVl => "Qwen3-VL text encoder (MiniMax H3 only)".into(),
+            Role::T5xxl => "T5-XXL text encoder — Flux.1".into(),
+            Role::ClipL => "CLIP-L text encoder — Flux.1".into(),
             Role::ClipVision => "CLIP-Vision tower (Wan 2.1 I2V/FLF2V)".into(),
-            Role::Vae(VaeKind::Wan21) => "wan_2.1 VAE — every Wan except the TI2V-5B".into(),
+            Role::Vae(VaeKind::Wan21) => "wan_2.1 VAE — Krea 2, Qwen-Image, and every Wan except the TI2V-5B".into(),
             Role::Vae(VaeKind::Wan22) => "wan2.2 VAE — TI2V-5B only".into(),
             Role::Lora(LoraBase::Unknown) => "LoRA".into(),
             Role::Lora(base) => format!("LoRA for {}", base.label()),
@@ -317,12 +343,23 @@ impl Role {
             }
             Role::ImageVae(ImageVaeKind::Sd) => "SD VAE (4 channels) — SD 1.x/2.x/SDXL".into(),
             Role::ImageVae(ImageVaeKind::Flux) => {
-                "Flux ae VAE (16 channels) — Flux, Z-Image, Chroma".into()
+                "Flux ae VAE (16 channels) — Flux.1, Z-Image, Chroma".into()
             }
+            Role::ImageVae(ImageVaeKind::Flux2) => "Flux.2 VAE (32 channels) — Flux.2 Klein".into(),
             Role::Llm(LlmKind::Qwen3 { dim: 2560 }) => {
-                "Qwen3-4B text encoder — Z-Image".into()
+                "Qwen3-4B text encoder — Z-Image, Flux.2 Klein 4B".into()
             }
+            Role::Llm(LlmKind::Qwen3 { dim: 4096 }) => "Qwen3-8B text encoder — Flux.2 Klein 9B".into(),
             Role::Llm(LlmKind::Qwen3 { dim }) => format!("Qwen3 text encoder ({dim} wide)"),
+            Role::Llm(LlmKind::Qwen3Vl { dim: 2560 }) => "Qwen3-VL-4B text encoder — Krea 2".into(),
+            Role::Llm(LlmKind::Qwen3Vl { dim: 5120 }) => {
+                "Qwen3-VL-32B text encoder — MiniMax H3 (video)".into()
+            }
+            Role::Llm(LlmKind::Qwen3Vl { dim }) => format!("Qwen3-VL text encoder ({dim} wide)"),
+            Role::Llm(LlmKind::Qwen25Vl { dim: 3584 }) => {
+                "Qwen2.5-VL-7B text encoder — Qwen-Image".into()
+            }
+            Role::Llm(LlmKind::Qwen25Vl { dim }) => format!("Qwen2.5-VL text encoder ({dim} wide)"),
             Role::Unsupported(what) => format!("{what}, which this build doesn't run yet"),
             Role::Unknown(why) => why.clone(),
         }
@@ -369,6 +406,7 @@ pub fn read_tensors(path: &Path) -> Result<Tensors> {
                 })
                 .collect(),
             layout: Layout::PyTorch,
+            arch: None,
         })
     } else {
         read_safetensors(&mut f)
@@ -415,6 +453,7 @@ fn read_safetensors(f: &mut std::fs::File) -> Result<Tensors> {
     Ok(Tensors {
         tensors,
         layout: Layout::PyTorch,
+        arch: None,
     })
 }
 
@@ -459,10 +498,17 @@ fn read_gguf(f: &mut std::fs::File) -> Result<Tensors> {
     if tensor_count > 1_000_000 || kv_count > 1_000_000 {
         bail!("implausible GGUF header: {tensor_count} tensors, {kv_count} metadata keys");
     }
+    // Every key is skipped except the architecture. That one is read whatever
+    // its position — llama.cpp writes it first, but nothing requires it to be.
+    let mut arch = None;
     for _ in 0..kv_count {
-        let _key = read_gguf_string(&mut r)?;
+        let key = read_gguf_string(&mut r)?;
         let ty = read_u32(&mut r)?;
-        skip_gguf_value(&mut r, ty)?;
+        if key == "general.architecture" && ty == 8 {
+            arch = Some(read_gguf_string(&mut r)?);
+        } else {
+            skip_gguf_value(&mut r, ty)?;
+        }
     }
     let mut tensors = Vec::with_capacity(tensor_count as usize);
     for _ in 0..tensor_count {
@@ -483,6 +529,7 @@ fn read_gguf(f: &mut std::fs::File) -> Result<Tensors> {
     Ok(Tensors {
         tensors,
         layout: Layout::Ggml,
+        arch,
     })
 }
 
@@ -643,11 +690,15 @@ pub fn classify(t: &Tensors) -> Role {
     // use. The width comes off `encoder.conv_out.bias`, which is `2 × z` (mean
     // and log-variance) and one-dimensional, so it reads the same in either
     // container — the same reason the Wan branch below reads a bias.
-    if t.has("decoder.conv_in.") && t.has("decoder.mid.") {
+    //
+    // `mid_block` is diffusers' name for the same block, which is how Black
+    // Forest Labs ship the Flux.2 VAE; read as a Wan VAE it claimed 512
+    // latent channels.
+    if t.has("decoder.conv_in.") && (t.has("decoder.mid.") || t.has("decoder.mid_block.")) {
         return match t.vector_len("encoder.conv_out.bias") {
             Some(8) => Role::ImageVae(ImageVaeKind::Sd),
             Some(32) => Role::ImageVae(ImageVaeKind::Flux),
-            Some(64) => Role::Unsupported("a Flux 2 VAE (32 latent channels)".into()),
+            Some(64) => Role::ImageVae(ImageVaeKind::Flux2),
             Some(n) => Role::Unknown(format!("an LDM-style VAE with {} latent channels", n / 2)),
             None => Role::Unknown("an LDM-style VAE with no encoder to read its width from".into()),
         };
@@ -679,35 +730,86 @@ pub fn classify(t: &Tensors) -> Role {
             None => Role::Unknown("a VAE whose latent width could not be read".into()),
         };
     }
-    // umt5. T5's own block naming, which is distinct from the VAE's `encoder.`
-    // despite the shared prefix.
-    if t.has("encoder.block.") && t.has("SelfAttention") {
-        return Role::Umt5;
+    // T5. Its own block naming — `encoder.block.N.layer.0.SelfAttention` in a
+    // safetensors, `enc.blk.N` in a llama.cpp GGUF like city96's — which is
+    // distinct from a VAE's `encoder.` despite the shared prefix. umt5 (every
+    // Wan) and T5 v1.1 XXL (Flux.1) are the same shape; the vocabulary is the
+    // one difference, so it is read off the token embedding, `[vocab, 4096]`,
+    // at whichever end the container put it.
+    if (t.has("encoder.block.") && t.has("SelfAttention")) || t.has("enc.blk.") {
+        let vocab = t
+            .tensors
+            .iter()
+            .find(|x| matches!(x.name.as_str(), "shared.weight" | "encoder.embed_tokens.weight" | "token_embd.weight"))
+            .and_then(|x| x.shape.iter().copied().max());
+        return match vocab {
+            Some(32128) => Role::T5xxl,
+            // A file whose embedding wasn't readable was umt5 before this split
+            // existed, and stays so: every one the Video tab has met was.
+            Some(256384) | None => Role::Umt5,
+            Some(v) => Role::Unknown(format!("a T5 encoder with a {v}-token vocabulary, which is neither T5-XXL nor umt5")),
+        };
     }
-    // Qwen3-VL: a causal LM (token embeddings and `layers.N.self_attn`) with a
-    // vision tower bolted on. This is H3's text encoder.
-    if t.has("model.embed_tokens.weight") && t.has("visual.") {
-        return Role::QwenVl;
-    }
-    // A Qwen3 LM with no vision tower — Z-Image's text encoder. `q_norm` on the
-    // attention is what separates Qwen3 from Qwen2.5, which has none. Spelled
-    // both ways: Hugging Face's names in a safetensors, llama.cpp's in the GGUF
-    // quantizations sd.cpp's own docs point at.
-    if (t.has("embed_tokens.weight") && t.has("self_attn.q_norm.weight"))
-        || (t.has("token_embd.weight") && t.has("attn_q_norm.weight"))
-    {
-        // The final norm is one-dimensional and as wide as the model.
+    // A Qwen language model: token embeddings plus Qwen's attention, in Hugging
+    // Face's names (`embed_tokens`, `self_attn.q_proj`) or llama.cpp's
+    // (`token_embd`, `attn_q`). Which Qwen is what decides the family, and the
+    // wrong one loads — sd.cpp picks the architecture from the *diffusion*
+    // model, not from this file — and conditions on nonsense.
+    if (t.has("embed_tokens.weight") && t.has("self_attn.q_")) || (t.has("token_embd.weight") && t.has(".attn_q")) {
+        // The final norm is one-dimensional and as wide as the model. Qwen3-VL
+        // nests its language half under `language_model.`.
         let dim = t
             .tensors
             .iter()
-            .find(|x| matches!(x.name.as_str(), "model.norm.weight" | "norm.weight" | "output_norm.weight"))
+            .find(|x| {
+                matches!(
+                    x.name.as_str(),
+                    "model.norm.weight" | "norm.weight" | "output_norm.weight" | "model.language_model.norm.weight"
+                )
+            })
             .and_then(|x| match x.shape.as_slice() {
                 [n] => Some(*n),
                 _ => None,
             });
-        return match dim {
-            Some(dim) => Role::Llm(LlmKind::Qwen3 { dim }),
-            None => Role::Unknown("a Qwen3 language model whose width could not be read".into()),
+        let Some(dim) = dim else {
+            return Role::Unknown("a Qwen language model whose width could not be read".into());
+        };
+        // `q_norm` on the attention is Qwen3's and Qwen2.5 has none. The vision
+        // tower is `visual.`; a GGUF ships it separately as an mmproj, so there
+        // the architecture string is the only witness.
+        let q_norm = t.has("self_attn.q_norm.weight") || t.has("attn_q_norm.weight");
+        // Transformers' newer Qwen-VL layout nests the language half one level
+        // down, `model.language_model.layers.N`, and stable-diffusion.cpp has no
+        // rename for it: its LLM names are `model.layers.N`, reached from a
+        // GGUF's `blk.N` by `convert_cond_stage_model_name` and from nothing
+        // else. Such a file loads into nothing and sd-cli fails on every layer
+        // as "not in model metadata" — which is what Comfy's
+        // `qwen3vl_4b_bf16.safetensors` did, the very file sd.cpp's own
+        // `docs/krea2.md` links. So it is named and kept out of every slot
+        // rather than offered.
+        if t.has("model.language_model.layers.") {
+            return Role::Unknown(format!(
+                "a Qwen-VL text encoder ({dim} wide) in the nested `model.language_model.` layout, \
+                 which stable-diffusion.cpp can't load — use a GGUF of the same model instead"
+            ));
+        }
+        let vision = t.has("visual.");
+        return match (t.arch.as_deref(), q_norm, vision) {
+            (Some("qwen3vl"), ..) | (None, true, true) => Role::Llm(LlmKind::Qwen3Vl { dim }),
+            (Some("qwen3"), ..) | (None, true, false) => Role::Llm(LlmKind::Qwen3 { dim }),
+            (Some("qwen2vl"), ..) | (None, false, true) => Role::Llm(LlmKind::Qwen25Vl { dim }),
+            (Some(arch), ..) => Role::Unknown(format!("a '{arch}' language model ({dim} wide), which no image family here uses")),
+            (None, false, false) => Role::Unknown(format!("a Qwen2-style language model ({dim} wide) with no vision tower")),
+        };
+    }
+    // CLIP's text tower. Its width is the final norm's: 768 for CLIP-L, 1280
+    // for SDXL's and SD3's CLIP-G.
+    if t.has("text_model.encoder.layers") {
+        return match t.vector_len("text_model.final_layer_norm.weight") {
+            Some(768) => Role::ClipL,
+            Some(1280) => Role::Unsupported("a CLIP-G text encoder (SD3's second encoder)".into()),
+            Some(w) => Role::Unknown(format!("a CLIP text encoder {w} wide")),
+            None => Role::Unknown("a CLIP text encoder whose width could not be read".into()),
         };
     }
     if t.has("vision_model.encoder.layers") {
@@ -737,14 +839,24 @@ pub fn classify(t: &Tensors) -> Role {
 fn lora_base(t: &Tensors) -> LoraBase {
     let either = |dotted: &str, flat: &str| t.has(dotted) || t.has(flat);
 
-    // `txtfusion` is sd.cpp's own Krea 2 marker; `attn.wq` catches a LoRA that
-    // left the text-fusion blocks alone. Nothing else here names a projection
-    // `wq` under `attn`.
-    if t.has("txtfusion") || either(".attn.wq.", "_attn_wq") {
-        return LoraBase::Other("Krea 2");
+    // `txtfusion` is sd.cpp's own Krea 2 marker and `text_fusion` diffusers'
+    // spelling of it. `attn.wq` and `attn.to_gate` catch a LoRA that left the
+    // text fusion alone, in the original names and in diffusers' — Krea 2's
+    // attention is gated, and nothing else here has a projection by either
+    // name.
+    if t.has("txtfusion")
+        || t.has("text_fusion")
+        || either(".attn.wq.", "_attn_wq")
+        || either(".attn.to_gate.", "_attn_to_gate")
+    {
+        return LoraBase::Image(ImageFamily::Krea2);
     }
-    if t.has("double_blocks") || t.has("single_blocks") || t.has("single_transformer_blocks") {
-        return LoraBase::Image(ImageFamily::Flux);
+    if t.has("double_blocks")
+        || t.has("single_blocks")
+        || t.has("single_transformer_blocks")
+        || t.has("stream_modulation")
+    {
+        return flux_lora(t);
     }
     // Qwen-Image's dual-stream MLPs. Flux's original naming has `img_mlp` too,
     // inside `double_blocks`, which is why this comes second.
@@ -755,7 +867,7 @@ fn lora_base(t: &Tensors) -> LoraBase {
     // stream is `ff_context` and `add_q_proj`. Qwen-Image has `add_q_proj` too,
     // and its `img_mlp` has already claimed it above.
     if t.has("ff_context") || t.has("add_q_proj") {
-        return LoraBase::Image(ImageFamily::Flux);
+        return flux_lora(t);
     }
     if t.has("cross_attn") {
         return LoraBase::Other("Wan");
@@ -773,6 +885,85 @@ fn lora_base(t: &Tensors) -> LoraBase {
         return LoraBase::Image(ImageFamily::ZImage);
     }
     LoraBase::Unknown
+}
+
+/// Which Flux a Flux-shaped LoRA is for: Flux.1, a Flux.2 Klein, or Flux.2 dev.
+///
+/// All of them keep `double_blocks`/`single_blocks`, so the names say "Flux"
+/// and no more. Two things in a LoRA say which:
+///
+/// - **The width it projects from**, the model's hidden size, off the down
+///   projection of a block's attention — `[rank, hidden]`. 6144 is Flux.2 dev
+///   and 4096 Klein 9B; 3072 is Flux.1 *and* Klein 4B.
+/// - **For 3072, the blocks it patches.** Flux.1 has 19 double and 38 single
+///   blocks and modulates each one (`img_mod`, `modulation.lin`); Klein 4B has
+///   5 and 20 and modulates once per stream (`*_stream_modulation`). A LoRA
+///   reaching past Klein's blocks, or patching a per-block modulation, is
+///   Flux.1; one patching a stream modulation is Klein.
+///
+/// A 3072-wide LoRA that touches only blocks both have is [`LoraBase::Unknown`]
+/// — offered everywhere — rather than a guess.
+fn flux_lora(t: &Tensors) -> LoraBase {
+    let down = |x: &&TensorInfo| x.name.contains("lora_down") || x.name.contains("lora_A");
+    let attn = ["qkv", "linear1", "to_q", "to_k", "to_v"];
+    let width = t
+        .tensors
+        .iter()
+        .filter(down)
+        .find(|x| x.name.contains("blocks") && attn.iter().any(|a| x.name.contains(a)))
+        .map(|x| x.inner_dim(t.layout));
+    let flux2 = t.has("stream_modulation");
+    // Per-block modulation, in either spelling, is Flux.1's; Flux.2's is per
+    // stream and says so in its name.
+    let flux1 = t.has("img_mod")
+        || t.has("txt_mod")
+        || t.tensors.iter().any(|x| x.name.contains("modulation") && !x.name.contains("stream_modulation"));
+    match width {
+        Some(6144) => return LoraBase::Other("Flux.2 dev"),
+        Some(4096) => return LoraBase::Image(ImageFamily::Flux2Klein9b),
+        Some(3072) | None => {}
+        Some(_) => return LoraBase::Unknown,
+    }
+    if flux2 && !flux1 {
+        return LoraBase::Image(ImageFamily::Flux2Klein4b);
+    }
+    let double = block_index(
+        t,
+        &["double_blocks.", "double_blocks_", "transformer_blocks.", "transformer_blocks_"],
+    );
+    let single = block_index(
+        t,
+        &["single_blocks.", "single_blocks_", "single_transformer_blocks.", "single_transformer_blocks_"],
+    );
+    if flux1 || double.is_some_and(|d| d > 4) || single.is_some_and(|s| s > 19) {
+        LoraBase::Image(ImageFamily::Flux)
+    } else {
+        LoraBase::Unknown
+    }
+}
+
+/// The highest block number after any of `prefixes` — `double_blocks.18.` is
+/// 18.
+///
+/// Diffusers calls the double blocks `transformer_blocks` and the single ones
+/// `single_transformer_blocks`, which contains the double prefix, so a match
+/// preceded by `single_` is not a double block. The single-block prefixes
+/// catch diffusers' spelling as a substring of it.
+fn block_index(t: &Tensors, prefixes: &[&str]) -> Option<u32> {
+    t.tensors
+        .iter()
+        .flat_map(|x| {
+            prefixes.iter().flat_map(move |p| {
+                x.name.match_indices(p).filter_map(move |(at, _)| {
+                    if x.name[..at].ends_with("single_") && p.starts_with("transformer") {
+                        return None;
+                    }
+                    let rest = &x.name[at + p.len()..];
+                    rest.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+                })
+            })
+        })
+        .max()
 }
 
 /// SD 1.x, SD 2.x or SDXL, for a LoRA with UNet or CLIP keys; `None` when it
@@ -836,11 +1027,8 @@ fn unsupported(t: &Tensors) -> Option<&'static str> {
         ("input_blocks.8.0.time_mixer.mix_factor", "a Stable Video Diffusion UNet"),
         // Image families not yet added.
         ("joint_blocks.", "an SD3 transformer"),
-        ("double_stream_modulation_img.lin.weight", "a Flux 2 transformer"),
         ("distilled_guidance_layer.", "a Chroma transformer"),
         ("nerf_final_layer_conv.", "a Chroma Radiance transformer"),
-        ("txtfusion.projector.weight", "a Krea 2 transformer"),
-        ("text_fusion.projector.weight", "a Krea 2 transformer"),
         ("double_blocks.0.img_mlp.gate_proj.weight", "an Ovis-Image transformer"),
         ("layers.0.adaLN_sa_ln.weight", "an ERNIE-Image transformer"),
         ("llm_adapter.blocks.0.cross_attn.q_proj.weight", "an Anima transformer"),
@@ -867,6 +1055,35 @@ fn image_model(t: &Tensors) -> Option<Role> {
     if t.has("cap_embedder.0.weight") {
         return image(ImageFamily::ZImage);
     }
+    // Krea 2's text-fusion projector, sd.cpp's own marker
+    // (`model_loader.cpp:457`). Comfy's repackage spells it `txtfusion`,
+    // diffusers `text_fusion`.
+    if t.has("txtfusion.projector.weight") || t.has("text_fusion.projector.weight") {
+        return image(ImageFamily::Krea2);
+    }
+    // Flux.2's shared modulation, which Flux.1 has per block instead. Ahead of
+    // Flux.1's arm below, since Flux.2 keeps the `double_blocks` names.
+    if t.has("double_stream_modulation_img.") {
+        // sd.cpp's own split (`model_loader.cpp:642`): dev has 48 single blocks
+        // and Klein fewer.
+        if t.has("single_blocks.47.") {
+            return Some(Role::Unsupported(
+                "a Flux.2 dev transformer (its 24B Mistral text encoder doesn't fit beside it on a consumer card)".into(),
+            ));
+        }
+        // Which Klein is which encoder it was trained on, and that is in the
+        // file: `txt_in` takes three of the encoder's hidden layers
+        // concatenated (`flux.hpp:160`), so its input width is three times the
+        // encoder's.
+        return match tensor(t, "txt_in.weight").map(|x| x.inner_dim(t.layout)) {
+            Some(7680) => image(ImageFamily::Flux2Klein4b),
+            Some(12288) => image(ImageFamily::Flux2Klein9b),
+            Some(w) => Some(Role::Unknown(format!(
+                "a Flux.2 transformer conditioned on {w}-wide text, which is neither Klein"
+            ))),
+            None => Some(Role::Unknown("a Flux.2 transformer with no readable txt_in".into())),
+        };
+    }
     if t.has("transformer_blocks.0.img_mod.1.weight") {
         // Mage-Flow shares Qwen-Image's block naming and differs in its patch
         // width: `img_in` takes 128 channels where Qwen-Image takes 64.
@@ -888,7 +1105,12 @@ fn image_model(t: &Tensors) -> Option<Role> {
             Some(384) => Some(Role::Unsupported("a Flux Fill transformer".into())),
             Some(128) => Some(Role::Unsupported("a Flux Controls transformer".into())),
             Some(196) => Some(Role::Unsupported("a Flex.2 transformer".into())),
-            _ => image(ImageFamily::Flux),
+            // Dev and every finetune of it (Krea dev, Kontext) embed the
+            // distilled guidance scale; schnell was distilled without it. The
+            // same tensor sd.cpp keys its flow shift on
+            // (`diffusion_engine.cpp:1320`).
+            _ if t.has("guidance_in.") => image(ImageFamily::Flux),
+            _ => image(ImageFamily::FluxSchnell),
         };
     }
     if t.has("input_blocks.") || t.has("unet.down_blocks.") {
@@ -1148,7 +1370,9 @@ pub fn build(dir: &Path, found: &[Found]) -> Discovery {
     let umt5 = pick(&|r: &Role| matches!(r, Role::Umt5));
     let vae21 = pick(&|r: &Role| matches!(r, Role::Vae(VaeKind::Wan21)));
     let vae22 = pick(&|r: &Role| matches!(r, Role::Vae(VaeKind::Wan22)));
-    let qwen = pick(&|r: &Role| matches!(r, Role::QwenVl));
+    // H3 conditions on Qwen3-VL-32B; the 4B is Krea 2's, and the width is
+    // what tells them apart.
+    let qwen = pick(&|r: &Role| matches!(r, Role::Llm(LlmKind::Qwen3Vl { dim: 5120 })));
     let clip_vision = pick(&|r: &Role| matches!(r, Role::ClipVision));
 
     // Where a component we don't have would go. The role subdirectories are the
@@ -1377,6 +1601,7 @@ mod tests {
                 })
                 .collect(),
             layout: Layout::PyTorch,
+            arch: None,
         }
     }
 
@@ -1423,6 +1648,7 @@ mod tests {
                 },
             ],
             layout: Layout::Ggml,
+            arch: None,
         };
         assert_eq!(classify(&converted), Role::Vae(VaeKind::Wan21));
     }
@@ -1476,9 +1702,11 @@ mod tests {
         let qwen = t(&[
             ("model.embed_tokens.weight", &[151936, 5120]),
             ("model.layers.0.self_attn.q_proj.weight", &[8192, 2560]),
+            ("model.layers.0.self_attn.q_norm.weight", &[128]),
+            ("model.norm.weight", &[5120]),
             ("visual.patch_embed.proj.weight", &[1152, 3, 2, 16, 16]),
         ]);
-        assert_eq!(classify(&qwen), Role::QwenVl);
+        assert_eq!(classify(&qwen), Role::Llm(LlmKind::Qwen3Vl { dim: 5120 }));
     }
 
     #[test]
@@ -1549,7 +1777,7 @@ mod tests {
                 ("diffusion_model.blocks.0.attn.wq.lora_A.weight", &[32, 6144]),
                 ("diffusion_model.txtfusion.refiner_blocks.0.attn.wq.lora_A.weight", &[32, 2560]),
             ]),
-            LoraBase::Other("Krea 2")
+            LoraBase::Image(ImageFamily::Krea2)
         );
         for zimage in [
             "diffusion_model.layers.0.attention.to_q.lora_A.weight",
@@ -1558,10 +1786,12 @@ mod tests {
         ] {
             assert_eq!(base(&[(zimage, &[16, 3840])]), LoraBase::Image(ImageFamily::ZImage), "{zimage}");
         }
+        // Each reaches a block Flux.2 Klein 4B — the other 3072-wide Flux —
+        // doesn't have: Klein stops at double block 4 and single block 19.
         for flux in [
-            "lora_unet_double_blocks_0_img_attn_qkv.lora_down.weight",
-            "transformer.single_transformer_blocks.0.attn.to_q.lora_A.weight",
-            "transformer.transformer_blocks.0.attn.add_q_proj.lora_A.weight",
+            "lora_unet_double_blocks_18_img_attn_qkv.lora_down.weight",
+            "transformer.single_transformer_blocks.37.attn.to_q.lora_A.weight",
+            "transformer.transformer_blocks.18.attn.add_q_proj.lora_A.weight",
         ] {
             assert_eq!(base(&[(flux, &[16, 3072])]), LoraBase::Image(ImageFamily::Flux), "{flux}");
         }
@@ -1575,13 +1805,63 @@ mod tests {
         assert_eq!(base(&[("mystery.lora_down.weight", &[4, 4])]), LoraBase::Unknown);
     }
 
+    /// Flux.1 and every Flux.2 share `double_blocks`, so a Flux LoRA is placed
+    /// by its width and, at 3072, by which blocks it patches.
+    #[test]
+    fn a_flux_lora_is_placed_by_width_and_blocks() {
+        let base = |names: &[(&str, &[u64])]| match classify(&t(names)) {
+            Role::Lora(b) => b,
+            other => panic!("{other:?}"),
+        };
+        let qkv = "diffusion_model.double_blocks.0.img_attn.qkv.lora_A.weight";
+        // Flux.2 dev's turbo LoRA, off its header: 6144 wide.
+        assert_eq!(
+            base(&[("diffusion_model.single_blocks.0.linear1.lora_A.weight", &[256, 6144])]),
+            LoraBase::Other("Flux.2 dev")
+        );
+        assert_eq!(base(&[(qkv, &[16, 4096])]), LoraBase::Image(ImageFamily::Flux2Klein9b));
+        // 3072 wide and patching a stream modulation: Klein 4B.
+        assert_eq!(
+            base(&[(qkv, &[16, 3072]), ("diffusion_model.double_stream_modulation_img.lin.lora_A.weight", &[16, 3072])]),
+            LoraBase::Image(ImageFamily::Flux2Klein4b)
+        );
+        // A per-block modulation is Flux.1's, in either spelling.
+        assert_eq!(
+            base(&[(qkv, &[16, 3072]), ("diffusion_model.double_blocks.0.img_mod.lin.lora_A.weight", &[16, 3072])]),
+            LoraBase::Image(ImageFamily::Flux)
+        );
+        assert_eq!(
+            base(&[(qkv, &[16, 3072]), ("lora_unet_single_blocks_0_modulation_lin.lora_down.weight", &[16, 3072])]),
+            LoraBase::Image(ImageFamily::Flux)
+        );
+        // Only blocks both have: offered everywhere rather than guessed.
+        assert_eq!(
+            base(&[(qkv, &[16, 3072]), ("diffusion_model.single_blocks.3.linear1.lora_A.weight", &[16, 3072])]),
+            LoraBase::Unknown
+        );
+        // A double-block search must not read a single block's number: 37 is a
+        // Flux.1 single block, and there is no double block 37 to have found.
+        assert_eq!(
+            block_index(
+                &t(&[("transformer.single_transformer_blocks.37.attn.to_q.lora_A.weight", &[16, 3072])]),
+                &["transformer_blocks."]
+            ),
+            None
+        );
+        // And a Flux LoRA fits schnell as well as dev, and nothing else.
+        let flux = LoraBase::Image(ImageFamily::Flux);
+        assert!(flux.fits(ImageFamily::Flux));
+        assert!(flux.fits(ImageFamily::FluxSchnell));
+        assert!(!flux.fits(ImageFamily::Flux2Klein4b));
+    }
+
     #[test]
     fn only_a_lora_for_the_family_fits_it() {
         let sdxl = LoraBase::Image(ImageFamily::Sdxl);
         assert!(sdxl.fits(ImageFamily::Sdxl));
         assert!(!sdxl.fits(ImageFamily::ZImage));
         assert!(!sdxl.fits(ImageFamily::Sd1));
-        assert!(!LoraBase::Other("Krea 2").fits(ImageFamily::Sdxl));
+        assert!(!LoraBase::Other("Wan").fits(ImageFamily::Sdxl));
         assert!(LoraBase::Unknown.fits(ImageFamily::ZImage));
     }
 
@@ -1652,10 +1932,61 @@ mod tests {
             classify(&qwen),
             Role::Image { family: ImageFamily::QwenImage, bundled: false }
         );
-        let flux = t(&[("double_blocks.0.img_attn.qkv.weight", &[9216, 3072]), ("img_in.weight", &[3072, 64])]);
+        // Dev and its finetunes (Krea dev, Kontext — whose tensors are dev's
+        // exactly) embed the distilled guidance; schnell doesn't.
+        let flux = |guidance: bool| {
+            let mut rows: Vec<(&str, &[u64])> =
+                vec![("double_blocks.0.img_attn.qkv.weight", &[9216, 3072]), ("img_in.weight", &[3072, 64])];
+            if guidance {
+                rows.push(("guidance_in.in_layer.weight", &[3072, 256]));
+            }
+            t(&rows)
+        };
         assert_eq!(
-            classify(&flux),
+            classify(&flux(true)),
             Role::Image { family: ImageFamily::Flux, bundled: false }
+        );
+        assert_eq!(
+            classify(&flux(false)),
+            Role::Image { family: ImageFamily::FluxSchnell, bundled: false }
+        );
+        // Flux.2 keeps `double_blocks` and adds a shared modulation; which Klein
+        // is `txt_in`'s input width, three times the encoder's. These widths are
+        // off the released files' headers.
+        let klein = |txt: u64, single: &'static str| {
+            t(&[
+                ("double_stream_modulation_img.lin.weight", &[18432, 3072]),
+                ("double_blocks.0.img_attn.qkv.weight", &[9216, 3072]),
+                (single, &[27648, 3072]),
+                ("txt_in.weight", &[3072, txt]),
+            ])
+        };
+        let single = "single_blocks.19.linear1.weight";
+        assert_eq!(
+            classify(&klein(7680, single)),
+            Role::Image { family: ImageFamily::Flux2Klein4b, bundled: false }
+        );
+        assert_eq!(
+            classify(&klein(12288, single)),
+            Role::Image { family: ImageFamily::Flux2Klein9b, bundled: false }
+        );
+        match classify(&klein(15360, "single_blocks.47.linear1.weight")) {
+            Role::Unsupported(what) => assert!(what.contains("Flux.2 dev"), "{what}"),
+            other => panic!("{other:?}"),
+        }
+        let mut gguf = klein(7680, single);
+        gguf.layout = Layout::Ggml;
+        for x in &mut gguf.tensors {
+            x.shape.reverse();
+        }
+        assert_eq!(
+            classify(&gguf),
+            Role::Image { family: ImageFamily::Flux2Klein4b, bundled: false }
+        );
+        let krea = t(&[("blocks.0.attn.wq.weight", &[6144, 6144]), ("txtfusion.projector.weight", &[1, 12])]);
+        assert_eq!(
+            classify(&krea),
+            Role::Image { family: ImageFamily::Krea2, bundled: false }
         );
         // Flux's layout with a different input width is a variant that needs
         // inputs this build doesn't send.
@@ -1696,7 +2027,15 @@ mod tests {
         };
         assert_eq!(classify(&vae(8)), Role::ImageVae(ImageVaeKind::Sd));
         assert_eq!(classify(&vae(32)), Role::ImageVae(ImageVaeKind::Flux));
-        assert!(matches!(classify(&vae(64)), Role::Unsupported(_)));
+        assert_eq!(classify(&vae(64)), Role::ImageVae(ImageVaeKind::Flux2));
+        // Black Forest Labs ship the Flux.2 VAE in diffusers' layout, whose
+        // `mid_block` once sent it down the Wan branch as 512 channels wide.
+        let diffusers = t(&[
+            ("decoder.conv_in.weight", &[512, 32, 3, 3]),
+            ("decoder.mid_block.resnets.0.conv2.bias", &[512]),
+            ("encoder.conv_out.bias", &[64]),
+        ]);
+        assert_eq!(classify(&diffusers), Role::ImageVae(ImageVaeKind::Flux2));
     }
 
     /// A DiT is only offered once it has both halves: a recipe, since the
@@ -1752,6 +2091,118 @@ mod tests {
             ("output_norm.weight", &[2560]),
         ]);
         assert_eq!(classify(&gguf), Role::Llm(LlmKind::Qwen3 { dim: 2560 }));
+    }
+
+    /// Three Qwens condition three families, and sd.cpp loads whichever it is
+    /// handed into the architecture the *diffusion* model asks for. The shapes
+    /// here are off the released files' headers.
+    #[test]
+    fn each_qwen_encoder_is_told_apart() {
+        // A Qwen3-VL in the flat layout sd.cpp loads: `q_norm` and a vision
+        // tower.
+        let qwen3vl = t(&[
+            ("model.embed_tokens.weight", &[151936, 2560]),
+            ("model.layers.0.self_attn.q_proj.weight", &[4096, 2560]),
+            ("model.layers.0.self_attn.q_norm.weight", &[128]),
+            ("model.norm.weight", &[2560]),
+            ("visual.blocks.0.attn.qkv.weight", &[3072, 1024]),
+        ]);
+        assert_eq!(classify(&qwen3vl), Role::Llm(LlmKind::Qwen3Vl { dim: 2560 }));
+        // Comfy's Krea 2 encoder, off its header: the same model with the
+        // language half nested under `language_model.`, which sd.cpp has no
+        // rename for. It failed on every layer as "not in model metadata", so
+        // it must not fill a slot.
+        let nested = t(&[
+            ("model.language_model.embed_tokens.weight", &[151936, 2560]),
+            ("model.language_model.layers.0.self_attn.q_proj.weight", &[4096, 2560]),
+            ("model.language_model.layers.0.self_attn.q_norm.weight", &[128]),
+            ("model.language_model.norm.weight", &[2560]),
+            ("model.visual.blocks.0.attn.qkv.weight", &[3072, 1024]),
+        ]);
+        match classify(&nested) {
+            Role::Unknown(why) => assert!(why.contains("GGUF"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        // Qwen-Image's: no `q_norm`, which is Qwen2.5.
+        let qwen25 = t(&[
+            ("model.embed_tokens.weight", &[152064, 3584]),
+            ("model.layers.0.self_attn.q_proj.weight", &[3584, 3584]),
+            ("model.norm.weight", &[3584]),
+            ("visual.blocks.0.attn.qkv.weight", &[3840, 1280]),
+        ]);
+        assert_eq!(classify(&qwen25), Role::Llm(LlmKind::Qwen25Vl { dim: 3584 }));
+        // A text-only GGUF of Qwen3-VL has Qwen3's tensor names exactly; only
+        // `general.architecture` says which it is.
+        let gguf = |arch: &str| Tensors {
+            arch: Some(arch.into()),
+            layout: Layout::Ggml,
+            ..t(&[
+                ("token_embd.weight", &[2560, 151936]),
+                ("blk.0.attn_q.weight", &[2560, 4096]),
+                ("blk.0.attn_q_norm.weight", &[128]),
+                ("output_norm.weight", &[2560]),
+            ])
+        };
+        assert_eq!(classify(&gguf("qwen3vl")), Role::Llm(LlmKind::Qwen3Vl { dim: 2560 }));
+        assert_eq!(classify(&gguf("qwen3")), Role::Llm(LlmKind::Qwen3 { dim: 2560 }));
+        assert_eq!(classify(&gguf("qwen2vl")), Role::Llm(LlmKind::Qwen25Vl { dim: 2560 }));
+        assert!(matches!(classify(&gguf("llama")), Role::Unknown(_)));
+    }
+
+    /// Flux.1's two encoders. T5-XXL is umt5's shape with a smaller
+    /// vocabulary, which is the whole difference, in either container.
+    #[test]
+    fn flux_encoders_are_named_and_t5_is_not_umt5() {
+        let t5 = |vocab: u64| {
+            t(&[
+                ("encoder.block.0.layer.0.SelfAttention.q.weight", &[4096, 4096]),
+                ("shared.weight", &[vocab, 4096]),
+            ])
+        };
+        assert_eq!(classify(&t5(32128)), Role::T5xxl);
+        assert_eq!(classify(&t5(256384)), Role::Umt5);
+        // city96's GGUF, llama.cpp's names.
+        let mut gguf = t(&[("enc.blk.0.attn_q.weight", &[4096, 4096]), ("token_embd.weight", &[4096, 32128])]);
+        gguf.layout = Layout::Ggml;
+        gguf.arch = Some("t5encoder".into());
+        assert_eq!(classify(&gguf), Role::T5xxl);
+        let clip = |w: u64| {
+            t(&[
+                ("text_model.encoder.layers.0.self_attn.q_proj.weight", &[w, w]),
+                ("text_model.final_layer_norm.weight", &[w]),
+            ])
+        };
+        assert_eq!(classify(&clip(768)), Role::ClipL);
+        assert!(matches!(classify(&clip(1280)), Role::Unsupported(_)));
+    }
+
+    /// Every slot of every family names a file a role could fill. A slot
+    /// whose `fits` matched nothing would leave a model forever greyed out.
+    #[test]
+    fn every_slot_is_fillable() {
+        let roles = [
+            Role::ImageVae(ImageVaeKind::Sd),
+            Role::ImageVae(ImageVaeKind::Flux),
+            Role::ImageVae(ImageVaeKind::Flux2),
+            Role::Vae(VaeKind::Wan21),
+            Role::ClipL,
+            Role::T5xxl,
+            Role::Llm(LlmKind::Qwen3 { dim: 2560 }),
+            Role::Llm(LlmKind::Qwen3 { dim: 4096 }),
+            Role::Llm(LlmKind::Qwen3Vl { dim: 2560 }),
+            Role::Llm(LlmKind::Qwen25Vl { dim: 3584 }),
+        ];
+        for f in ImageFamily::ALL {
+            for s in f.slots() {
+                assert!(roles.iter().any(|r| (s.fits)(r)), "{f:?}'s {} fits nothing", s.key);
+            }
+        }
+        // And the encoders don't cross: Klein 9B's is not Z-Image's, and
+        // Krea 2's Qwen3-VL is not Klein 4B's Qwen3 of the same width.
+        let fits = |f: ImageFamily, r: &Role| f.slots().iter().any(|s| s.key == "llm" && (s.fits)(r));
+        assert!(!fits(ImageFamily::ZImage, &Role::Llm(LlmKind::Qwen3 { dim: 4096 })));
+        assert!(!fits(ImageFamily::Flux2Klein4b, &Role::Llm(LlmKind::Qwen3Vl { dim: 2560 })));
+        assert!(fits(ImageFamily::Flux2Klein4b, &Role::Llm(LlmKind::Qwen3 { dim: 2560 })));
     }
 
     #[test]

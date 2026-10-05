@@ -38,12 +38,11 @@ function fetchLoras(force) {
 }
 
 // Whether a LoRA belongs on a model of `family` (its `/models` wire id).
-// The server's rule (`LoraBase::fits`) on the two strings it serves: `base`
-// empty means nothing identified it, and that is offered everywhere — refusing
-// a working file because the scan couldn't read it would be worse than the
-// mismatch. A known base must be the model's family exactly; a Wan or Krea 2
-// LoRA has a `base` and no `family`, so it fits nothing on this tab.
-const fits = (l, family) => !family || !l.base || l.family === family;
+// The server's rule (`LoraBase::fits`) already evaluated: `families` is every
+// family it fits. A LoRA nothing identified lists them all — refusing a working
+// file because the scan couldn't read it would be worse than the mismatch — and
+// a Wan or Flux.2 dev one lists none, so it fits nothing on this tab.
+const fits = (l, family) => !family || l.families.includes(family);
 
 // Everything the picker knows how to render for. An unusable file is kept and
 // disabled rather than dropped, matching what the server publishes and why: "my

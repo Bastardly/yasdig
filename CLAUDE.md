@@ -169,7 +169,8 @@ their recipes are different shapes, but one classifier feeds both.
 
 **Nothing is identified by filename or folder.** `Config::scan_images` walks the
 whole models dir (recursive; the video, LoRA and upscaler dirs are left out, each
-having a listing of its own) and `discover::classify` names what each file is. The
+having a listing of its own — except that the video dir's *parts*, whatever some
+image slot fits, are let back in) and `discover::classify` names what each file is. The
 folders are for the person — ComfyUI's role layout works, and so does a flat folder.
 This replaced an extension check that listed an LTX-2 video transformer as an SDXL
 checkpoint, and it is also what found an SD 1.x file that had been running on SDXL's
@@ -196,7 +197,37 @@ family's parts is rows there. A picked part arrives on `GenRequest::parts` or fr
 whitelist is **membership in the scan**: a name is compared with what a directory
 walk produced, so `..` can't name anything that isn't already listed.
 
-Eight things break silently:
+Thirteen things break silently:
+
+- **Every encoder slot fits by kind *and* width.** sd.cpp picks the language
+  model's architecture from the *diffusion* model and loads whatever `--llm` it is
+  handed into it, so a Qwen3-VL-4B in Klein 4B's Qwen3-4B slot — same width, same
+  tensor names in a GGUF — loads, conditions on nonsense, and renders.
+  `every_slot_is_fillable` pins that the encoders don't cross.
+- **A text-only GGUF's architecture is only in its metadata.** llama.cpp writes a
+  Qwen3-VL's language half with Qwen3's exact names, so `read_gguf` keeps
+  `general.architecture` (`Tensors::arch`, the one key it reads) and the Qwen arm
+  of `classify` trusts it over the names. T5 is the same story told by vocabulary:
+  umt5 and T5-XXL differ only in the token embedding's 256384 vs 32128 rows.
+- **A right model in a layout sd.cpp can't read is not a part.** Transformers'
+  newer Qwen-VL layout nests the language half under `model.language_model.`, and
+  sd.cpp only renames llama.cpp's `blk.N` into its `model.layers.N` — so Comfy's
+  `qwen3vl_4b_bf16.safetensors`, which sd.cpp's own `docs/krea2.md` links, failed
+  every layer as "not in model metadata". `classify` makes that layout an
+  `Unknown` naming the GGUF as the fix. The general rule: what a slot accepts is
+  what sd-cli *loads*, not what the weights *are*.
+- **The video dir's parts are shared, its models aren't** (`Config::scan_images`).
+  Krea 2 and Qwen-Image decode with the Wan 2.1 VAE the Video tab already keeps;
+  the filter is "some `ImageFamily::slots()` row fits it", so a Wan transformer or
+  umt5 can't leak into the image select, and a new slot widens it with no second
+  list. Only when the video dir is inside the models dir, because a part is named
+  relative to the models dir and `resolve_part` joins the name back onto it.
+- **Klein is two families, and Flux.1 dev and schnell are two.** Klein 4B and 9B
+  take different encoders, which a slot's plain `fn(&Role)` can't choose between
+  per model, and their LoRAs don't cross. Dev and schnell share every part but not
+  a step count, and the header says which (`guidance_in`) — so `LoraBase::fits`
+  lets a Flux LoRA fit both, the one place the rule is more than equality, which is
+  why `/loras` serves `families` rather than one family.
 
 - **Image models are tested before either VAE branch in `classify`.** A bundled SDXL
   carries its VAE, whose resnets are `decoder.…conv2`, which is the Wan VAE's
@@ -233,9 +264,13 @@ Eight things break silently:
   steps and CFG, which is a picture, just a bad one.
 
 **Adding a family** is: a classifier arm (from `get_sd_version`'s marker), a variant
-with `label`/`as_str`, its rows in `slots()` (plus a `Components` field and flag if
-it needs one that isn't there — Flux's `clip_l` and `t5xxl` already are), a
-`recipe()`, its `flags()`, and `runnable()` turned on. Its LoRAs are already
+with `label`/`as_str` and a place in `ImageFamily::ALL`, its rows in `slots()` (plus
+a `Components` field and flag if it needs one that isn't there, and a `Role` for a
+new kind of part), a `recipe()`, its `flags()`, and `runnable()` turned on. Before
+writing the classifier arm, read the released files' headers — an HTTP range read
+of a safetensors' first 8 bytes and its JSON, or the first few MB of a GGUF — rather
+than trusting a doc: the Flux.2 VAE ships in diffusers' layout (`mid_block`, not
+`mid`) and was read as a 512-channel Wan VAE until a real header said otherwise. Its LoRAs are already
 identified (*## LoRAs*). `README.md` gets its download list. The escalation ladder
 needs nothing — every rung is pixels in, pixels out, so refining a Z-Image on an SDXL
 is ordinary, and `swap_model` already carries family and components with the rest of
@@ -400,7 +435,7 @@ renders — an SDXL LoRA on a Z-Image changes nothing, and an SD 1 one on an SDX
 patches the one CLIP-L the two share and nothing else. So `classify` carries a
 `LoraBase` on `Role::Lora`, read by `discover::lora_base` off the names of what the
 LoRA patches, and `check_loras` takes the profile's family and refuses a mismatch.
-Four things about it:
+Five things about it:
 
 - **Never the metadata.** kohya's `ss_base_model_version` and
   `modelspec.architecture` are the tempting shortcut and they lie — `hand 5.5` in
@@ -414,10 +449,19 @@ Four things about it:
   substring; one with a separator (`attn.wq`, `.attention.`) is tested twice.
 - **`Unknown` fits everything.** Refusing a working file because the scan couldn't
   read it would be worse than the mismatch this guards. `LoraBase::Other` (Wan,
-  Krea 2) is the opposite: named, and fits no image model.
+  Flux.2 dev) is the opposite: named, and fits no image model.
+- **A Flux LoRA's names say "Flux" and nothing more** (`discover::flux_lora`).
+  Flux.1 and every Flux.2 keep `double_blocks`, so the width of a block's down
+  projection decides first (6144 Flux.2 dev, 4096 Klein 9B), and at 3072 — Flux.1
+  *and* Klein 4B — which blocks it reaches: past double 4 or single 19, or a
+  per-block modulation, is Flux.1; a `*_stream_modulation` is Klein. Anything
+  else is `Unknown` rather than a guess. `block_index` must skip a
+  `single_transformer_blocks` when looking for diffusers' double blocks, whose
+  name it contains.
 
-On the wire that is `family` (the `/models` spelling) and `base` (a label) on each
-`/loras` entry; `fits()` in `loras.js` is `LoraBase::fits` over those two strings.
+On the wire that is `families` (every family it fits, `LoraBase::fits` evaluated on
+the server) and `base` (a label) on each `/loras` entry; `fits()` in `loras.js` is a
+membership test on the first, so the page holds no copy of the rule.
 
 **`Profile.loras` is the only knob on `Profile` with no `Defaults`/`Template`
 pair**, and that is deliberate: a LoRA is reached for per picture, so it arrives
