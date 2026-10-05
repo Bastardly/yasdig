@@ -18,6 +18,10 @@
     <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
     <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
     <button type="button" class="btn btn-choice tab" data-tab="settings">Settings</button>
+    <!-- Not a tab, so not `.tab`: it opens the queue in a dialog over whatever
+         tab you are on rather than taking you away from it. Hidden while the
+         queue is empty; `jobs.js` writes its count and the loop mark. -->
+    <button type="button" id="jobsbtn" class="btn btn-jobs" hidden></button>
     <!-- The way out of a release started from a file manager, which has no
          console to close. Red because it stops a render in flight; never
          disabled while busy, for #stop's reason. Pushed to the far end so it
@@ -679,6 +683,22 @@
     <img id="lbimg" alt="full size result" draggable="false">
   </div>
   <button type="button" id="lbclose" aria-label="Close viewer">&times;</button>
+</dialog>
+<!-- The job queue. Modal, so nothing behind it takes a click while it is up;
+     a click on the backdrop closes it (`jobs.js`), and so does Escape. The
+     inner box is what a click "inside" means — the dialog element itself is
+     only ever the target of a click on its backdrop. -->
+<dialog id="jobsdlg" aria-labelledby="jobstitle">
+  <div class="jobsbox">
+    <div class="wihead">
+      <b id="jobstitle">Jobs</b>
+      <button type="button" id="jobsclose" class="btn">Close</button>
+    </div>
+    <p class="sub">Run in this order, one at a time. A loop gives way to anything
+      queued behind it after each image.</p>
+    <ul id="jobslist" class="joblist"></ul>
+    <div id="jobserr" class="err"></div>
+  </div>
 </dialog>
 <dialog id="picker">
   <div class="wihead">

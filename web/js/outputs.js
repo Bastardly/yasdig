@@ -1,6 +1,6 @@
 import { $, esc, post } from './dom.js';
 import { S, escErr } from './state.js';
-import { setBusy, onIdle } from './busy.js';
+import { setBusy, setIdle, onIdle } from './busy.js';
 import { setPost, setPostStart, showFullSize, setViewerImage, cancelPost } from './viewer.js';
 import { gridMarks } from './gridmark.js';
 
@@ -72,7 +72,7 @@ let outputs = [];
 // Which tile is open in the viewer, and the only cursor the arrow keys move.
 // -1 when nothing has been opened yet.
 let index = -1;
-// An open is a job on the serialized worker, so a held arrow key has to coalesce
+// An open is a job on the serialized display worker, so a held arrow key has to coalesce
 // the way a slider drag does (see runPost): while one is in flight the latest
 // target is remembered and fired once, rather than eight of them queueing up and
 // then playing back as a slideshow after the key is released.
@@ -185,10 +185,9 @@ function markGrid() {
 // `Pending`, never a filename.
 async function openAt(i) {
   if (i < 0 || i >= outputs.length) return;
-  // A batch or loop on the Image tab owns the worker *and* `setBusy`: opening
-  // here would end with a `setBusy(null)` that re-enables Generate in the middle
-  // of the run it belongs to.
-  if (S.run) return;
+  // No check for a run on the Image tab: opening is on the display lane and
+  // the viewer's image has a slot of its own (`Slot::Output`), so a run
+  // landing images meanwhile neither delays this nor replaces it.
   if (opening) { queued = i; return; }
   // A debounced or in-flight `/adjust` belongs to the image being left. Without
   // this, letting go of a slider and pressing → immediately lands the old
@@ -225,7 +224,7 @@ async function openAt(i) {
     if ($('lightbox').open) $('lberr').textContent = msg;
   } finally {
     opening = false;
-    setBusy(null);
+    setIdle('lbsave');
     if (queued !== null) { const next = queued; queued = null; openAt(next); }
   }
 }
@@ -256,7 +255,7 @@ async function saveEdit() {
     escErr(String(e.message || e));
     $('lberr').textContent = String(e.message || e);
   } finally {
-    setBusy(null);
+    setIdle('lbsave');
   }
 }
 
@@ -276,7 +275,7 @@ export function initOutputs() {
   // slider keeps its arrows and everything else gets the gallery's. Clicking the
   // picture is how you hand them back.
   document.addEventListener('keydown', (e) => {
-    if (S.pane !== 'outputs' || S.run) return;
+    if (S.pane !== 'outputs') return;
     if (!$('lightbox').open) return;
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName)) return;

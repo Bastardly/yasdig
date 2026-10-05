@@ -1,7 +1,8 @@
 import { $, bar, esc, post, numOr } from './dom.js';
 import { S, P, escErr } from './state.js';
-import { setBusy, onIdle } from './busy.js';
-import { setPost, setPostStart, setViewerImage, showFullSize } from './viewer.js';
+import { setBusy, setIdle, onIdle, redrawBusy } from './busy.js';
+import { cancelPost, setPost, setPostStart, setViewerImage, showFullSize } from './viewer.js';
+import { onJobs, onNotice, onResult, runningJob, soonJobs, stopJob } from './jobs.js';
 import { loadWorkItems, markGrid } from './workitems.js';
 import { loraPicker } from './loras.js';
 import { sourceSlot } from './source-slot.js';
@@ -610,6 +611,11 @@ function takeHiresScale() {
 // Info first, image last: on a narrow screen the metadata and the action
 // buttons stay visible without scrolling past a tall image.
 export function render(data) {
+  // A different picture from the one under the sliders: a re-filter of the
+  // old one still in flight must not land on top of it. A run's image can
+  // arrive mid-drag now that the sliders stay live during one.
+  if (data.image_id !== S.imageId) cancelPost();
+  lastImage = data;
   const t = data.timings;
   const stages = [['generate', t.gen_ms], ['upscale', t.upscale_ms ?? 0], ['fsr', t.fsr_ms],
                   ['refine', t.refine_ms], ['hi-res', t.hires_ms]];
@@ -710,26 +716,79 @@ export function render(data) {
   setPostStart(data.filters_start ?? data.filters);
   setPost(data.filters);
   $('postms').textContent = '';
+  // The action row was just rebuilt; a Refine still waiting on its request
+  // keeps saying so.
+  redrawBusy();
 }
 
-async function escalate(which, path, payload, label) {
+// The Image tab's result as it was last drawn, so coming back from another
+// tab puts it back — `showTab` clears the pane it leaves, and before this the
+// picture was simply gone. Also what a run's image is compared against, since
+// the escalation that produced it may have rendered it already.
+let lastImage = null;
+
+export function restoreImage() {
+  if (lastImage && S.imageId === null) render(lastImage);
+}
+
+const sameImage = (a, b) => !!a && !!b && a.image_id === b.image_id
+  && a.refine_passes === b.refine_passes && a.hires_passes === b.hires_passes
+  && a.width === b.width && a.height === b.height;
+
+// A run's image landed (or a pass's, which was also answered on its own
+// request). Drawn only on the Image tab: on Outputs it would replace the image
+// in the viewer, which belongs to that tab. It is kept, and comes back with the
+// tab.
+//
+// Also where an escalation's own answer goes, for the same reason: it can wait
+// behind a batch for minutes now, and the tab it was pressed on may not be the
+// one showing when it lands.
+function takeResult(data) {
+  if (sameImage(data, lastImage) && S.imageId === data.image_id) return;
+  loadWorkItems();
+  if (S.pane === 'image') render(data); else lastImage = data;
+}
+
+// The server answered that the image is gone. One with no escalation in it is
+// exactly its archived work item, so it can be reopened and the pass retried
+// with nobody the wiser; an escalated one existed only in scratch, and the
+// message says how to get its base back.
+const stale = (e) => e.status === 400 && /no longer available/.test(String(e.message));
+
+async function reopen(workId) {
+  for (const shelf of ['workitems', 'favorites']) {
+    try { return await post(`/${shelf}/open`, { id: workId }); } catch { /* the other shelf */ }
+  }
+  return null;
+}
+
+async function escalate(which, path, payload, label, kind) {
   if (S.imageId === null) return;
-  setBusy(which, label);
+  setBusy(which, label, kind);
   escErr('');
+  soonJobs();
   try {
-    render(await post(path, { image_id: S.imageId, ...payload }));
+    try {
+      takeResult(await post(path, { image_id: S.imageId, ...payload }));
+    } catch (e) {
+      const base = lastImage && !lastImage.refine_passes && !lastImage.hires_passes;
+      const again = stale(e) && base && S.workId ? await reopen(S.workId) : null;
+      if (!again) throw e;
+      render(again);
+      takeResult(await post(path, { image_id: S.imageId, ...payload }));
+    }
   } catch (e) {
     escErr(String(e.message || e));
-    // 400 = the pass isn't available any more (evicted, or the server
-    // restarted), so the controls are dead; keep the image on screen. Any
-    // other failure is retryable — the server kept its intermediates.
-    if (e.status === 400) {
+    // The image is gone, so the controls are dead; keep the picture on
+    // screen. Any other failure is retryable — the server kept its
+    // intermediates.
+    if (stale(e)) {
       S.imageId = null;
       const row = document.querySelector('.actions');
       if (row) row.remove();
     }
   } finally {
-    setBusy(null);
+    setIdle(which);
   }
 }
 
@@ -778,25 +837,22 @@ export const escalateModels = () => ({
 // image", which is what an unchosen select sends and what the server reads an
 // empty string as.
 const refine = () => escalate('refine', '/refine',
-  { model: P('refmodel').value || null, ...escalateSettings() }, 'Refining…');
+  { model: P('refmodel').value || null, ...escalateSettings() }, 'Refining…', 'refine');
 const hires = () => escalate('hires', '/hires',
   { model: P('hiresmodel').value || null, upscale: parseFloat($('upfactor').value),
-    ...escalateSettings() }, 'Hi-res pass…');
+    ...escalateSettings() }, 'Hi-res pass…', 'hires');
 
 // ---- Runs -------------------------------------------------------------------
 //
 // A run is one or more generations, plus whatever the "After each image" boxes
-// ask for. It is driven from this page rather than by a server-side batch job on
-// purpose. The GPU worker is a single blocking consumer, so one job that held it
-// for a whole run would leave /adjust, the grid and every other client dead for
-// the length of it, with nothing to cancel it by. Looping over the routes that
-// already exist costs one round trip per image — nothing against a diffusion —
-// and buys three things: each result on screen as it lands, a stop that only has
-// to wait for the image in flight, and no new server code at all.
+// ask for. Pressing Generate queues it on the server (`crate::jobs`) and that is
+// all this page does: the server makes the images one at a time, publishes each
+// stage as it lands, and the Jobs poll hands them to `takeResult`. So the run
+// survives a reload or a trip to another tab, and Generate stays pressable —
+// pressing it again queues the next run behind this one.
 //
-// The price is that the loop lives in the page: close the tab and it ends after
-// the current image. For a local tool with the browser open that is a fair
-// trade, and it does mean a runaway loop is always one tab-close from stopping.
+// Everything the run needs is captured now, in the body. That is what a queue
+// means: job A keeps the boxes it was queued with while job B is being set up.
 
 const runTotal = () =>
   $('autorun').checked ? Infinity : Math.max(1, parseInt($('count').value, 10) || 1);
@@ -810,19 +866,17 @@ function syncGoLabel() {
 
 // One image's request, as `[route, body]`: from noise it is `/generate`, from a
 // source `/img2img`, and the two share everything that isn't about where the
-// picture starts. Plus the seed walk: a pinned seed advances by one per image,
-// because a batch at a fixed seed is otherwise N copies of the same picture;
-// image 0 is still precisely the seed in the box, which is the reason to pin
-// one. -1 stays -1 and the server draws a fresh one each time. A batch over one
-// source is therefore N seeds of one transform, which is a real use — pick the
-// best of eight.
-function genPayload(index) {
+// picture starts. The seed in the box goes as typed; the server walks it by
+// one per image of a pinned-seed run, so image 0 is still precisely that seed.
+// A batch over one source is therefore N seeds of one transform, which is a
+// real use — pick the best of eight.
+function genPayload() {
   const seed = parseInt($('seed').value, 10);
   const common = {
     prompt: $('prompt').value,
     template: $('template').value,
     negative: $('negative').value || null,
-    seed: Number.isFinite(seed) && seed >= 0 ? seed + index : -1,
+    seed: Number.isFinite(seed) && seed >= 0 ? seed : -1,
     // Both routes: a pass over a source runs these too.
     steps: numOr('steps'),
     cfg_scale: numOr('cfg'),
@@ -873,84 +927,63 @@ function genPayload(index) {
   }];
 }
 
+// The *After each generation* fold, as the run will carry it. The checkpoint
+// selects are read from the Image tab by id: Generate only exists there.
+function afterEach() {
+  return {
+    hires: $('opthires').checked
+      ? { upscale: S.upFactor, model: $('hiresmodel').value || null } : null,
+    refine: $('optrefine').checked ? { model: $('refmodel').value || null } : null,
+    save: $('optsave').checked,
+  };
+}
+
 async function startRun() {
-  if (S.run) return;
-  S.run = { stop: false, done: 0, total: runTotal() };
   $('err').textContent = '';
-  syncStopButton();
+  const n = runTotal();
+  const [route, body] = genPayload();
+  $('go').disabled = true;
   try {
-    while (!S.run.stop && S.run.done < S.run.total) {
-      // Progress goes in the button that started it — the one control on the
-      // page that is certainly still where the user is looking.
-      const n = S.run.done + 1;
-      const at = (what) =>
-        `${what} ${n}${S.run.total === Infinity ? '' : '/' + S.run.total}…`;
-
-      setBusy('go', at('Generating'));
-      render(await post(...genPayload(S.run.done)));
-      // Only a generate creates a work item — refine and hi-res escalate the one
-      // that's already there, and adjust doesn't touch the disk at all. Per
-      // image rather than once at the end, so the strip fills as the run goes.
-      loadWorkItems();
-
-      // Hi-res before refine, the order the buttons are in and for the reason
-      // they're in it: hi-res is the pass that enlarges, refine is the finishing
-      // touch you run at whatever size you ended up at. Both read the Advanced
-      // panel through the same escalateSettings() the buttons use, so an
-      // automated pass and a manual one run identically.
-      if ($('opthires').checked) {
-        setBusy('go', at('Hi-res'));
-        render(await post('/hires',
-          { image_id: S.imageId, upscale: S.upFactor,
-            model: P('hiresmodel').value || null, ...escalateSettings() }));
-      }
-      if ($('optrefine').checked) {
-        setBusy('go', at('Refining'));
-        render(await post('/refine',
-          { image_id: S.imageId, model: P('refmodel').value || null,
-            ...escalateSettings() }));
-      }
-      if ($('optsave').checked) {
-        setBusy('go', at('Saving'));
-        const saved = await post('/save-output', { image_id: S.imageId });
-        $('saved').textContent = `saved → ${saved.path}`;
-      }
-      S.run.done += 1;
-    }
+    await post(route, {
+      ...body,
+      count: n === Infinity ? null : n,
+      loop: n === Infinity,
+      after: afterEach(),
+    });
+    soonJobs();
   } catch (e) {
-    // Deliberately not escalate()'s behaviour of reporting beside the image and
-    // carrying on: a failure here is the run's failure. Whatever killed image 3
-    // kills image 4 as well — VRAM, a missing checkpoint, a pass the model
-    // hasn't got — and a hundred repeats of it help nobody. Everything already
-    // generated is in the grid, and the message says what to change.
     $('err').textContent = String(e.message || e);
   } finally {
-    S.run = null;
-    setBusy(null);
-    syncStopButton();
+    $('go').disabled = false;
   }
 }
+
+// The running run, if it is an image run of more than one: what the Stop under
+// Generate addresses. The Jobs dialog stops anything; this is the shortcut for
+// the common case, and it asks nothing, as it never did.
+const stoppableRun = () => {
+  const j = runningJob();
+  return j && (j.kind === 'generate' || j.kind === 'img2img') && j.total !== 1 ? j : null;
+};
 
 // Stop after the image in flight has finished its whole pipeline. The hi-res,
 // the refine and the save are that image, and dropping a refined one a single
 // call short of saving it is not what anybody means by "stop".
 function stopRun() {
-  if (!S.run) return;
-  S.run.stop = true;
-  $('stop').disabled = true;
-  $('stop').textContent = 'Stopping after this image…';
+  const j = stoppableRun();
+  if (j) stopJob(j.id);
 }
 
 // Shown only while there is something to stop *between* — a single image is over
-// when it's over. setBusy never touches it, so it stays clickable for the whole
-// run, which is the entire point of it.
+// when it's over. Driven by the Jobs poll, so it follows a run this page didn't
+// start, and one that outlived a reload.
 function syncStopButton() {
-  const show = !!S.run && S.run.total > 1;
-  $('stop').hidden = !show;
-  if (show) {
-    $('stop').disabled = false;
-    $('stop').textContent = 'Stop';
-  }
+  const j = stoppableRun();
+  $('stop').hidden = !j;
+  if (!j) return;
+  const stopping = j.state === 'stopping';
+  $('stop').disabled = stopping;
+  $('stop').textContent = stopping ? 'Stopping after this image…' : 'Stop';
 }
 
 // Keep the image on screen. Everything generated is archived automatically, but
@@ -966,7 +999,7 @@ async function saveOutput() {
   } catch (e) {
     escErr(String(e.message || e));
   } finally {
-    setBusy(null);
+    setIdle('saveout');
   }
 }
 
@@ -1027,6 +1060,13 @@ export function initImage() {
   // `IDLE_LABELS.go` is only a fallback: what the button says at rest depends on
   // the run panel, which that map can't know.
   onIdle(syncGoLabel);
+  onResult(takeResult);
+  onJobs(syncStopButton);
+  // A run that failed has no request waiting on it; its message comes here.
+  onNotice((msg) => {
+    $('err').textContent = /cancelled by request/.test(msg)
+      ? 'Stopped. The image in flight was not kept.' : msg;
+  });
 
   loadModels();
   // A label for controls that start with a value, so it can't wait for the

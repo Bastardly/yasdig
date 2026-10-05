@@ -1,5 +1,6 @@
 import { $, esc, post } from './dom.js';
-import { setBusy, cancelRun } from './busy.js';
+import { setBusy, setIdle, cancelRun } from './busy.js';
+import { soonJobs } from './jobs.js';
 
 // ---- Convert ----------------------------------------------------------------
 
@@ -91,9 +92,11 @@ async function startConvert() {
   $('cstop').hidden = false;
   $('cstop').disabled = false;
   $('cstop').textContent = 'Stop';
-  setBusy('cgo', 'Converting…');
+  setBusy('cgo', 'Converting…', 'convert');
   try {
-    const r = await post('/convert', { source: f.id, type: $('ctype').value });
+    const pending = post('/convert', { source: f.id, type: $('ctype').value });
+    soonJobs();
+    const r = await pending;
     const mins = (r.ms / 60000).toFixed(1);
     // The estimate's only feedback. Reported next to the outcome rather than
     // quietly discarded, because it is the number the select was chosen on.
@@ -112,18 +115,20 @@ async function startConvert() {
     const msg = String(e.message || e);
     $('cerr').textContent = msg.includes('cancelled by request')
       ? 'Stopped. The partial file was removed.'
-      : msg;
+      : msg.includes('removed from the job queue')
+        ? 'Removed from the queue before it started.'
+        : msg;
   } finally {
     crunning = false;
     $('cstop').hidden = true;
-    setBusy(null);
+    setIdle('cgo');
     syncConvert();
   }
 }
 
 export function initConvert() {
   $('cgo').addEventListener('click', startConvert);
-  $('cstop').addEventListener('click', () => cancelRun('cstop', 'cerr'));
+  $('cstop').addEventListener('click', () => cancelRun('cstop', 'convert'));
   $('csource').addEventListener('change', syncConvert);
   $('ctype').addEventListener('change', syncConvert);
 

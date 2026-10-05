@@ -1,22 +1,31 @@
 //! rustimage — Python-free Vulkan image generator.
 //!
-//! A minimal std-only HTTP server fronts a single GPU worker thread. The worker
-//! owns the sd.cpp runner and the wgpu FSR context, so all GPU work is
-//! serialized (no VRAM thrash). Routes:
+//! A minimal std-only HTTP server fronts two worker threads. The diffusion
+//! worker owns the sd.cpp runner and takes its work from the job queue
+//! (`jobs.rs`) one image at a time, so sd-cli never runs twice at once (no VRAM
+//! thrash). The display worker re-filters, reopens and saves images, so the
+//! viewer answers mid-render; the two share one wgpu FSR context behind a lock.
+//! Routes:
 //!   GET  /            -> static web UI
 //!   GET  /templates   -> JSON list of model profiles
-//!   POST /generate    -> {prompt, template, negative?, seed?, ...overrides}
-//!                        -> {image_base64, width, height, seed, image_id,
-//!                            can_refine, can_hires, timings}
+//!   POST /generate    -> {prompt, template, negative?, seed?, ...overrides,
+//!                         count?, loop?, after?: {hires?, refine?, save}}
+//!                        -> {job}, at once. The images arrive through /jobs
+//!   GET  /jobs        -> {jobs:[{id, kind, label, done, total, state}],
+//!                         latest_seq, notices, progress}
+//!   GET  /jobs/latest -> the newest image a job made: {image_base64, width,
+//!                         height, seed, image_id, can_refine, can_hires, timings}
+//!   POST /jobs/stop   -> {id}  remove a waiting job, or stop a running one
 //!   POST /upload      -> a PNG as the raw body (the one binary route)
 //!                        -> {stem, width, height}, landing in work/output/
-//!   POST /img2img     -> {prompt, template, source, ...overrides}
-//!                        one img2img pass over a work/output/ image, answering
-//!                        in /generate's shape so the same ladder follows it
+//!   POST /img2img     -> {prompt, template, source, ...overrides, count?, ...}
+//!                        img2img passes over a work/output/ image, queued like
+//!                        /generate's so the same ladder follows them
 //!   POST /refine      -> {image_id, ...overrides}   img2img in place, no rescale
 //!   POST /hires       -> {image_id, upscale, ...overrides}
-//!                        img2img with an enlarge first. Both return the same
-//!                        shape as /generate, both can be run in either order and
+//!                        img2img with an enlarge first. Both queue ahead of
+//!                        everything not yet running, wait their turn and answer
+//!                        in /jobs/latest's shape; both can be run in either order and
 //!                        repeated, and both take the escalation knobs — omitted
 //!                        means "as the image was generated". `model` names a
 //!                        different checkpoint for that one pass
@@ -76,6 +85,7 @@ mod foldscale;
 mod fsr;
 mod home;
 mod http;
+mod jobs;
 mod pipeline;
 mod preflight;
 mod sd;
@@ -91,15 +101,18 @@ mod workitems;
 use anyhow::{Context, Result};
 use base64::Engine as _;
 use config::{Config, Filters, FiltersPatch, LoraRef};
-use pipeline::{Engine, EscalateRequest, GenRequest, GenResult, Img2ImgRequest, VideoRequest};
+use pipeline::{
+    lock, Engine, EscalateRequest, GenRequest, GenResult, Img2ImgRequest, Retained, VideoRequest,
+};
 use sd::Monitor;
 use settings::Settings;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use workitems::{Gallery, Shelf};
 
-/// A unit of GPU work plus a channel to send the result back to the HTTP thread.
+/// A unit of display-lane work plus a channel to send the result back to the
+/// HTTP thread.
 ///
 /// The reply is the finished JSON body rather than a `GenResult`, because not
 /// every job produces an image — `SaveOutput` answers with a path. Rendering on
@@ -110,23 +123,14 @@ struct Job {
     reply: Sender<Result<String>>,
 }
 
+/// The display lane: everything that only re-filters, reopens or copies an
+/// image. None of it runs sd-cli, so none of it has any business waiting behind
+/// a render — which is what it used to do, and why the viewer could not be
+/// opened while a batch ran. See [`pipeline::Display`].
 enum JobKind {
-    Generate(GenRequest),
-    /// One img2img pass over an image the user supplied. A generation like
-    /// `Generate` is — it mints a fresh result the escalations then work on —
-    /// and it queues for exactly the same reason.
-    Img2Img(Img2ImgRequest),
-    /// Refine the base image the engine retained from an earlier generation.
-    Refine { id: u64, over: EscalateRequest },
-    /// Re-diffuse an earlier result at output resolution, optionally enlarging.
-    Hires {
-        id: u64,
-        upscale: f32,
-        over: EscalateRequest,
-    },
     /// Re-filter an earlier result — display passes only, no diffusion.
     Adjust { id: u64, patch: FiltersPatch },
-    /// Reopen an archived generation as a live result. Needs the worker because
+    /// Reopen an archived generation as a live result. Needs a worker because
     /// it ends in a `publish`, and because the new `Pending` lives there. The
     /// shelf rides along because the two grids — Current and Favorites — hold
     /// the same ids, so the id alone doesn't say which file to read.
@@ -135,12 +139,32 @@ enum JobKind {
         shelf: Shelf,
     },
     /// Reopen a finished image from `work/output/` as a live result — the
-    /// Outputs tab. Through the queue for the same two reasons as `Open`, and
+    /// Outputs tab. Through a worker for the same two reasons as `Open`, and
     /// unlike every other `/outputs` route, which only reads the filesystem.
     OpenOutput(String),
     /// Copy the image on screen into `work/output/`. No GPU, but the only copy
-    /// of which file that is lives in the engine's `pending` map.
+    /// of which file that is lives in the retained images.
     SaveOutput(u64),
+}
+
+/// The diffusion lane's work, as the job queue (`crate::jobs`) carries it.
+/// Everything here runs sd-cli or holds the GPU for long enough that two at
+/// once would fight over VRAM, so it is serialized and visible in the Jobs
+/// dialog.
+#[derive(Clone)]
+enum Work {
+    /// A generate or an image-to-image, one image or many, with what to do
+    /// after each. Boxed: it is the large variant by an order of magnitude.
+    Run(Box<RunPlan>),
+    /// Refine the base image the engine retained from an earlier generation.
+    /// The image is pinned while this waits — see `pipeline::Retained::pin`.
+    Refine { id: u64, over: EscalateRequest },
+    /// Re-diffuse an earlier result at output resolution, optionally enlarging.
+    Hires {
+        id: u64,
+        upscale: f32,
+        over: EscalateRequest,
+    },
     /// Generate a clip. Minutes long rather than seconds, which is what made
     /// `SdRunner::run` stream its output — `GET /progress` is the only thing
     /// that makes this bearable, and it answers on the connection thread while
@@ -160,6 +184,66 @@ enum JobKind {
         clarity: Option<f32>,
     },
 }
+
+/// One run: what makes each image, and what happens to it afterwards.
+///
+/// Everything is captured when the run is queued. That is what a queue means —
+/// job A keeps the boxes it was queued with while job B is set up — and it
+/// replaces the page loop's "read the boxes once per image", which only made
+/// sense while there was only ever one run.
+#[derive(Clone)]
+struct RunPlan {
+    start: Start,
+    after: AfterEach,
+    /// The escalation knobs from the same body, for the after-each passes —
+    /// what the Refine and Hi-res buttons would send with the panel as it was.
+    escalate: EscalateRequest,
+}
+
+#[derive(Clone)]
+enum Start {
+    Generate(GenRequest),
+    Img2Img(Img2ImgRequest),
+}
+
+/// The *After each generation* fold. Hi-res before refine, the order the
+/// buttons are in: hi-res is the pass that enlarges, refine is the finishing
+/// touch you run at whatever size you ended up at.
+#[derive(Clone, Default, serde::Deserialize)]
+struct AfterEach {
+    #[serde(default)]
+    hires: Option<AfterPass>,
+    #[serde(default)]
+    refine: Option<AfterPass>,
+    #[serde(default)]
+    save: bool,
+}
+
+#[derive(Clone, Default, serde::Deserialize)]
+struct AfterPass {
+    /// The checkpoint for this pass; empty or absent is the one that made the
+    /// image, as on the buttons.
+    #[serde(default)]
+    model: Option<String>,
+    /// Hi-res only.
+    #[serde(default)]
+    upscale: Option<f32>,
+}
+
+type Jobs = jobs::Queue<Work>;
+
+/// What a connection thread needs to reach the two workers.
+#[derive(Clone)]
+struct Lanes {
+    display: Sender<Job>,
+    queue: Jobs,
+    retained: Arc<Mutex<Retained>>,
+}
+
+/// The most images one run may ask for. Not a resource limit — the loop is
+/// unbounded — but a typo guard: 10000 in the count box is a mistake, and the
+/// loop is the way to ask for "many".
+const MAX_RUN: u32 = 1000;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -261,58 +345,24 @@ fn run(args: &[String]) -> Result<()> {
     // it, and a Stop reaches the running child through it.
     let monitor = Monitor::default();
 
-    // Spawn the single GPU worker. It initializes wgpu + sd, reports readiness,
-    // then serves jobs one at a time.
+    // The diffusion worker. It initializes wgpu + sd, reports readiness, then
+    // takes work from the job queue one image at a time. The display worker is
+    // started from what it hands back — the same FSR device and the same
+    // retained images — so the two lanes share one GPU context.
     let engine_cfg = (*cfg).clone();
     let engine_monitor = monitor.clone();
-    let (job_tx, job_rx) = mpsc::channel::<Job>();
-    let (ready_tx, ready_rx) = mpsc::channel::<Result<String>>();
+    let queue = Jobs::new();
+    let worker_queue = queue.clone();
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<(String, pipeline::Display, Arc<Mutex<Retained>>)>>();
     std::thread::Builder::new()
         .name("gpu-worker".into())
         .spawn(move || match Engine::new(engine_cfg, engine_monitor) {
             Ok(mut engine) => {
-                let _ = ready_tx.send(Ok(engine.adapter_name().to_string()));
-                for job in job_rx {
-                    let result = match job.kind {
-                        JobKind::Generate(req) => engine.run(&req).map(|r| result_json(&r)),
-                        JobKind::Img2Img(req) => engine.img2img(&req).map(|r| result_json(&r)),
-                        JobKind::Refine { id, over } => {
-                            engine.refine(id, &over).map(|r| result_json(&r))
-                        }
-                        JobKind::Hires { id, upscale, over } => {
-                            engine.hires(id, upscale, &over).map(|r| result_json(&r))
-                        }
-                        JobKind::Adjust { id, patch } => {
-                            engine.adjust(id, &patch).map(|r| result_json(&r))
-                        }
-                        JobKind::Open { id, shelf } => {
-                            engine.open(&id, shelf).map(|r| result_json(&r))
-                        }
-                        JobKind::OpenOutput(stem) => {
-                            engine.open_output(&stem).map(|r| result_json(&r))
-                        }
-                        JobKind::SaveOutput(id) => engine.save_output(id).map(|p| saved_json(&p)),
-                        JobKind::Video(req) => engine.video(&req).and_then(|r| json_body(&r)),
-                        JobKind::Convert(plan) => {
-                            engine.convert(&plan).and_then(|r| json_body(&r))
-                        }
-                        JobKind::EnlargeClip {
-                            id,
-                            upscale,
-                            sharpness,
-                            clarity,
-                        } => engine
-                            .enlarge_clip(
-                                &id,
-                                upscale,
-                                &Filters::starting_at(
-                                    sharpness.unwrap_or(0.0),
-                                    clarity.unwrap_or(0.0),
-                                ),
-                            )
-                            .and_then(|r| json_body(&r)),
-                    };
-                    let _ = job.reply.send(result);
+                let saver = engine.display();
+                let _ = ready_tx.send(Ok((engine.adapter_name(), engine.display(), engine.retained())));
+                loop {
+                    let ticket = worker_queue.next();
+                    diffuse(&mut engine, &saver, &worker_queue, ticket);
                 }
             }
             Err(e) => {
@@ -321,16 +371,45 @@ fn run(args: &[String]) -> Result<()> {
         })
         .context("spawning gpu worker")?;
 
-    match ready_rx.recv().context("gpu worker died during startup")? {
-        Ok(name) => {
+    let (display, retained) = match ready_rx.recv().context("gpu worker died during startup")? {
+        Ok((name, display, retained)) => {
             println!("[rustimage] GPU worker ready on adapter: {name}");
             println!(
                 "[rustimage] GPU post-process: upscale=easu, grade=oklab, contrast=clarity, \
                  sharpen=rcas"
             );
+            (display, retained)
         }
         Err(e) => return Err(e.context("startup failed")),
-    }
+    };
+
+    let (display_tx, display_rx) = mpsc::channel::<Job>();
+    std::thread::Builder::new()
+        .name("display-worker".into())
+        .spawn(move || {
+            let mut display = display;
+            for job in display_rx {
+                let result = match job.kind {
+                    JobKind::Adjust { id, patch } => {
+                        display.adjust(id, &patch).map(|r| result_json(&r))
+                    }
+                    JobKind::Open { id, shelf } => {
+                        display.open(&id, shelf).map(|r| result_json(&r))
+                    }
+                    JobKind::OpenOutput(stem) => {
+                        display.open_output(&stem).map(|r| result_json(&r))
+                    }
+                    JobKind::SaveOutput(id) => display.save_output(id).map(|p| saved_json(&p)),
+                };
+                let _ = job.reply.send(result);
+            }
+        })
+        .context("spawning display worker")?;
+    let lanes = Lanes {
+        display: display_tx,
+        queue,
+        retained,
+    };
 
     println!("[rustimage] listening on {url}");
     if std::env::var_os("RUSTIMAGE_NO_BROWSER").is_none() {
@@ -343,18 +422,123 @@ fn run(args: &[String]) -> Result<()> {
             Ok(s) => s,
             Err(_) => continue,
         };
-        let job_tx = job_tx.clone();
+        let lanes = lanes.clone();
         let cfg = cfg.clone();
         let web_dir = web_dir.clone();
         let monitor = monitor.clone();
         std::thread::spawn(move || {
-            if let Err(e) = handle_conn(stream, &job_tx, &cfg, web_dir.as_deref(), &monitor) {
+            if let Err(e) = handle_conn(stream, &lanes, &cfg, web_dir.as_deref(), &monitor) {
                 eprintln!("[rustimage] connection error: {e:#}");
             }
         });
     }
 
     Ok(())
+}
+
+/// Run one ticket from the job queue on the diffusion worker, and settle it
+/// with the queue: one image of a run, or a whole indivisible job.
+fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs::Ticket<Work>) {
+    match t.work {
+        Work::Run(plan) => match run_image(engine, saver, queue, &plan, t.done) {
+            Ok(()) => {
+                queue.image_done(t.id);
+            }
+            Err(e) => queue.fail_run(t.id, format!("{e:#}")),
+        },
+        Work::Refine { id, over } => {
+            let r = engine.refine(id, &over).map(|r| latest(queue, &r));
+            lock(&engine.retained()).unpin(id);
+            queue.finish(t.id, r);
+        }
+        Work::Hires { id, upscale, over } => {
+            let r = engine.hires(id, upscale, &over).map(|r| latest(queue, &r));
+            lock(&engine.retained()).unpin(id);
+            queue.finish(t.id, r);
+        }
+        Work::Video(req) => queue.finish(t.id, engine.video(&req).and_then(|r| json_body(&r))),
+        Work::Convert(plan) => {
+            queue.finish(t.id, engine.convert(&plan).and_then(|r| json_body(&r)))
+        }
+        Work::EnlargeClip {
+            id,
+            upscale,
+            sharpness,
+            clarity,
+        } => queue.finish(
+            t.id,
+            engine
+                .enlarge_clip(
+                    &id,
+                    upscale,
+                    &Filters::starting_at(sharpness.unwrap_or(0.0), clarity.unwrap_or(0.0)),
+                )
+                .and_then(|r| json_body(&r)),
+        ),
+    }
+}
+
+/// Render an image result and publish it as the latest one, so the page shows
+/// it wherever it was when the job was queued — including after a reload.
+fn latest(queue: &Jobs, r: &GenResult) -> String {
+    let json = result_json(r);
+    queue.set_latest(json.clone());
+    json
+}
+
+/// One image of a run, start to finish: the same calls in the same order the
+/// page's run loop used to make — generate, then hi-res, refine and save as the
+/// *After each* fold asked. Each stage is published as it lands, as the page
+/// used to render it.
+///
+/// The image is pinned from its generate to its last pass, so a work item
+/// reopened on the display lane meanwhile can take the Image slot without
+/// deleting the file the hi-res is about to read.
+fn run_image(
+    engine: &mut Engine,
+    saver: &pipeline::Display,
+    queue: &Jobs,
+    plan: &RunPlan,
+    done: u32,
+) -> Result<()> {
+    let first = match &plan.start {
+        Start::Generate(req) => {
+            let mut req = req.clone();
+            req.seed = jobs::walk_seed(req.seed, done);
+            engine.run(&req, true)?
+        }
+        Start::Img2Img(req) => {
+            let mut req = req.clone();
+            req.seed = jobs::walk_seed(req.seed, done);
+            engine.img2img(&req, true)?
+        }
+    };
+    let id = first.image_id;
+    latest(queue, &first);
+    let rest = (|| -> Result<()> {
+        if let Some(h) = &plan.after.hires {
+            let over = EscalateRequest {
+                template: h.model.clone(),
+                ..plan.escalate.clone()
+            };
+            let r = engine.hires(id, h.upscale.unwrap_or(2.0), &over)?;
+            latest(queue, &r);
+        }
+        if let Some(rf) = &plan.after.refine {
+            let over = EscalateRequest {
+                template: rf.model.clone(),
+                ..plan.escalate.clone()
+            };
+            let r = engine.refine(id, &over)?;
+            latest(queue, &r);
+        }
+        if plan.after.save {
+            saver.save_output(id)?;
+        }
+        Ok(())
+    })();
+    lock(&engine.retained()).unpin(id);
+    rest
 }
 
 /// Show the page in the person's own browser. A double-click has no other way
@@ -377,7 +561,7 @@ fn open_browser(url: &str) {
 
 fn handle_conn(
     stream: std::net::TcpStream,
-    job_tx: &Sender<Job>,
+    lanes: &Lanes,
     cfg: &Config,
     web_dir: Option<&std::path::Path>,
     monitor: &Monitor,
@@ -412,16 +596,16 @@ fn handle_conn(
         ("POST", "/settings") => handle_save_settings(&mut conn, cfg, &req.body),
         ("GET", "/model-settings") => handle_get_model_settings(&mut conn, cfg),
         ("POST", "/model-settings") => handle_save_model_settings(&mut conn, cfg, &req.body),
-        ("POST", "/generate") => handle_generate(&mut conn, job_tx, &req.body),
-        ("POST", "/img2img") => handle_img2img(&mut conn, cfg, job_tx, &req.body),
+        ("POST", "/generate") => handle_generate(&mut conn, lanes, &req.body),
+        ("POST", "/img2img") => handle_img2img(&mut conn, cfg, lanes, &req.body),
         // The one route with a binary body, and the one `http.rs` gives a large
         // limit to. Filesystem-only, so it stays off the queue — an upload must
         // not wait out the render it is meant to replace.
         ("POST", "/upload") => handle_upload(&mut conn, cfg, &req.body),
-        ("POST", "/refine") => handle_refine(&mut conn, job_tx, &req.body),
-        ("POST", "/hires") => handle_hires(&mut conn, job_tx, &req.body),
-        ("POST", "/adjust") => handle_adjust(&mut conn, job_tx, &req.body),
-        ("POST", "/save-output") => handle_save_output(&mut conn, job_tx, &req.body),
+        ("POST", "/refine") => handle_refine(&mut conn, lanes, &req.body),
+        ("POST", "/hires") => handle_hires(&mut conn, lanes, &req.body),
+        ("POST", "/adjust") => handle_adjust(&mut conn, lanes, &req.body),
+        ("POST", "/save-output") => handle_save_output(&mut conn, lanes, &req.body),
 
         // Progress and Stop, both on the connection thread and both for the
         // same reason: they are *about* the job the worker is running, so
@@ -446,6 +630,14 @@ fn handle_conn(
             "application/json",
             progress_json(monitor.snapshot().as_ref()).as_bytes(),
         ),
+        // The queue, beside them for the same reason: the Jobs dialog is about
+        // what the worker is doing and what waits behind it.
+        ("GET", "/jobs") => handle_jobs(&mut conn, &lanes.queue, monitor),
+        ("GET", "/jobs/latest") => match lanes.queue.latest() {
+            Some((_, json)) => conn.respond(200, "application/json", json.as_bytes()),
+            None => conn.respond(404, "application/json", error_json("no image yet").as_bytes()),
+        },
+        ("POST", "/jobs/stop") => handle_stop_job(&mut conn, lanes, monitor, &req.body),
         ("POST", "/cancel") => conn.respond(
             200,
             "application/json",
@@ -467,7 +659,7 @@ fn handle_conn(
             handle_thumb(&mut conn, cfg, Shelf::Work, id)
         }
         ("POST", "/workitems/open") => {
-            handle_open_workitem(&mut conn, job_tx, Shelf::Work, &req.body)
+            handle_open_workitem(&mut conn, lanes, Shelf::Work, &req.body)
         }
         ("POST", "/workitems/delete") => {
             handle_delete_workitems(&mut conn, cfg, Shelf::Work, &req.body)
@@ -486,7 +678,7 @@ fn handle_conn(
             handle_thumb(&mut conn, cfg, Shelf::Favorites, id)
         }
         ("POST", "/favorites/open") => {
-            handle_open_workitem(&mut conn, job_tx, Shelf::Favorites, &req.body)
+            handle_open_workitem(&mut conn, lanes, Shelf::Favorites, &req.body)
         }
         ("POST", "/favorites/delete") => {
             handle_delete_workitems(&mut conn, cfg, Shelf::Favorites, &req.body)
@@ -500,7 +692,7 @@ fn handle_conn(
         // several files, so "it finished downloading" is something to notice
         // without a restart.
         ("GET", "/convert-models") => handle_convert_models(&mut conn, cfg),
-        ("POST", "/convert") => handle_convert(&mut conn, cfg, job_tx, &req.body),
+        ("POST", "/convert") => handle_convert(&mut conn, cfg, lanes, &req.body),
         // Filesystem only — one header seek per file in the LoRA dir — so it
         // answers here rather than queueing behind whatever is rendering. Built
         // live for the reason `/models` is: dropping a file into a folder should
@@ -509,8 +701,8 @@ fn handle_conn(
         // Same shape and reason, minus the header read — see `UpscalerFile`.
         ("GET", "/upscalers") => handle_list_upscalers(&mut conn, cfg),
         ("GET", "/video-models") => handle_video_models(&mut conn, cfg),
-        ("POST", "/video") => handle_video(&mut conn, job_tx, &req.body),
-        ("POST", "/videos/enlarge") => handle_enlarge_clip(&mut conn, job_tx, &req.body),
+        ("POST", "/video") => handle_video(&mut conn, lanes, &req.body),
+        ("POST", "/videos/enlarge") => handle_enlarge_clip(&mut conn, lanes, &req.body),
         ("GET", "/videos") => handle_list_clips(&mut conn, cfg),
         // Two guard arms rather than one, because a clip serves both a
         // thumbnail and its frames and only the frame route has a number in it.
@@ -528,7 +720,7 @@ fn handle_conn(
         }
         ("POST", "/videos/delete") => handle_delete_clips(&mut conn, cfg, &req.body),
         ("GET", "/outputs") => handle_list_outputs(&mut conn, cfg, Gallery::Output),
-        ("POST", "/outputs/open") => handle_open_output(&mut conn, job_tx, &req.body),
+        ("POST", "/outputs/open") => handle_open_output(&mut conn, lanes, &req.body),
         ("POST", "/outputs/delete") => {
             handle_delete_outputs(&mut conn, cfg, Gallery::Output, &req.body)
         }
@@ -559,7 +751,8 @@ fn handle_conn(
 /// closing is the Stop-button mistake again. In order:
 ///
 /// 1. **Kill the child first.** The process exiting would leave sd-cli running
-///    on its own, holding the VRAM, with no server left to stop it.
+///    on its own, holding the VRAM, with no server left to stop it. Then empty
+///    `work/current/`, which is scratch and needs no setting to say so.
 /// 2. Clear what `user/settings.toml` says to ([`shutdown::clear`]). The *saved*
 ///    file, which is what the page's confirm box quotes.
 /// 3. Answer, so the page can say it has stopped rather than seeing a dropped
@@ -585,6 +778,9 @@ fn handle_shutdown(
         .and_then(|v| v["clear"].as_bool())
         .unwrap_or(true);
     monitor.cancel();
+    // Always, whatever the settings say: `work/current/` is scratch, and the
+    // queue it served is gone with this process anyway.
+    pipeline::clear_scratch(&cfg.base_dir.join("work"));
     let cleared = if clear {
         let c = shutdown::clear(cfg);
         println!(
@@ -881,7 +1077,7 @@ fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> 
     }
 }
 
-fn handle_video(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
+fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
         prompt: String,
@@ -942,12 +1138,13 @@ fn handle_video(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) 
         vae_tiling: dto.vae_tiling,
     };
 
-    submit(conn, job_tx, JobKind::Video(req), 500)
+    let label = req.model.clone();
+    enqueue_wait(conn, lanes, jobs::Kind::Video, label, Work::Video(req), false, 500)
 }
 
 fn handle_enlarge_clip(
     conn: &mut http::Connection,
-    job_tx: &Sender<Job>,
+    lanes: &Lanes,
     body: &[u8],
 ) -> Result<()> {
     #[derive(serde::Deserialize)]
@@ -962,15 +1159,18 @@ fn handle_enlarge_clip(
     }
 
     match parse_json::<Dto>(conn, body)? {
-        Some(dto) => submit(
+        Some(dto) => enqueue_wait(
             conn,
-            job_tx,
-            JobKind::EnlargeClip {
+            lanes,
+            jobs::Kind::Enlarge,
+            format!("clip {}", dto.id),
+            Work::EnlargeClip {
                 id: dto.id,
                 upscale: dto.upscale.unwrap_or(2.0),
                 sharpness: dto.sharpness,
                 clarity: dto.clarity,
             },
+            false,
             400,
         ),
         None => Ok(()),
@@ -1005,7 +1205,7 @@ fn handle_convert_models(conn: &mut http::Connection, cfg: &Config) -> Result<()
 fn handle_convert(
     conn: &mut http::Connection,
     cfg: &Config,
-    job_tx: &Sender<Job>,
+    lanes: &Lanes,
     body: &[u8],
 ) -> Result<()> {
     #[derive(serde::Deserialize)]
@@ -1019,7 +1219,14 @@ fn handle_convert(
         return Ok(());
     };
     match convert::plan(cfg, &dto.source, &dto.ty) {
-        Ok(plan) => submit(conn, job_tx, JobKind::Convert(plan), 400),
+        Ok(plan) => {
+            let label = plan
+                .source
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            enqueue_wait(conn, lanes, jobs::Kind::Convert, label, Work::Convert(plan), false, 400)
+        }
         Err(e) => conn.respond(
             400,
             "application/json",
@@ -1124,7 +1331,7 @@ fn handle_output_thumb(conn: &mut http::Connection, cfg: &Config, stem: &str) ->
 
 fn handle_open_workitem(
     conn: &mut http::Connection,
-    job_tx: &Sender<Job>,
+    lanes: &Lanes,
     shelf: Shelf,
     body: &[u8],
 ) -> Result<()> {
@@ -1136,7 +1343,7 @@ fn handle_open_workitem(
     match parse_json::<Dto>(conn, body)? {
         // 400, same staleness contract as the escalations: an id that isn't
         // there means the UI's copy of the grid is stale, not that we broke.
-        Some(dto) => submit(conn, job_tx, JobKind::Open { id: dto.id, shelf }, 400),
+        Some(dto) => submit(conn, &lanes.display, JobKind::Open { id: dto.id, shelf }, 400),
         None => Ok(()),
     }
 }
@@ -1151,7 +1358,7 @@ fn handle_open_workitem(
 /// of the grid is stale, not that we broke.
 fn handle_open_output(
     conn: &mut http::Connection,
-    job_tx: &Sender<Job>,
+    lanes: &Lanes,
     body: &[u8],
 ) -> Result<()> {
     #[derive(serde::Deserialize)]
@@ -1160,7 +1367,7 @@ fn handle_open_output(
     }
 
     match parse_json::<Dto>(conn, body)? {
-        Some(dto) => submit(conn, job_tx, JobKind::OpenOutput(dto.stem), 400),
+        Some(dto) => submit(conn, &lanes.display, JobKind::OpenOutput(dto.stem), 400),
         None => Ok(()),
     }
 }
@@ -1302,7 +1509,7 @@ fn handle_favorite_outputs(conn: &mut http::Connection, cfg: &Config, body: &[u8
 
 fn handle_save_output(
     conn: &mut http::Connection,
-    job_tx: &Sender<Job>,
+    lanes: &Lanes,
     body: &[u8],
 ) -> Result<()> {
     #[derive(serde::Deserialize)]
@@ -1311,12 +1518,12 @@ fn handle_save_output(
     }
 
     match parse_json::<Dto>(conn, body)? {
-        Some(dto) => submit(conn, job_tx, JobKind::SaveOutput(dto.image_id), 400),
+        Some(dto) => submit(conn, &lanes.display, JobKind::SaveOutput(dto.image_id), 400),
         None => Ok(()),
     }
 }
 
-fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
+fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
         prompt: String,
@@ -1374,12 +1581,32 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         /// — it means "empty this slot" — so no `double_option` is needed.
         #[serde(default)]
         parts: Option<std::collections::BTreeMap<String, Option<String>>>,
+        /// How many images, and whether to keep going until stopped. One
+        /// request is one queued run, whatever its length — see `crate::jobs`.
+        #[serde(default)]
+        count: Option<u32>,
+        #[serde(default, rename = "loop")]
+        looping: bool,
+        /// The *After each generation* fold.
+        #[serde(default)]
+        after: AfterEach,
     }
 
     let dto: Dto = match parse_json::<Dto>(conn, body)? {
         Some(d) => d,
         None => return Ok(()),
     };
+
+    let escalate = run_escalation(
+        dto.refine_steps,
+        dto.refine_strength,
+        dto.refine_cfg_scale,
+        dto.hires_steps,
+        dto.hires_strength,
+        dto.hires_cfg_scale,
+    );
+    let total = (!dto.looping).then(|| dto.count.unwrap_or(1));
+    let after = dto.after;
 
     let req = GenRequest {
         prompt: dto.prompt,
@@ -1407,7 +1634,67 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
         parts: dto.parts,
     };
 
-    submit(conn, job_tx, JobKind::Generate(req), 500)
+    let label = req.template.clone();
+    queue_run(conn, lanes, jobs::Kind::Generate, label, total, RunPlan {
+        start: Start::Generate(req),
+        after,
+        escalate,
+    })
+}
+
+/// The escalation knobs a generate body carries, as the after-each passes
+/// send them — what the Refine and Hi-res buttons would send with the panel as
+/// it stood. The two CFGs are *sent*, `null` included: the page always sends
+/// them, and an empty box unsets the pass's CFG, exactly as on the buttons.
+fn run_escalation(
+    refine_steps: Option<u32>,
+    refine_strength: Option<f32>,
+    refine_cfg_scale: Option<f32>,
+    hires_steps: Option<u32>,
+    hires_strength: Option<f32>,
+    hires_cfg_scale: Option<f32>,
+) -> EscalateRequest {
+    EscalateRequest {
+        template: None,
+        refine_steps,
+        refine_strength,
+        hires_steps,
+        hires_strength,
+        refine_cfg_scale: Some(refine_cfg_scale),
+        hires_cfg_scale: Some(hires_cfg_scale),
+    }
+}
+
+/// Queue a run and answer at once with its id. The images arrive through
+/// `GET /jobs` and `/jobs/latest`, not on this request — a run can be a loop,
+/// and nothing about it should depend on this connection staying open.
+///
+/// What the generate itself would reject — an unknown model, an empty prompt —
+/// is found by the worker and comes back as a notice, the same way a failure on
+/// image 7 of 8 does. Checking it twice, here and there, would be two copies of
+/// the rules.
+fn queue_run(
+    conn: &mut http::Connection,
+    lanes: &Lanes,
+    kind: jobs::Kind,
+    label: String,
+    total: Option<u32>,
+    plan: RunPlan,
+) -> Result<()> {
+    if total.is_some_and(|n| n == 0 || n > MAX_RUN) {
+        return conn.respond(
+            400,
+            "application/json",
+            error_json(&format!(
+                "a run is 1 to {MAX_RUN} images — for more, use Keep going until stopped"
+            ))
+            .as_bytes(),
+        );
+    }
+    let id = lanes
+        .queue
+        .push(kind, label, total, Work::Run(Box::new(plan)), None, false);
+    conn.respond(200, "application/json", format!("{{\"job\":{id}}}").as_bytes())
 }
 
 /// One img2img pass over an image already in `work/output/` — a saved result or
@@ -1421,7 +1708,7 @@ fn handle_generate(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8
 fn handle_img2img(
     conn: &mut http::Connection,
     cfg: &Config,
-    job_tx: &Sender<Job>,
+    lanes: &Lanes,
     body: &[u8],
 ) -> Result<()> {
     #[derive(serde::Deserialize)]
@@ -1472,6 +1759,15 @@ fn handle_img2img(
         /// — it means "empty this slot" — so no `double_option` is needed.
         #[serde(default)]
         parts: Option<std::collections::BTreeMap<String, Option<String>>>,
+        /// How many images, and whether to keep going until stopped. One
+        /// request is one queued run, whatever its length — see `crate::jobs`.
+        #[serde(default)]
+        count: Option<u32>,
+        #[serde(default, rename = "loop")]
+        looping: bool,
+        /// The *After each generation* fold.
+        #[serde(default)]
+        after: AfterEach,
     }
 
     let dto: Dto = match parse_json::<Dto>(conn, body)? {
@@ -1491,6 +1787,18 @@ fn handle_img2img(
             .as_bytes(),
         );
     }
+
+
+    let escalate = run_escalation(
+        dto.refine_steps,
+        dto.refine_strength,
+        dto.refine_cfg_scale,
+        dto.hires_steps,
+        dto.hires_strength,
+        dto.hires_cfg_scale,
+    );
+    let total = (!dto.looping).then(|| dto.count.unwrap_or(1));
+    let after = dto.after;
 
     let req = Img2ImgRequest {
         prompt: dto.prompt,
@@ -1517,7 +1825,12 @@ fn handle_img2img(
         parts: dto.parts,
     };
 
-    submit(conn, job_tx, JobKind::Img2Img(req), 500)
+    let label = req.template.clone();
+    queue_run(conn, lanes, jobs::Kind::Img2img, label, total, RunPlan {
+        start: Start::Img2Img(req),
+        after,
+        escalate,
+    })
 }
 
 /// Take a PNG from the browser and put it in `work/output/`.
@@ -1569,8 +1882,8 @@ fn handle_upload(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Resu
 
 /// The body `/refine` and `/hires` share: which earlier result to escalate, plus
 /// the knobs that pass runs with. An unknown `image_id` means the intermediates
-/// are gone (evicted, or the server restarted), which is a client-side staleness
-/// problem — 400, not 500. The same goes for asking for a pass the image can't
+/// are gone (a newer image took its slot, or the server restarted), which is a
+/// client-side staleness problem — 400, not 500. The same goes for asking for a pass the image can't
 /// take.
 ///
 /// Every knob is optional and falls back to the settings the retained image was
@@ -1627,16 +1940,18 @@ where
     serde::Deserialize::deserialize(de).map(Some)
 }
 
-fn handle_refine(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
+fn handle_refine(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
     match parse_json::<EscalateDto>(conn, body)? {
-        Some(dto) => submit(
+        Some(dto) => escalate(
             conn,
-            job_tx,
-            JobKind::Refine {
+            lanes,
+            jobs::Kind::Refine,
+            dto.image_id,
+            dto.model.clone(),
+            Work::Refine {
                 id: dto.image_id,
                 over: dto.overrides(),
             },
-            400,
         ),
         None => Ok(()),
     }
@@ -1652,17 +1967,19 @@ struct HiresDto {
     upscale: Option<f32>,
 }
 
-fn handle_hires(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
+fn handle_hires(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
     match parse_json::<HiresDto>(conn, body)? {
-        Some(dto) => submit(
+        Some(dto) => escalate(
             conn,
-            job_tx,
-            JobKind::Hires {
+            lanes,
+            jobs::Kind::Hires,
+            dto.esc.image_id,
+            dto.esc.model.clone(),
+            Work::Hires {
                 id: dto.esc.image_id,
                 upscale: dto.upscale.unwrap_or(1.0),
                 over: dto.esc.overrides(),
             },
-            400,
         ),
         None => Ok(()),
     }
@@ -1672,7 +1989,7 @@ fn handle_hires(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) 
 /// unknown id is 400 — but no diffusion runs, so this is the one handler that
 /// comes back in milliseconds and can be driven live from the UI's sliders.
 /// An omitted field keeps whatever the image currently has.
-fn handle_adjust(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8]) -> Result<()> {
+fn handle_adjust(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
     // Flattened rather than nested under a `filters` key, so the body stays the
     // flat `{"image_id":1,"sharpness":0.5}` it has always been and simply gains
     // eight more optional fields.
@@ -1686,7 +2003,7 @@ fn handle_adjust(conn: &mut http::Connection, job_tx: &Sender<Job>, body: &[u8])
     match parse_json::<Dto>(conn, body)? {
         Some(dto) => submit(
             conn,
-            job_tx,
+            &lanes.display,
             JobKind::Adjust {
                 id: dto.image_id,
                 patch: dto.patch,
@@ -1715,7 +2032,120 @@ fn parse_json<T: serde::de::DeserializeOwned>(
     }
 }
 
-/// Enqueue GPU work, wait for the worker, and write the JSON response.
+/// A Refine or Hi-res button press: pin the image so a run landing meanwhile
+/// can't delete what this pass will read, queue it ahead of everything that
+/// isn't running, and wait for it. 400 when the image is already gone — the
+/// page's copy is stale, which is the contract these routes always had.
+fn escalate(
+    conn: &mut http::Connection,
+    lanes: &Lanes,
+    kind: jobs::Kind,
+    id: u64,
+    model: Option<String>,
+    work: Work,
+) -> Result<()> {
+    let Some(made_with) = lock(&lanes.retained).pin(id) else {
+        return conn.respond(
+            400,
+            "application/json",
+            error_json(
+                "that image is no longer available — a newer one has replaced it, or the \
+                 server restarted. Click it in the work items below to reopen it.",
+            )
+            .as_bytes(),
+        );
+    };
+    let label = model.filter(|m| !m.is_empty()).unwrap_or(made_with);
+    enqueue_wait(conn, lanes, kind, label, work, true, 400)
+}
+
+/// Queue diffusion-lane work, wait for its turn and its result, and write the
+/// JSON response. `err_status` is the status used when the job itself fails.
+///
+/// The connection waits for as long as the queue ahead of it takes. That is
+/// fine for a connection thread, and it keeps these routes request/response —
+/// the clip, the conversion and the escalated image come back on the request
+/// that asked for them, as they always did. A page that goes away meanwhile
+/// loses only the answer: the clip is archived and the image is the latest.
+fn enqueue_wait(
+    conn: &mut http::Connection,
+    lanes: &Lanes,
+    kind: jobs::Kind,
+    label: String,
+    work: Work,
+    priority: bool,
+    err_status: u16,
+) -> Result<()> {
+    let (reply_tx, reply_rx) = mpsc::channel();
+    lanes.queue.push(kind, label, None, work, Some(reply_tx), priority);
+    let result = reply_rx
+        .recv()
+        .context("gpu worker dropped the reply channel")?;
+    match result {
+        Ok(json) => conn.respond(200, "application/json", json.as_bytes()),
+        Err(e) => conn.respond(
+            err_status,
+            "application/json",
+            error_json(&format!("{e:#}")).as_bytes(),
+        ),
+    }
+}
+
+/// `GET /jobs`: the queue, and what the running job is doing right now — one
+/// poll for the Jobs button, its dialog and every tab's progress line.
+fn handle_jobs(conn: &mut http::Connection, queue: &Jobs, monitor: &Monitor) -> Result<()> {
+    let mut body = serde_json::to_value(queue.snapshot())?;
+    body["progress"] = serde_json::from_str(&progress_json(monitor.snapshot().as_ref()))?;
+    conn.respond(200, "application/json", body.to_string().as_bytes())
+}
+
+/// `POST /jobs/stop {id}`: the Jobs dialog's one button. Waiting, it is
+/// Remove; running, a run finishes the image in flight (its passes and its save
+/// included — dropping a refined image one call short of saving it is not what
+/// anybody means by stop), and anything else is killed, as the video tab's
+/// Stop always did.
+fn handle_stop_job(
+    conn: &mut http::Connection,
+    lanes: &Lanes,
+    monitor: &Monitor,
+    body: &[u8],
+) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        id: u64,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else {
+        return Ok(());
+    };
+    let what = match lanes.queue.stop(dto.id) {
+        jobs::Stopped::Removed(work) => {
+            // A queued button press was holding its image.
+            if let Work::Refine { id, .. } | Work::Hires { id, .. } = work {
+                lock(&lanes.retained).unpin(id);
+            }
+            "removed"
+        }
+        jobs::Stopped::Stopping => "stopping",
+        jobs::Stopped::Cancel => {
+            monitor.cancel();
+            "cancelled"
+        }
+        jobs::Stopped::Unknown => {
+            return conn.respond(
+                400,
+                "application/json",
+                error_json("that job has already finished").as_bytes(),
+            )
+        }
+    };
+    conn.respond(
+        200,
+        "application/json",
+        format!("{{\"stopped\":\"{what}\"}}").as_bytes(),
+    )
+}
+
+/// Hand display-lane work to its worker, wait, and write the JSON response.
 /// `err_status` is the status used when the job itself fails.
 fn submit(
     conn: &mut http::Connection,
@@ -2023,7 +2453,9 @@ fn run_upscale_cli(args: &[String]) -> Result<()> {
     if matches!(arch, sr::arch::Arch::Esrgan { .. }) {
         runner.preflight()?;
     }
-    let fsr = fsr::Fsr::new()?;
+    // A mutex because `enlarge` is the server's helper too, where the device
+    // is shared between two lanes; here nobody else holds it.
+    let fsr = std::sync::Mutex::new(fsr::Fsr::new()?);
     let start = std::time::Instant::now();
     let model_ms = pipeline::enlarge(&fsr, &runner, &in_png, &out_png, factor, Some(&model))?;
     let (w, h) = image::image_dimensions(&out_png)

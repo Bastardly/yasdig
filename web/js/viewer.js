@@ -2,7 +2,7 @@ import { $, post } from './dom.js';
 import { S, P, escErr } from './state.js';
 
 // The viewer's panel, top to bottom. This list is the only place a filter is
-// declared: the markup, the labels, setPost, setBusy, the /adjust body and the
+// declared: the markup, the labels, setPost, the /adjust body and the
 // input listeners all read it, so adding one is a row here and a field on the
 // server's `Filters`. The names are the wire names — that is what lets the body
 // and the response be built by looping rather than by naming ten keys twice.
@@ -162,7 +162,7 @@ let postStart = {};
 let postEpoch = 0;
 
 // Debounce, then *coalesce*: while a request is out, later moves collapse into
-// one follow-up with the latest values. The GPU worker is serialized, so a
+// one follow-up with the latest values. The display worker is serialized, so a
 // queue of drag positions would play back as a visible lag after letting go.
 export function schedulePost() {
   syncPostLabels();
@@ -172,9 +172,10 @@ export function schedulePost() {
 }
 
 async function runPost() {
-  // `disabled` means an escalation is running; the follow-up from a coalesced
-  // drag can land after one has started.
-  if (S.imageId === null || $('sharpness').disabled) return;
+  // The sliders stay live while a pass runs: they are on the display lane, and
+  // if a refine replaces the image mid-drag the server refuses the drag rather
+  // than writing it over the new one (`Retained::update`).
+  if (S.imageId === null) return;
   if (postBusy) { postAgain = true; return; }
   postBusy = true;
   try {
@@ -226,17 +227,6 @@ export function cancelPost() {
 export function setViewerImage(src) {
   lbCentre = true;
   $('lbimg').src = src;
-}
-
-// What `setBusy` reaches into this module for. The retained entry stays live
-// during an escalation, so an adjust would succeed and then be silently
-// overwritten by the escalation's render. Dropping a debounced one costs
-// nothing: render() puts the sliders back to what the server applied, which is
-// where they already are.
-export function setFiltersBusy(active) {
-  for (const f of FILTERS) $(f.id).disabled = !!active;
-  $('lbreset').disabled = !!active;
-  if (active) clearTimeout(postTimer);
 }
 
 // Declarations only above this line: everything that touches the DOM or starts a

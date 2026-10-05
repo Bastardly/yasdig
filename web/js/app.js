@@ -10,7 +10,9 @@ import { $ } from './dom.js';
 import { S, clearPane } from './state.js';
 import { initViewer } from './viewer.js';
 import { initHints } from './hints.js';
-import { initImage } from './image.js';
+import { initImage, restoreImage } from './image.js';
+import { initJobs, jobCount } from './jobs.js';
+import { initBusy } from './busy.js';
 import { initWorkItems, markGrid } from './workitems.js';
 import { initOutputs, loadOutputs } from './outputs.js';
 import { initVideo } from './video.js';
@@ -54,6 +56,10 @@ function showTab(name) {
       S.workId = null;
       markGrid();
       S.pane = name;
+      // The Image tab's last result comes back with the tab: it is still
+      // retained on the server (the Outputs viewer has a slot of its own), and
+      // a run may have made a newer one while you were away.
+      if (name === 'image') restoreImage();
     }
     // Re-read on entry: the Image tab's Save writes into this directory, so the
     // grid is stale the moment you come back from having used it.
@@ -83,8 +89,10 @@ async function closeServer() {
     s.clear_outputs_on_close && 'outputs in work/output/ (not Favorites)',
     s.clear_videos_on_close && 'video clips',
   ].filter(Boolean);
+  const queued = jobCount();
   const msg = 'Close the rustimage server?\n\n'
     + 'If an image or video is being made, it is stopped. '
+    + (queued ? `The ${queued} job${queued > 1 ? 's' : ''} in the queue ${queued > 1 ? 'are' : 'is'} dropped. ` : '')
     + (doomed.length
       ? `These are deleted, as your saved settings ask:\n• ${doomed.join('\n• ')}`
       : 'Nothing is deleted.');
@@ -112,6 +120,7 @@ async function closeServer() {
 // run in, and nothing depends on it.
 initViewer();
 initHints();
+initBusy();
 initImage();
 initWorkItems();
 initOutputs();
@@ -126,4 +135,7 @@ initSettings();
 // After initImage(), whose model list starts the upscaler fetch this waits on
 // for its own select, and after initHints(), since it wires its own labels.
 initModelSettings();
+// Last: its first poll hands any image a run already made to the hooks the
+// modules above registered, so they have to be registered first.
+initJobs();
 initTabs();

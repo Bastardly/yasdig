@@ -1135,13 +1135,26 @@ the button says `Generate 4`; the images are produced one at a time and each
 appears as it lands, so you can watch the batch fill the work items strip rather
 than waiting for the lot. Tick **Keep going until stopped** and the button
 becomes `Start loop generation`: it ignores the count and keeps going until you press
-**Stop**, which finishes the image in flight and then ends the run. Stop stays clickable
-the whole time — it is the one control a busy run doesn't disable.
+**Stop**, which finishes the image in flight and then ends the run.
+
+Generate **queues** the run on the server, and stays pressable: press it again — with
+other settings, another model — and that run waits its turn behind this one. While
+anything is queued, a green **Jobs (n)** button sits at the end of the tab row; it
+opens a list of what is running and waiting, with a **Stop** or **Remove** on each (both
+ask first). A red **!** on it means a loop is in there. A loop never hogs the queue:
+after each of its images, anything queued behind it runs first. **Refine** and
+**Hi-res** pressed during a batch run between two of its images rather than after the
+whole batch. Clips and conversions queue the same way.
+
+The run belongs to the server, not the page: switch tabs, edit outputs in the viewer
+(which never waits on the queue) or reload, and it carries on — the Image tab shows its
+newest image when you come back.
 
 While anything is rendering, the line under the buttons counts the steps as sd-cli
-reports them — `Step 7/20 · 1.23s/it`, or `Loading weights 18/50 · 412.00MB/s` before
-the denoising starts. It is polled from `GET /progress`, which is answered off the job
-queue, so it keeps moving during a render rather than arriving once the render is done.
+reports them — `Image 2/4 · Step 7/20 · 1.23s/it`, or `Loading weights 18/50 ·
+412.00MB/s` before the denoising starts. It is polled from `GET /jobs`, which is
+answered off the job queue, so it keeps moving during a render rather than arriving
+once the render is done.
 
 A pinned seed **advances by one per image**, so a batch of eight isn't eight copies of
 the same picture; the first image is exactly the seed you pinned. `-1` keeps drawing a
@@ -1158,15 +1171,19 @@ this order:
 
 They apply to a run of one just as much as to a batch, which is how you queue a single
 generate-and-refine and walk away. Both passes read the same boxes the buttons
-do, so a run uses whatever the boxes say when it starts.
+do, and a run takes them as they are **when you press Generate** — so you can queue a
+run, change the boxes and queue a different one.
 
 Any failure stops the run and reports it beside the controls — whatever killed image 3
 would kill image 4 as well. Everything generated up to that point is still in the grid.
 
-Two things worth knowing before leaving one unattended. **The loop runs in the page**:
-closing the tab stops it after the current image (which is also the quickest way to stop
-a runaway one). And every generation is archived, so an overnight loop writes a few MB
-per image into `work/workitems/` — delete what you don't want from the grid.
+Two things worth knowing before leaving one unattended. **The queue lives in the
+server's memory**: closing the tab doesn't stop it, but *Close server* (or quitting
+rustimage) drops whatever is still queued. And every generation is archived, so an
+overnight loop writes a few MB per image into `work/workitems/` — delete what you
+don't want from the grid. Only the newest image per place it is shown is kept warm, in
+`work/current/`, which is emptied on start and on *Close server*: a refined or hi-res
+image you want to keep is one **Save to output** away (or tick it in *After each*).
 
 ### Video
 
@@ -1423,10 +1440,24 @@ needs a Vulkan device and nothing else.
   equal to `base` is dropped, so only real differences are stored. Any setting a model
   can have (not `prompt`, `negative`, `hires_scale` or `variables`); an unknown key is
   a 400 rather than a silent no-op. Answers with the same shape as the GET.
-- `POST /generate` — only `prompt` and `template` are required:
+- `POST /generate` — **queues a run** and answers `{ "job": 7 }` at once; the images
+  arrive through `GET /jobs` and `GET /jobs/latest` below. Only `prompt` and
+  `template` are required:
   ```json
   { "prompt": "…", "template": "sdxl-turbo", "negative": null, "seed": -1 }
   ```
+  The run itself: `count` images (default 1, at most 1000), or `"loop": true` to keep
+  going until stopped; a pinned `seed` advances by one per image. `after` is the
+  *After each generation* fold — each pass `null` to skip it, `model` empty or absent
+  for the checkpoint that made the image, and the escalation knobs below apply to
+  both passes:
+  ```json
+  { "count": 4, "loop": false,
+    "after": { "hires": { "upscale": 2, "model": null },
+               "refine": { "model": "sd_xl_base_1.0" }, "save": true } }
+  ```
+  Anything the generate itself refuses — an unknown model, an empty prompt — is found
+  when the run reaches the worker and is reported as a `notice` on `/jobs`.
   Every generation setting may also be overridden per-request; each is optional, and
   omitting one uses the model's profile value:
   ```json
@@ -1461,7 +1492,8 @@ needs a Vulkan device and nothing else.
   them. The web UI leaves both out for that reason. The eight colour knobs aren't here
   at all — they are not per-model, so they start at 0 on every image and only `/adjust`
   sets them. `seed` defaults to `-1` (pick one).
-  Response:
+  Each image, as `GET /jobs/latest` serves it (and as `/refine`, `/hires` and the
+  reopen routes answer):
   ```json
   { "image_base64": "…", "width": 1536, "height": 1536, "seed": 12345,
     "refine_passes": 0, "hires_passes": 0,
@@ -1509,15 +1541,35 @@ needs a Vulkan device and nothing else.
   larger one is scaled down (Lanczos3) first; omitted, it is the model's
   `hires_max_side`. The source is validated on the connection thread, so a stale
   pick is an immediate `400` rather than one that arrives after the render in
-  flight. Answers in `/generate`'s shape, so the escalations follow it unchanged,
-  and the result is archived as a work item with the source stem recorded on it.
+  flight. Queued like `/generate` — `count`, `loop` and `after` included — so the
+  escalations follow it unchanged, and each result is archived as a work item with
+  the source stem recorded on it.
+- `GET /jobs` — the queue, running entry first:
+  ```json
+  { "jobs": [{ "id": 7, "kind": "generate", "label": "sdxl-turbo", "done": 1,
+               "total": 4, "state": "running" }],
+    "latest_seq": 12, "notices": [{ "seq": 9, "message": "…" }],
+    "progress": { "busy": true, "phase": "sampling", "step": 7, "steps": 20, "rate": "1.23s/it" } }
+  ```
+  `kind` is `generate`, `img2img`, `refine`, `hires`, `video`, `enlarge` or `convert`;
+  `total` is `null` for a loop; `state` is `running`, `stopping` or `queued`.
+  `latest_seq` moves whenever a job publishes an image — fetch it from
+  `GET /jobs/latest`. `notices` are the last few failed runs, which have no request
+  of their own to fail. Answered on the connection thread.
+- `GET /jobs/latest` — the newest image any job made, in the shape above; `404` before
+  the first.
+- `POST /jobs/stop` — `{ "id": 7 }`. A waiting job is removed (a request waiting on it
+  gets an error); a running run finishes the image in flight and ends; any other
+  running job is killed. Answers `{ "stopped": "removed" | "stopping" | "cancelled" }`.
 - `POST /refine` — `{ "image_id": 3 }`. img2img over the retained image at its current
   size, no rescale.
 - `POST /hires` — `{ "image_id": 3, "upscale": 2 }`. FSR-upscale toward
   `upscale ×` the current size (1–4, default 1), img2img at up to `hires_max_side`, then
   a final FSR upscale if the target is beyond that budget.
 
-  Both return the same shape as `/generate` and can be chained in either order, any
+  Both queue ahead of everything not yet running — so during a batch they run between
+  two of its images — wait their turn, and answer in `/jobs/latest`'s shape. They can
+  be chained in either order, any
   number of times; `/hires` stops being available once the image is past
   `hires_max_side`, `/refine` does not.
 
@@ -1705,12 +1757,12 @@ everything else about a clip is filesystem-only and doesn't — which matters mo
 since a clip holds the worker for minutes and the frame player is fetching 33 PNGs.
 
 Errors are `{"error": "…"}`. Anything addressed by `image_id` fails with `400` — the id
-has expired (only the last 8 results stay warm, and the scratch half of `work/` is
-cleared on restart), or that pass isn't available for the image; either way it's
-client-side staleness, and the image is left intact to retry. Since every generation is
-archived, an expired id is now recovered by reopening the work item rather than by
-regenerating. A failed `/generate` is `500`, malformed JSON is `400`, and `503` means
-the GPU worker is gone.
+has expired (only the newest image per place it is shown stays warm, in
+`work/current/`, which is cleared on restart), or that pass isn't available for the
+image; either way it's client-side staleness, and the image is left intact to retry.
+Since every generation is archived, an expired id is recovered by reopening the work
+item rather than by regenerating — the page does that by itself for an image with no
+escalation in it. Malformed JSON is `400`, and `503` means the GPU worker is gone.
 
 ## Architecture notes
 

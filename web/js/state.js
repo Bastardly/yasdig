@@ -5,9 +5,10 @@ import { $ } from './dom.js';
 // Save, the viewer — is the same machinery pointed at a different pair of
 // elements. `S.pane` says which.
 //
-// The state stays single on purpose. Only one tab is visible at a time and the
-// GPU worker is serialized, so there is only ever one live `imageId` to have;
-// two copies would mean two ways to be stale. What that costs is that switching
+// The state stays single on purpose. Only one tab is visible at a time, so
+// there is only ever one live `imageId` to be acting on; two copies would mean
+// two ways to be stale. (The server keeps one per tab — `pipeline::Slot` — and
+// the Image tab's comes back with it: see `restoreImage`.) What that costs is that switching
 // tabs has to *clear* the pane being left (see showTab), or a picture would sit
 // there looking live while `imageId` addressed a different one.
 //
@@ -40,10 +41,6 @@ export const S = {
   // generate, refine and hi-res — so a value living only in the DOM is reset by
   // the very actions you'd want it to survive.
   upFactor: 2,
-  // A run in flight — a batch, or the loop — else null. `total` is Infinity in
-  // loop mode, `stop` is set by the Stop button and read between images. It is
-  // also the flag everything else reads to know the GPU is spoken for.
-  run: null,
   // Which of the two image panes is showing.
   pane: 'image',
 };

@@ -1,6 +1,5 @@
 import { $, esc, post } from './dom.js';
 import { S } from './state.js';
-import { setBusy } from './busy.js';
 import { imageLoras, imageSource, models, render, setParts, setUpscaler, syncCfgPlaceholders,
          syncOutSize, syncParts } from './image.js';
 import { gridMarks } from './gridmark.js';
@@ -146,14 +145,15 @@ async function clickWorkItem(id) {
     markGrid();
     return;
   }
-  // Marking for deletion stays live during a run — it touches nothing the run
-  // uses — but opening does not. The buttons are disabled while a run is going;
-  // the thumbnails aren't, and an open would queue behind the generation in
-  // flight only to have its render replaced by the next image.
-  if (S.run) return;
+  // Opening works during a run too: it is on the display lane, so it never
+  // waits for the render in flight. The run's next image will replace it on
+  // screen when it lands, as a run's images always replaced each other — but
+  // only on screen: the run holds its own image (`Retained::pin`), and this one
+  // stays one click away in the grid.
+  if (opening) return;
   const item = workItems.find((w) => w.id === id);
   if (!item) return;
-  setBusy('go', 'Opening…');
+  opening = true;
   $('err').textContent = '';
   try {
     applyWorkItem(item);
@@ -161,9 +161,13 @@ async function clickWorkItem(id) {
   } catch (e) {
     $('err').textContent = String(e.message || e);
   } finally {
-    setBusy(null);
+    opening = false;
   }
 }
+
+// One open at a time: a double click would otherwise open the item twice, the
+// second evicting the first.
+let opening = false;
 
 // Put an item's stored settings back in the controls. The server independently
 // restores the same profile onto the reopened image, so this is only about what

@@ -1,5 +1,9 @@
-//! Per-request orchestration, with per-stage timing. Runs on the single GPU
-//! worker thread so generation is serialized (one job touches the GPU at a time).
+//! Per-request orchestration, with per-stage timing. Two lanes share it:
+//! [`Engine`] runs on the diffusion worker, which takes its work from the job
+//! queue (`crate::jobs`) one image at a time, and [`Display`] runs on the
+//! display worker — open, adjust, save — so the viewer answers in the middle of
+//! a render. They share one FSR device behind a mutex, which the diffusion lane
+//! holds only for its own FSR passes and never while sd-cli runs.
 //!
 //! Generation is deliberately the cheap part — sd.cpp txt2img at base resolution
 //! plus an FSR upscale — and quality is escalated afterwards, on demand. Every
@@ -32,18 +36,145 @@ use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 static JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// How many results stay escalatable. Older ones are evicted (files deleted)
-/// so `work/` can't grow without bound.
+/// The one FSR device, shared by both lanes. A mutex rather than a second
+/// device: the diffusion lane holds it for its own FSR passes — milliseconds,
+/// or seconds for an upscaler model — and never across an sd-cli run, so an
+/// edit waits only for a pass it would have had to share the GPU with anyway,
+/// and no second device's buffers sit in VRAM beside sd-cli's.
+pub type SharedFsr = Arc<Mutex<Fsr>>;
+
+/// Lock without letting one panicked pass poison every later one. The device
+/// and its pipelines are still valid after a failed dispatch.
+pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Where on the page a retained image is shown. **One live image per slot** is
+/// the whole eviction rule: storing into a slot lets go of what was there.
 ///
-/// Eviction used to lose you the image. It doesn't any more: every generation is
-/// archived under `work/workitems/` (see [`crate::workitems`]) and can be
-/// reopened, which turns this from a hard limit on what exists into a limit on
-/// what is *already warm*. That's why it stays at 8 rather than growing.
-const MAX_PENDING: usize = 8;
+/// It replaced an eight-entry cache (`MAX_PENDING`) that existed before work
+/// items were archived — an evicted image is reopenable from
+/// `work/workitems/`, so there is no reason to keep more than what is on
+/// screen. Two slots rather than one because both can be on screen in the
+/// same minute: a batch image landing must not throw away the output being
+/// edited in the viewer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    /// The Image tab's result: a run's images, their escalations, a reopened
+    /// work item.
+    Image,
+    /// The image the Outputs tab's viewer has open.
+    Output,
+}
+
+struct Live {
+    pending: Pending,
+    /// `None` once something else took the slot while this was pinned.
+    slot: Option<Slot>,
+    /// Jobs that still need this image: the run whose hi-res and refine are
+    /// still to come, or a Refine queued behind a batch. Evicting a pinned entry
+    /// takes its slot and leaves its files until the last pin goes, because the
+    /// job would otherwise fail on a file a reopened work item deleted.
+    pins: u32,
+}
+
+/// Every retained image, shared by the two lanes. Keyed by `image_id`, which
+/// an escalation keeps — a refine replaces the entry under the same id.
+#[derive(Default)]
+pub struct Retained {
+    live: BTreeMap<u64, Live>,
+}
+
+impl Retained {
+    fn get(&self, id: u64, action: &str) -> Result<Pending> {
+        match self.live.get(&id) {
+            Some(l) => Ok(l.pending.clone()),
+            None => bail!(
+                "that image is no longer available to {action} — a newer one has \
+                 replaced it, or the server restarted. Click it in the work items \
+                 below to reopen it, settings and all."
+            ),
+        }
+    }
+
+    /// The slot an entry is in, so an escalation lands back where it was.
+    fn slot_of(&self, id: u64) -> Slot {
+        self.live.get(&id).and_then(|l| l.slot).unwrap_or(Slot::Image)
+    }
+
+    /// Record `entry` as the current state of `id` in `slot`, letting go of
+    /// whatever else was there. `pin` adds a hold for the caller — see
+    /// [`Live::pins`]; an existing entry's pins carry over.
+    fn store(&mut self, id: u64, slot: Slot, entry: Pending, pin: bool) {
+        let others: Vec<u64> = self
+            .live
+            .iter()
+            .filter(|(k, l)| **k != id && l.slot == Some(slot))
+            .map(|(k, _)| *k)
+            .collect();
+        for k in others {
+            if let Some(l) = self.live.get_mut(&k) {
+                l.slot = None;
+            }
+            self.drop_if_free(k);
+        }
+        let pins = self.live.get(&id).map_or(0, |l| l.pins) + u32::from(pin);
+        self.live.insert(
+            id,
+            Live {
+                pending: entry,
+                slot: Some(slot),
+                pins,
+            },
+        );
+    }
+
+    /// Write back an adjusted entry — only if it is still the one that was
+    /// read. A refine can finish while a slider drag is in flight on the other
+    /// lane, and writing the drag back would put the pre-refine image's paths
+    /// over the new one's.
+    fn update(&mut self, id: u64, entry: Pending) -> bool {
+        match self.live.get_mut(&id) {
+            Some(l) if l.pending.raw == entry.raw => {
+                l.pending = entry;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Hold `id` for a job. Returns the model that made it — the label the
+    /// Jobs dialog shows — or `None` when the image is already gone.
+    pub fn pin(&mut self, id: u64) -> Option<String> {
+        let l = self.live.get_mut(&id)?;
+        l.pins += 1;
+        Some(l.pending.profile.name.clone())
+    }
+
+    pub fn unpin(&mut self, id: u64) {
+        if let Some(l) = self.live.get_mut(&id) {
+            l.pins = l.pins.saturating_sub(1);
+        }
+        self.drop_if_free(id);
+    }
+
+    fn drop_if_free(&mut self, id: u64) {
+        let free = self
+            .live
+            .get(&id)
+            .is_some_and(|l| l.slot.is_none() && l.pins == 0);
+        if free {
+            if let Some(l) = self.live.remove(&id) {
+                l.pending.remove_files();
+            }
+        }
+    }
+}
 
 /// Hard limit on the hi-res upscale factor a request may ask for.
 pub const MAX_UPSCALE: f32 = 4.0;
@@ -319,7 +450,7 @@ pub struct GenResult {
     pub timings: Timings,
     pub refine_passes: u32,
     pub hires_passes: u32,
-    /// Handle for [`Engine::refine`] / [`Engine::hires`] / [`Engine::adjust`].
+    /// Handle for [`Engine::refine`] / [`Engine::hires`] / [`Display::adjust`].
     pub image_id: u64,
     /// The archived generation this descends from, so the UI can mark which
     /// thumbnail is on screen. Unrelated to `image_id`: that one addresses the
@@ -453,8 +584,12 @@ impl Pending {
 
 pub struct Engine {
     cfg: Config,
-    fsr: Fsr,
-    work_dir: PathBuf,
+    fsr: SharedFsr,
+    /// `work/current/`: every file a live result or a pass in flight owns.
+    /// Its own folder so `work/`'s root holds only the archives, and so
+    /// emptying it — on start and on *Close server* — is one sweep that cannot
+    /// reach anything durable.
+    scratch: PathBuf,
     /// The durable half of `work/`, plus the favourites shelf under `user/`.
     /// Written on a generate, read on an open; which shelf an open reads is a
     /// [`workitems::Shelf`] the request carries.
@@ -464,34 +599,66 @@ pub struct Engine {
     videos: VideoStore,
     /// Shared with the connection threads: progress out, cancel in.
     monitor: Monitor,
-    /// Escalatable results, keyed by job id (ordered, so the oldest evicts first).
-    pending: BTreeMap<u64, Pending>,
+    /// Escalatable results, shared with the display lane.
+    retained: Arc<Mutex<Retained>>,
+}
+
+/// The scratch folder under `work/`. See [`Engine::scratch`].
+pub fn scratch_dir(work_dir: &Path) -> PathBuf {
+    work_dir.join("current")
+}
+
+/// Empty the scratch folder. Run on start — job ids restart at 0, so a
+/// leftover would collide with a new job's file — and by *Close server*,
+/// which needs no setting for it: nothing in here is anything but scratch.
+pub fn clear_scratch(work_dir: &Path) {
+    purge_pngs(&scratch_dir(work_dir));
 }
 
 impl Engine {
     pub fn new(cfg: Config, monitor: Monitor) -> Result<Engine> {
         let work_dir = cfg.base_dir.join("work");
-        std::fs::create_dir_all(&work_dir).ok();
-        // Job ids restart at 0 each run, so clear any PNGs a previous run left
-        // behind rather than letting a new job collide with them. Still exactly
-        // right with the archive in place: this is non-recursive and matches on
-        // a `.png` extension, so `work/workitems/` and `work/output/` are not
-        // reachable from it — only the scratch it was always meant to clear.
+        let scratch = scratch_dir(&work_dir);
+        std::fs::create_dir_all(&scratch).ok();
+        clear_scratch(&work_dir);
+        // Scratch used to live in `work/` itself. Swept once more here so an
+        // install from before `work/current/` doesn't keep its last eight
+        // results' PNGs in the root for ever. Non-recursive and `.png` only,
+        // so the archives under `work/` are out of its reach.
         purge_pngs(&work_dir);
         let items = workitems::Store::new(&work_dir, &cfg.user_dir());
         let videos = VideoStore::new(&work_dir);
-        let fsr = Fsr::new()?;
+        let fsr = Arc::new(Mutex::new(Fsr::new()?));
         // Fail fast with a friendly message if the sd binary is missing.
         SdRunner::new(&cfg).preflight()?;
         Ok(Engine {
             cfg,
             fsr,
-            work_dir,
+            scratch,
             items,
             videos,
             monitor,
-            pending: BTreeMap::new(),
+            retained: Arc::default(),
         })
+    }
+
+    /// The display lane, sharing this engine's FSR device and retained images.
+    pub fn display(&self) -> Display {
+        Display {
+            fsr: self.fsr.clone(),
+            scratch: self.scratch.clone(),
+            items: workitems::Store::new(&self.cfg.base_dir.join("work"), &self.cfg.user_dir()),
+            retained: self.retained.clone(),
+        }
+    }
+
+    /// For the HTTP side: pinning an image a queued Refine will need.
+    pub fn retained(&self) -> Arc<Mutex<Retained>> {
+        self.retained.clone()
+    }
+
+    fn fsr(&self) -> MutexGuard<'_, Fsr> {
+        lock(&self.fsr)
     }
 
     /// A runner wired to this engine's monitor. Every pass goes through here, so
@@ -549,18 +716,11 @@ impl Engine {
     /// The client never sends a path — it picks a stem the server published
     /// through `GET /outputs`, and `valid_id` is the whitelist that makes that
     /// safe (digits, letters and `-`, so `.` and `/` aren't in the alphabet).
-    /// Shared by [`Engine::video`] and [`Engine::img2img`]: both start from a
-    /// finished image, and a second copy of this check is a second place for it
-    /// to be gotten wrong.
+    /// Shared by [`Engine::video`], [`Engine::img2img`] and
+    /// [`Display::open_output`]: all three start from a finished image, and a
+    /// second copy of this check is a second place for it to be gotten wrong.
     fn output_source(&self, stem: &str) -> Result<PathBuf> {
-        if !workitems::valid_id(stem) {
-            bail!("'{stem}' is not an output name");
-        }
-        // Either gallery: a favourite is a source like any other, and a stem
-        // names one picture wherever it lives (`workitems::Gallery`).
-        self.items
-            .find_output(stem)
-            .with_context(|| format!("no saved image '{stem}' in work/output/ or your favourites"))
+        output_source(&self.items, stem)
     }
 
     /// Point a pending result at a different checkpoint before an escalation
@@ -632,11 +792,11 @@ impl Engine {
         }
     }
 
-    pub fn adapter_name(&self) -> &str {
-        self.fsr.adapter_name()
+    pub fn adapter_name(&self) -> String {
+        self.fsr().adapter_name().to_string()
     }
 
-    pub fn run(&mut self, req: &GenRequest) -> Result<GenResult> {
+    pub fn run(&mut self, req: &GenRequest, pin: bool) -> Result<GenResult> {
         let mut profile = self.model(&req.template)?;
         // Apply per-request overrides onto the profile.
         if let Some(v) = req.steps {
@@ -750,9 +910,9 @@ impl Engine {
             .and_then(|(src, out)| variables::typed(src, out));
         let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();
-        let lowres = scratch.path(self.work_dir.join(format!("{id}-0-base.png")));
-        let raw = scratch.path(self.work_dir.join(format!("{id}-0-raw.png")));
-        let display = scratch.path(self.work_dir.join(format!("{id}-0-full.png")));
+        let lowres = scratch.path(self.scratch.join(format!("{id}-0-base.png")));
+        let raw = scratch.path(self.scratch.join(format!("{id}-0-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-0-full.png")));
 
         let sd = self.sd();
         let neg = negative.as_deref();
@@ -779,7 +939,7 @@ impl Engine {
 
         // 3) Sharpen for display.
         let filters = Filters::starting_at(tpl.sharpness, tpl.clarity);
-        let (png, w, h) = self.publish(&raw, &display, &filters)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
         let fsr_ms = t.elapsed().as_millis() - upscale_ms;
 
         // Past every `?`: these two are the result, and the `Pending` below owns
@@ -846,8 +1006,10 @@ impl Engine {
             hires_passes: 0,
             step: 0,
         };
-        let result = self.result(id, &entry, png, Timings { gen_ms, upscale_ms, fsr_ms, ..Default::default() });
-        self.store(id, entry);
+        let result = entry.result(id, png, Timings { gen_ms, upscale_ms, fsr_ms, ..Default::default() });
+        // `pin` is a run holding this image for the hi-res and refine still to
+        // come — see [`Live::pins`].
+        lock(&self.retained).store(id, Slot::Image, entry, pin);
         Ok(result)
     }
 
@@ -866,7 +1028,7 @@ impl Engine {
     ///   is cheap; here the pixels already exist at whatever size they exist at,
     ///   and the only sizing question is whether that size is affordable — see
     ///   [`fit_to`].
-    pub fn img2img(&mut self, req: &Img2ImgRequest) -> Result<GenResult> {
+    pub fn img2img(&mut self, req: &Img2ImgRequest, pin: bool) -> Result<GenResult> {
         let mut profile = self.model(&req.template)?;
         // The same fold as `run`, minus width/height: this pass sends no -W/-H,
         // so a base size would be a box that does nothing.
@@ -945,9 +1107,9 @@ impl Engine {
             .and_then(|(src, out)| variables::typed(src, out));
         let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();
-        let src = scratch.path(self.work_dir.join(format!("{id}-0-src.png")));
-        let raw = scratch.path(self.work_dir.join(format!("{id}-0-raw.png")));
-        let display = scratch.path(self.work_dir.join(format!("{id}-0-full.png")));
+        let src = scratch.path(self.scratch.join(format!("{id}-0-src.png")));
+        let raw = scratch.path(self.scratch.join(format!("{id}-0-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-0-full.png")));
 
         // 1) Bring the source in at a size this card can diffuse at. A phone
         //    photo is 4032x3024 and a pass at that size is an out-of-memory on a
@@ -975,7 +1137,7 @@ impl Engine {
         } else {
             // Magnification, which is EASU's whole job — and unsharpened, like
             // everything that feeds a diffusion pass.
-            self.fsr
+            self.fsr()
                 .process(&stored, &src, fw as f32 / sw as f32, &Filters::NONE)?;
         }
         let fsr_ms_in = t.elapsed().as_millis();
@@ -1003,7 +1165,7 @@ impl Engine {
         //    sd.cpp rounds an init image to the latent grid and only warns.
         let t = Instant::now();
         let filters = Filters::starting_at(profile.sharpness, profile.clarity);
-        let (png, w, h) = self.publish(&raw, &display, &filters)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
         let fsr_ms = fsr_ms_in + t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -1058,8 +1220,8 @@ impl Engine {
             hires_passes: 0,
             step: 0,
         };
-        let result = self.result(id, &entry, png, Timings { gen_ms, fsr_ms, ..Default::default() });
-        self.store(id, entry);
+        let result = entry.result(id, png, Timings { gen_ms, fsr_ms, ..Default::default() });
+        lock(&self.retained).store(id, Slot::Image, entry, pin);
         Ok(result)
     }
 
@@ -1257,7 +1419,7 @@ impl Engine {
         let mut size = (0, 0);
         for (i, frame) in frames.iter().enumerate() {
             let dest = out_dir.join(format!("frame_{i:03}.png"));
-            size = self.fsr.process(frame, &dest, factor, filters)?;
+            size = self.fsr().process(frame, &dest, factor, filters)?;
         }
         Ok(EnlargeResult {
             dir: out_dir,
@@ -1280,7 +1442,7 @@ impl Engine {
     /// detail while only the structural gain survives the upscale. At output
     /// resolution there is nothing downstream to smear what the pass adds.
     pub fn refine(&mut self, id: u64, over: &EscalateRequest) -> Result<GenResult> {
-        let mut p = self.lookup(id, "refine")?;
+        let mut p = lock(&self.retained).get(id, "refine")?;
         // Model first, then the boxes on top of it: a swap replaces the whole
         // profile, so applying the overrides the other way round would throw
         // them away. Both before `can_refine`, so the check reads the settings
@@ -1306,8 +1468,8 @@ impl Engine {
 
         let step = p.step + 1;
         let mut scratch = Scratch::default();
-        let raw = scratch.path(self.work_dir.join(format!("{id}-{step}-raw.png")));
-        let display = scratch.path(self.work_dir.join(format!("{id}-{step}-full.png")));
+        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-{step}-full.png")));
         let sd = self.sd();
 
         let t = Instant::now();
@@ -1331,7 +1493,7 @@ impl Engine {
         // rounds an init image to what the latent grid allows, so the pass can
         // return a slightly different size than it was given.
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
-        let (png, w, h) = self.publish(&raw, &display, &filters)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -1352,8 +1514,8 @@ impl Engine {
             step,
             ..p
         };
-        let result = self.result(id, &entry, png, Timings { fsr_ms, refine_ms, ..Default::default() });
-        self.store(id, entry);
+        let result = entry.result(id, png, Timings { fsr_ms, refine_ms, ..Default::default() });
+        self.keep(id, entry);
         Ok(result)
     }
 
@@ -1368,7 +1530,7 @@ impl Engine {
         if !(1.0..=MAX_UPSCALE).contains(&upscale) {
             bail!("upscale must be between 1 and {MAX_UPSCALE}");
         }
-        let mut p = self.lookup(id, "run a hi-res pass on")?;
+        let mut p = lock(&self.retained).get(id, "run a hi-res pass on")?;
         // See `refine`: the swap replaces the profile, so it has to come first.
         // Note this can also move `hires_max_side`, and therefore whether the
         // pass is affordable at all — `can_hires` below is asked of the model
@@ -1405,10 +1567,10 @@ impl Engine {
 
         let step = p.step + 1;
         let mut scratch = Scratch::default();
-        let upscaled = scratch.path(self.work_dir.join(format!("{id}-{step}-up.png")));
-        let hires = scratch.path(self.work_dir.join(format!("{id}-{step}-hires.png")));
-        let raw = scratch.path(self.work_dir.join(format!("{id}-{step}-raw.png")));
-        let display = scratch.path(self.work_dir.join(format!("{id}-{step}-full.png")));
+        let upscaled = scratch.path(self.scratch.join(format!("{id}-{step}-up.png")));
+        let hires = scratch.path(self.scratch.join(format!("{id}-{step}-hires.png")));
+        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-{step}-full.png")));
         let sd = self.sd();
         let mut fsr_ms = 0u128;
 
@@ -1416,7 +1578,7 @@ impl Engine {
         //    Unsharpened, like everything that feeds a diffusion pass.
         let init = if diff_w > p.raw_w {
             let t = Instant::now();
-            self.fsr.process(
+            self.fsr().process(
                 &p.raw,
                 &upscaled,
                 diff_w as f32 / p.raw_w as f32,
@@ -1457,14 +1619,14 @@ impl Engine {
         } else {
             1.0
         };
-        self.fsr.process(&hires, &raw, scale, &Filters::NONE)?;
+        self.fsr().process(&hires, &raw, scale, &Filters::NONE)?;
         // `hires` and `upscaled` have both been consumed; the guard drops them
         // on the way out, and would have dropped them just the same had the
         // pass died between here and the top of the function.
 
         // 4) Sharpen for display.
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
-        let (png, w, h) = self.publish(&raw, &display, &filters)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
         fsr_ms += t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -1482,13 +1644,41 @@ impl Engine {
             step,
             ..p
         };
-        let result = self.result(id, &entry, png, Timings { fsr_ms, hires_ms, ..Default::default() });
-        self.store(id, entry);
+        let result = entry.result(id, png, Timings { fsr_ms, hires_ms, ..Default::default() });
+        self.keep(id, entry);
         Ok(result)
     }
 
+    /// See [`enlarge`], which this is wired to the engine's own FSR device and
+    /// monitored runner — so a model pass shows on the progress bar and Stop
+    /// can kill it, like every other sd-cli run.
+    fn enlarge(&self, src: &Path, dst: &Path, factor: f32, model: Option<&Path>) -> Result<u128> {
+        enlarge(&self.fsr, &self.sd(), src, dst, factor, model)
+    }
+
+    /// Put an escalation's result back where its image was shown.
+    fn keep(&self, id: u64, entry: Pending) {
+        let mut r = lock(&self.retained);
+        let slot = r.slot_of(id);
+        r.store(id, slot, entry, false);
+    }
+}
+
+/// The display lane: everything that only re-filters, reopens or copies an
+/// image, on a thread of its own so none of it waits behind a render. It
+/// shares the engine's FSR device and its [`Retained`] — the sliders work on
+/// the image a run just produced — and owns no sd-cli at all, which is what
+/// makes it safe to run beside one.
+pub struct Display {
+    fsr: SharedFsr,
+    scratch: PathBuf,
+    items: workitems::Store,
+    retained: Arc<Mutex<Retained>>,
+}
+
+impl Display {
     /// Re-run the display filters on an existing result. No diffusion: this is
-    /// [`Engine::publish`] again on the retained `raw`, which is what makes it a
+    /// [`publish`] again on the retained `raw`, which is what makes it a
     /// millisecond operation and therefore something a slider can drive.
     ///
     /// The escalations are the expensive rungs of the ladder; this is the free
@@ -1501,7 +1691,7 @@ impl Engine {
     /// a one-field body. The change applies to this image only, and only until
     /// the next pass — see [`Pending::filters`].
     pub fn adjust(&mut self, id: u64, patch: &FiltersPatch) -> Result<GenResult> {
-        let mut p = self.lookup(id, "adjust")?;
+        let mut p = lock(&self.retained).get(id, "adjust")?;
         patch.apply(&mut p.filters);
         // Same bounds the config goes through, from the same place.
         p.filters.validate(&p.profile.name)?;
@@ -1515,7 +1705,7 @@ impl Engine {
         // Deliberately no `Scratch` here, unlike the three passes above. This
         // writes over a file the retained `Pending` already owns, so putting it
         // under the guard would mean a failed drag deleting a live image.
-        let (png, w, h) = self.publish(&p.raw, &p.display, &p.filters)?;
+        let (png, w, h) = publish(&self.fsr, &p.raw, &p.display, &p.filters)?;
         let fsr_ms = t.elapsed().as_millis();
 
         let entry = Pending {
@@ -1523,8 +1713,12 @@ impl Engine {
             raw_h: h,
             ..p
         };
-        let result = self.result(id, &entry, png, Timings { fsr_ms, ..Default::default() });
-        self.store(id, entry);
+        let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
+        // Only over the entry it read. A pass on the other lane may have
+        // replaced it meanwhile, and the drag belongs to the image it replaced.
+        if !lock(&self.retained).update(id, entry) {
+            bail!("that image was replaced while it was being adjusted");
+        }
         Ok(result)
     }
 
@@ -1546,8 +1740,8 @@ impl Engine {
 
         let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();
-        let raw = scratch.path(self.work_dir.join(format!("{id}-0-raw.png")));
-        let display = scratch.path(self.work_dir.join(format!("{id}-0-full.png")));
+        let raw = scratch.path(self.scratch.join(format!("{id}-0-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-0-full.png")));
 
         let t = Instant::now();
         std::fs::copy(&stored, &raw)
@@ -1555,7 +1749,7 @@ impl Engine {
         // Filters start where the model says again, exactly as a fresh generate
         // does — the archived image is unsharpened, so there is nothing to undo.
         let filters = Filters::starting_at(item.profile.sharpness, item.profile.clarity);
-        let (png, w, h) = self.publish(&raw, &display, &filters)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -1582,15 +1776,15 @@ impl Engine {
             hires_passes: item.hires_passes,
             step: 0,
         };
-        let result = self.result(id, &entry, png, Timings { fsr_ms, ..Default::default() });
-        self.store(id, entry);
+        let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
+        lock(&self.retained).store(id, Slot::Image, entry, false);
         Ok(result)
     }
 
     /// Bring a finished image in `work/output/` back as a live result, so the
     /// viewer's sliders can work on it. The Outputs tab's one route.
     ///
-    /// A near-twin of [`Engine::open`] — copy in, `publish`, mint a `Pending` —
+    /// A near-twin of [`Display::open`] — copy in, `publish`, mint a `Pending` —
     /// and it is copied into scratch for exactly the same reason: that file
     /// belongs to the user, and a `Pending` pointing at it would have
     /// `remove_files` delete it. Invariant 8, in the third place it applies.
@@ -1618,19 +1812,19 @@ impl Engine {
     /// by hand, so this has to be able to open one. It gets `Profile::default()`
     /// and no prompt, which is all the sliders need.
     pub fn open_output(&mut self, stem: &str) -> Result<GenResult> {
-        let stored = self.output_source(stem)?;
+        let stored = output_source(&self.items, stem)?;
         let item = self.items.load_output(stem);
 
         let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();
-        let raw = scratch.path(self.work_dir.join(format!("{id}-0-raw.png")));
-        let display = scratch.path(self.work_dir.join(format!("{id}-0-full.png")));
+        let raw = scratch.path(self.scratch.join(format!("{id}-0-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-0-full.png")));
 
         let t = Instant::now();
         std::fs::copy(&stored, &raw)
             .with_context(|| format!("opening {}", stored.display()))?;
         let filters = Filters::NONE;
-        let (png, w, h) = self.publish(&raw, &display, &filters)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -1664,8 +1858,8 @@ impl Engine {
             hires_passes: item.as_ref().map(|i| i.hires_passes).unwrap_or(0),
             step: item.as_ref().map(|i| i.step).unwrap_or(0),
         };
-        let result = self.result(id, &entry, png, Timings { fsr_ms, ..Default::default() });
-        self.store(id, entry);
+        let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
+        lock(&self.retained).store(id, Slot::Output, entry, false);
         Ok(result)
     }
 
@@ -1677,7 +1871,7 @@ impl Engine {
     /// unsharpened version is already archived for every generation, so nothing
     /// is lost by saving the filtered one here.
     pub fn save_output(&self, id: u64) -> Result<PathBuf> {
-        let p = self.lookup(id, "save")?;
+        let p = lock(&self.retained).get(id, "save")?;
         let item = WorkItem {
             // Named by origin, so every save out of one generation groups
             // together; the job id only stands in when the archive write failed.
@@ -1703,73 +1897,59 @@ impl Engine {
         };
         self.items.save_output(&p.display, &item)
     }
+}
 
-    /// The one place the display filters are applied. Puts the retained raw
-    /// image through the grade, clarity and RCAS passes into `display` and
-    /// returns the PNG bytes for the response.
-    ///
-    /// Scale 1.0, so [`Fsr::process`] skips EASU, and each of the other three is
-    /// skipped when its knobs are neutral — microseconds against the diffusion
-    /// it follows. At [`Filters::NONE`] it is a byte-exact copy.
-    ///
-    /// It also reports the true dimensions, which is how each pass learns what
-    /// sd.cpp actually produced rather than what it was asked for.
-    fn publish(
-        &self,
-        raw: &Path,
-        display: &Path,
-        filters: &Filters,
-    ) -> Result<(Vec<u8>, u32, u32)> {
-        let (w, h) = self.fsr.process(raw, display, 1.0, filters)?;
-        let png = std::fs::read(display)?;
-        Ok((png, w, h))
+/// See [`Engine::output_source`]; a free function so the display lane's
+/// [`Display::open_output`] runs the same check.
+fn output_source(items: &workitems::Store, stem: &str) -> Result<PathBuf> {
+    if !workitems::valid_id(stem) {
+        bail!("'{stem}' is not an output name");
     }
+    // Either gallery: a favourite is a source like any other, and a stem
+    // names one picture wherever it lives (`workitems::Gallery`).
+    items
+        .find_output(stem)
+        .with_context(|| format!("no saved image '{stem}' in work/output/ or your favourites"))
+}
 
-    /// See [`enlarge`], which this is wired to the engine's own FSR device and
-    /// monitored runner — so a model pass shows on the progress bar and Stop
-    /// can kill it, like every other sd-cli run.
-    fn enlarge(&self, src: &Path, dst: &Path, factor: f32, model: Option<&Path>) -> Result<u128> {
-        enlarge(&self.fsr, &self.sd(), src, dst, factor, model)
-    }
+/// The one place the display filters are applied. Puts the retained raw
+/// image through the grade, clarity and RCAS passes into `display` and
+/// returns the PNG bytes for the response.
+///
+/// Scale 1.0, so [`Fsr::process`] skips EASU, and each of the other three is
+/// skipped when its knobs are neutral — microseconds against the diffusion
+/// it follows. At [`Filters::NONE`] it is a byte-exact copy.
+///
+/// It also reports the true dimensions, which is how each pass learns what
+/// sd.cpp actually produced rather than what it was asked for.
+fn publish(
+    fsr: &Mutex<Fsr>,
+    raw: &Path,
+    display: &Path,
+    filters: &Filters,
+) -> Result<(Vec<u8>, u32, u32)> {
+    let (w, h) = lock(fsr).process(raw, display, 1.0, filters)?;
+    let png = std::fs::read(display)?;
+    Ok((png, w, h))
+}
 
-    fn lookup(&self, id: u64, action: &str) -> Result<Pending> {
-        match self.pending.get(&id) {
-            Some(p) => Ok(p.clone()),
-            None => bail!(
-                "that image is no longer available to {action} — it was evicted or \
-                 the server restarted. Click it in the work items below to reopen \
-                 it, settings and all."
-            ),
-        }
-    }
-
-    /// Record an entry as the current state of `id`, evicting the oldest
-    /// results (and their files) once the cache is over budget.
-    fn store(&mut self, id: u64, entry: Pending) {
-        self.pending.insert(id, entry);
-        while self.pending.len() > MAX_PENDING {
-            if let Some((_, old)) = self.pending.pop_first() {
-                old.remove_files();
-            }
-        }
-    }
-
-    fn result(&self, id: u64, entry: &Pending, png: Vec<u8>, timings: Timings) -> GenResult {
+impl Pending {
+    fn result(&self, id: u64, png: Vec<u8>, timings: Timings) -> GenResult {
         GenResult {
             png,
-            width: entry.raw_w,
-            height: entry.raw_h,
-            seed: entry.seed,
+            width: self.raw_w,
+            height: self.raw_h,
+            seed: self.seed,
             timings,
-            refine_passes: entry.refine_passes,
-            hires_passes: entry.hires_passes,
+            refine_passes: self.refine_passes,
+            hires_passes: self.hires_passes,
             image_id: id,
-            work_id: entry.work_id.clone(),
-            can_refine: entry.can_refine(),
-            can_hires: entry.can_hires(),
-            filters: entry.filters,
-            start: Filters::starting_at(entry.profile.sharpness, entry.profile.clarity),
-            prompt: entry.prompt.clone(),
+            work_id: self.work_id.clone(),
+            can_refine: self.can_refine(),
+            can_hires: self.can_hires(),
+            filters: self.filters,
+            start: Filters::starting_at(self.profile.sharpness, self.profile.clarity),
+            prompt: self.prompt.clone(),
         }
     }
 }
@@ -1873,28 +2053,34 @@ fn fit_to(src: (u32, u32), max_side: u32) -> (u32, u32) {
 /// `model` is ignored at a factor of 1: that is "no upscale", and a
 /// 4× pass reduced back to 1× is minutes spent on a resample.
 pub fn enlarge(
-    fsr: &Fsr,
+    fsr: &Mutex<Fsr>,
     sd: &SdRunner,
     src: &Path,
     dst: &Path,
     factor: f32,
     model: Option<&Path>,
 ) -> Result<u128> {
+    // The lock is taken per GPU step, never around the whole call: an ESRGAN
+    // runs in sd-cli, and holding the device across that would stall every
+    // slider on the display lane for the length of it.
     let Some(model) = model.filter(|_| factor > 1.0) else {
-        fsr.process(src, dst, factor, &Filters::NONE)?;
+        lock(fsr).process(src, dst, factor, &Filters::NONE)?;
         return Ok(0);
     };
     let t = Instant::now();
     let input = image::image_dimensions(src)
         .with_context(|| format!("reading the size of {}", src.display()))?;
-    // Beside `dst` so it shares its job id; a `.png` extension so `purge_pngs`
-    // reaches it after a crash. Its own guard, since it never outlives this.
+    // Beside `dst` so it shares its job id and its folder; a `.png` extension
+    // so `purge_pngs` reaches it after a crash. Its own guard, since it never outlives this.
     let mut scratch = Scratch::default();
     let big = scratch.path(dst.with_extension("model.png"));
     if crate::sr::is_esrgan(model)? {
         sd.upscale(model, src, &big)?;
     } else {
-        let r = crate::sr::upscale(fsr.device(), fsr.queue(), model, src, &big)?;
+        let r = {
+            let fsr = lock(fsr);
+            crate::sr::upscale(fsr.device(), fsr.queue(), model, src, &big)?
+        };
         // One line per run: the tile is chosen from the device's buffer limit,
         // so it is worth being able to see what it came out as.
         eprintln!(
@@ -1915,7 +2101,7 @@ pub fn enlarge(
         AfterModel::Reduce(w, h) => reduce(&big, dst, w, h)?,
         AfterModel::Easu(rest) => {
             let ms = t.elapsed().as_millis();
-            fsr.process(&big, dst, rest, &Filters::NONE)?;
+            lock(fsr).process(&big, dst, rest, &Filters::NONE)?;
             return Ok(ms);
         }
     }
@@ -2040,8 +2226,96 @@ fn random_seed() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{after_model, fit_to, AfterModel};
+    use super::{after_model, fit_to, AfterModel, Pending, Retained, Slot};
+    use crate::config::{Filters, Profile};
     use crate::fsr::out_size;
+    use std::path::Path;
+
+    /// A retained image whose two files exist, so eviction has something to
+    /// delete and the tests something to look for.
+    fn live(dir: &Path, name: &str) -> Pending {
+        let raw = dir.join(format!("{name}-raw.png"));
+        let display = dir.join(format!("{name}-full.png"));
+        std::fs::write(&raw, b"r").unwrap();
+        std::fs::write(&display, b"d").unwrap();
+        Pending {
+            raw,
+            raw_w: 1,
+            raw_h: 1,
+            display,
+            profile: Profile::default(),
+            filters: Filters::NONE,
+            prompt: String::new(),
+            negative: None,
+            typed_prompt: None,
+            typed_negative: None,
+            seed: 0,
+            work_id: None,
+            source: None,
+            refine_passes: 0,
+            hires_passes: 0,
+            step: 0,
+        }
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("rustimage-slot-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// One live image per slot: the next one in lets the last one go, files
+    /// and all — and only in its own slot, so a batch image landing leaves the
+    /// output open in the viewer alone.
+    #[test]
+    fn storing_into_a_slot_lets_go_of_what_was_there() {
+        let dir = scratch("evict");
+        let mut r = Retained::default();
+        let a = live(&dir, "a");
+        let out = live(&dir, "out");
+        r.store(1, Slot::Image, a.clone(), false);
+        r.store(2, Slot::Output, out.clone(), false);
+        r.store(3, Slot::Image, live(&dir, "b"), false);
+        assert!(r.get(1, "t").is_err());
+        assert!(!a.raw.exists() && !a.display.exists());
+        assert!(r.get(2, "t").is_ok() && out.raw.exists());
+        assert!(r.get(3, "t").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A run's image, or one a queued Refine is waiting for, loses its slot to
+    /// a reopened work item but keeps its files until the job lets go.
+    #[test]
+    fn a_pinned_image_outlives_its_slot_until_unpinned() {
+        let dir = scratch("pin");
+        let mut r = Retained::default();
+        let a = live(&dir, "a");
+        r.store(1, Slot::Image, a.clone(), false);
+        assert!(r.pin(1).is_some());
+        r.store(2, Slot::Image, live(&dir, "b"), false);
+        assert!(r.get(1, "t").is_ok() && a.raw.exists());
+        r.unpin(1);
+        assert!(r.get(1, "t").is_err() && !a.raw.exists());
+        assert!(r.pin(1).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A slider drag that read the image before a refine replaced it must not
+    /// write the old paths back over the new ones.
+    #[test]
+    fn an_adjust_never_writes_over_a_newer_pass() {
+        let dir = scratch("update");
+        let mut r = Retained::default();
+        let before = live(&dir, "a");
+        r.store(1, Slot::Image, before.clone(), false);
+        r.store(1, Slot::Image, live(&dir, "a2"), false);
+        assert!(!r.update(1, before));
+        assert!(!r.update(9, live(&dir, "c")));
+        let now = r.get(1, "t").unwrap();
+        assert!(r.update(1, now));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Whichever upscaler runs, the image comes out the size EASU would have
     /// made — which is the size the page quoted before the click, and what

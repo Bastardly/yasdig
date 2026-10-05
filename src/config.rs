@@ -644,7 +644,7 @@ impl Profile {
 /// deserializes — see [`Profile`].
 ///
 /// Neutral is all-zero, which is what `Default` derives and what every
-/// `Fsr::process` call that isn't `Engine::publish` passes ([`Filters::NONE`]).
+/// `Fsr::process` call that isn't `pipeline::publish` passes ([`Filters::NONE`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Filters {
@@ -748,7 +748,7 @@ impl Filters {
 
     /// Range-check every knob.
     ///
-    /// Not folded into [`Profile::validate`] because `Engine::adjust` checks
+    /// Not folded into [`Profile::validate`] because `Display::adjust` checks
     /// values that aren't on a profile at all: the profile carries where the
     /// sliders *start*, and the live positions live on the result they apply to.
     ///

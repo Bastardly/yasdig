@@ -1,6 +1,7 @@
 import { $, esc, post, numOr } from './dom.js';
 import { S } from './state.js';
-import { setBusy, cancelRun } from './busy.js';
+import { setBusy, setIdle, cancelRun } from './busy.js';
+import { soonJobs } from './jobs.js';
 import { clip, renderClip } from './player.js';
 import { sourceSlot } from './source-slot.js';
 
@@ -156,9 +157,11 @@ async function startClip() {
   $('vstop').hidden = false;
   $('vstop').disabled = false;
   $('vstop').textContent = 'Stop';
-  setBusy('vgo', 'Generating clip…');
+  setBusy('vgo', 'Generating clip…', 'video');
   try {
-    const data = await post('/video', vidPayload());
+    const pending = post('/video', vidPayload());
+    soonJobs();
+    const data = await pending;
     renderClip(data.clip, data.gen_ms);
     loadClips();
   } catch (e) {
@@ -168,21 +171,24 @@ async function startClip() {
     // would read as one.
     $('verr').textContent = msg.includes('cancelled by request')
       ? 'Stopped. Nothing was kept — the partial frames are swept.'
-      : msg;
+      : msg.includes('removed from the job queue')
+        ? 'Removed from the queue before it started.'
+        : msg;
   } finally {
     vrunning = false;
     $('vstop').hidden = true;
-    setBusy(null);
+    setIdle('vgo');
     syncVideo();
   }
 }
 
-const cancelClip = () => cancelRun('vstop', 'verr');
+const cancelClip = () => cancelRun('vstop', 'video');
 
 export async function enlargeClip() {
   if (!clip) return;
-  setBusy('venlarge', 'Enlarging…');
+  setBusy('venlarge', 'Enlarging…', 'enlarge');
   $('verr').textContent = '';
+  soonJobs();
   try {
     const data = await post('/videos/enlarge', {
       id: clip.id,
@@ -195,7 +201,7 @@ export async function enlargeClip() {
   } catch (e) {
     $('verr').textContent = String(e.message || e);
   } finally {
-    setBusy(null);
+    setIdle('venlarge');
   }
 }
 

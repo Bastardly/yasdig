@@ -2,9 +2,10 @@
 
 Python-free Vulkan image generator for AMD/Linux. Generate small and cheap with
 stable-diffusion.cpp (shelled out as a subprocess, never FFI), then escalate quality
-on demand with img2img passes and a native FSR post-process in `wgpu`. All GPU work —
-sd.cpp *and* the FSR compute passes — is serialized through one worker thread, so
-nothing thrashes VRAM.
+on demand with img2img passes and a native FSR post-process in `wgpu`. Every sd.cpp
+run goes through one job queue and one diffusion worker, so nothing thrashes VRAM;
+the viewer's re-filters run on a second, display worker that shares the one FSR
+device behind a lock (see *## The job queue*).
 
 **`README.md` is thorough and user-facing: setup, the `models.toml` field table, the
 API shapes, the design rationale. Read it for any of those.** This file is only the
@@ -382,7 +383,7 @@ On the page, four things break silently:
   per model for no gain. The slot's `onChange` calls `syncMode`, so every way a source
   arrives — pick, upload, drop, paste, a reopened work item — flips the panel, and
   opens the fold.
-- **`genPayload` returns `[route, body]`**, and the run loop posts whatever it is
+- **`genPayload` returns `[route, body]`**, and `startRun` queues whatever it is
   given. That is what lets batch, loop and the after-each passes work over a source
   with no second loop: a batch over one source is N seeds of one transform.
 - **A reopened work item always sets the slot** — to its source, or to nothing.
@@ -640,7 +641,7 @@ Five things break silently:
   wrong. The page reaches it through the ordinary delete mode, which is why
   *Click to delete* stays offered on the favourites shelf while *Delete all*
   does not.
-- **Reopening a favourite is the same copy-in, copy-out.** `Engine::open` takes
+- **Reopening a favourite is the same copy-in, copy-out.** `Display::open` takes
   a `Shelf` and changes nothing else, so invariant 8 holds unchanged — and more
   sharply here, since a `Pending` pointing into `user/favorite/` would have
   `remove_files` delete a file the user explicitly asked to keep.
@@ -697,15 +698,71 @@ folder the user can also reach — and favourites are never named there at all. 
 three `clear_*_on_close` fields are page-level (`PAGE_ONLY`, both copies), declared
 before `variables`.
 
+It also always empties `work/current/` (`pipeline::clear_scratch`) — scratch, so
+no setting decides it — and the confirm says how many queued jobs are dropped: the
+queue lives in memory and goes with the process.
+
 The page then replaces itself with a "stopped" note and calls `window.close()`,
 which browsers ignore for a tab a script didn't open (ours was opened by
 `xdg-open`/`start`), so the note is what the user actually sees. Settings'
 `beforeunload` stands down once its form is gone.
 
+## The job queue
+
+`src/jobs.rs` (`Queue<T>`, generic so its scheduling is tested without a GPU),
+`Work` and `diffuse` in `main.rs`, `web/js/jobs.js` on the page. Every piece of
+diffusion-lane work — a run, a Refine or Hi-res press, a clip, a clip enlarge, a
+conversion — is an entry, shown in the Jobs dialog and stoppable there. The
+display lane (`pipeline::Display`: open, adjust, open-output, save) is **not** in
+it and never waits on it; that is what lets the viewer work mid-render.
+
+**A run is not one job to the worker.** `Queue::next` hands out one *image* of
+it — generate, then hi-res, refine and save as the fold asked (`run_image`) — and
+`image_done` decides what runs next. Three rules, all in `jobs.rs` and all under
+test:
+
+- **A button press runs at the next image boundary.** `/refine` and `/hires` push
+  with `priority`, which inserts after the running entry and after any priority
+  entry already waiting, so two presses run in the order pressed.
+- **A loop gives way.** After each loop image, if anything is waiting the loop goes
+  to the back. Strict FIFO would make every job queued after a loop a job that
+  never runs; the red `!` on the Jobs button is what says a loop is in there.
+- **Stop is two things.** A waiting entry is removed (its request answered with an
+  error, its pinned image let go). A running run is marked `stopping` and ends at
+  the image boundary — the image in flight is finished, passes and save included,
+  as the old Stop did. Anything else running is killed (`monitor.cancel`).
+
+Four things break silently:
+
+- **A run's request answers `{job}` at once; its images come through
+  `/jobs/latest`.** The worker publishes every stage with `set_latest`, the page
+  sees `latest_seq` move and fetches it. A run can be a loop, and nothing about
+  it may depend on the page that queued it staying open. Refine, Hi-res, Video,
+  Convert and Enlarge still answer on their own request (`enqueue_wait`), which
+  keeps those tabs request/response; their images are published too, and
+  `takeResult` skips one already on screen.
+- **Everything a run needs is captured at queue time** — that is what a queue
+  means. The old loop read the boxes per image, which only made sense while there
+  could be one run.
+- **A run's failure has no request to fail.** `fail_run` ends the run (whatever
+  killed image 3 kills image 4) and leaves a `Notice`; the page's first poll
+  adopts the notices already there, so a reload doesn't replay an old error.
+- **`/generate` no longer validates anything synchronously** beyond the count. An
+  unknown model is found by the worker and arrives as a notice, the same path as a
+  failure on image 7 of 8 — one set of rules, not two.
+
+The **display lane** shares the engine's FSR device as `Arc<Mutex<Fsr>>` rather
+than opening a second one. The diffusion lane takes the lock per FSR step, never
+across an sd-cli run — `enlarge` locks around EASU and the `sr` network but not
+around an ESRGAN, which is sd-cli — so an edit waits at most for one FSR pass.
+`Retained::update` is the other half: an adjust writes back only over the entry
+it read, so a refine that finished meanwhile is never overwritten with the old
+paths.
+
 ## The Outputs tab
 
 `work/output/` as a gallery rather than as a picker. `web/js/outputs.js` and
-`Engine::open_output` (`src/pipeline.rs`), and the whole tab is the grid: clicking a
+`Display::open_output` (`src/pipeline.rs`), and the whole tab is the grid: clicking a
 tile opens the **viewer** on it full size with the ten sliders live, and ← / → step
 through the gallery with the dialog left up.
 
@@ -754,8 +811,9 @@ Four things in it break silently:
   **`Delete all` is the same request with every id in it**, not a route of its own —
   which is what keeps `valid_id` the only guard there is. A route that emptied a
   directory wholesale would need a different kind of check entirely. It is one of
-  the page's two `confirm()`s (the other is *Close server*), and it only appears in
-  delete mode: marking is visible and reversible, "all" is neither.
+  the page's three `confirm()`s (the others are *Close server* and the Jobs
+  dialog's Stop/Remove), and it only appears in delete mode: marking is visible and
+  reversible, "all" is neither.
 - **`outputGrid` is the one tile.** It was written out three times — this grid, the
   old img2img source strip, the video tab's first-frame picker; now this grid and the
   picker dialog behind every *Start from* slot — and the declared height
@@ -766,7 +824,7 @@ Four things in it break silently:
   `e.target.tagName` and returns for one. So a focused slider keeps its arrows, and
   clicking the picture is how you hand them back. The listener is on `document`
   because a modal `<dialog>`'s keydown bubbles out of it.
-- **An open is a job on the serialized worker, so a held arrow key coalesces** the
+- **An open is a job on the serialized display worker, so a held arrow key coalesces** the
   way a slider drag does — one in flight, the latest target remembered, fired once.
   Without that a two-second key repeat queues a slideshow that plays back after you
   let go. `cancelPost` (`viewer.js`) is the other half: it bumps an epoch that
@@ -831,7 +889,8 @@ resolves the imports itself. `index.html` loads exactly one of them:
 |------|-------|
 | `dom.js` | `$`, `esc`, `post`, `numOr`, `bar`. No state, no imports |
 | `state.js` | `S`, `PANES`, `P`, `clearPane`, `escErr` |
-| `busy.js` | `IDLE_LABELS`, `setBusy`, `onIdle`, the progress poll, `cancelRun` |
+| `busy.js` | `IDLE_LABELS`, `setBusy`/`setIdle` (one button waiting on its own request), `onIdle`, `cancelRun` |
+| `jobs.js` | the `/jobs` poll: the Jobs button and dialog, every tab's progress line, a run's images (`onResult`) and failures (`onNotice`) |
 | `hints.js` | `HELP`, `HINTS`, `wireHints`, the tooltip bubble |
 | `viewer.js` | `FILTERS`, the sliders, `/adjust`, fit/1:1, panning |
 | `image.js` | the Image tab: models, the folds, `render`, escalations, runs, Save |
@@ -867,12 +926,15 @@ Four things in it break silently:
   *The image panes* is unchanged; this is only how it is spelled now. Anything
   only one module writes stays a plain `let` in that module and is exported if
   others read it (`models`, `clip`).
-- **`setBusy` reaches every tab, and gets there through `onIdle`.** It disables
-  `#go`, `#vgo`, `#cgo`, `#lbsave`, all ten sliders and three upscale selects at
-  once, because there is one GPU queue. What a button says at rest is the owning
-  tab's to decide, so `image.js` registers a callback rather than
-  `busy.js` importing them back — which is also what keeps that module importable
-  from everywhere.
+- **`setBusy` locks one button, not the page.** It used to disable every GPU
+  button and all ten sliders at once, because the page was the only scheduler of
+  one worker. The job queue schedules now, so a button waits only on its own
+  request — Generate stays pressable (it queues the next run), the sliders stay
+  live (display lane) — and says "Queued…" until the worker reaches its `kind`.
+  `render()` calls `redrawBusy()` because it rebuilds the action row a waiting
+  Refine lives in. What a button says at rest is still the owning tab's to
+  decide, through `onIdle`, which is also what keeps `busy.js` importable from
+  everywhere.
 - **`web::WEB_FILES` is both the route table and the `doctor` list**, and the
   content type in it is load-bearing: a browser refuses to execute a
   `type="module"` script served as anything but a JavaScript MIME type, and the
@@ -888,9 +950,9 @@ prompt control on the page, so writing one per tab is what it exists to prevent.
 purpose. See *## The prompt box* below for the one feature on it.
 
 **The tabs are deliberately *not* components.** Shadow DOM is the only thing a
-custom element offers that a module doesn't, and `setBusy` above is why this page
-can't have it — five shadow roots would turn one function into a broadcast plus a
-registry, and `style.css` would need re-plumbing into each root. Without a shadow
+custom element offers that a module doesn't, and `setBusy` and the Jobs poll are
+why this page can't have it — five shadow roots would turn one function into a
+broadcast plus a registry, and `style.css` would need re-plumbing into each root. Without a shadow
 root a custom element is an `init()` with ceremony. `showTab` clearing the pane it
 leaves is the same argument from the other end: these tabs are one app with five
 faces, not five independent things.
@@ -1095,7 +1157,7 @@ visible under the image, because `render()` already prints `data.prompt`
 whenever it differs from the box and now it does.
 
 They are on `Pending` — seven literals, none with a `..rest`, so the compiler
-names every site — for one reason: `Engine::save_output` builds its sidecar out
+names every site — for one reason: `Display::save_output` builds its sidecar out
 of the `Pending`, not out of the request. Without them a refined and enlarged
 image saved to `work/output/` would record what it was conditioned with and lose
 what it was asked for.
@@ -1107,7 +1169,7 @@ Five things break silently:
   clickable *because* of that promise; a roll off the clock would quietly end
   it. `pick` mixes the seed with the occurrence's ordinal, so two writes of
   `{color}` in one prompt disagree with each other while the whole prompt stays
-  reproducible, and a batch — which walks the seed, `genPayload(index)` — still
+  reproducible, and a batch — which walks the seed, `jobs::walk_seed` — still
   varies image to image.
 - **A replacement is never rescanned.** Words are appended to the output, so a
   word containing `{color}` lands in the prompt as those characters. One pass,
@@ -1216,11 +1278,14 @@ two places that read `result` reach it with `?.` for exactly that row —
 pane key that exists so a lookup won't throw is a key that says nothing true.
 
 The module state (`imageId`, `currentSrc`, `workId`) stays **single**, because only one
-tab is visible and the worker is serialized, so there is only ever one live result to
-have; two copies would be two ways to be stale. The price is that `showTab` must
-`clearPane` the tab it leaves — otherwise a picture sits there looking live beside
-Refine and Hi-res buttons that now address a different image, which would work and
-would be wrong. It also means the ids `render()` writes (`refine`, `hires`, `saveout`,
+tab is visible, so there is only ever one live result to be acting on; two copies would
+be two ways to be stale. The price is that `showTab` must `clearPane` the tab it
+leaves — otherwise a picture sits there looking live beside Refine and Hi-res buttons
+that now address a different image, which would work and would be wrong. Coming
+*back* to the Image tab calls `restoreImage`, which renders `lastImage` again: the
+server still holds it (the Outputs viewer has a slot of its own, `Slot::Output`), and
+a run may have made a newer one meanwhile. Before that, leaving the tab lost the
+picture, which is half of what "navigating away loses things" meant. It also means the ids `render()` writes (`refine`, `hires`, `saveout`,
 `upfactor`, `viewadjust`) exist in at most one pane at a time, which is why
 `IDLE_LABELS` and `setUpFactor` need no second set of them.
 
@@ -1343,9 +1408,9 @@ These break silently rather than loudly.
 
 1. **Nothing ever diffuses over sharpened — or graded — pixels.** `Pending.raw`
    (`src/pipeline.rs`) is the unfiltered output-resolution image; every escalation
-   reads it, and the display passes run exactly once, in `Engine::publish()`. A new
+   reads it, and the display passes run exactly once, in `pipeline::publish()`. A new
    pass that read `display` instead would compound sharpening along the whole ladder.
-   `Engine::adjust` — the live sliders — rests on this directly: re-filtering `raw` is
+   `Display::adjust` — the live sliders — rests on this directly: re-filtering `raw` is
    lossless however many times a drag does it. Break the invariant and the sliders
    silently become destructive.
 
@@ -1391,19 +1456,23 @@ These break silently rather than loudly.
    helps most. `Pending::can_refine` documents this — it is not a bug to fix.
 8. **`work/workitems/` is never referenced by a live `Pending`.** Every generation is
    archived there (`src/workitems.rs`); `Engine::run` *copies* `raw` in and
-   `Engine::open` *copies* it back out into the usual `{id}-0-raw.png` scratch name. A
+   `Display::open` *copies* it back out into the usual `{id}-0-raw.png` scratch name. A
    `Pending` pointing straight at the archive would have its entry deleted by
    `Pending::remove_files` the first time it was refined, or by `Scratch::drop` if a
    pass failed — the feature quietly destroying the thing it exists to keep. One extra
    PNG write per generate (~15 ms at 1536²) is the price of the whole existing scratch
    lifecycle staying untouched.
 
-   Which is why `purge_pngs` and `MAX_PENDING` are **unchanged**, despite reading like
-   the cleanup to remove. Both only reach `work/` itself — `purge_pngs` is a
-   non-recursive `read_dir` filtered on a `.png` extension, so it skips directories —
-   and both still bound the scratch dir. What changed is that eviction is now harmless:
-   an evicted image is reopenable rather than lost, so the 8-entry cache is a limit on
-   what is already warm, not on what exists. `Engine::lookup`'s error says so.
+   That is also what let the scratch cache shrink. Scratch is `work/current/`
+   (`pipeline::scratch_dir`), emptied on start and by *Close server*, and it holds
+   **one live image per place one is shown** — `Slot::Image` and `Slot::Output` in
+   `Retained` — rather than the eight `MAX_PENDING` used to keep. Storing into a slot
+   lets go of what was there, and that is safe because a base image is reopenable
+   from the archive; the page reopens one by itself when a Refine finds it gone. An
+   *escalated* image exists only in scratch until saved, which is the price, and is
+   why a job that still needs an image **pins** it (`Retained::pin`): a run from its
+   generate to its last pass, a queued Refine from the click to the pass. A pinned
+   entry loses its slot but keeps its files until the last pin goes.
 
    `Pending.work_id` is an id, never a path, for the same reason. It exists only to
    name saves (`work/output/{work_id}-s{step}.png`) and to let the UI mark which
@@ -1656,23 +1725,15 @@ again.
   `build_models_json`) and `serde_json` for anything backed by a real struct (work item
   sidecars, `GET /workitems`). `serde_json` was already a dependency for parsing; don't
   hand-roll a 22-field round-trip, and don't churn the two that exist.
-- **Batch and loop generation are a client loop, not a job.** `startRun()` in
-  `web/js/image.js` calls `/generate` — or `/img2img` with a *Start from* source, as
-  `genPayload` decides — then `/hires`, `/refine` and `/save-output` per image;
-  there is no batch route and there shouldn't be. The worker is a single blocking
-  consumer (`for job in job_rx`), so one job that owned it for a whole run would leave
-  `/adjust`, the grid and every other client dead for the length of it, and cancelling it
-  would need a second channel into that loop. Looping over the existing routes costs one
-  round trip per image against a multi-second diffusion, and is what makes each result
-  appear as it lands and Stop only have to wait for the image in flight. The stated cost
-  is in `README.md`: the loop lives in the page, so closing the tab ends it after the
-  current image.
-  - The automated passes go through the same `escalateSettings()` the buttons use, and
-    the boxes are read once per image rather than captured at the start. A run must not
-    grow its own copy of the knob list — that is how the panel starts lying again.
+- **Batch and loop generation are a queued job, run one image at a time.** This
+  used to be a client loop, and was argued for; *## The job queue* is what replaced
+  the argument. The after-each passes are captured from the same body the generate
+  sends — `escalateSettings()` and the fold — so a run still has no knob list of
+  its own.
   - `#stop` is deliberately **not** in `IDLE_LABELS`, which is why `setBusy` never
-    disables it. A stop button that greys out for the length of the thing it stops is
-    furniture.
+    touches it. A stop button that greys out for the length of the thing it stops is
+    furniture. It is driven by the Jobs poll, so it follows a run that outlived a
+    reload.
 - **Video models are discovered by reading their headers, never their filenames**
   (`src/discover.rs`). A checkpoint is one file, so the image side can identify it by
   dropping it in the models dir. A video model is three to five files — transformer, VAE,

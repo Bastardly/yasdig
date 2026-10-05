@@ -31,11 +31,9 @@
 //! against a diffusion measured in seconds), and in exchange the whole existing
 //! scratch lifecycle stays exactly as it was.
 //!
-//! This is also why `purge_pngs` and `MAX_PENDING` in `src/pipeline.rs` are
-//! unchanged: both only reach `work/` itself — `purge_pngs` uses a non-recursive
-//! `read_dir` and filters on a `.png` extension, so it skips directories — and
-//! both are still what keeps the scratch dir bounded. Eviction is merely harmless
-//! now, because an evicted image can be reopened from here.
+//! It is also what let the scratch cache shrink to one image per place it is
+//! shown (`pipeline::Slot`) and move to `work/current/`: an image let go of
+//! there can be reopened from here, so nothing more needs to stay warm.
 
 use crate::config::Profile;
 use anyhow::{bail, Context, Result};
@@ -980,7 +978,7 @@ mod tests {
 
     /// What the Outputs tab reopens an image *with*. `list_outputs` drops the
     /// profile on the way into an `Output`, so the sidecar has to be readable
-    /// whole — `Engine::open_output` restores the settings from it, and a
+    /// whole — `Display::open_output` restores the settings from it, and a
     /// sidecar that came back empty would silently reopen every saved image as
     /// `Profile::default()`.
     ///

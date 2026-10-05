@@ -51,6 +51,13 @@
      Desaturated to roughly the red's weight, so neither shouts over the other
      across a strip of pictures. */
   --keep:        #3f8f5c;
+  /* The Jobs button: something is queued. The danger red's saturation and
+     lightness (52%, 47%) at a green hue, so the two buttons in the tab row read
+     as a pair of the same weight. A green that light carries dark text — white
+     on it is under 3:1. */
+  --go:          #3ab84f;
+  --go-hi:       #44cc59;
+  --on-go:       #08130a;
 
   /* ---- Type. No webfont: the server is localhost and the project's pitch is
      that it fetches nothing, so a stylesheet that phones out for a face would be
@@ -175,6 +182,17 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .btn-run:hover { background: var(--accent-hi); }
 .btn-danger { background: var(--danger); color: #fff; border-color: transparent; }
 .btn-danger:hover { background: var(--danger-hi); }
+.btn-jobs { background: var(--go); color: var(--on-go); border-color: transparent; }
+.btn-jobs:hover { background: var(--go-hi); }
+/* "A job in the queue never ends by itself." A red disc with a white mark
+   rather than a red "!" on the green: red on green is unreadable at this size,
+   and invisible to the commonest colour blindness. */
+.jobs-loop {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.2em; height: 1.2em; border-radius: 50%;
+  background: var(--danger); color: #fff; font-weight: 700;
+  box-shadow: 0 0 0 1px var(--on-go);
+}
 /* `.tab` on the six tab buttons is a JS hook — it is how `showTab` finds them —
    and deliberately has no rule here. Don't delete it for looking unused.
 
@@ -416,6 +434,24 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 }
 #picker::backdrop { background: var(--scrim-soft); }
 #picker .wigrid img { height: var(--thumb-h-pick); }
+
+/* The job queue. Narrow — a list of one-line rows — and the box inside it
+   carries the padding, so a click on the dialog element itself can only be a
+   click on the backdrop. */
+#jobsdlg {
+  width: min(440px, 92vw); max-height: 80vh; padding: 0; background: var(--ink-700);
+  color: var(--text); border: var(--line); border-radius: var(--r-lg);
+}
+#jobsdlg::backdrop { background: var(--scrim-soft); }
+.jobsbox { padding: var(--sp-4); }
+.joblist { list-style: none; margin: var(--sp-3) 0 0; padding: 0; }
+.jobrow {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) 0; border-top: var(--line);
+}
+.jobrow .jobinfo { flex: 1; min-width: 0; }
+.jobrow .jobinfo .meta { overflow-wrap: anywhere; }
+.jobrow.running b, .jobrow.stopping b { color: var(--go); }
 
 /* ============================ The viewer ============================ */
 
