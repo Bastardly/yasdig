@@ -1539,6 +1539,8 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         #[serde(default)]
         sampler: Option<String>,
         #[serde(default)]
+        scheduler: Option<String>,
+        #[serde(default)]
         width: Option<u32>,
         #[serde(default)]
         height: Option<u32>,
@@ -1616,6 +1618,7 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         steps: dto.steps,
         cfg_scale: dto.cfg_scale,
         sampler: dto.sampler,
+        scheduler: dto.scheduler,
         width: dto.width,
         height: dto.height,
         upscale_factor: dto.upscale_factor,
@@ -1731,6 +1734,8 @@ fn handle_img2img(
         #[serde(default)]
         sampler: Option<String>,
         #[serde(default)]
+        scheduler: Option<String>,
+        #[serde(default)]
         refine_steps: Option<u32>,
         #[serde(default)]
         refine_strength: Option<f32>,
@@ -1811,6 +1816,7 @@ fn handle_img2img(
         steps: dto.steps,
         cfg_scale: dto.cfg_scale,
         sampler: dto.sampler,
+        scheduler: dto.scheduler,
         refine_steps: dto.refine_steps,
         refine_strength: dto.refine_strength,
         refine_cfg_scale: dto.refine_cfg_scale,
@@ -2298,7 +2304,7 @@ fn build_models_json(cfg: &Config) -> String {
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
                  \"family\":{},\"family_label\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
-                 \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\
+                 \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\"scheduler\":{},\
                  \"upscale_factor\":{},\"upscaler\":{},\
                  \"refine_steps\":{},\"refine_strength\":{},\"refine_cfg_scale\":{},\
                  \"hires_steps\":{},\"hires_strength\":{},\"hires_cfg_scale\":{},\
@@ -2320,6 +2326,7 @@ fn build_models_json(cfg: &Config) -> String {
                 p.steps,
                 p.cfg_scale,
                 json_str(&p.sampler),
+                json_str(&p.scheduler),
                 // The panel's Output upscale box starts here. It is the one
                 // generation knob that changes what "the image" is, so the page
                 // needs the number and not just the `out_*` above, which is that

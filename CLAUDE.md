@@ -759,6 +759,35 @@ around an ESRGAN, which is sd-cli — so an edit waits at most for one FSR pass.
 it read, so a refine that finished meanwhile is never overwritten with the old
 paths.
 
+## Samplers, schedulers and the Help tab
+
+`config::SAMPLERS` and `config::SCHEDULERS` are sd-cli's two name tables,
+transcribed with the line they come from, and `check_sampling` (from
+`Profile::validate` and `VideoModel::validate`) refuses anything else with the
+list in the error — before this a typo failed inside sd-cli. The page's list is
+the `#sampler` and `#scheduler` markup, which Settings mirrors and the Video tab
+clones (`initVideo`); `every_sampler_and_scheduler_option_is_one_sd_cpp_takes`
+reads the served `index.html` and fails on an option the server would refuse.
+**Re-transcribe the tables when sd.cpp is bumped** — nothing compares them with
+the clone, which is gitignored and absent from `cargo test`'s view.
+
+Three things break silently:
+
+- **Auto is the absence of the flag.** `base_cmd` sends no `--scheduler` for it,
+  and sd.cpp's `default_scheduler` (`src/pipeline/request.cpp`) then picks per
+  model and per sampler: `flux`/`flux2` for those families, `lcm` for the lcm
+  and tcd samplers, `simple` for ddim_trailing. No single value sent from here
+  reproduces that, so Auto must stay a no-flag value, not become `discrete`.
+- **`ays` only has tables for SD 1.5 and SDXL** (`denoiser.hpp`); elsewhere sd.cpp
+  logs an error mid-run. `check_sampling` takes the family to refuse it first.
+- **`ltx2` and `logit_normal` are left out on purpose** — defaults for families
+  this build doesn't run. Add them with the family, not before.
+
+The **Help tab** (`help.js`) is a `TOPICS` table — id, title, an HTML string —
+drawn into a menu at `--col-controls` and a page at `--col-result`. A topic is a
+row. The tooltips name a control and point to it ("The Help tab compares them")
+rather than repeating it: `HELP`'s one-copy rule, seen from the other side.
+
 ## The Outputs tab
 
 `work/output/` as a gallery rather than as a picker. `web/js/outputs.js` and
@@ -904,6 +933,7 @@ resolves the imports itself. `index.html` loads exactly one of them:
 | `convert.js` | the Convert tab |
 | `prompt-box.js` | the one custom element, and the weighting shortcut on it |
 | `prompt-weight.js` | `adjust`: the string maths behind Ctrl+↑/↓. Pure, and the one file with a test |
+| `help.js` | the Help tab: `TOPICS`, one row per topic, drawn into a menu and a page |
 | `settings.js` | the Settings tab: the field table, and the form generated from it |
 | `modelsettings.js` | the Settings tab's *Per model* card: `user/model-settings.toml` |
 | `app.js` | `showTab`, and the boot order |
@@ -1011,7 +1041,7 @@ adds the fourth):
 1. **`user/settings.toml`** — the global form.
 2. **`ImageFamily::recipe()`** — size, steps, CFG and sampler for a DiT family.
    Empty for SD 1.x/2.x/SDXL, whose recipe the global numbers already *are*; that is
-   why the global form's section for those five boxes is called *SD 1.x, SD 2.x and
+   why the global form's section for those six boxes is called *SD 1.x, SD 2.x and
    SDXL* rather than being removed — it is the one place to change every SDXL at once.
 3. **`[templates.*]`** in `models.toml` — hand-written, read-only.
 4. **`user/model-settings.toml`** — `settings::ModelSettings`, `[model."<name>"]`
@@ -1045,6 +1075,13 @@ Four things break silently:
 - **The FSR-versus-no-override ambiguity is real.** `upscaler: None` means both
   "FSR" and "not set", so this layer can't pin FSR over a global ESRGAN upscaler.
   Documented rather than fixed; fixing it means an explicit FSR name in the file.
+  **`scheduler` is the knob that learned from it**: `"auto"` is a value
+  (`config::AUTO_SCHEDULER`), meaning "send no `--scheduler`", not a `None`, so a
+  model can pin Auto over a global `karras`. Every DiT recipe does exactly that,
+  which keeps the global form's scheduler inside its *SD 1.x, SD 2.x and SDXL*
+  section the way `sampler: euler` keeps the sampler there — sd.cpp's own default
+  for Flux and Flux.2 is a schedule of theirs, and a `karras` chosen for SDXL
+  would replace it.
 
 On the page, `web/js/settings.js` generates the form from one table, the way
 `viewer.js` builds ten sliders from `FILTERS`. A row names the *control it is the

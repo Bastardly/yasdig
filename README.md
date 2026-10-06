@@ -406,15 +406,16 @@ where it says something:
 
 Edited from the Settings tab, or by hand. These are the values every model starts
 from, and what a template inherits whatever it doesn't name. Tuned for standard
-(non-distilled) SDXL — which is why `width`, `height`, `steps`, `cfg_scale` and
-`sampler` reach SD 1.x, 2.x and SDXL only: every other family starts from its own
+(non-distilled) SDXL — which is why `width`, `height`, `steps`, `cfg_scale`,
+`sampler` and `scheduler` reach SD 1.x, 2.x and SDXL only: every other family starts from its own
 (see [Model families](#model-families)).
 
 | field | meaning |
 |-------|---------|
 | `prompt` / `negative` | what the prompt boxes contain when the page loads. Not per-model — a checkpoint has a house step count, none has an opinion about what you usually want to draw |
 | `width` / `height` | base generation size, default `768` each (small = fast) |
-| `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `30`, `6.0`, `euler` (Turbo → few steps, cfg 1) |
+| `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `30`, `6.0`, `euler` (Turbo → few steps, cfg 1). `sampler` is any of sd.cpp's 21 (`config::SAMPLERS`) |
+| `scheduler` | sd.cpp's `--scheduler`, default `auto`: no flag, so sd.cpp picks the model's own (`flux`/`flux2` for those families, `discrete` for SD and SDXL). `ays` is refused outside SD 1.5 and SDXL, the only models it has tables for. The Help tab compares them |
 | `upscale_factor` | the enlarge every base render goes through, default `2.0` (768 → 1536) — not a diffusion pass. Also a box in the Image tab's *After each generation* fold, where `1` means no enlarge at all |
 | `upscaler` *(opt)* | what does that enlarge: unset (the default) is FSR's EASU; a file name under the upscaler dir, extension included, is an ESRGAN model. See [Upscalers](#upscalers) |
 | `hires_scale` | where the hi-res pass's enlarge factor starts, default `2.0`, 1 to 4. The select above a finished image and the *Hi-res scale* box in the Hi-res pass fold are the same setting |
@@ -697,7 +698,7 @@ soft. At output resolution there is nothing downstream to smear what it adds.
 
 The **Settings** tab is `user/settings.toml` as a form: the values every model
 starts from, and what the prompt boxes contain when the page loads. Steps, CFG,
-sampler and size are in a section named *SD 1.x, SD 2.x and SDXL*, because that is
+sampler, scheduler and size are in a section named *SD 1.x, SD 2.x and SDXL*, because that is
 all they reach — other families start from their own (see
 [Model families](#model-families)).
 Press **Save settings** and it is written and takes effect immediately — the
@@ -1417,7 +1418,7 @@ needs a Vulkan device and nothing else.
   item's sidecar records —, `auto` — what the scan picks with nothing chosen, `null` on
   a checkpoint, meaning its own — and `options`, every file that fits the slot as
   `{name, path}`, already filtered for the family), `base_width` / `base_height`, `out_width` / `out_height`, and the profile's
-  `steps`, `cfg_scale`, `sampler`, `upscale_factor`, `upscaler`, `refine_steps`,
+  `steps`, `cfg_scale`, `sampler`, `scheduler`, `upscale_factor`, `upscaler`, `refine_steps`,
   `refine_strength`, `refine_cfg_scale`, `hires_steps`, `hires_strength`, `hires_cfg_scale`,
   `source_strength`, `hires_max_side`, `sharpness`, `clarity` — which is
   what lets the UI pre-fill its controls when you pick a model. `hires_max_side` is
@@ -1461,7 +1462,7 @@ needs a Vulkan device and nothing else.
   Every generation setting may also be overridden per-request; each is optional, and
   omitting one uses the model's profile value:
   ```json
-  { "steps": 20, "cfg_scale": 5.0, "sampler": "euler",
+  { "steps": 20, "cfg_scale": 5.0, "sampler": "euler", "scheduler": "auto",
     "width": 768, "height": 768, "upscale_factor": 2.0, "upscaler": "4x-UltraSharp.pth",
     "refine_steps": 2, "refine_strength": 0.3, "hires_steps": 8, "hires_strength": 0.3,
     "sharpness": 0.35, "clarity": 0.0,

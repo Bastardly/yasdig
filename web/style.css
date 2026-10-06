@@ -453,6 +453,22 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .jobrow .jobinfo .meta { overflow-wrap: anywhere; }
 .jobrow.running b, .jobrow.stopping b { color: var(--go); }
 
+/* ============================ The Help tab ============================
+
+   The Image tab's two columns, reused: the menu at the controls width, the
+   page at the result width. Topics are .btn-choice, the tab row's rule — the
+   highlighted one is where you are. */
+.helpnav { display: flex; flex-direction: column; gap: var(--sp-2); }
+.helpnav .btn { justify-content: flex-start; text-align: left; }
+.helpdoc h2 { font-size: var(--fs-title); margin: 0 0 var(--sp-3); }
+.helpdoc h3 { font-size: var(--fs-body); margin: var(--sp-5) 0 var(--sp-1); }
+.helpdoc p { margin: var(--sp-2) 0; }
+.helpdoc code { font-family: var(--font-num); font-size: var(--fs-sm); color: var(--text); }
+.helptable { width: 100%; border-collapse: collapse; margin: var(--sp-2) 0; font-size: var(--fs-sm); }
+.helptable th { text-align: left; color: var(--text-dim); font-weight: 600; padding: var(--sp-1) var(--sp-2); }
+.helptable td { vertical-align: top; padding: var(--sp-2); border-top: var(--line); }
+.helptable td:first-child { width: 34%; }
+
 /* ============================ The viewer ============================ */
 
 /* Also where post-processing happens: a control panel on the left and a

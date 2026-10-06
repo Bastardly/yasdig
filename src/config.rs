@@ -149,6 +149,65 @@ pub const MIN_STRENGTH: f32 = 0.05;
 /// plain txt2img, which is never what either escalation button wants.
 pub const MAX_STRENGTH: f32 = 0.95;
 
+/// Every `--sampling-method` sd-cli takes, in its own order
+/// (`stable-diffusion.cpp src/stable-diffusion.cpp:67`). Checked by
+/// [`check_sampling`] so a typo is an error naming the list rather than a
+/// failure inside sd-cli, and by a test against every `<option>` the page
+/// offers, so the markup can't name something this refuses.
+pub const SAMPLERS: &[&str] = &[
+    "euler", "euler_a", "heun", "dpm2", "dpm++2s_a", "dpm++2m", "dpm++2mv2", "ipndm",
+    "ipndm_v", "lcm", "ddim_trailing", "tcd", "res_multistep", "res_2s", "er_sde",
+    "euler_cfg_pp", "euler_a_cfg_pp", "euler_ge", "dpm++2m_sde", "dpm++2m_sde_bt", "lms",
+];
+
+/// What [`Profile::scheduler`] holds to send no `--scheduler` at all.
+pub const AUTO_SCHEDULER: &str = "auto";
+
+/// Every `--scheduler` we pass on, from sd-cli's list
+/// (`src/stable-diffusion.cpp:110`), plus [`AUTO_SCHEDULER`]. Two of its
+/// sixteen are left out: `ltx2` and `logit_normal` are the defaults of LTX-2
+/// and Ideogram, families this build doesn't run, so here they could only be
+/// picked by mistake. `flux` and `flux2` stay — Auto picks them for those
+/// families, and naming one by hand is a real experiment.
+pub const SCHEDULERS: &[&str] = &[
+    AUTO_SCHEDULER, "discrete", "karras", "exponential", "ays", "gits", "sgm_uniform",
+    "simple", "smoothstep", "kl_optimal", "lcm", "bong_tangent", "flux2", "flux", "beta",
+];
+
+/// The sampler and scheduler names, and the one pairing sd.cpp can't run.
+/// `family` is `None` for a video model, which has no scheduler knob.
+///
+/// `ays` is a table of sigmas measured per model, and sd.cpp only ships SD 1.5's
+/// and SDXL's (`src/runtime/denoiser.hpp:190`): on SD 2 it warns and borrows
+/// SD 1.5's, on anything else it logs an error mid-run. Refused here instead,
+/// before minutes of loading weights.
+pub fn check_sampling(
+    who: &str,
+    sampler: &str,
+    scheduler: &str,
+    family: Option<ImageFamily>,
+) -> Result<()> {
+    if !SAMPLERS.contains(&sampler) {
+        bail!("{who}: sampler '{sampler}' is not one sd.cpp has; pick one of {}", SAMPLERS.join(", "));
+    }
+    if !SCHEDULERS.contains(&scheduler) {
+        bail!(
+            "{who}: scheduler '{scheduler}' is not one sd.cpp has; pick one of {}",
+            SCHEDULERS.join(", ")
+        );
+    }
+    if let Some(f) = family {
+        if scheduler == "ays" && !matches!(f, ImageFamily::Sd1 | ImageFamily::Sdxl) {
+            bail!(
+                "{who}: the ays scheduler only has tables for SD 1.5 and SDXL, and this \
+                 is a {} model — pick Auto, or karras for a similar shape",
+                f.label()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// One LoRA applied to one generation.
 ///
 /// A struct rather than the video side's `"name:1"` string, and the difference
@@ -307,6 +366,15 @@ pub struct Profile {
     pub steps: u32,
     pub cfg_scale: f32,
     pub sampler: String,
+    /// `--scheduler`. [`AUTO_SCHEDULER`] sends no flag, so sd.cpp picks the
+    /// model's own — which is the only right answer for Flux and Flux.2, and
+    /// is what every sidecar written before this existed ran with.
+    ///
+    /// A string rather than an `Option`, unlike `upscaler`: `None` there means
+    /// both "FSR" and "not set", so a per-model entry can't pin FSR over a
+    /// global choice. `"auto"` is a value, so a model can pin it over a global
+    /// `karras`.
+    pub scheduler: String,
     pub upscale_factor: f32,
     /// What performs that enlarge. `None` is FSR's EASU; a name is an ESRGAN
     /// model under [`Config::upscaler_dir`], extension included — the same
@@ -600,6 +668,7 @@ impl Profile {
                 bail!("'{}': {field} is {v}, must be 0 or greater", self.name);
             }
         }
+        check_sampling(&format!("'{}'", self.name), &self.sampler, &self.scheduler, Some(self.family))?;
         // The name guard is here as well as at the route because this profile is
         // about to become a command line: a name that re-cuts sd.cpp's tag regex
         // would not fail, it would apply some *other* file.
@@ -964,6 +1033,11 @@ impl ImageFamily {
             steps: Some(steps),
             cfg_scale: Some(cfg_scale),
             sampler: Some("euler".into()),
+            // Pinned to Auto so the global form's scheduler, which sits beside
+            // the sampler in the SD/SDXL section, reaches the families it is
+            // for and no further: a `karras` chosen for SDXL would otherwise
+            // replace Flux's own schedule.
+            scheduler: Some(AUTO_SCHEDULER.into()),
             ..PartialSettings::default()
         };
         match self {
@@ -1673,6 +1747,7 @@ impl VideoModel {
         if self.fps == 0 {
             bail!("video '{n}': fps is 0");
         }
+        check_sampling(&format!("video '{n}'"), &self.sampler, AUTO_SCHEDULER, None)?;
         for (field, v) in [
             ("cfg_scale", self.cfg_scale),
             ("high_noise_cfg_scale", self.high_noise_cfg()),
@@ -3345,5 +3420,43 @@ lora_dir = "adapters"
             "a carried grade is not a starting point — GenResult.start is the one \
              the viewer resets to"
         );
+    }
+
+    /// Every name the page offers is one the server takes. The markup is the
+    /// page's list (Settings mirrors it, the Video tab clones it), so this is
+    /// what stops an `<option>` the server would refuse.
+    #[test]
+    fn every_sampler_and_scheduler_option_is_one_sd_cpp_takes() {
+        let page = crate::web::lookup("/index.html").expect("index.html is served");
+        let html = std::str::from_utf8(page.bytes).unwrap();
+        for (select, table) in [("sampler", SAMPLERS), ("scheduler", SCHEDULERS)] {
+            let open = format!("<select id=\"{select}\">");
+            let start = html.find(&open).unwrap_or_else(|| panic!("#{select} is in the page"));
+            let body = &html[start..start + html[start..].find("</select>").unwrap()];
+            let values: Vec<&str> = body
+                .split("value=\"")
+                .skip(1)
+                .map(|v| &v[..v.find('"').unwrap()])
+                .collect();
+            assert!(values.len() > 5, "#{select} lists its options");
+            for v in values {
+                assert!(table.contains(&v), "#{select} offers '{v}', which the server refuses");
+            }
+        }
+    }
+
+    #[test]
+    fn sampling_names_are_checked_and_ays_only_runs_where_it_has_tables() {
+        let ok = |s: &str, sch: &str, f| check_sampling("m", s, sch, Some(f)).is_ok();
+        assert!(ok("euler", AUTO_SCHEDULER, ImageFamily::Flux));
+        assert!(ok("dpm++2m", "karras", ImageFamily::Sdxl));
+        assert!(!ok("dpm++3m", "karras", ImageFamily::Sdxl));
+        assert!(!ok("euler", "normal", ImageFamily::Sdxl));
+        assert!(ok("euler", "ays", ImageFamily::Sd1));
+        assert!(ok("euler", "ays", ImageFamily::Sdxl));
+        assert!(!ok("euler", "ays", ImageFamily::Flux));
+        // Two names sd.cpp has and this build deliberately doesn't offer.
+        assert!(!ok("euler", "ltx2", ImageFamily::Sdxl));
+        assert!(!ok("euler", "logit_normal", ImageFamily::Sdxl));
     }
 }

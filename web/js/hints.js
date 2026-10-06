@@ -90,10 +90,14 @@ const HELP = [
         + 'and scorch at anything higher. On the Image tab it is '
         + 'also the CFG of a pass over a picked image.' },
   { ids: ['sampler', 'vsampler'],
-    text: 'The algorithm that removes the noise. They differ mostly in how '
-        + 'quickly they settle: euler is the safe default, dpm++2m converges in '
-        + 'fewer steps, and lcm belongs to LCM and turbo checkpoints and looks '
-        + 'wrong on anything else.' },
+    text: 'The method that turns noise into the picture, step by step. Keep '
+        + 'the one the model fills in unless you have a reason: few-step and '
+        + 'turbo models are trained for one sampler and look wrong on others. '
+        + 'The Help tab compares them.' },
+  { ids: ['scheduler'],
+    text: 'Where the steps are spent between full noise and none. Auto lets '
+        + 'sd.cpp pick the model’s own, which is the right answer for Flux and '
+        + 'Flux.2. The Help tab compares them.' },
   { ids: ['loras'],
     text: 'Small files that patch the checkpoint’s weights — a style, a '
         + 'character, a 4-step distillation. They come from models/loras/, and '

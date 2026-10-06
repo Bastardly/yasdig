@@ -38,7 +38,7 @@ const HEADER: &str = "\
 # like, but note that pressing Save rewrites the whole file and any comments you
 # add here go with it.
 #
-# These apply to every model. width, height, steps, cfg_scale and sampler reach
+# These apply to every model. width, height, steps, cfg_scale, sampler and scheduler reach
 # only SD 1.x, 2.x and SDXL: every other family starts from its own defaults for
 # those. A [templates.<name>] block in models.toml, then user/model-settings.toml,
 # override whichever of these they name. See README.md for what each field does.
@@ -78,6 +78,9 @@ pub struct Settings {
     pub steps: u32,
     pub cfg_scale: f32,
     pub sampler: String,
+    /// `--scheduler`, or `"auto"` to send none and let sd.cpp pick the model's
+    /// own. See [`Profile::scheduler`].
+    pub scheduler: String,
     pub upscale_factor: f32,
     /// What performs that enlarge: `None` is FSR (EASU), a name is an ESRGAN
     /// model under the upscaler dir. See [`Profile::upscaler`].
@@ -146,6 +149,8 @@ pub struct PartialSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampler: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduler: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upscale_factor: Option<f32>,
     /// Absent inherits, a name pins, the same one-way shape `refine_cfg_scale`
     /// below has: a template can name a model, and has no way to say "back to
@@ -199,6 +204,10 @@ impl Default for Settings {
             steps: 30,
             cfg_scale: 6.0,
             sampler: "euler".to_string(),
+            // sd.cpp's own per-model choice, which is not one scheduler: Flux
+            // and Flux.2 have schedules of their own, and forcing `discrete`
+            // onto them would quietly make them worse.
+            scheduler: crate::config::AUTO_SCHEDULER.to_string(),
             upscale_factor: 2.0,
             // FSR: free, and needs no file. An ESRGAN model is a download.
             upscaler: None,
@@ -261,6 +270,7 @@ impl Settings {
             steps: over.steps.unwrap_or(self.steps),
             cfg_scale: over.cfg_scale.unwrap_or(self.cfg_scale),
             sampler: over.sampler.clone().unwrap_or_else(|| self.sampler.clone()),
+            scheduler: over.scheduler.clone().unwrap_or_else(|| self.scheduler.clone()),
             upscale_factor: over.upscale_factor.unwrap_or(self.upscale_factor),
             upscaler: over.upscaler.clone().or_else(|| self.upscaler.clone()),
             sharpness: over.sharpness.unwrap_or(self.sharpness),
@@ -409,6 +419,7 @@ impl Settings {
             steps: self.steps,
             cfg_scale: self.cfg_scale,
             sampler: self.sampler.clone(),
+            scheduler: self.scheduler.clone(),
             upscale_factor: self.upscale_factor,
             upscaler: self.upscaler.clone(),
             sharpness: self.sharpness,
@@ -828,6 +839,23 @@ mod tests {
         assert_eq!(m.width, 1024);
         assert_eq!(m.refine_strength, 0.12);
         assert_eq!(m.sampler, "dpm++2m");
+    }
+
+    /// A file written before the scheduler existed reads as Auto — what those
+    /// images ran with — and a model can pin Auto back over a global choice,
+    /// which an `Option` (the `upscaler` shape) could not say.
+    #[test]
+    fn the_scheduler_defaults_to_auto_and_auto_can_be_pinned() {
+        let old: Settings = toml::from_str("steps = 20\nsampler = \"euler\"\n").unwrap();
+        assert_eq!(old.scheduler, crate::config::AUTO_SCHEDULER);
+
+        let global = Settings { scheduler: "karras".into(), ..Settings::default() };
+        let back: Settings = toml::from_str(&toml::to_string_pretty(&global).unwrap()).unwrap();
+        assert_eq!(back.scheduler, "karras");
+
+        let pin: PartialSettings = toml::from_str("scheduler = \"auto\"\n").unwrap();
+        assert_eq!(global.merged_with(&pin).scheduler, "auto");
+        assert_eq!(global.merged_with(&PartialSettings::default()).scheduler, "karras");
     }
 
     /// An empty overlay has to be exactly the settings, because that is the

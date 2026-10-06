@@ -183,6 +183,8 @@ function syncSummaries() {
     n === Infinity ? 'until stopped' : n > 1 ? `${n} images` : null,
     source ? null : `${$('w').value}×${$('h').value}`,
     `${$('steps').value} steps`, `CFG ${$('cfg').value}`, $('sampler').value,
+    // Auto is the model's own and says nothing worth the space.
+    $('scheduler').value === 'auto' ? null : $('scheduler').value,
   ].filter(Boolean).join(' · '));
   $('sum-gen').classList.toggle('on', n > 1);
 
@@ -253,6 +255,7 @@ function syncAdvanced() {
   $('steps').value = m.steps;
   $('cfg').value = m.cfg_scale;
   $('sampler').value = m.sampler;
+  $('scheduler').value = m.scheduler;
   $('w').value = m.base_width;
   $('h').value = m.base_height;
   $('upscale').value = m.upscale_factor;
@@ -441,6 +444,7 @@ export function setUpscaler(name) {
 // the box below", the same thing it means when generating.
 const MODEL_KNOBS = [
   ['steps', 'steps'], ['cfg_scale', 'cfg'], ['sampler', 'sampler', 'text'],
+  ['scheduler', 'scheduler', 'text'],
   ['width', 'w'], ['height', 'h'],
   ['upscale_factor', 'upscale'], ['upscaler', 'upscaler', 'choice'],
   ['hires_steps', 'hsteps'], ['hires_strength', 'hstrength'], ['hires_cfg_scale', 'hcfg', 'blank'],
@@ -881,6 +885,7 @@ function genPayload() {
     steps: numOr('steps'),
     cfg_scale: numOr('cfg'),
     sampler: $('sampler').value || null,
+    scheduler: $('scheduler').value || null,
     // The same six the escalations send, from the same place — they set where
     // this image's passes start, and `/refine` and `/hires` can move them
     // afterwards. The two CFGs are among them, and null for an empty box still

@@ -197,6 +197,7 @@ pub struct GenRequest {
     pub steps: Option<u32>,
     pub cfg_scale: Option<f32>,
     pub sampler: Option<String>,
+    pub scheduler: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
     /// The FSR (EASU) enlarge every base render goes through on its way to the
@@ -275,6 +276,7 @@ pub struct Img2ImgRequest {
     pub steps: Option<u32>,
     pub cfg_scale: Option<f32>,
     pub sampler: Option<String>,
+    pub scheduler: Option<String>,
     pub refine_steps: Option<u32>,
     pub refine_strength: Option<f32>,
     pub refine_cfg_scale: Option<f32>,
@@ -810,6 +812,11 @@ impl Engine {
                 profile.sampler = v.clone();
             }
         }
+        if let Some(v) = &req.scheduler {
+            if !v.is_empty() {
+                profile.scheduler = v.clone();
+            }
+        }
         if let Some(v) = req.width {
             profile.width = v;
         }
@@ -1041,6 +1048,11 @@ impl Engine {
         if let Some(v) = &req.sampler {
             if !v.is_empty() {
                 profile.sampler = v.clone();
+            }
+        }
+        if let Some(v) = &req.scheduler {
+            if !v.is_empty() {
+                profile.scheduler = v.clone();
             }
         }
         if let Some(v) = req.source_strength {

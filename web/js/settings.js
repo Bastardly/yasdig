@@ -56,7 +56,7 @@ export const FIELDS = [
   SECTION('Prompt variables', { help: 'setvars', pane: 'setvarbox' }),
   { key: 'variables', kind: 'vars' },
 
-  // The five knobs a family recipe names. Here they are the defaults for the
+  // The six knobs a family recipe names. Here they are the defaults for the
   // UNet families only, because that is what they are: every other family's
   // recipe is laid over them (`ImageFamily::recipe`), so a Steps box that
   // claimed to reach a Z-Image would be a setting that appears not to take.
@@ -66,6 +66,7 @@ export const FIELDS = [
   { key: 'steps', from: 'steps', kind: 'int', min: 1, max: 100 },
   { key: 'cfg_scale', from: 'cfg', kind: 'num', min: 0, step: 0.1 },
   { key: 'sampler', from: 'sampler', kind: 'mirror' },
+  { key: 'scheduler', from: 'scheduler', kind: 'mirror' },
   { key: 'width', from: 'w', kind: 'int', min: 64, step: 64 },
   { key: 'height', from: 'h', kind: 'int', min: 64, step: 64 },
 

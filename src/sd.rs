@@ -460,6 +460,12 @@ impl<'a> SdRunner<'a> {
         }
         cmd.args(["--cfg-scale", &format!("{cfg_scale}")]);
         cmd.args(["--sampling-method", &p.sampler]);
+        // Auto is no flag at all: sd.cpp's `default_scheduler` then picks per
+        // model (`flux`/`flux2` for those families, `lcm` for the lcm and tcd
+        // samplers, `discrete` otherwise), which no single value here could.
+        if p.scheduler != crate::config::AUTO_SCHEDULER {
+            cmd.args(["--scheduler", &p.scheduler]);
+        }
         cmd.args(["-s", &seed.to_string()]);
         cmd.args(["-o", &path_str(out)]);
         if let Some(wt) = &p.weight_type {
@@ -1100,6 +1106,21 @@ binary = "/opt/sd-cli"
         sdxl.set_part("vae", None);
         assert_eq!(sdxl.components, None);
         assert!(sdxl.is_bundled());
+    }
+
+    /// Auto is the absence of the flag, not a value of it: sd.cpp would refuse
+    /// `--scheduler auto`, and with no flag it picks Flux's own schedule for a
+    /// Flux, which no single name sent from here could.
+    #[test]
+    fn auto_sends_no_scheduler_and_a_name_sends_itself() {
+        let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
+        let mut p = Profile { model: PathBuf::from("/models/m.safetensors"), ..Default::default() };
+        assert_eq!(p.scheduler, crate::config::AUTO_SCHEDULER);
+        let a = argv(&SdRunner::new(&cfg).base_cmd(&p, "a cat", None, 1, Path::new("o.png"), 1.0));
+        assert!(!a.iter().any(|x| x == "--scheduler"));
+        p.scheduler = "karras".into();
+        let a = argv(&SdRunner::new(&cfg).base_cmd(&p, "a cat", None, 1, Path::new("o.png"), 1.0));
+        assert_eq!(flag(&a, "--scheduler"), Some("karras"));
     }
 
     /// LoRAs are inline in the prompt, which is sd.cpp's spelling — and the

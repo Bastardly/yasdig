@@ -198,6 +198,8 @@ function applyWorkItem(item) {
   $('steps').value = p.steps;
   $('cfg').value = p.cfg_scale;
   $('sampler').value = p.sampler;
+  // A sidecar from before the knob ran with sd.cpp's own choice, which is Auto.
+  $('scheduler').value = p.scheduler ?? 'auto';
   $('w').value = p.width;
   $('h').value = p.height;
   // `?? ''` rather than a fallback number: a sidecar written before this box

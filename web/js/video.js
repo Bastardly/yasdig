@@ -329,6 +329,9 @@ export const vSource = sourceSlot({
 });
 
 export function initVideo() {
+  // The Image tab's sampler list, groups and all: one list in the markup, and
+  // `config::SAMPLERS` checks it. First, before anything sets a value on it.
+  $('vsampler').innerHTML = $('sampler').innerHTML;
   $('vgo').addEventListener('click', startClip);
   $('vstop').addEventListener('click', cancelClip);
   vSource.init();

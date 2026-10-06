@@ -17,6 +17,7 @@
     <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
     <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
     <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
+    <button type="button" class="btn btn-choice tab" data-tab="help">Help</button>
     <button type="button" class="btn btn-choice tab" data-tab="settings">Settings</button>
     <!-- Not a tab, so not `.tab`: it opens the queue in a dialog over whatever
          tab you are on rather than taking you away from it. Hidden while the
@@ -99,25 +100,76 @@
           <input id="cfg" type="number" step="0.1" min="0">
         </div>
       </div>
-      <!-- How many, and how the noise is walked. Every image in a run is a
-           separate request from this page, which is what lets results appear
-           as they land and Stop wait only for the one in flight — see the
-           comment over startRun(). -->
+      <!-- How the noise is walked. The list is sd.cpp's whole set, grouped as
+           the Help tab's Samplers page groups them; `config::SAMPLERS` and
+           `SCHEDULERS` are the server's copy, and a cargo test checks every
+           option here against them. Settings and the Video tab clone these
+           options rather than listing them again. -->
       <div class="row">
-        <div>
-          <label for="count">Images</label>
-          <input id="count" type="number" min="1" step="1" value="1">
-        </div>
         <div>
           <label for="sampler">Sampler</label>
           <select id="sampler">
-            <option value="euler">euler</option>
-            <option value="euler_a">euler_a</option>
-            <option value="dpm++2m">dpm++2m</option>
-            <option value="dpm++2mv2">dpm++2mv2</option>
-            <option value="lcm">lcm</option>
+            <optgroup label="Repeatable">
+              <option value="euler">euler</option>
+              <option value="heun">heun</option>
+              <option value="dpm2">dpm2</option>
+              <option value="dpm++2m">dpm++2m</option>
+              <option value="dpm++2mv2">dpm++2mv2</option>
+              <option value="ipndm">ipndm</option>
+              <option value="ipndm_v">ipndm_v</option>
+              <option value="ddim_trailing">ddim_trailing</option>
+              <option value="lms">lms</option>
+              <option value="res_multistep">res_multistep</option>
+              <option value="res_2s">res_2s</option>
+            </optgroup>
+            <optgroup label="Varying">
+              <option value="euler_a">euler_a</option>
+              <option value="dpm++2s_a">dpm++2s_a</option>
+              <option value="dpm++2m_sde">dpm++2m_sde</option>
+              <option value="dpm++2m_sde_bt">dpm++2m_sde_bt</option>
+              <option value="er_sde">er_sde</option>
+            </optgroup>
+            <optgroup label="Few-step">
+              <option value="lcm">lcm</option>
+              <option value="tcd">tcd</option>
+            </optgroup>
+            <optgroup label="Experimental">
+              <option value="euler_cfg_pp">euler_cfg_pp</option>
+              <option value="euler_a_cfg_pp">euler_a_cfg_pp</option>
+              <option value="euler_ge">euler_ge</option>
+            </optgroup>
           </select>
         </div>
+        <div>
+          <label for="scheduler">Scheduler</label>
+          <select id="scheduler">
+            <option value="auto">Auto (model default)</option>
+            <optgroup label="Common">
+              <option value="discrete">discrete</option>
+              <option value="karras">karras</option>
+              <option value="exponential">exponential</option>
+              <option value="sgm_uniform">sgm_uniform</option>
+              <option value="simple">simple</option>
+              <option value="ays">ays</option>
+              <option value="lcm">lcm</option>
+            </optgroup>
+            <optgroup label="More">
+              <option value="gits">gits</option>
+              <option value="smoothstep">smoothstep</option>
+              <option value="kl_optimal">kl_optimal</option>
+              <option value="beta">beta</option>
+              <option value="bong_tangent">bong_tangent</option>
+              <option value="flux">flux</option>
+              <option value="flux2">flux2</option>
+            </optgroup>
+          </select>
+        </div>
+      </div>
+      <!-- How many. A run is one queued job however many images it makes; see
+           *## The job queue* in CLAUDE.md. -->
+      <div>
+        <label for="count">Images</label>
+        <input id="count" type="number" min="1" step="1" value="1">
       </div>
       <div class="checks">
         <label><input type="checkbox" id="autorun"> Keep going until stopped</label>
@@ -477,11 +529,8 @@
       </div>
       <div>
         <label for="vsampler">Sampler</label>
-        <select id="vsampler">
-          <option value="euler">euler</option>
-          <option value="euler_a">euler_a</option>
-          <option value="dpm++2m">dpm++2m</option>
-        </select>
+        <!-- Filled from #sampler by initVideo: one list, not two. -->
+        <select id="vsampler"></select>
       </div>
     </div>
     <!-- Shown only for the mixture-of-experts pair, which is the only family
@@ -573,6 +622,14 @@
       <div id="cresult"></div>
     </div>
   </div>
+  </div>
+
+  <!-- ==================== Help ====================
+       A menu and a page, at the Image tab's two column widths. Both are drawn
+       by `help.js` from its `TOPICS` table; adding a topic is a row there. -->
+  <div class="layout" id="tab-help" hidden>
+    <nav class="card col-controls helpnav" id="helpnav" aria-label="Help topics"></nav>
+    <article class="card col-result helpdoc" id="helpdoc"></article>
   </div>
 
   <!-- ==================== Settings ====================
