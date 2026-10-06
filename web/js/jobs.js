@@ -21,7 +21,7 @@ const IDLE_MS = 2500;
 
 // What the dialog calls each kind of job. The server's names are the keys.
 const KINDS = {
-  generate: 'Generate', img2img: 'Image to image', refine: 'Refine', hires: 'Hi-res',
+  generate: 'Generate', img2img: 'Image to image', refine: 'Refine', hires: 'Hi-res', redraw: 'Redraw',
   video: 'Video', enlarge: 'Enlarge frames', convert: 'Convert',
 };
 const isRun = (j) => j.kind === 'generate' || j.kind === 'img2img';
@@ -123,12 +123,15 @@ function drawList() {
 // blob rather than by pointing `src` at the route: an older frame is deleted as
 // soon as a newer one is complete, so a re-request could 404 and blank it. The
 // shown frame only changes once the next one is in hand.
+// Every `img.livepreview` on the page shows it — the run panel's and the
+// Redraw dialog's — from the one fetch.
 async function drawPreview() {
-  const img = $('livepreview');
+  const imgs = [...document.querySelectorAll('img.livepreview')];
+  const show = (url) => { for (const i of imgs) { i.src = url; i.hidden = false; } };
   const live = () => snap.progress?.preview;
   const n = live();
   if (typeof n !== 'number') {
-    img.hidden = true;
+    for (const i of imgs) i.hidden = true;
     previewShown = previewWanted = null;
     return;
   }
@@ -142,8 +145,7 @@ async function drawPreview() {
     if (previewWanted !== n || typeof live() !== 'number') return;
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     previewUrl = URL.createObjectURL(blob);
-    img.src = previewUrl;
-    img.hidden = false;
+    show(previewUrl);
     previewShown = n;
   } catch {
     // A dropped fetch is the next poll's to retry.
@@ -184,7 +186,7 @@ export async function pollJobs() {
     const text = progressText();
     // All three tabs' readouts: they report the same worker, and only one of
     // them is ever visible.
-    for (const id of ['prog', 'vprog', 'cprog']) $(id).textContent = text;
+    for (const id of ['prog', 'vprog', 'cprog', 'rdprog']) $(id).textContent = text;
     drawPreview();
     drawButton();
     if ($('jobsdlg').open) drawList();

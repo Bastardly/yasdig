@@ -7,6 +7,7 @@ import { loadWorkItems, markGrid } from './workitems.js';
 import { loraPicker } from './loras.js';
 import { sourceSlot } from './source-slot.js';
 import { wireHints } from './hints.js';
+import { openRedraw, syncRedraw } from './redraw.js';
 
 // The checkpoint list the server published. Exported because the work-item
 // grid looks a name up in it; only this module refills it.
@@ -627,7 +628,7 @@ export function render(data) {
   lastImage = data;
   const t = data.timings;
   const stages = [['generate', t.gen_ms], ['upscale', t.upscale_ms ?? 0], ['fsr', t.fsr_ms],
-                  ['refine', t.refine_ms], ['hi-res', t.hires_ms]];
+                  ['refine', t.refine_ms], ['hi-res', t.hires_ms], ['redraw', t.redraw_ms ?? 0]];
   const total = stages.reduce((sum, [, ms]) => sum + ms, 0);
   const max = Math.max(...stages.map(([, ms]) => ms), 1);
   const bars = stages.filter(([, ms]) => ms > 0)
@@ -663,6 +664,8 @@ export function render(data) {
   // image opens the same viewer, but an affordance nobody can see is a feature
   // nobody finds — and the sliders used to be visible furniture.
   actions += '<button id="viewadjust" class="btn">View &amp; adjust</button>';
+  // Neutral: opening the dialog spends nothing; its own button does.
+  actions += '<button id="redrawopen" class="btn">Redraw…</button>';
 
   // The prompt as it was actually conditioned. Shown only when it differs from
   // the box, which happens for exactly three reasons: a `{variable}` was drawn —
@@ -694,6 +697,10 @@ export function render(data) {
     `;
 
   P('result').querySelector('img').addEventListener('click', () => showFullSize(S.currentSrc));
+  $('redrawopen').addEventListener('click', () => openRedraw(data));
+  // The Redraw dialog follows the image on screen while it is open: a redraw,
+  // a step back, or a batch image landing.
+  syncRedraw(data);
   $('viewadjust').addEventListener('click', () => showFullSize(S.currentSrc));
   // The viewer can already be open when this runs: a modal dialog stops clicks,
   // not a batch that was started before it was opened. So the big copy is kept in
@@ -744,7 +751,8 @@ export function restoreImage() {
   if (lastImage && S.imageId === null) render(lastImage);
 }
 
-const sameImage = (a, b) => !!a && !!b && a.image_id === b.image_id
+// `step` because a redraw moves nothing else: same id, same passes, same size.
+const sameImage = (a, b) => !!a && !!b && a.image_id === b.image_id && a.step === b.step
   && a.refine_passes === b.refine_passes && a.hires_passes === b.hires_passes
   && a.width === b.width && a.height === b.height;
 
@@ -756,7 +764,7 @@ const sameImage = (a, b) => !!a && !!b && a.image_id === b.image_id
 // Also where an escalation's own answer goes, for the same reason: it can wait
 // behind a batch for minutes now, and the tab it was pressed on may not be the
 // one showing when it lands.
-function takeResult(data) {
+export function takeResult(data) {
   if (sameImage(data, lastImage) && S.imageId === data.image_id) return;
   loadWorkItems();
   if (S.pane === 'image') render(data); else lastImage = data;
@@ -988,10 +996,10 @@ const stoppableRun = () => {
 };
 
 // What *Cancel generation* addresses: whatever is drawing the live preview —
-// an image of a run, or a Refine or Hi-res press.
+// an image of a run, or a Refine, Hi-res or Redraw press.
 const cancellable = () => {
   const j = runningJob();
-  return j && (isRunKind(j) || j.kind === 'refine' || j.kind === 'hires') ? j : null;
+  return j && (isRunKind(j) || ['refine', 'hires', 'redraw'].includes(j.kind)) ? j : null;
 };
 
 // Stop after the image in flight has finished its whole pipeline. The hi-res,

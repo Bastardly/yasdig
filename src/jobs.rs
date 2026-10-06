@@ -38,6 +38,9 @@ pub enum Kind {
     Img2img,
     Refine,
     Hires,
+    /// Redraw a painted region of the image in hand. One pass, so a Stop
+    /// kills it like a Refine.
+    Redraw,
     Video,
     Enlarge,
     Convert,
@@ -526,6 +529,17 @@ mod tests {
         assert_eq!(q.len(), 1);
         q.finish(id, Err(anyhow!("cancelled")));
         assert_eq!(q.len(), 0);
+    }
+
+    /// A Redraw is one pass: a Stop kills it, it never steps between images.
+    #[test]
+    fn a_redraw_is_indivisible_and_named_on_the_wire() {
+        assert!(!Kind::Redraw.is_run());
+        assert_eq!(serde_json::to_string(&Kind::Redraw).unwrap(), "\"redraw\"");
+        let q = Queue::new();
+        let id = q.push(Kind::Redraw, "m".into(), None, "redraw", None, true);
+        q.next();
+        assert!(matches!(q.stop(id), Stopped::Cancel));
     }
 
     #[test]

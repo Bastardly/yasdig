@@ -99,7 +99,8 @@ impl<'a> SdRunner<'a> {
     /// `big_image` adds `--vae-tiling` and (unless the profile disables it)
     /// `--diffusion-fa`. Both matter above ~1536²: measured on a 7900 XTX, a
     /// 2048² pass takes 122 s without flash attention and 20 s with it.
-    pub fn img2img(
+    #[allow(clippy::too_many_arguments)]
+    fn img2img_cmd(
         &self,
         p: &Profile,
         prompt: &str,
@@ -112,7 +113,7 @@ impl<'a> SdRunner<'a> {
         cfg: f32,
         big_image: bool,
         label: &str,
-    ) -> Result<()> {
+    ) -> Command {
         let mut cmd = self.base_cmd(p, prompt, negative, seed, out, cfg);
         // sd.cpp derives dimensions from the init image, so no -W/-H here.
         cmd.args(["-i", &path_str(init)]);
@@ -160,6 +161,55 @@ impl<'a> SdRunner<'a> {
                 cmd.arg("--diffusion-fa");
             }
         }
+        cmd
+    }
+
+    /// img2img: one pass over `init`, written to `out`. See [`Self::img2img_cmd`]
+    /// for what the arguments do to the command line.
+    #[allow(clippy::too_many_arguments)]
+    pub fn img2img(
+        &self,
+        p: &Profile,
+        prompt: &str,
+        negative: Option<&str>,
+        seed: i64,
+        init: &Path,
+        out: &Path,
+        strength: f32,
+        steps: u32,
+        cfg: f32,
+        big_image: bool,
+        label: &str,
+    ) -> Result<()> {
+        let cmd = self.img2img_cmd(p, prompt, negative, seed, init, out, strength, steps, cfg, big_image, label);
+        self.run(cmd, label)
+    }
+
+    /// An img2img pass that only redraws where `mask` is white — the Redraw
+    /// pass, over a crop the caller has already cut and enlarged (see
+    /// [`crate::redraw`]). The same command as [`Self::img2img`] plus
+    /// `--mask`, so the step floor and the schedule scaling apply unchanged.
+    /// Any model, not just an inpainting checkpoint: sd.cpp blends the
+    /// original latent back in outside the mask after every step
+    /// (`diffusion_engine.cpp`, `denoise_mask`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn redraw(
+        &self,
+        p: &Profile,
+        prompt: &str,
+        negative: Option<&str>,
+        seed: i64,
+        init: &Path,
+        out: &Path,
+        strength: f32,
+        steps: u32,
+        cfg: f32,
+        big_image: bool,
+        label: &str,
+        mask: &Path,
+    ) -> Result<()> {
+        let mut cmd = self.img2img_cmd(p, prompt, negative, seed, init, out, strength, steps, cfg, big_image, label);
+        cmd.args(["--mask", &path_str(mask)]);
         self.run(cmd, label)
     }
 
@@ -1312,6 +1362,22 @@ binary = "/opt/sd-cli"
         ] {
             assert_eq!(parse_cache_skip(line), None, "{line}");
         }
+    }
+
+    /// Redraw is img2img plus `--mask` and nothing else — the step floor and
+    /// schedule scaling are the same function's, so they can't drift apart.
+    #[test]
+    fn a_redraw_is_an_img2img_with_a_mask() {
+        let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
+        let p = Profile { model: PathBuf::from("/models/m.safetensors"), ..Default::default() };
+        let r = SdRunner::new(&cfg);
+        let base = argv(&r.img2img_cmd(&p, "a hand", None, 7, Path::new("i.png"), Path::new("o.png"), 0.8, 20, 6.0, false, "x"));
+        let mut masked = r.img2img_cmd(&p, "a hand", None, 7, Path::new("i.png"), Path::new("o.png"), 0.8, 20, 6.0, false, "x");
+        masked.args(["--mask", "m.png"]);
+        let masked = argv(&masked);
+        assert_eq!(&masked[..base.len()], &base[..]);
+        assert_eq!(flag(&masked, "--mask"), Some("m.png"));
+        assert!(!base.iter().any(|a| a == "--mask"));
     }
 
     /// LoRAs are inline in the prompt, which is sd.cpp's spelling — and the

@@ -98,6 +98,24 @@ const HELP = [
     text: 'Where the steps are spent between full noise and none. Auto lets '
         + 'sd.cpp pick the model’s own, which is the right answer for Flux and '
         + 'Flux.2. The Help tab compares them.' },
+  { ids: ['rpprompt'],
+    text: 'What should appear where you painted — "a red scarf", "an open hand". '
+        + 'Leave it blank to redraw the area from this image\u2019s own prompt, which '
+        + 'is usually right for fixing a hand or a face. Used for this redraw only; '
+        + 'the image keeps its prompt.' },
+  { ids: ['rpstrength'],
+    text: 'How much of what is under the mask to throw away. 0.5, the default, '
+        + 'keeps its shape and colours and fixes the detail; 0.8 replaces it while '
+        + 'matching the surroundings; 0.95 starts that area over.' },
+  { ids: ['rpsoft'],
+    text: 'How far past what you painted the new pixels fade into the old. '
+        + 'What you painted is always replaced in full; this is the blend around '
+        + 'it. Raise it when a strong redraw leaves a visible edge, lower it to '
+        + 'keep the change tight. 0 is a hard edge.' },
+  { ids: ['rpbrush'],
+    text: 'Brush size on screen, so it feels the same in the column, fitted and at '
+        + '1:1. Right-drag erases; Space+drag pans. Paint over all of what should '
+        + 'change — Edge softness blends it into the picture beyond that.' },
   { ids: ['cachemode'],
     text: 'Skips denoising steps whose result can be predicted, so Generate '
         + 'finishes sooner, at some cost in exactness. Refine and Hi-res always '

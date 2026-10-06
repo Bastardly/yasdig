@@ -85,10 +85,10 @@ export function syncPostLabels() {
 // pan to a detail, then drag Sharpness, and the detail stays under the cursor.
 export function setResultImage(src) {
   // This path is a re-filter, so it never re-centres — and it has to say so
-  // rather than rely on the flag being clear. Re-opening the viewer on the src
-  // already loaded fires no load event, which leaves `lbCentre` set for the next
-  // decode to consume, and the next decode is this one.
-  lbCentre = false;
+  // rather than rely on nothing being pending. Re-opening the viewer on the src
+  // already loaded fires no load event, which leaves a centring pending for the
+  // next decode to consume, and the next decode is this one.
+  lb?.keepView();
   S.currentSrc = src;
   // `?.`, because the Outputs tab is a pane with no result block at all — its
   // image only ever exists in the viewer. The other two always have one.
@@ -97,50 +97,102 @@ export function setResultImage(src) {
   $('lbimg').src = src;
 }
 
-// Fitted, or true 1:1 and pannable. The two filters ask different questions —
-// clarity is a look across the whole frame, sharpness is a pixel — so neither
-// view alone is enough.
-let lbFit = true;
-// Set when the next decode is a newly opened or freshly rendered image rather
-// than a re-filter of the one on screen, and consumed by the image's load
-// handler. Without it a slider drag would yank the view back to the middle on
-// every step — see showFullSize.
-let lbCentre = false;
+// Fit, 1:1 and drag-to-pan for an image in a scrolling pane: the viewer's and
+// the Redraw dialog's. A factory, gridmark.js's shape, because two copies of the
+// centring rules below are two chances for one to be fixed and the other not.
+// Builds closures and nothing else, so calling it from an init keeps the
+// declare-only rule.
+//
+// `pans(e)` says whether a pointerdown is a pan: any left drag in the viewer,
+// Space+drag or a middle drag in the dialog, where a left drag paints.
+export function zoomPane({ view, img, fit, full, pans }) {
+  // Fitted, or true 1:1 and pannable. The fit/1:1 choice survives from the last
+  // time the pane was open, because it is a preference about how you work.
+  let isFit = true;
+  // Set when the next decode is a newly opened or freshly rendered image rather
+  // than a re-filter of the one on screen, and consumed by the image's load
+  // handler. Without it a slider drag would yank the view back to the middle on
+  // every step.
+  let centreNext = false;
 
-function setFit(fit) {
-  lbFit = fit;
-  $('lbview').classList.toggle('fit', fit);
-  $('lbfit').classList.toggle('active', fit);
-  $('lbfull').classList.toggle('active', !fit);
-  if (!fit) centreView();
+  // Landing in the top-left corner of a 3072² image shows you its corner. The
+  // middle is what was on screen a moment ago in the fitted view, so that is
+  // where 1:1 should start.
+  const centre = () => {
+    view.scrollLeft = (view.scrollWidth - view.clientWidth) / 2;
+    view.scrollTop = (view.scrollHeight - view.clientHeight) / 2;
+  };
+  const setFit = (f) => {
+    isFit = f;
+    view.classList.toggle('fit', f);
+    fit.classList.toggle('active', f);
+    full.classList.toggle('active', !f);
+    if (!f) centre();
+  };
+
+  fit.addEventListener('click', () => setFit(true));
+  full.addEventListener('click', () => setFit(false));
+  // The centring has to be re-run once the decode has given the pane something
+  // to measure: a fresh data: URL has no dimensions yet when `show` returns, and
+  // re-opening on the src already loaded fires no load event at all — so both
+  // halves are needed.
+  img.addEventListener('load', () => {
+    if (centreNext) { centreNext = false; if (!isFit) centre(); }
+  });
+
+  // Drag to pan. Scroll offsets rather than a transform, so the wheel, a trackpad
+  // and the scrollbars all keep working for free; `setPointerCapture` is what
+  // makes a drag survive the pointer leaving the pane, and preventDefault on the
+  // down is what stops the browser dragging a ghost of the image around instead.
+  view.addEventListener('pointerdown', (e) => {
+    if (isFit || !pans(e)) return;
+    const x0 = e.clientX, y0 = e.clientY, sx = view.scrollLeft, sy = view.scrollTop;
+    const move = (ev) => {
+      view.scrollLeft = sx - (ev.clientX - x0);
+      view.scrollTop = sy - (ev.clientY - y0);
+    };
+    const up = () => {
+      view.classList.remove('drag');
+      view.removeEventListener('pointermove', move);
+      view.removeEventListener('pointerup', up);
+      view.removeEventListener('pointercancel', up);
+    };
+    view.setPointerCapture(e.pointerId);
+    view.classList.add('drag');
+    view.addEventListener('pointermove', move);
+    view.addEventListener('pointerup', up);
+    view.addEventListener('pointercancel', up);
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  return {
+    // A different image is arriving: centre on it once it has decoded.
+    expectNew: () => { centreNext = true; },
+    // The next decode is a re-filter of the image on screen: leave the view.
+    keepView: () => { centreNext = false; },
+    // The pane was just shown: re-apply the remembered choice, now that there
+    // is a size to centre against.
+    shown: () => setFit(isFit),
+    isFit: () => isFit,
+  };
 }
 
-// Landing in the top-left corner of a 3072² image shows you its corner. The
-// middle is what was on screen a moment ago in the fitted view, so that is where
-// 1:1 should start.
-function centreView() {
-  const v = $('lbview');
-  v.scrollLeft = (v.scrollWidth - v.clientWidth) / 2;
-  v.scrollTop = (v.scrollHeight - v.clientHeight) / 2;
-}
+// The viewer's pane, made in initViewer.
+let lb = null;
 
 // The image is already a data: URL on the page, so this re-uses it rather than
 // fetching anything.
 //
-// The fit/1:1 choice survives from the last time the viewer was open, because it
-// is a preference about how you work; the scroll position does not, because it
-// belonged to an image that has since been replaced.
+// The scroll position does not survive a re-open, because it belonged to an
+// image that has since been replaced.
 export function showFullSize(src) {
-  // Cleared by the image's load handler, which re-runs the centring once the
-  // decode has given the pane something to measure. Both halves are needed: a
-  // fresh data: URL has no dimensions yet when this returns, and re-opening on
-  // the src that is already loaded fires no load event at all.
-  lbCentre = true;
+  lb.expectNew();
   $('lbimg').src = src;
   $('lberr').textContent = '';
   $('lightbox').showModal();
   // After showModal, so the pane has a size to centre against.
-  setFit(lbFit);
+  lb.shown();
 }
 
 // Post-process is the free rung of the ladder: no diffusion, just the display
@@ -225,7 +277,7 @@ export function cancelPost() {
 // kept in step here too, and re-centred, because what arrived is a different
 // image rather than a re-filter of the one on screen.
 export function setViewerImage(src) {
-  lbCentre = true;
+  lb?.expectNew();
   $('lbimg').src = src;
 }
 
@@ -261,37 +313,8 @@ export function initViewer() {
   // at and hostile for something you edit in.
   $('lbclose').addEventListener('click', () => $('lightbox').close());
   $('lbreset').addEventListener('click', () => { setPost(postStart); schedulePost(); });
-  $('lbfit').addEventListener('click', () => setFit(true));
-  $('lbfull').addEventListener('click', () => setFit(false));
-  // See showFullSize: the centring has to be re-run once the decode has given the
-  // pane something to measure.
-  $('lbimg').addEventListener('load', () => {
-    if (lbCentre) { lbCentre = false; if (!lbFit) centreView(); }
-  });
-
-  // Drag to pan. Scroll offsets rather than a transform, so the wheel, a trackpad
-  // and the scrollbars all keep working for free; `setPointerCapture` is what makes
-  // a drag survive the pointer leaving the pane, and preventDefault on the down is
-  // what stops the browser dragging a ghost of the image around instead.
-  $('lbview').addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || lbFit) return;
-    const v = $('lbview');
-    const x0 = e.clientX, y0 = e.clientY, sx = v.scrollLeft, sy = v.scrollTop;
-    const move = (ev) => {
-      v.scrollLeft = sx - (ev.clientX - x0);
-      v.scrollTop = sy - (ev.clientY - y0);
-    };
-    const up = () => {
-      v.classList.remove('drag');
-      v.removeEventListener('pointermove', move);
-      v.removeEventListener('pointerup', up);
-      v.removeEventListener('pointercancel', up);
-    };
-    v.setPointerCapture(e.pointerId);
-    v.classList.add('drag');
-    v.addEventListener('pointermove', move);
-    v.addEventListener('pointerup', up);
-    v.addEventListener('pointercancel', up);
-    e.preventDefault();
+  lb = zoomPane({
+    view: $('lbview'), img: $('lbimg'), fit: $('lbfit'), full: $('lbfull'),
+    pans: (e) => e.button === 0,
   });
 }

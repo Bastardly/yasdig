@@ -26,6 +26,9 @@ const MAX_UPLOAD: usize = 32 * 1024 * 1024;
 fn body_limit(path: &str) -> usize {
     match path {
         "/upload" => MAX_UPLOAD,
+        // A mask at the image's size, base64 in JSON. Mostly one colour, so
+        // small — but a busy one at 3072² is well past `MAX_BODY`.
+        "/redraw" => MAX_UPLOAD,
         _ => MAX_BODY,
     }
 }

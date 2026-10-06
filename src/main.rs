@@ -24,6 +24,11 @@
 //!                        img2img passes over a work/output/ image, queued like
 //!                        /generate's so the same ladder follows them
 //!   POST /refine      -> {image_id, ...overrides}   img2img in place, no rescale
+//!   POST /redraw     -> {image_id, mask, prompt?, strength?}  redraw the
+//!                        painted part; `mask` is a base64 PNG, white = redraw
+//!   POST /history/goto -> {image_id, index}  step back (or forward) to an
+//!                        earlier state of the image; every pass is a step
+//!   GET  /history/{id}/{index}.png   a step's thumbnail
 //!   POST /hires       -> {image_id, upscale, ...overrides}
 //!                        img2img with an enlarge first. Both queue ahead of
 //!                        everything not yet running, wait their turn and answer
@@ -91,6 +96,7 @@ mod home;
 mod http;
 mod jobs;
 mod pipeline;
+mod redraw;
 mod preflight;
 mod sd;
 mod settings;
@@ -149,6 +155,9 @@ enum JobKind {
     /// Copy the image on screen into `work/output/`. No GPU, but the only copy
     /// of which file that is lives in the retained images.
     SaveOutput(u64),
+    /// Step to another state in an image's history (`Display::goto`). A
+    /// `publish`, so the display lane's — it answers mid-render.
+    Goto { id: u64, index: usize },
 }
 
 /// The diffusion lane's work, as the job queue (`crate::jobs`) carries it.
@@ -169,6 +178,9 @@ enum Work {
         upscale: f32,
         over: EscalateRequest,
     },
+    /// Redraw the painted part of a retained image (`Engine::redraw`). Pinned
+    /// while it waits, like the two above.
+    Redraw { id: u64, req: pipeline::RedrawRequest },
     /// Generate a clip. Minutes long rather than seconds, which is what made
     /// `SdRunner::run` stream its output — `GET /progress` is the only thing
     /// that makes this bearable, and it answers on the connection thread while
@@ -405,6 +417,7 @@ fn run(args: &[String]) -> Result<()> {
                         display.open_output(&stem).map(|r| result_json(&r))
                     }
                     JobKind::SaveOutput(id) => display.save_output(id).map(|p| saved_json(&p)),
+                    JobKind::Goto { id, index } => display.goto(id, index).map(|r| result_json(&r)),
                 };
                 let _ = job.reply.send(result);
             }
@@ -463,6 +476,11 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
         }
         Work::Hires { id, upscale, over } => {
             let r = engine.hires(id, upscale, &over).map(|r| latest(queue, &r));
+            lock(&engine.retained()).unpin(id);
+            queue.finish(t.id, r);
+        }
+        Work::Redraw { id, req } => {
+            let r = engine.redraw(id, &req).map(|r| latest(queue, &r));
             lock(&engine.retained()).unpin(id);
             queue.finish(t.id, r);
         }
@@ -614,6 +632,18 @@ fn handle_conn(
         ("POST", "/upload") => handle_upload(&mut conn, cfg, &req.body),
         ("POST", "/refine") => handle_refine(&mut conn, lanes, &req.body),
         ("POST", "/hires") => handle_hires(&mut conn, lanes, &req.body),
+        ("POST", "/redraw") => handle_redraw(&mut conn, lanes, &req.body),
+        ("POST", "/history/goto") => handle_goto(&mut conn, lanes, &req.body),
+        // A history step's thumbnail. Off the queue like every thumbnail; both
+        // numbers are the whole whitelist.
+        ("GET", p) if p.starts_with("/history/") && p.ends_with(".png") => {
+            match history_path(p).and_then(|(id, i)| {
+                pipeline::Retained::history_thumb(&lanes.retained, id, i)
+            }) {
+                Some(png) => conn.respond_with(200, "image/png", "Cache-Control: no-store\r\n", &png),
+                None => conn.respond(404, "text/plain", b"not found"),
+            }
+        }
         ("POST", "/adjust") => handle_adjust(&mut conn, lanes, &req.body),
         ("POST", "/save-output") => handle_save_output(&mut conn, lanes, &req.body),
 
@@ -1988,6 +2018,97 @@ fn handle_refine(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Res
     }
 }
 
+/// `POST /redraw {image_id, mask, prompt?, strength?}`: redraw the painted
+/// part of the image in hand. `mask` is a base64 PNG at the image's size, white
+/// where to redraw — base64 in JSON rather than a raw body like `/upload`,
+/// because it travels with three other fields, and a mask is mostly one colour
+/// so its PNG is small. Queued and waited on like `/refine`.
+fn handle_redraw(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    let Some(dto) = parse_json::<RedrawDto>(conn, body)? else {
+        return Ok(());
+    };
+    let mask_png = match dto.mask_png() {
+        Ok(m) => m,
+        Err(e) => {
+            return conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes())
+        }
+    };
+    escalate(
+        conn,
+        lanes,
+        jobs::Kind::Redraw,
+        dto.image_id,
+        None,
+        Work::Redraw {
+            id: dto.image_id,
+            req: pipeline::RedrawRequest {
+                mask_png,
+                prompt: dto.prompt,
+                strength: dto.strength,
+                feather: dto.feather,
+            },
+        },
+    )
+}
+
+#[derive(serde::Deserialize)]
+struct RedrawDto {
+    image_id: u64,
+    mask: String,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    strength: Option<f32>,
+    #[serde(default)]
+    feather: Option<u32>,
+}
+
+impl RedrawDto {
+    /// The mask's PNG bytes. Accepts a `data:` URL as well, since that is what
+    /// a canvas hands the page, and stripping it there would be one more place
+    /// to get the prefix wrong.
+    fn mask_png(&self) -> Result<Vec<u8>> {
+        let b64 = self.mask.split_once("base64,").map_or(self.mask.as_str(), |(_, b)| b);
+        base64::engine::general_purpose::STANDARD
+            .decode(b64.trim())
+            .context("the mask is not valid base64")
+    }
+}
+
+/// `POST /history/goto {image_id, index}`: make a step of the image's history
+/// the live one. The display lane's, so it never waits behind a render.
+fn handle_goto(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+        index: usize,
+    }
+    match parse_json::<Dto>(conn, body)? {
+        Some(dto) => submit(
+            conn,
+            &lanes.display,
+            JobKind::Goto {
+                id: dto.image_id,
+                index: dto.index,
+            },
+            400,
+        ),
+        None => Ok(()),
+    }
+}
+
+/// `/history/{image_id}/{index}.png` → the two numbers, or `None` for any
+/// path that isn't exactly that.
+fn history_path(path: &str) -> Option<(u64, usize)> {
+    let rest = path.strip_prefix("/history/")?.strip_suffix(".png")?;
+    let (id, index) = rest.split_once('/')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(id) || !digits(index) {
+        return None;
+    }
+    Some((id.parse().ok()?, index.parse().ok()?))
+}
+
 /// `/hires` is `/refine` plus the enlarge factor. Flattened rather than a sixth
 /// field on `EscalateDto`, so refine can't be sent an upscale it would ignore.
 #[derive(serde::Deserialize)]
@@ -2151,7 +2272,7 @@ fn handle_stop_job(
     let what = match lanes.queue.stop(dto.id) {
         jobs::Stopped::Removed(work) => {
             // A queued button press was holding its image.
-            if let Work::Refine { id, .. } | Work::Hires { id, .. } = work {
+            if let Work::Refine { id, .. } | Work::Hires { id, .. } | Work::Redraw { id, .. } = work {
                 lock(&lanes.retained).unpin(id);
             }
             "removed"
@@ -2263,15 +2384,18 @@ fn result_json(res: &GenResult) -> String {
     let start = serde_json::to_string(&res.start).unwrap_or_else(|_| "{}".to_string());
     format!(
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
-         \"hires_passes\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\
+         \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\
          \"filters\":{},\"filters_start\":{},\"prompt\":{},\
-         \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"cache_skipped\":{},\"cache_steps\":{}}}}}",
+         \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{}}}}}",
         b64,
         res.width,
         res.height,
         res.seed,
         res.refine_passes,
         res.hires_passes,
+        res.step,
+        serde_json::to_string(&res.history).unwrap_or_else(|_| "[]".to_string()),
+        res.at,
         res.image_id,
         // `null` when the archive write failed, which is the only case there
         // isn't one. The UI uses it to mark which thumbnail is on screen.
@@ -2291,6 +2415,7 @@ fn result_json(res: &GenResult) -> String {
         res.timings.fsr_ms,
         res.timings.refine_ms,
         res.timings.hires_ms,
+        res.timings.redraw_ms,
         res.timings.cache_skipped,
         res.timings.cache_steps,
     )
@@ -3111,7 +3236,38 @@ fn json_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{band_amplitudes, check_bands, grating, BandRow, DEPTH, DETAIL, GRIT};
-    use super::{clip_frame, workitems, EscalateDto, HiresDto};
+    use super::{clip_frame, history_path, workitems, EscalateDto, HiresDto, RedrawDto};
+
+    /// The history thumbnail's guard: two whole numbers or nothing.
+    #[test]
+    fn a_history_path_is_two_numbers() {
+        assert_eq!(history_path("/history/3/0.png"), Some((3, 0)));
+        assert_eq!(history_path("/history/12/11.png"), Some((12, 11)));
+        for bad in ["/history/3.png", "/history/a/0.png", "/history/3/-1.png", "/history//0.png", "/history/3/0/1.png", "/history/3/../0.png"] {
+            assert_eq!(history_path(bad), None, "{bad}");
+        }
+    }
+
+    /// The mask arrives as a canvas's `data:` URL or as bare base64; both are
+    /// the PNG's bytes. `prompt` and `strength` are optional.
+    #[test]
+    fn a_redraw_body_carries_its_mask_either_way() {
+        let png = b"\x89PNG\r\n";
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+        let body = format!("{{\"image_id\":3,\"mask\":\"data:image/png;base64,{b64}\"}}");
+        let dto: RedrawDto = serde_json::from_str(&body).unwrap();
+        assert_eq!(dto.mask_png().unwrap(), png);
+        assert_eq!((dto.prompt, dto.strength), (None, None));
+
+        let body = format!("{{\"image_id\":3,\"mask\":\"{b64}\",\"prompt\":\"a hat\",\"strength\":0.5}}");
+        let dto: RedrawDto = serde_json::from_str(&body).unwrap();
+        assert_eq!(dto.mask_png().unwrap(), png);
+        assert_eq!(dto.prompt.as_deref(), Some("a hat"));
+
+        let bad: RedrawDto = serde_json::from_str("{\"image_id\":3,\"mask\":\"!!\"}").unwrap();
+        assert!(bad.mask_png().is_err());
+    }
 
     /// The page tells "no preview yet" from "preview 0" by `null`, so the
     /// field has to be there on every busy body and be a real JSON value.

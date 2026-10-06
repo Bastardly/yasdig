@@ -759,6 +759,57 @@
   </div>
   <button type="button" id="lbclose" aria-label="Close viewer">&times;</button>
 </dialog>
+<!-- Redraw: paint over part of the Image tab's result and redraw just that.
+     The viewer's layout — a fixed panel beside a zoomable, pannable picture —
+     because large images want 1:1, and the live preview is in the panel because
+     watching the crop form is how you know to cancel. Opened from the Redraw
+     button in the result's action row (redraw.js). -->
+<dialog id="redraw">
+  <div class="lbside">
+    <div class="posthead"><b>Redraw</b></div>
+    <div class="lbzoom">
+      <button type="button" id="rdfit" class="btn btn-choice">Fit</button>
+      <button type="button" id="rdfull" class="btn btn-choice">1:1</button>
+    </div>
+    <p class="sub">Drag to paint over what should change. Right-drag erases;
+      Space+drag pans at 1:1.</p>
+    <label for="rpprompt">What should be there</label>
+    <prompt-box>
+      <textarea id="rpprompt" rows="3" placeholder="blank uses this image's own prompt"></textarea>
+    </prompt-box>
+    <div class="rdrow">
+      <label for="rpstrength">Strength</label>
+      <input id="rpstrength" type="number" step="0.05" min="0.05" max="0.95" value="0.5">
+    </div>
+    <div class="slider">
+      <div class="head"><label for="rpsoft">Edge softness</label><span class="val" id="rpsoftval"></span></div>
+      <input id="rpsoft" type="range" min="0" max="64" step="1" value="16">
+    </div>
+    <div class="slider">
+      <div class="head"><label for="rpbrush">Brush</label><span class="val" id="rpbrushval"></span></div>
+      <input id="rpbrush" type="range" min="4" max="200" step="1" value="40">
+    </div>
+    <div class="redrawtools">
+      <button type="button" id="rperase" class="btn btn-choice">Eraser</button>
+      <button type="button" id="rpclear" class="btn">Clear</button>
+    </div>
+    <button type="button" id="redrawgo" class="btn btn-run btn-block" disabled>Redraw</button>
+    <button type="button" id="rdcancel" class="btn btn-danger btn-block" hidden>Cancel generation</button>
+    <p class="sub" id="rdprog"></p>
+    <img class="livepreview" alt="Live preview" hidden>
+    <div id="rperr" class="err"></div>
+    <div class="lbgroup">History</div>
+    <p class="sub">Every pass is a step. Click one to go back to it; Ctrl+Z and
+      Ctrl+Shift+Z step through. A new pass from an earlier step replaces the
+      ones after it.</p>
+    <ol id="rdhistory" class="rdhistory"></ol>
+  </div>
+  <div class="lbview fit rdview" id="rdview">
+    <img id="rdimg" alt="image being redrawn" draggable="false">
+    <canvas id="rdmask" class="maskview"></canvas>
+  </div>
+  <button type="button" id="rdclose" class="lbclose" aria-label="Close Redraw">&times;</button>
+</dialog>
 <!-- The job queue. Modal, so nothing behind it takes a click while it is up;
      a click on the backdrop closes it (`jobs.js`), and so does Escape. The
      inner box is what a click "inside" means — the dialog element itself is

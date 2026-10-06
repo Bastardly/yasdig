@@ -128,6 +128,44 @@ export const TOPICS = [
       ], false)}`,
   },
   {
+    id: 'redraw',
+    title: 'Redraw',
+    html: `
+      <h2>Redraw</h2>
+      <p>Keeps an image that is almost right. Paint over what should change — a hand,
+      a face, a stray object — and press <b>Redraw</b>: only that area is redrawn,
+      and every pixel outside it stays exactly as it was.</p>
+      <h3>How</h3>
+      <p>Press <b>Redraw…</b> beside the image. Drag to paint; right-drag, or the
+      <b>Eraser</b>, takes paint away. Switch to <b>1:1</b> for detail and hold
+      <b>Space</b> to drag the picture around. The mask shows only while the pointer
+      is over the picture, so moving off it shows you the result clean. Type what
+      should be there, or leave the box blank to redraw from the image\u2019s own
+      prompt. The live preview shows the area forming; <i>Cancel generation</i>
+      stops it and leaves the image as it was.</p>
+      ${table(['Strength', 'What it does'], [
+        ['0.4–0.6', 'Keeps the shape and colours, fixes the detail. The default, 0.5, is here.'],
+        ['0.8', 'Replaces what was there, matched to its surroundings.'],
+        ['0.9–0.95', 'Starts the area over. For removing or swapping an object.'],
+      ])}
+      <p><b>Edge softness</b> is how far past the paint the new pixels fade into the
+      old. What you painted is always replaced in full. Raise it when a strong
+      redraw leaves an edge; 0 is a hard one.</p>
+      <h3>Going back</h3>
+      <p>Every pass on an image — Redraw, Refine, Hi-res — is a step in its
+      <b>History</b>, in the dialog. Click a step to go back to it (Ctrl+Z and
+      Ctrl+Shift+Z step through). Fixed the fingers, then ruined the hat? Click the
+      fingers step and redraw the hat again: the bad hat is replaced, the fingers
+      are kept. An image keeps its last twelve steps and always its original.</p>
+      <h3>Why small things come back sharper</h3>
+      <p>The painted area and a margin around it are cut out and enlarged to the
+      model\u2019s own size before they are redrawn, then shrunk back in. A face 80
+      pixels wide is drawn at 1024, not at 80 — which is why a redraw can fix
+      what a whole re-roll can\u2019t. The Outputs tab has no Redraw, because a
+      saved output already has its sharpening in its pixels; pick it under
+      <i>Image to image</i> to work on it.</p>`,
+  },
+  {
     id: 'stepcache',
     title: 'Step caching',
     html: `

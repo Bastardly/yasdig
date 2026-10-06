@@ -26,7 +26,8 @@
 //! re-run on it for free: that is `adjust`, and it is why they are a slider
 //! rather than a reason to regenerate.
 
-use crate::config::{Config, Filters, FiltersPatch, LoraRef, Profile};
+use crate::config::{Config, Filters, FiltersPatch, LoraRef, Profile, MAX_STRENGTH, MIN_STRENGTH};
+use crate::redraw;
 use crate::fsr::Fsr;
 use crate::sd::{Monitor, SdRunner, VideoIo};
 use crate::variables;
@@ -146,6 +147,41 @@ impl Retained {
             }
             _ => false,
         }
+    }
+
+    /// Write back a stepped-to entry (`Display::goto`), only if the image is
+    /// still the one that was read — `was` is its `raw` then. `update` can't
+    /// serve: it matches on the entry's own `raw`, and a step changes exactly
+    /// that.
+    fn replace(&mut self, id: u64, was: &Path, entry: Pending) -> bool {
+        match self.live.get_mut(&id) {
+            Some(l) if l.pending.raw == was => {
+                l.pending = entry;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// A history step's thumbnail: its PNG bytes, made on first request and
+    /// kept beside the step's raw. `None` when there is no such image or step.
+    /// Called on a connection thread — a decode and a resize, no GPU.
+    pub fn history_thumb(this: &Mutex<Retained>, id: u64, index: usize) -> Option<Vec<u8>> {
+        let raw = {
+            let r = lock(this);
+            r.live.get(&id)?.pending.steps().get(index)?.raw.clone()
+        };
+        let thumb = thumb_path(&raw);
+        if !thumb.exists() {
+            let img = image::open(&raw).ok()?;
+            // Through a temp name and a rename: two requests for one tile are
+            // two threads of this process, and a reader must never see half.
+            static N: AtomicU64 = AtomicU64::new(0);
+            let tmp = raw.with_extension(format!("thumb{}.part", N.fetch_add(1, Ordering::Relaxed)));
+            img.thumbnail(256, 256).save_with_format(&tmp, image::ImageFormat::Png).ok()?;
+            std::fs::rename(&tmp, &thumb).ok()?;
+        }
+        std::fs::read(thumb).ok()
     }
 
     /// Hold `id` for a job. Returns the model that made it — the label the
@@ -411,6 +447,30 @@ pub struct EscalateRequest {
     pub hires_cfg_scale: Option<Option<f32>>,
 }
 
+/// What a Redraw asks for: which pixels, and optionally what to put there.
+#[derive(Debug, Clone)]
+pub struct RedrawRequest {
+    /// A PNG at the image's own size; white is "redraw this".
+    pub mask_png: Vec<u8>,
+    /// What should be there. `None` or blank uses the image's own prompt, which
+    /// is the right default for "fix the hand".
+    pub prompt: Option<String>,
+    /// `None` is [`REDRAW_STRENGTH`].
+    pub strength: Option<f32>,
+    /// Edge softness in image pixels (`redraw::feather`); `None` is
+    /// [`REDRAW_SOFTNESS`].
+    pub feather: Option<u32>,
+}
+
+/// Fixes what was under the mask while keeping its shape and colours — the
+/// common case, a hand or a face that is nearly right. 0.8 replaces it, 0.95
+/// starts over; those are a choice, not a default.
+pub const REDRAW_STRENGTH: f32 = 0.5;
+
+/// Edge softness when a request names none: enough that a strong redraw
+/// doesn't leave a seam at 1024², little enough to stay where it was painted.
+pub const REDRAW_SOFTNESS: u32 = 16;
+
 impl EscalateRequest {
     /// Fold onto the retained profile, then re-check it: the panel can put a
     /// strength or a step count out of range just as `/generate` can.
@@ -446,6 +506,7 @@ pub struct Timings {
     pub fsr_ms: u128,
     pub refine_ms: u128,
     pub hires_ms: u128,
+    pub redraw_ms: u128,
     /// Steps the generate pass's step cache skipped, of `cache_steps`. Both 0
     /// when it skipped none, which is also what an escalation reports — those
     /// run uncached ([`Profile::uncached`]).
@@ -461,6 +522,15 @@ pub struct GenResult {
     pub timings: Timings,
     pub refine_passes: u32,
     pub hires_passes: u32,
+    /// How many passes this image is past its generate — every escalation,
+    /// a redraw included. The page's "already on screen" test needs it: a
+    /// redraw changes no pass count and no size, so without it a redrawn
+    /// image would compare equal to the one it replaced and never be drawn.
+    pub step: u32,
+    /// What each step of this image's history was ("Generated", "Refine", …),
+    /// oldest first, and which one is on screen. See `Display::goto`.
+    pub history: Vec<String>,
+    pub at: usize,
     /// Handle for [`Engine::refine`] / [`Engine::hires`] / [`Display::adjust`].
     pub image_id: u64,
     /// The archived generation this descends from, so the UI can mark which
@@ -558,6 +628,81 @@ struct Pending {
     /// each step's filenames distinct from the ones it supersedes — otherwise a
     /// pass would read and write the same path.
     step: u32,
+    /// Every state this image has been in, oldest first, so a bad pass can be
+    /// stepped back from (`Display::goto`). Empty means "just the current
+    /// state", which is what every fresh `Pending` starts as. Scratch, like
+    /// everything a `Pending` owns: never in a sidecar.
+    history: Vec<Snapshot>,
+    /// Which of `history` the live fields are.
+    at: usize,
+}
+
+/// One state in a [`Pending`]'s history: enough to make it the live image
+/// again. Not the filters — those are the user's look and stay where they are
+/// when stepping (invariant 1's carry, the same as `Filters::restart`'s).
+#[derive(Debug, Clone)]
+struct Snapshot {
+    raw: PathBuf,
+    /// A Hi-res on another checkpoint swaps the profile, and stepping back
+    /// past it has to swap it back: `can_refine`, `can_hires` and where the
+    /// sliders reset all describe the model that made *this* state.
+    profile: Profile,
+    refine_passes: u32,
+    hires_passes: u32,
+    step: u32,
+    /// What made it: "Generated", "Refine", "Hi-res 2×", "Redraw: a red scarf".
+    label: String,
+}
+
+/// How many states an image keeps. Each is one full-size PNG in scratch, so
+/// it is a disk cap rather than a memory one; past it the oldest *after the
+/// original* goes, since the original is the one people go back to.
+const MAX_HISTORY: usize = 12;
+
+impl Snapshot {
+    fn of(p: &Pending, label: String) -> Snapshot {
+        Snapshot {
+            raw: p.raw.clone(),
+            profile: p.profile.clone(),
+            refine_passes: p.refine_passes,
+            hires_passes: p.hires_passes,
+            step: p.step,
+            label,
+        }
+    }
+
+    fn remove_files(&self) {
+        let _ = std::fs::remove_file(&self.raw);
+        let _ = std::fs::remove_file(thumb_path(&self.raw));
+    }
+}
+
+/// Where a history step's thumbnail lives: beside its raw, so whatever deletes
+/// the one deletes the other. Made on first request (`history_thumb`).
+fn thumb_path(raw: &Path) -> PathBuf {
+    raw.with_extension("thumb.png")
+}
+
+/// `next` with the history `prev` leaves it: every step after the one `prev`
+/// was on is deleted — a new pass from an earlier step is a new branch, as in
+/// any undo stack — and `next` goes on top. The image `prev` showed stays, as
+/// a step; only its `display`, which `publish` can make again, is deleted.
+fn advance(prev: &Pending, mut next: Pending, label: String) -> Pending {
+    let mut h = prev.steps();
+    let at = prev.at.min(h.len() - 1);
+    for s in h.drain(at + 1..) {
+        s.remove_files();
+    }
+    if prev.display != next.display {
+        let _ = std::fs::remove_file(&prev.display);
+    }
+    h.push(Snapshot::of(&next, label));
+    while h.len() > MAX_HISTORY {
+        h.remove(1).remove_files();
+    }
+    next.at = h.len() - 1;
+    next.history = h;
+    next
 }
 
 impl Pending {
@@ -587,9 +732,25 @@ impl Pending {
         self.raw_w.max(self.raw_h) > BIG_IMAGE_SIDE
     }
 
+    /// The history, with the current state in it — which a fresh `Pending`'s
+    /// empty one leaves implicit.
+    fn steps(&self) -> Vec<Snapshot> {
+        if self.history.is_empty() {
+            vec![Snapshot::of(self, "Generated".into())]
+        } else {
+            self.history.clone()
+        }
+    }
+
+    /// Everything this image owns: the display, and every step's raw and
+    /// thumbnail — the current one among them.
     fn remove_files(&self) {
-        let _ = std::fs::remove_file(&self.raw);
         let _ = std::fs::remove_file(&self.display);
+        for s in self.steps() {
+            s.remove_files();
+        }
+        let _ = std::fs::remove_file(&self.raw);
+        let _ = std::fs::remove_file(thumb_path(&self.raw));
     }
 }
 
@@ -1019,6 +1180,8 @@ impl Engine {
         // Retain the intermediates so the next step up the ladder doesn't have
         // to re-run this one.
         let entry = Pending {
+            history: Vec::new(),
+            at: 0,
             raw,
             raw_w: w,
             raw_h: h,
@@ -1251,6 +1414,8 @@ impl Engine {
         };
 
         let entry = Pending {
+            history: Vec::new(),
+            at: 0,
             raw,
             raw_w: w,
             raw_h: h,
@@ -1521,9 +1686,13 @@ impl Engine {
         }
 
         let step = p.step + 1;
+        // Unique per pass, not just per step: after stepping back to step 1,
+        // the next pass is step 2 again, and `{id}-{step}` would overwrite the
+        // old step 2's file and then delete it as a discarded branch.
+        let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();
-        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-raw.png")));
-        let display = scratch.path(self.scratch.join(format!("{id}-{step}-full.png")));
+        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
         let sd = self.sd();
 
         // Uncached: a finishing pass is the quality rung (`Profile::uncached`).
@@ -1556,7 +1725,7 @@ impl Engine {
         // Only now that it succeeded — a failure above leaves the entry intact
         // so the user can retry, and takes this pass's half-written files with
         // it rather than stranding them beside the ones still in use.
-        p.remove_files();
+        let prev = p.clone();
         let entry = Pending {
             raw,
             raw_w: w,
@@ -1569,7 +1738,144 @@ impl Engine {
             step,
             ..p
         };
+        let entry = advance(&prev, entry, "Refine".into());
         let result = entry.result(id, png, Timings { fsr_ms, refine_ms, ..Default::default() });
+        self.keep(id, entry);
+        Ok(result)
+    }
+
+    /// Redraw only the painted part of the current image — see
+    /// [`crate::redraw`] for why it is a crop, enlarged, diffused, shrunk and
+    /// composited rather than a masked pass over the whole frame.
+    ///
+    /// An escalation like `refine`: it reads `raw`, never `display`
+    /// (invariant 1), runs uncached, and its result becomes the image, so
+    /// Refine, Hi-res, Save and another Redraw follow it with no special case.
+    /// The prompt is the pass's own and is not written back: `Pending.prompt`
+    /// keeps describing the picture.
+    pub fn redraw(&mut self, id: u64, req: &RedrawRequest) -> Result<GenResult> {
+        let p = lock(&self.retained).get(id, "redraw")?;
+        self.cfg.check_loras(&p.profile.loras, p.profile.family)?;
+        let strength = req.strength.unwrap_or(REDRAW_STRENGTH);
+        if !(MIN_STRENGTH..=MAX_STRENGTH).contains(&strength) {
+            bail!("redraw strength must be between {MIN_STRENGTH} and {MAX_STRENGTH}");
+        }
+
+        let mut base = image::open(&p.raw)
+            .with_context(|| format!("reading {}", p.raw.display()))?
+            .to_rgb8();
+        let mask = image::load_from_memory(&req.mask_png)
+            .context("the mask is not a PNG")?
+            .to_luma8();
+        // Refused rather than resized: a mismatch means the page painted on a
+        // different image than the one this id now names.
+        if mask.dimensions() != base.dimensions() {
+            bail!(
+                "the mask is {}×{} but the image is {}×{} — reopen the image and paint again",
+                mask.width(),
+                mask.height(),
+                base.width(),
+                base.height()
+            );
+        }
+        let painted = redraw::mask_bbox(&mask).context("paint the area to redraw first")?;
+        let soft = req.feather.unwrap_or(REDRAW_SOFTNESS);
+        if soft > redraw::MAX_SOFTNESS {
+            bail!("edge softness must be at most {} pixels", redraw::MAX_SOFTNESS);
+        }
+        let crop = redraw::context_rect(painted, base.width(), base.height(), soft);
+        let target = p.profile.width.max(p.profile.height);
+        let (ww, wh) = redraw::work_size(crop.w, crop.h, target);
+
+        let step = p.step + 1;
+        // Unique per pass, not just per step: after stepping back to step 1,
+        // the next pass is step 2 again, and `{id}-{step}` would overwrite the
+        // old step 2's file and then delete it as a discarded branch.
+        let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut scratch = Scratch::default();
+        // Three working files, never kept: `Scratch` sweeps them on success
+        // and on failure alike.
+        let init = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-rp-init.png")));
+        let sd_mask = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-rp-mask.png")));
+        let out = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-rp-out.png")));
+        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
+
+        use image::imageops::{crop_imm, resize, FilterType};
+        let crop_mask = crop_imm(&mask, crop.x, crop.y, crop.w, crop.h).to_image();
+        resize(&crop_imm(&base, crop.x, crop.y, crop.w, crop.h).to_image(), ww, wh, FilterType::Lanczos3)
+            .save(&init)
+            .with_context(|| format!("writing {}", init.display()))?;
+        // Grown past the whole fade at the crop's own scale, then taken to the
+        // work size: the blend below must only ever mix in pixels the model
+        // really drew (`redraw::diffusion_mask`). Hard-edged, since sd.cpp
+        // binarizes it anyway and the soft edge is the composite's job.
+        let grown = redraw::diffusion_mask(&crop_mask, soft);
+        redraw::binarize(&resize(&grown, ww, wh, FilterType::Triangle))
+            .save(&sd_mask)
+            .with_context(|| format!("writing {}", sd_mask.display()))?;
+
+        // A step's worth further along the seed, so pressing Redraw again on
+        // the same mask draws a new variant rather than the same one. The roll
+        // of any `{variable}` follows it, as everywhere else.
+        let seed = p.seed.wrapping_add(step as i64);
+        let vars = self.cfg.settings().variables;
+        let prompt = match req.prompt.as_deref().map(str::trim) {
+            Some(text) if !text.is_empty() => variables::expand(text, &vars, seed)?,
+            _ => p.prompt.clone(),
+        };
+
+        let t = Instant::now();
+        self.sd().redraw(
+            &p.profile.uncached(),
+            &prompt,
+            p.negative.as_deref(),
+            seed,
+            &init,
+            &out,
+            strength,
+            p.profile.steps,
+            p.profile.cfg_scale,
+            ww.max(wh) > BIG_IMAGE_SIDE,
+            "img2img redraw",
+            &sd_mask,
+        )?;
+        let redraw_ms = t.elapsed().as_millis();
+
+        let t = Instant::now();
+        let patch = image::open(&out)
+            .with_context(|| format!("reading {}", out.display()))?
+            .to_rgb8();
+        let patch = resize(&patch, crop.w, crop.h, FilterType::Lanczos3);
+        let alpha = redraw::feather(&crop_mask, soft);
+        redraw::composite(&mut base, &patch, &alpha, (crop.x, crop.y));
+        base.save(&raw).with_context(|| format!("writing {}", raw.display()))?;
+        let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let fsr_ms = t.elapsed().as_millis();
+
+        scratch.keep(&raw);
+        scratch.keep(&display);
+        let prev = p.clone();
+        let entry = Pending {
+            raw,
+            raw_w: w,
+            raw_h: h,
+            display,
+            filters,
+            step,
+            ..p
+        };
+        // What the history list calls it: the prompt as typed, cut short.
+        let label = match req.prompt.as_deref().map(str::trim) {
+            Some(text) if !text.is_empty() => {
+                let short: String = text.chars().take(40).collect();
+                format!("Redraw: {short}{}", if text.chars().count() > 40 { "…" } else { "" })
+            }
+            _ => "Redraw".into(),
+        };
+        let entry = advance(&prev, entry, label);
+        let result = entry.result(id, png, Timings { fsr_ms, redraw_ms, ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }
@@ -1621,11 +1927,15 @@ impl Engine {
         let diff_w = snap64(((p.raw_w as f32) * diff_scale).round() as u32);
 
         let step = p.step + 1;
+        // Unique per pass, not just per step: after stepping back to step 1,
+        // the next pass is step 2 again, and `{id}-{step}` would overwrite the
+        // old step 2's file and then delete it as a discarded branch.
+        let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();
-        let upscaled = scratch.path(self.scratch.join(format!("{id}-{step}-up.png")));
-        let hires = scratch.path(self.scratch.join(format!("{id}-{step}-hires.png")));
-        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-raw.png")));
-        let display = scratch.path(self.scratch.join(format!("{id}-{step}-full.png")));
+        let upscaled = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-up.png")));
+        let hires = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-hires.png")));
+        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
         let sd = self.sd();
         let mut fsr_ms = 0u128;
 
@@ -1687,7 +1997,7 @@ impl Engine {
 
         scratch.keep(&raw);
         scratch.keep(&display);
-        p.remove_files();
+        let prev = p.clone();
         let entry = Pending {
             raw,
             raw_w: w,
@@ -1700,6 +2010,7 @@ impl Engine {
             step,
             ..p
         };
+        let entry = advance(&prev, entry, format!("Hi-res {upscale}×"));
         let result = entry.result(id, png, Timings { fsr_ms, hires_ms, ..Default::default() });
         self.keep(id, entry);
         Ok(result)
@@ -1778,6 +2089,41 @@ impl Display {
         Ok(result)
     }
 
+    /// Make step `index` of an image's history the live image again: the way
+    /// back from a pass that went wrong. No diffusion — `publish` over that
+    /// step's raw with the filters as they are now — so it is the display lane's
+    /// and answers mid-render, like the sliders. Nothing is deleted: stepping
+    /// forward again works until a new pass starts a new branch (`advance`).
+    pub fn goto(&mut self, id: u64, index: usize) -> Result<GenResult> {
+        let p = lock(&self.retained).get(id, "step through")?;
+        let history = p.steps();
+        let s = history
+            .get(index)
+            .with_context(|| format!("this image has no step {index}"))?
+            .clone();
+        let t = Instant::now();
+        let (png, w, h) = publish(&self.fsr, &s.raw, &p.display, &p.filters)?;
+        let fsr_ms = t.elapsed().as_millis();
+        let was = p.raw.clone();
+        let entry = Pending {
+            raw: s.raw,
+            raw_w: w,
+            raw_h: h,
+            profile: s.profile,
+            refine_passes: s.refine_passes,
+            hires_passes: s.hires_passes,
+            step: s.step,
+            history,
+            at: index,
+            ..p
+        };
+        let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
+        if !lock(&self.retained).replace(id, &was, entry) {
+            bail!("that image changed while stepping through its history — try again");
+        }
+        Ok(result)
+    }
+
     /// Bring an archived generation back as a live result: a fresh `image_id`
     /// with its own `Pending`, so refine, hi-res and the sliders all work on it
     /// immediately. No diffusion runs — this is a file copy and a `publish`.
@@ -1812,6 +2158,8 @@ impl Display {
         scratch.keep(&display);
 
         let entry = Pending {
+            history: Vec::new(),
+            at: 0,
             raw,
             raw_w: w,
             raw_h: h,
@@ -1893,6 +2241,8 @@ impl Display {
         profile.clarity = 0.0;
 
         let entry = Pending {
+            history: Vec::new(),
+            at: 0,
             raw,
             raw_w: w,
             raw_h: h,
@@ -1991,7 +2341,11 @@ fn publish(
 
 impl Pending {
     fn result(&self, id: u64, png: Vec<u8>, timings: Timings) -> GenResult {
+        let steps = self.steps();
         GenResult {
+            step: self.step,
+            history: steps.into_iter().map(|s| s.label).collect(),
+            at: self.at,
             png,
             width: self.raw_w,
             height: self.raw_h,
@@ -2282,7 +2636,7 @@ fn random_seed() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{after_model, fit_to, AfterModel, Pending, Retained, Slot};
+    use super::{advance, after_model, fit_to, AfterModel, Pending, Retained, Slot, MAX_HISTORY};
     use crate::config::{Filters, Profile};
     use crate::fsr::out_size;
     use std::path::Path;
@@ -2311,7 +2665,15 @@ mod tests {
             refine_passes: 0,
             hires_passes: 0,
             step: 0,
+            history: Vec::new(),
+            at: 0,
         }
+    }
+
+    /// `prev` after a pass that wrote `name`: what `refine` does, minus sd-cli.
+    fn pass(dir: &Path, prev: &Pending, name: &str) -> Pending {
+        let next = Pending { step: prev.step + 1, ..live(dir, name) };
+        advance(prev, next, name.into())
     }
 
     fn scratch(tag: &str) -> std::path::PathBuf {
@@ -2354,6 +2716,69 @@ mod tests {
         r.unpin(1);
         assert!(r.get(1, "t").is_err() && !a.raw.exists());
         assert!(r.pin(1).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every pass is a step: the image it replaced stays, and stepping back
+    /// then taking a new pass drops the branch that was stepped back from.
+    #[test]
+    fn a_new_pass_after_stepping_back_drops_the_old_branch() {
+        let dir = scratch("history");
+        let g = live(&dir, "g");
+        let fingers = pass(&dir, &g, "fingers");
+        let hat = pass(&dir, &fingers, "hat");
+        assert_eq!(hat.history.len(), 3);
+        assert_eq!(hat.at, 2);
+        assert!(g.raw.exists() && fingers.raw.exists() && hat.raw.exists());
+        assert!(!g.display.exists() && !fingers.display.exists(), "displays are remade, not kept");
+
+        // Back to the fingers (what `goto` writes), then a better hat.
+        let back = Pending { at: 1, ..fingers.clone() };
+        let back = Pending { history: hat.history.clone(), ..back };
+        let hat2 = pass(&dir, &back, "hat2");
+        let labels: Vec<&str> = hat2.history.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, ["Generated", "fingers", "hat2"]);
+        assert!(!hat.raw.exists(), "the bad hat's step is gone");
+        assert!(fingers.raw.exists() && g.raw.exists());
+
+        hat2.remove_files();
+        assert!(!g.raw.exists() && !fingers.raw.exists() && !hat2.raw.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn history_keeps_the_original_and_drops_the_oldest_after_it() {
+        let dir = scratch("cap");
+        let g = live(&dir, "g");
+        let mut p = g.clone();
+        let mut made = Vec::new();
+        for i in 0..MAX_HISTORY + 3 {
+            p = pass(&dir, &p, &format!("s{i}"));
+            made.push(p.raw.clone());
+        }
+        assert_eq!(p.history.len(), MAX_HISTORY);
+        assert_eq!(p.history[0].label, "Generated");
+        assert!(g.raw.exists(), "the original stays");
+        // Fifteen passes and the original is sixteen: the four oldest after
+        // the original go.
+        assert!(!made[0].exists() && !made[3].exists() && made[4].exists());
+        assert_eq!(p.at, MAX_HISTORY - 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A step back writes only over the image it read; a pass that landed
+    /// meanwhile wins.
+    #[test]
+    fn a_step_never_writes_over_a_newer_pass() {
+        let dir = scratch("replace");
+        let mut r = Retained::default();
+        let a = live(&dir, "a");
+        r.store(1, Slot::Image, a.clone(), false);
+        let b = pass(&dir, &a, "b");
+        let stepped = Pending { at: 0, ..b.clone() };
+        r.store(1, Slot::Image, b.clone(), false);
+        assert!(r.replace(1, &b.raw, stepped.clone()));
+        assert!(!r.replace(1, &a.raw, stepped), "read a, but b is live");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -795,6 +795,82 @@ Three things break silently:
   as a blob and swaps only when it is in hand, since the one on screen may already be
   pruned and re-requesting its URL would 404.
 
+## Redraw
+
+Paint over part of the Image tab's result and redraw just that part:
+`src/redraw.rs` (the geometry and the compositing, pure and GPU-free tested),
+`Engine::redraw`, `POST /redraw`, `SdRunner::redraw` (`img2img_cmd` plus
+`--mask`) and `web/js/redraw.js`, a dialog of its own (`#redraw`) opened from the
+result's action row. An escalation in every respect that matters — reads `raw`,
+publishes through `publish()`, a priority job that pins its image, uncached — so
+Refine, Hi-res and Save follow it with nothing special. `--mask` works on every
+family, not only inpainting checkpoints: sd.cpp blends the original latent back in
+outside the mask after every step (`diffusion_engine.cpp`, `denoise_mask`).
+
+Seven things break silently:
+
+- **The result is composited in pixel space, never taken whole from sd-cli.**
+  Every VAE round trip shifts colour and softens a little everywhere, so the
+  pass's own frame would quietly change the entire picture and leave a seam at the
+  crop. `redraw::composite` through `redraw::feather` leaves every pixel the fade
+  never reaches as the original's bytes — `untouched_pixels_are_the_original_bytes`.
+- **The fade goes outward, and sd-cli redraws past all of it.** `feather` is 255
+  over everything painted (never below the hard mask — a blur alone reaches ~98%,
+  which leaves a sliver of what was asked to go) and fades over the edge softness
+  beyond it. `diffusion_mask` dilates further (`3·soft + 8`), so the blend only ever
+  mixes the original with pixels the model really drew; mixing it with the
+  original's own VAE round trip is the rough edge at high strength.
+  `the_model_redraws_past_the_whole_fade` pins it, and `context_rect` grows the crop
+  by the same reach.
+- **The crop is enlarged to the model's size, never diffused small.** A painted
+  face 80 px wide redrawn at 80 px comes back as bad as before; `work_size` puts the
+  crop's long side at the profile's base size. Both axes are snapped to 64, unlike
+  `fit_to`, which is right *only* because the patch is resized back to the crop's
+  exact size before compositing.
+- **`GenResult.step` is in the page's "already on screen" test** (`sameImage`).
+  A redraw changes no pass count and no size, so without it a redrawn image compared
+  equal to the one it replaced and `takeResult` dropped it.
+- **The redraw prompt is the pass's, not the image's.** `Pending.prompt` keeps
+  describing the picture; a blank box uses it. The seed is `p.seed + step`, so a
+  second press on the same mask is a new variant.
+- **The mask's view lies over the image; it never wraps it**, so `zoomPane`'s
+  fit/centre rules hold, and it is display-sized while the master mask is
+  natural-sized, so a 3072² image isn't a second 36 MB canvas. Its pointer handler
+  runs *after* the pane's and skips whatever the pane took as a pan
+  (`defaultPrevented`) or would have if it weren't fitted (Space, middle button).
+- **Outputs never offer it.** A saved output is `display` (invariant 1). The
+  dialog is reached only from the Image tab's action row.
+
+`zoomPane` (`viewer.js`) is the viewer's Fit/1:1/pan, made a factory when the
+dialog became its second user: the centring rules (`expectNew` before a different
+image, `keepView` before a re-filter) live in it once. The history list's rows are
+bare `<button>`s, the thumbnail-grid exception: the 2 px border is the chrome.
+
+### History
+
+Every pass on an image — Refine, Hi-res, Redraw — is a step that can be gone back
+to: `Pending.history` (`Snapshot`s: raw, profile, pass counts, step, label) and
+`Pending.at`, `Display::goto`, `POST /history/goto`, and
+`GET /history/{id}/{index}.png`. Scratch, like everything a `Pending` owns: never in
+a sidecar. Five things break silently:
+
+- **A pass no longer deletes the image it replaced** — `advance` keeps it as a
+  step and deletes only its `display`, which `publish` can make again. A new pass
+  from an earlier step deletes the steps after it (a new branch, as in any undo
+  stack). `MAX_HISTORY` (12) drops the oldest *after* the original.
+- **Pass file names carry a unique `n`** (`{id}-{step}-{n}-raw.png`). After
+  stepping back to step 1 the next pass is step 2 again, and `{id}-{step}` alone
+  would overwrite the old step 2's file and then delete it as a discarded branch.
+- **`remove_files` deletes every step's raw and thumbnail.** An image let go of
+  (slot taken, last pin gone) must not strand its history in `work/current/`.
+- **`goto` writes back through `Retained::replace(id, was, …)`, not `update`.**
+  `update` matches on the entry's own `raw`, which is exactly what a step changes;
+  `replace` matches on the raw that was read, so a pass that landed meanwhile wins.
+  The page locks the list while a pass runs, for the same reason.
+- **Filters are not in a `Snapshot`.** Stepping keeps the grade where it is — the
+  user's look, carried the way `Filters::restart` carries it — and the step's
+  profile comes back with it, because a Hi-res on another checkpoint swapped it.
+
 ## Step caching
 
 `Profile::cache_mode`, sd-cli's `--cache-mode` (`docs/caching.md` in the clone), on the
@@ -988,12 +1064,13 @@ resolves the imports itself. `index.html` loads exactly one of them:
 | `busy.js` | `IDLE_LABELS`, `setBusy`/`setIdle` (one button waiting on its own request), `onIdle`, `cancelRun` |
 | `jobs.js` | the `/jobs` poll: the Jobs button and dialog, every tab's progress line, a run's images (`onResult`) and failures (`onNotice`) |
 | `hints.js` | `HELP`, `HINTS`, `wireHints`, the tooltip bubble |
-| `viewer.js` | `FILTERS`, the sliders, `/adjust`, fit/1:1, panning |
+| `viewer.js` | `FILTERS`, the sliders, `/adjust`, and `zoomPane` (fit/1:1/panning, shared with Redraw) |
 | `image.js` | the Image tab: models, the folds, `render`, escalations, runs, Save |
 | `workitems.js` | the work-item grid and reopening one |
 | `gridmark.js` | click-to-mark: the marks, the action table, the buttons, the requests |
 | `source-slot.js` | *Start from*: the source-image slot factory, the upload, drop and paste |
 | `loras.js` | the LoRA picker factory (one instance, on the Image tab) |
+| `redraw.js` | the Redraw dialog: the mask, painting, the request, the history list |
 | `outputs.js` | `fetchOutputs`, `outputGrid`, and the Outputs tab |
 | `video.js` | the Video tab: models, generate, the clip grid, the first frame (a `sourceSlot`) |
 | `player.js` | the canvas frame player and `renderClip` |

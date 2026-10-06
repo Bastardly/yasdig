@@ -88,6 +88,8 @@
   --shadow-pop: 0 6px 20px rgba(0, 0, 0, .8);
   --scrim: rgba(0, 0, 0, .85);     /* the viewer's backdrop */
   --scrim-soft: rgba(0, 0, 0, .7); /* the picker's, and the close button's bed */
+  --mask: rgba(220, 70, 60, .5);   /* a Redraw mask over the picture: the
+                                      danger hue, see-through so you can aim */
 
   /* ---- Measurements. All at the values the layout was tuned to; see the
      .layout comment for why the caps are the part that matters. ---- */
@@ -489,7 +491,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    pixel level, and the result column shows a fitted preview a few hundred
    pixels wide — so this is the only place the sliders can honestly live.
    Nothing here scrolls but the two panes themselves. */
-#lightbox {
+#lightbox, #redraw {
   width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh;
   margin: 0; padding: 0; border: 0; overflow: hidden;
   background: var(--ink-900); color: var(--text);
@@ -498,8 +500,8 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    by the UA rule `dialog:not([open]) { display: none }`, which an id selector
    outranks — so declaring `display: flex` on #lightbox alone shows the viewer
    from page load, permanently, with close() having no attribute to remove. */
-#lightbox[open] { display: flex; }
-#lightbox::backdrop { background: var(--scrim); }
+#lightbox[open], #redraw[open] { display: flex; }
+#lightbox::backdrop, #redraw::backdrop { background: var(--scrim); }
 /* Fixed width, not a fraction: the controls are the same size whatever the
    image is, and this column is where later sliders go. It scrolls on its own,
    so adding them never squeezes the viewport. */
@@ -529,12 +531,43 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .lbview.fit img { max-width: 100%; max-height: 100%; }
 /* Positioned against the dialog, which is fixed while modal — not against the
    viewport pane, which scrolls and would carry the button away with it. */
-#lbclose {
+#lbclose, #rdclose {
   position: absolute; top: 10px; right: 14px;
   padding: 2px var(--sp-3); font-size: var(--fs-display); line-height: 1.1;
   border-radius: var(--r-md); background: var(--scrim-soft); color: var(--text);
 }
 #lberr { margin-top: var(--sp-4); }
+
+/* ============================ Redraw ============================ */
+
+/* The viewer's layout, reused: `.lbside` beside a `.lbview`. The mask canvas
+   lies over the image, positioned against the pane (which scrolls, carrying it
+   along), and is shown only while the pointer is over the picture or a stroke
+   is going — off the picture, you see the result clean. Its edge is blurred to
+   the softness that will be used (`redraw.js`), so what you see is roughly what
+   will blend. */
+.rdview { position: relative; cursor: crosshair; }
+.rdview.panning, .rdview.drag { cursor: grabbing; }
+.maskview { position: absolute; pointer-events: none; opacity: 0; transition: opacity .12s; }
+.rdview:hover .maskview, .maskview.stroking { opacity: 1; }
+#redraw .lbside > label, #redraw .rdrow { margin-top: var(--sp-3); }
+.rdrow { display: flex; align-items: center; gap: var(--sp-3); }
+.rdrow label { margin: 0; flex: 1; }
+.rdrow input { width: 90px; }
+.redrawtools { display: flex; gap: var(--sp-2); margin: var(--sp-3) 0; }
+.redrawtools .btn { flex: 1; }
+#rdcancel { margin-top: var(--sp-2); }
+.rdhistory { list-style: none; margin: var(--sp-2) 0 0; padding: 0; display: grid; gap: var(--sp-2); }
+.rdhistory button {
+  display: flex; align-items: center; gap: var(--sp-2); width: 100%; text-align: left;
+  padding: var(--sp-1); border-radius: var(--r-sm); border: 2px solid transparent;
+}
+.rdhistory button:hover { background: var(--ink-600); }
+.rdhistory button.active { border-color: var(--state); }
+.rdhistory button:disabled { opacity: .5; cursor: default; }
+.rdhistory img { width: 56px; height: 56px; object-fit: cover; border-radius: var(--r-sm); background: var(--ink-800); }
+.rdhistory span { font-size: var(--fs-sm); color: var(--text-dim); }
+.rdhistory button.active span { color: var(--text); }
 
 /* The post-process panel. The label sits *above* its track rather than beside
    it: beside was right when these two controls were under a full-width image,

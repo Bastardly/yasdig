@@ -1095,6 +1095,30 @@ pick it in the Image tab's **Image to image** fold — that starts a real pass f
 strength you choose. Grading it further is exactly what this tab is for; re-rendering it is a
 different question, asked in a different place.
 
+### Redraw
+
+For an image that is almost right. **Redraw…** beside the result opens a dialog laid
+out like the viewer: paint over what should change — a hand, a face, a stray object —
+optionally type what should be there (blank redraws it from the image's own prompt),
+and press **Redraw**. Only the painted area is redrawn; every pixel outside it keeps
+its exact original value. Right-drag erases, **1:1** and Space+drag work on a large
+image at full size, and the mask only shows while the pointer is over the picture, so
+the result is easy to judge. The live preview is in the dialog too.
+
+It works on every model, not just inpainting checkpoints, and small things come back
+*sharper*: the painted area and a margin around it are cut out, enlarged to the
+model's own size, redrawn, shrunk back and blended in. **Strength** 0.5 (the default)
+keeps the shape and fixes the detail, 0.8 replaces it, 0.95 starts that area over.
+**Edge softness** is how far past the paint the new pixels fade into the old — what you
+painted is always replaced in full.
+
+Every pass on an image — Redraw, Refine and Hi-res — is a step in its **History**,
+listed in the dialog with a thumbnail each. Click one to go back (or Ctrl+Z /
+Ctrl+Shift+Z): fixed the fingers, ruined the hat, step back to the fingers and try the
+hat again. A new pass from an earlier step replaces the ones after it. An image keeps
+its last twelve steps and always its original; history is scratch, gone with the image
+or the server. Outputs have no Redraw — pick one under *Image to image* instead.
+
 ### Escalating with a different model
 
 **Hi-res model** and **Refine model**, at the head of the Hi-res and Refine folds, run
@@ -1581,6 +1605,18 @@ needs a Vulkan device and nothing else.
   job that isn't a running run, or in the moment between two passes of one image.
 - `POST /refine` — `{ "image_id": 3 }`. img2img over the retained image at its current
   size, no rescale.
+- `POST /redraw` — `{ "image_id": 3, "mask": "<base64 PNG or data: URL>", "prompt":
+  "a red scarf", "strength": 0.5, "feather": 16 }`. Redraws where the mask is white.
+  The mask must be the image's own size; the rest is optional (blank prompt = the
+  image's own, strength 0.5, `feather` — edge softness in image pixels, 0–128 —
+  16). Queued ahead of everything not yet running, like `/refine`, and answers in its
+  shape, with `timings.redraw_ms`.
+- `POST /history/goto` — `{ "image_id": 3, "index": 1 }`. Make that step of the
+  image's history the live one. Every result carries `history` (each step's label,
+  oldest first) and `at` (the step on screen). A `publish`, no diffusion — answered on
+  the display lane, so it never waits behind a render.
+- `GET /history/{image_id}/{index}.png` — a step's 256 px thumbnail, made on first
+  request.
 - `POST /hires` — `{ "image_id": 3, "upscale": 2 }`. FSR-upscale toward
   `upscale ×` the current size (1–4, default 1), img2img at up to `hires_max_side`, then
   a final FSR upscale if the target is beyond that budget.
