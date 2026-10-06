@@ -468,6 +468,14 @@ impl<'a> SdRunner<'a> {
         }
         cmd.args(["-s", &seed.to_string()]);
         cmd.args(["-o", &path_str(out)]);
+        // The live preview: `proj` is a fixed latent-to-RGB matrix per VAE
+        // (`StableDiffusionGGML::preview_image`), so it needs no file and covers
+        // every family this build runs. Numbered rather than one overwritten
+        // file, because sd-cli writes in place — see `newest_complete`.
+        if let Some(dir) = self.monitor.preview_dir() {
+            cmd.args(["--preview", "proj", "--preview-interval", "1"]);
+            cmd.args(["--preview-path", &path_str(&dir.join("p-%04d.png"))]);
+        }
         if let Some(wt) = &p.weight_type {
             cmd.args(["--type", wt]);
         }
@@ -500,6 +508,14 @@ impl<'a> SdRunner<'a> {
     /// for the one mode, `upscale`, whose failures don't always reach the exit
     /// status.
     fn run_tail(&self, mut cmd: Command, label: &str) -> Result<VecDeque<String>> {
+        // Before the spawn, not in `Monitor::begin`, which runs after it: a
+        // child that wrote its first preview in that gap would lose it. Every
+        // run clears it, so one that passes no `--preview` (video, convert,
+        // upscale) leaves nothing behind that could read as its own.
+        if let Some(dir) = self.monitor.preview_dir() {
+            let _ = std::fs::remove_dir_all(dir);
+            std::fs::create_dir_all(dir).ok();
+        }
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd
             .spawn()
@@ -629,9 +645,40 @@ struct MonitorInner {
     /// waiting for.
     child: Mutex<Option<Child>>,
     cancelled: AtomicBool,
+    /// Where sd-cli writes its per-step previews. `None` on a detached
+    /// monitor, which then asks for no previews at all — nobody would read them.
+    preview: Option<PathBuf>,
 }
 
 impl Monitor {
+    /// The worker's monitor, whose runs write a live preview into `dir`. The
+    /// dir is the monitor's rather than the runner's because both ends need
+    /// it: the runner names it to sd-cli, a connection thread reads it back.
+    pub fn with_preview(dir: PathBuf) -> Self {
+        Monitor(Arc::new(MonitorInner {
+            preview: Some(dir),
+            ..Default::default()
+        }))
+    }
+
+    pub fn preview_dir(&self) -> Option<&Path> {
+        self.0.preview.as_deref()
+    }
+
+    /// The number of the newest complete preview, while a run is in flight.
+    /// `None` between runs, so a finished or stopped run's last frame is never
+    /// shown as if it were live.
+    pub fn preview(&self) -> Option<u32> {
+        self.snapshot()?;
+        newest_complete(self.preview_dir()?)
+    }
+
+    /// The bytes of preview `n`, for `GET /preview/{n}.png`. The number is the
+    /// whole whitelist: the name is built here, never taken from the request.
+    pub fn preview_png(&self, n: u32) -> Option<Vec<u8>> {
+        std::fs::read(self.preview_dir()?.join(preview_name(n))).ok()
+    }
+
     /// What to show while a job runs, or `None` when nothing is running.
     pub fn snapshot(&self) -> Option<Progress> {
         self.0.progress.lock().ok()?.clone()
@@ -700,6 +747,55 @@ impl Monitor {
             });
         }
     }
+}
+
+/// What sd-cli's `p-%04d.png` makes of preview `n` (`format_frame_idx`).
+fn preview_name(n: u32) -> String {
+    format!("p-{n:04}.png")
+}
+
+/// The last twelve bytes of every finished PNG: the empty `IEND` chunk, its
+/// length, type and CRC.
+const PNG_END: [u8; 12] = [0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0x82];
+
+/// The highest-numbered preview in `dir` that is complete, deleting the ones
+/// before it.
+///
+/// sd-cli writes each preview in place — no temp name, no rename — so the
+/// newest file can be half written when this looks, and an overwritten single
+/// file would be half written exactly as often as it was read. Numbered files
+/// plus the `IEND` test make that a fall-back to the previous frame instead of
+/// a broken image, and don't depend on whether sd-cli prints its progress bar
+/// before or after the callback. Pruning keeps a 50-step run to two files; the
+/// one being written is never older than the one returned, so it is never
+/// deleted under the child.
+pub fn newest_complete(dir: &Path) -> Option<u32> {
+    let mut found: Vec<u32> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| {
+            let name = e.ok()?.file_name();
+            let digits = name.to_str()?.strip_prefix("p-")?.strip_suffix(".png")?;
+            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            digits.parse().ok()
+        })
+        .collect();
+    found.sort_unstable_by(|a, b| b.cmp(a));
+    let newest = found.iter().copied().find(|&n| is_complete(&dir.join(preview_name(n))))?;
+    for &n in found.iter().filter(|&&n| n < newest) {
+        let _ = std::fs::remove_file(dir.join(preview_name(n)));
+    }
+    Some(newest)
+}
+
+fn is_complete(path: &Path) -> bool {
+    use std::io::{Seek, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut tail = [0u8; 12];
+    f.seek(SeekFrom::End(-12)).is_ok() && f.read_exact(&mut tail).is_ok() && tail == PNG_END
 }
 
 /// Pull `step`, `steps` and the rate text out of one of sd.cpp's progress bars:
@@ -1244,6 +1340,56 @@ lora_dir = "loras""#,
             tail.back().map(String::as_str),
             Some(format!("line {}", TAIL_LINES * 3 - 1).as_str())
         );
+    }
+
+    /// The newest preview may be half written; the one before it is what to
+    /// show, and everything older goes. Names that aren't sd-cli's are left
+    /// alone and never read as a frame.
+    #[test]
+    fn the_newest_complete_preview_wins_and_older_ones_go() {
+        let dir = std::env::temp_dir().join(format!("rustimage-preview-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(newest_complete(&dir), None, "a missing dir is no preview");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(newest_complete(&dir), None, "an empty dir is no preview");
+
+        let png = |body: &[u8]| [b"\x89PNG".as_slice(), body, &PNG_END].concat();
+        for n in [0, 1, 2] {
+            std::fs::write(dir.join(preview_name(n)), png(b"frame")).unwrap();
+        }
+        std::fs::write(dir.join(preview_name(3)), b"\x89PNG half").unwrap();
+        std::fs::write(dir.join("p-.png"), png(b"")).unwrap();
+        std::fs::write(dir.join("p-9999.png.part"), png(b"")).unwrap();
+        std::fs::write(dir.join("other.png"), png(b"")).unwrap();
+
+        assert_eq!(newest_complete(&dir), Some(2));
+        assert!(!dir.join(preview_name(0)).exists() && !dir.join(preview_name(1)).exists());
+        assert!(dir.join(preview_name(3)).exists(), "the one being written stays");
+        assert!(dir.join("other.png").exists());
+
+        // The child finishes writing it: now that one is the frame.
+        std::fs::write(dir.join(preview_name(3)), png(b"frame")).unwrap();
+        assert_eq!(newest_complete(&dir), Some(3));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Only the worker's monitor asks for previews, and only while a run is
+    /// in flight does it report one.
+    #[test]
+    fn previews_are_asked_for_by_the_worker_alone() {
+        let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
+        let p = Profile {
+            model: PathBuf::from("/models/sdxl.safetensors"),
+            ..Default::default()
+        };
+        let detached = argv(&SdRunner::new(&cfg).base_cmd(&p, "a cat", None, 1, Path::new("o.png"), 1.0));
+        assert!(!detached.iter().any(|a| a.starts_with("--preview")));
+
+        let m = Monitor::with_preview(PathBuf::from("/work/current/preview"));
+        let a = argv(&SdRunner::watched(&cfg, &m).base_cmd(&p, "a cat", None, 1, Path::new("o.png"), 1.0));
+        assert_eq!(flag(&a, "--preview"), Some("proj"));
+        assert_eq!(flag(&a, "--preview-path"), Some("/work/current/preview/p-%04d.png"));
+        assert_eq!(m.preview(), None, "nothing running, nothing to show");
     }
 
     /// `Phase` is derived from the unit sd.cpp chose, so that derivation is a

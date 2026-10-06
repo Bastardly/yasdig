@@ -59,6 +59,9 @@ struct Entry<T> {
     /// `None` is "Keep going until stopped".
     total: Option<u32>,
     stopping: bool,
+    /// The image in flight was cancelled on purpose (*Cancel generation*):
+    /// its failure is the next image's cue, not the end of the run.
+    skipping: bool,
     /// Pushed by a button press on the image in hand (Refine, Hi-res) rather
     /// than queued as new work: it goes ahead of everything that isn't running.
     priority: bool,
@@ -103,6 +106,10 @@ pub struct JobView {
     pub total: Option<u32>,
     /// `running`, `stopping` or `queued`.
     pub state: &'static str,
+    /// The image in flight is being cancelled (*Cancel generation*). Beside
+    /// `state` rather than one of its values, because a run can be stopping
+    /// and skipping at once.
+    pub skipping: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -196,6 +203,7 @@ impl<T: Clone> Queue<T> {
             done: 0,
             total,
             stopping: false,
+            skipping: false,
             priority,
             work,
             reply,
@@ -251,6 +259,7 @@ impl<T: Clone> Queue<T> {
         };
         let mut e = s.entries.remove(i).expect("position came from this deque");
         e.done += 1;
+        e.skipping = false;
         let finished = e.stopping || e.total.is_some_and(|n| e.done >= n);
         if finished {
             return false;
@@ -262,6 +271,38 @@ impl<T: Clone> Queue<T> {
             s.entries.insert(at, e);
         }
         true
+    }
+
+    /// *Cancel generation*: mark the image a running run has in flight as
+    /// cancelled on purpose, so the caller can kill its child and the worker
+    /// counts the failure that follows as the image being done rather than as
+    /// the run failing. Returns whether `id` is a run the worker holds; anything
+    /// else has no "next image" to jump to, and is the Stop route's to kill.
+    pub fn skip(&self, id: u64) -> bool {
+        let mut s = self.lock();
+        if s.running != Some(id) {
+            return false;
+        }
+        match s.entries.iter_mut().find(|e| e.id == id) {
+            Some(e) if e.kind.is_run() => {
+                e.skipping = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Take a [`Queue::skip`] back: there was no child to kill, so nothing will
+    /// fail, and a mark left standing would swallow a real failure later on.
+    pub fn unskip(&self, id: u64) {
+        if let Some(e) = self.lock().entries.iter_mut().find(|e| e.id == id) {
+            e.skipping = false;
+        }
+    }
+
+    /// Whether the image that just failed was cancelled on purpose.
+    pub fn skipped(&self, id: u64) -> bool {
+        self.lock().entries.iter().any(|e| e.id == id && e.skipping)
     }
 
     /// An indivisible job is over: answer whoever is waiting and drop it.
@@ -347,6 +388,7 @@ impl<T: Clone> Queue<T> {
                 } else {
                     "running"
                 },
+                skipping: e.skipping,
             })
             .collect();
         Snapshot {
@@ -449,6 +491,30 @@ mod tests {
         assert_eq!(q.snapshot().jobs[0].state, "stopping");
         assert!(!q.image_done(id));
         assert_eq!(q.len(), 0);
+    }
+
+    /// *Cancel generation* kills one image and the run goes on to the next;
+    /// the cancelled image counts, so a pinned seed still walks past it.
+    #[test]
+    fn a_skipped_image_counts_and_the_run_goes_on() {
+        let q = Queue::new();
+        let id = q.push(Kind::Generate, "m".into(), Some(3), "batch", None, false);
+        assert!(!q.skip(id), "not running yet: nothing in flight to cancel");
+        q.next();
+        assert!(q.skip(id));
+        assert!(q.snapshot().jobs[0].skipping);
+        assert!(q.skipped(id));
+        assert!(q.image_done(id));
+        assert!(!q.skipped(id), "the mark is that image's, not the next one's");
+        assert_eq!(q.next().done, 1);
+
+        // No child to kill: the mark is taken back, so a real failure still fails.
+        assert!(q.skip(id));
+        q.unskip(id);
+        assert!(!q.skipped(id));
+
+        let conv = q.push(Kind::Convert, "c".into(), None, "convert", None, true);
+        assert!(!q.skip(conv), "an indivisible job has no next image");
     }
 
     #[test]

@@ -731,6 +731,15 @@ test:
   error, its pinned image let go). A running run is marked `stopping` and ends at
   the image boundary — the image in flight is finished, passes and save included,
   as the old Stop did. Anything else running is killed (`monitor.cancel`).
+- **Cancel generation is the third, and it is a kill that the run survives**
+  (`POST /jobs/skip`). `Queue::skip` marks the running entry *before* the route
+  kills the child, so `diffuse` can never see the failure without the mark, and
+  it reads the mark (`Queue::skipped`) to call `image_done` instead of `fail_run`.
+  The skipped image counts towards `done`, so a pinned seed walks past it rather
+  than redrawing it. `unskip` takes the mark back when `monitor.cancel` found no
+  child (the gap between two sd-cli passes), since a mark left standing would turn
+  the next real failure into a silent skip. A Refine or Hi-res press has no next
+  image, so the page sends it to `/jobs/stop` instead.
 
 Four things break silently:
 
@@ -758,6 +767,33 @@ around an ESRGAN, which is sd-cli — so an edit waits at most for one FSR pass.
 `Retained::update` is the other half: an adjust writes back only over the entry
 it read, so a refine that finished meanwhile is never overwritten with the old
 paths.
+
+## Live preview
+
+sd-cli's `--preview proj`, written by every txt2img and img2img pass (`base_cmd`)
+into `work/current/preview/` and shown under the progress line. `proj` is a fixed
+latent-to-RGB matrix per VAE (`StableDiffusionGGML::preview_image`,
+`src/pipeline/diffusion_engine.cpp`), so it needs no file and covers every family —
+and is 1/8 of the render, which is why it is a thumbnail in the run panel rather than
+the result column. `Monitor::with_preview` holds the dir, because both ends need it:
+the runner names it to sd-cli and a connection thread reads it back for
+`GET /preview/{n}.png`. A detached monitor (tests, `preflight`) asks for no previews.
+Video is left out: with more than one frame sd-cli muxes an `.avi` instead (`step_callback`).
+
+Three things break silently:
+
+- **Numbered files plus an `IEND` test, never one overwritten file.** sd-cli writes a
+  preview in place — no temp name, no rename — so a single `preview.png` would be half
+  written some fraction of the times it was read. `newest_complete` takes the highest
+  `p-NNNN.png` whose last 12 bytes are the `IEND` chunk, falls back past one still being
+  written, and prunes the older ones (never the newer, which is the one being written).
+- **The dir is emptied in `run_tail` before the spawn, not in `Monitor::begin`**, which
+  runs after it — a fast child's first frame would land in the gap and be deleted. Every
+  run empties it, so a mode that writes none can't show the previous run's.
+- **`Monitor::preview` is `None` whenever `progress` is.** A finished or stopped run's
+  last frame would otherwise sit under the button looking live. The page fetches a frame
+  as a blob and swaps only when it is in hand, since the one on screen may already be
+  pruned and re-requesting its URL would 404.
 
 ## Samplers, schedulers and the Help tab
 

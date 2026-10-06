@@ -1136,7 +1136,10 @@ the button says `Generate 4`; the images are produced one at a time and each
 appears as it lands, so you can watch the batch fill the work items strip rather
 than waiting for the lot. Tick **Keep going until stopped** and the button
 becomes `Start loop generation`: it ignores the count and keeps going until you press
-**Stop**, which finishes the image in flight and then ends the run.
+**Stop job**, which finishes the image in flight and then ends the run (it only shows
+for more than one image). **Cancel generation**, beside it, throws the image in flight
+away and moves on to the next one in the run — a single image simply ends; on a Refine
+or Hi-res pass it cancels that pass and leaves the image as it was.
 
 Generate **queues** the run on the server, and stays pressable: press it again — with
 other settings, another model — and that run waits its turn behind this one. While
@@ -1156,6 +1159,14 @@ reports them — `Image 2/4 · Step 7/20 · 1.23s/it`, or `Loading weights 18/50
 412.00MB/s` before the denoising starts. It is polled from `GET /jobs`, which is
 answered off the job queue, so it keeps moving during a render rather than arriving
 once the render is done.
+
+Under it, a **live preview** shows the picture forming, updated every step — enough
+to see a wrong composition, a wrong subject or a LoRA doing nothing a few steps in,
+and press **Cancel generation** instead of waiting out the render. It is sd-cli's `--preview proj`:
+a fixed projection of the latent to colour, so it costs no extra download and works
+for every image family, but it is 1/8 of the render's size and shows composition and
+colour rather than detail. Generate, *Start from*, Refine and Hi-res all show one;
+video does not yet.
 
 A pinned seed **advances by one per image**, so a batch of eight isn't eight copies of
 the same picture; the first image is exactly the seed you pinned. `-1` keeps drawing a
@@ -1548,12 +1559,13 @@ needs a Vulkan device and nothing else.
 - `GET /jobs` — the queue, running entry first:
   ```json
   { "jobs": [{ "id": 7, "kind": "generate", "label": "sdxl-turbo", "done": 1,
-               "total": 4, "state": "running" }],
+               "total": 4, "state": "running", "skipping": false }],
     "latest_seq": 12, "notices": [{ "seq": 9, "message": "…" }],
     "progress": { "busy": true, "phase": "sampling", "step": 7, "steps": 20, "rate": "1.23s/it" } }
   ```
   `kind` is `generate`, `img2img`, `refine`, `hires`, `video`, `enlarge` or `convert`;
-  `total` is `null` for a loop; `state` is `running`, `stopping` or `queued`.
+  `total` is `null` for a loop; `state` is `running`, `stopping` or `queued`;
+  `skipping` is true while the image in flight is being cancelled by `/jobs/skip`.
   `latest_seq` moves whenever a job publishes an image — fetch it from
   `GET /jobs/latest`. `notices` are the last few failed runs, which have no request
   of their own to fail. Answered on the connection thread.
@@ -1562,6 +1574,10 @@ needs a Vulkan device and nothing else.
 - `POST /jobs/stop` — `{ "id": 7 }`. A waiting job is removed (a request waiting on it
   gets an error); a running run finishes the image in flight and ends; any other
   running job is killed. Answers `{ "stopped": "removed" | "stopping" | "cancelled" }`.
+- `POST /jobs/skip` — `{ "id": 7 }`, the *Cancel generation* button. Kills the image a
+  running run has in flight and goes on to the run's next image; the cancelled image
+  counts, so a pinned seed walks past it. Answers `{ "skipped": true }`, or `400` for a
+  job that isn't a running run, or in the moment between two passes of one image.
 - `POST /refine` — `{ "image_id": 3 }`. img2img over the retained image at its current
   size, no rescale.
 - `POST /hires` — `{ "image_id": 3, "upscale": 2 }`. FSR-upscale toward
@@ -1641,7 +1657,12 @@ needs a Vulkan device and nothing else.
   `loading` while sd-cli reads weights and `sampling` once it is denoising — worth
   distinguishing, because a model that streams from RAM can spend minutes on the first
   and "step 0 of 20" is the wrong thing to show for all of them. `rate` is sd-cli's own
-  text, unit and all.
+  text, unit and all. While a txt2img or img2img pass samples, the busy body also
+  carries `"preview": 7` — the newest complete live preview — or `null` before the
+  first one; `GET /jobs` embeds the same object as its `progress`.
+- `GET /preview/{n}.png` — that preview, as a PNG at 1/8 of the render's size. Older
+  frames are deleted as newer ones complete, so a 404 for an `n` that is no longer the
+  newest is normal; ask for the number the last poll reported.
 - `POST /cancel` — stops the run in flight, returning `{ "cancelled": true }` if there
   was one. This kills the `sd-cli` process, which is the only cancellation it offers;
   the pass was writing to a scratch file that is cleaned up on failure either way, so

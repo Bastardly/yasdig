@@ -103,6 +103,8 @@
                             doing the same job on two tabs */
   --thumb-h-pick: 140px; /* the first-frame picker */
   --thumb-h-chosen: 120px; /* the one chosen image, above its buttons */
+  --preview-h: 420px;    /* the live preview under the progress line; a cap,
+                            so a portrait render can't push the folds away */
   --bar-name: 60px;
   --bar-val: 72px;
 }
@@ -268,6 +270,17 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
    used to be above), and a hairline under the block so it reads as the panel's
    head rather than as the first of the settings. */
 .gohead { border-bottom: var(--line); padding-bottom: var(--sp-3); margin-bottom: var(--sp-1); }
+/* The live preview. sd.cpp's `proj` is 1/8 of the render, so it is scaled up
+   smoothly — nearest-neighbour at 8× reads as a glitch, not as a preview. */
+.livepreview {
+  display: block; width: 100%; max-height: var(--preview-h); object-fit: contain;
+  margin-top: var(--sp-2); background: var(--ink-700);
+  border-radius: var(--r-sm); border: var(--line); image-rendering: auto;
+}
+/* Cancel generation and Stop job: one row, splitting it when both show. */
+.runstop { display: flex; gap: var(--sp-2); }
+.runstop:has(> :not([hidden])) { margin-top: var(--sp-2); }
+.runstop .btn-block { flex: 1 1 0; }
 /* Edits in a form that are not on disk yet. Amber rather than red: nothing is
    wrong, there is just something left to do — and it is the same colour as the
    button that finishes it.

@@ -782,7 +782,10 @@ async function escalate(which, path, payload, label, kind) {
       takeResult(await post(path, { image_id: S.imageId, ...payload }));
     }
   } catch (e) {
-    escErr(String(e.message || e));
+    const msg = String(e.message || e);
+    // *Cancel generation* on this pass: nothing went wrong, and the image
+    // under the buttons is still the one the pass started from.
+    escErr(/cancelled by request/.test(msg) ? 'Cancelled. The image is as it was.' : msg);
     // The image is gone, so the controls are dead; keep the picture on
     // screen. Any other failure is retryable — the server kept its
     // intermediates.
@@ -963,12 +966,20 @@ async function startRun() {
   }
 }
 
-// The running run, if it is an image run of more than one: what the Stop under
-// Generate addresses. The Jobs dialog stops anything; this is the shortcut for
-// the common case, and it asks nothing, as it never did.
+// The running run, if it is an image run of more than one: what *Stop job*
+// under Generate addresses. The Jobs dialog stops anything; this is the shortcut
+// for the common case, and it asks nothing, as it never did.
+const isRunKind = (j) => j.kind === 'generate' || j.kind === 'img2img';
 const stoppableRun = () => {
   const j = runningJob();
-  return j && (j.kind === 'generate' || j.kind === 'img2img') && j.total !== 1 ? j : null;
+  return j && isRunKind(j) && j.total !== 1 ? j : null;
+};
+
+// What *Cancel generation* addresses: whatever is drawing the live preview —
+// an image of a run, or a Refine or Hi-res press.
+const cancellable = () => {
+  const j = runningJob();
+  return j && (isRunKind(j) || j.kind === 'refine' || j.kind === 'hires') ? j : null;
 };
 
 // Stop after the image in flight has finished its whole pipeline. The hi-res,
@@ -979,16 +990,40 @@ function stopRun() {
   if (j) stopJob(j.id);
 }
 
-// Shown only while there is something to stop *between* — a single image is over
-// when it's over. Driven by the Jobs poll, so it follows a run this page didn't
-// start, and one that outlived a reload.
+// Throw the image in flight away — for a preview whose composition is already
+// wrong. A run goes on to its next image (`/jobs/skip`); a Refine or Hi-res is
+// one pass, so cancelling it is stopping it.
+async function cancelImage() {
+  const j = cancellable();
+  if (!j) return;
+  if (!isRunKind(j)) return stopJob(j.id);
+  $('cancelgen').disabled = true;
+  try {
+    await post('/jobs/skip', { id: j.id });
+  } catch (e) {
+    // Most often the gap between two passes; the poll re-enables the button.
+    escErr(String(e.message || e));
+  }
+  soonJobs();
+}
+
+// Both driven by the Jobs poll, so they follow a run this page didn't start,
+// and one that outlived a reload. *Stop job* only while there is something to
+// stop *between* — a single image is over when it's over, and *Cancel
+// generation* already ends it.
 function syncStopButton() {
+  const c = cancellable();
+  $('cancelgen').hidden = !c;
+  if (c) {
+    $('cancelgen').disabled = !!c.skipping;
+    $('cancelgen').textContent = c.skipping ? 'Cancelling…' : 'Cancel generation';
+  }
   const j = stoppableRun();
   $('stop').hidden = !j;
   if (!j) return;
   const stopping = j.state === 'stopping';
   $('stop').disabled = stopping;
-  $('stop').textContent = stopping ? 'Stopping after this image…' : 'Stop';
+  $('stop').textContent = stopping ? 'Stopping after this image…' : 'Stop job';
 }
 
 // Keep the image on screen. Everything generated is archived automatically, but
@@ -1013,6 +1048,7 @@ export function initImage() {
   initFolds();
   $('go').addEventListener('click', startRun);
   $('stop').addEventListener('click', stopRun);
+  $('cancelgen').addEventListener('click', cancelImage);
   // The Hi-res fold's view of the shared upscale factor.
   $('hiresscale').value = S.upFactor;
   $('hiresscale').addEventListener('change', takeHiresScale);

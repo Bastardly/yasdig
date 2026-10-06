@@ -16,6 +16,8 @@
 //!   GET  /jobs/latest -> the newest image a job made: {image_base64, width,
 //!                         height, seed, image_id, can_refine, can_hires, timings}
 //!   POST /jobs/stop   -> {id}  remove a waiting job, or stop a running one
+//!   POST /jobs/skip   -> {id}  cancel the image a run has in flight; the run
+//!                        goes on to its next image
 //!   POST /upload      -> a PNG as the raw body (the one binary route)
 //!                        -> {stem, width, height}, landing in work/output/
 //!   POST /img2img     -> {prompt, template, source, ...overrides, count?, ...}
@@ -67,6 +69,8 @@
 //!   GET  /outputs/{stem}/thumb.png   generated on first request
 //!   POST /save-output      -> {image_id} keep the image on screen
 //!   GET  /progress    -> what the worker is rendering right now, step by step
+//!   GET  /preview/{n}.png  the live preview of the run in flight; `n` is
+//!                     the `preview` number /progress and /jobs report
 //!   POST /cancel      -> kill the run in flight (the only stop sd-cli offers)
 //!   POST /shutdown    -> stop the run, clear what the settings say, and exit
 //!
@@ -342,8 +346,9 @@ fn run(args: &[String]) -> Result<()> {
     let web_dir = Some(cfg.base_dir.join("web")).filter(|d| d.is_dir());
 
     // Shared with every connection thread: the worker publishes progress into
-    // it, and a Stop reaches the running child through it.
-    let monitor = Monitor::default();
+    // it, a Stop reaches the running child through it, and its runs write the
+    // live preview `GET /preview/{n}.png` serves.
+    let monitor = Monitor::with_preview(pipeline::preview_dir(&cfg.base_dir.join("work")));
 
     // The diffusion worker. It initializes wgpu + sd, reports readiness, then
     // takes work from the job queue one image at a time. The display worker is
@@ -442,6 +447,11 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
     match t.work {
         Work::Run(plan) => match run_image(engine, saver, queue, &plan, t.done) {
             Ok(()) => {
+                queue.image_done(t.id);
+            }
+            // *Cancel generation* killed this image on purpose: the run goes
+            // on to its next one, with no notice — the person asked for it.
+            Err(_) if queue.skipped(t.id) => {
                 queue.image_done(t.id);
             }
             Err(e) => queue.fail_run(t.id, format!("{e:#}")),
@@ -628,8 +638,18 @@ fn handle_conn(
         ("GET", "/progress") => conn.respond(
             200,
             "application/json",
-            progress_json(monitor.snapshot().as_ref()).as_bytes(),
+            progress_json(monitor).as_bytes(),
         ),
+        // The newest live preview, by the number `/progress` and `/jobs` report.
+        // A number is the whole whitelist; a 404 is normal, since an older
+        // frame is pruned as soon as a newer one is complete.
+        ("GET", p) if p.starts_with("/preview/") && p.ends_with(".png") => {
+            let n = p.trim_start_matches("/preview/").trim_end_matches(".png");
+            match n.parse::<u32>().ok().and_then(|n| monitor.preview_png(n)) {
+                Some(png) => conn.respond_with(200, "image/png", "Cache-Control: no-store\r\n", &png),
+                None => conn.respond(404, "text/plain", b"not found"),
+            }
+        }
         // The queue, beside them for the same reason: the Jobs dialog is about
         // what the worker is doing and what waits behind it.
         ("GET", "/jobs") => handle_jobs(&mut conn, &lanes.queue, monitor),
@@ -638,6 +658,7 @@ fn handle_conn(
             None => conn.respond(404, "application/json", error_json("no image yet").as_bytes()),
         },
         ("POST", "/jobs/stop") => handle_stop_job(&mut conn, lanes, monitor, &req.body),
+        ("POST", "/jobs/skip") => handle_skip_job(&mut conn, lanes, monitor, &req.body),
         ("POST", "/cancel") => conn.respond(
             200,
             "application/json",
@@ -2101,7 +2122,7 @@ fn enqueue_wait(
 /// poll for the Jobs button, its dialog and every tab's progress line.
 fn handle_jobs(conn: &mut http::Connection, queue: &Jobs, monitor: &Monitor) -> Result<()> {
     let mut body = serde_json::to_value(queue.snapshot())?;
-    body["progress"] = serde_json::from_str(&progress_json(monitor.snapshot().as_ref()))?;
+    body["progress"] = serde_json::from_str(&progress_json(monitor))?;
     conn.respond(200, "application/json", body.to_string().as_bytes())
 }
 
@@ -2149,6 +2170,43 @@ fn handle_stop_job(
         "application/json",
         format!("{{\"stopped\":\"{what}\"}}").as_bytes(),
     )
+}
+
+/// `POST /jobs/skip {id}`: *Cancel generation*. Kills the image a run has in
+/// flight and lets the run go on to its next one — the button for a preview
+/// whose composition is already wrong. Marked before the kill, so the worker
+/// can never see the failure without the mark; taken back when there was no
+/// child to kill (between two sd-cli passes), so it can't swallow a real
+/// failure later.
+fn handle_skip_job(
+    conn: &mut http::Connection,
+    lanes: &Lanes,
+    monitor: &Monitor,
+    body: &[u8],
+) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        id: u64,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else {
+        return Ok(());
+    };
+    if !lanes.queue.skip(dto.id) {
+        return conn.respond(
+            400,
+            "application/json",
+            error_json("that job has no image in flight to cancel").as_bytes(),
+        );
+    }
+    if !monitor.cancel() {
+        lanes.queue.unskip(dto.id);
+        return conn.respond(
+            400,
+            "application/json",
+            error_json("between two passes — try again in a moment").as_bytes(),
+        );
+    }
+    conn.respond(200, "application/json", b"{\"skipped\":true}")
 }
 
 /// Hand display-lane work to its worker, wait, and write the JSON response.
@@ -2253,15 +2311,22 @@ fn saved_json(path: &std::path::Path) -> String {
 /// Hand-rolled like the other two long-standing shapes. Neither string needs
 /// escaping and both are ours: `label` is one of a handful of literals this file
 /// passes to `SdRunner`, and `rate` is sd.cpp's own `%.2f` plus a unit.
-fn progress_json(p: Option<&sd::Progress>) -> String {
+/// `preview` is the newest live frame's number for `GET /preview/{n}.png`, or
+/// `null` while the run has none (loading, or a mode that writes none).
+fn progress_json(monitor: &Monitor) -> String {
+    progress_body(monitor.snapshot().as_ref(), monitor.preview())
+}
+
+fn progress_body(p: Option<&sd::Progress>, preview: Option<u32>) -> String {
     match p {
         Some(p) => format!(
-            "{{\"busy\":true,\"label\":{},\"phase\":\"{}\",\"step\":{},\"steps\":{},\"rate\":{}}}",
+            "{{\"busy\":true,\"label\":{},\"phase\":\"{}\",\"step\":{},\"steps\":{},\"rate\":{},\"preview\":{}}}",
             json_str(&p.label),
             p.phase.as_str(),
             p.step,
             p.steps,
-            json_str(&p.rate)
+            json_str(&p.rate),
+            preview.map_or("null".to_string(), |n| n.to_string())
         ),
         None => "{\"busy\":false}".to_string(),
     }
@@ -3040,6 +3105,24 @@ fn json_str(s: &str) -> String {
 mod tests {
     use super::{band_amplitudes, check_bands, grating, BandRow, DEPTH, DETAIL, GRIT};
     use super::{clip_frame, workitems, EscalateDto, HiresDto};
+
+    /// The page tells "no preview yet" from "preview 0" by `null`, so the
+    /// field has to be there on every busy body and be a real JSON value.
+    #[test]
+    fn progress_carries_the_preview_number_or_null() {
+        let p = crate::sd::Progress {
+            label: "txt2img".into(),
+            phase: crate::sd::Phase::Sampling,
+            step: 3,
+            steps: 20,
+            rate: "1.23s/it".into(),
+        };
+        let with: serde_json::Value = serde_json::from_str(&super::progress_body(Some(&p), Some(7))).unwrap();
+        assert_eq!(with["preview"], 7);
+        let without: serde_json::Value = serde_json::from_str(&super::progress_body(Some(&p), None)).unwrap();
+        assert!(without["preview"].is_null());
+        assert_eq!(super::progress_body(None, Some(7)), "{\"busy\":false}");
+    }
 
     /// The frame route's guard. The case worth pinning is the rejection: a
     /// segment that isn't a number must not come back as "no frame", because

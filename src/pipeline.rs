@@ -615,6 +615,13 @@ pub fn scratch_dir(work_dir: &Path) -> PathBuf {
 /// which needs no setting for it: nothing in here is anything but scratch.
 pub fn clear_scratch(work_dir: &Path) {
     purge_pngs(&scratch_dir(work_dir));
+    purge_pngs(&preview_dir(work_dir));
+}
+
+/// Where sd-cli writes the live preview of the run in flight (`sd::Monitor`).
+/// Inside scratch, and emptied by the runner before every run as well.
+pub fn preview_dir(work_dir: &Path) -> PathBuf {
+    scratch_dir(work_dir).join("preview")
 }
 
 impl Engine {

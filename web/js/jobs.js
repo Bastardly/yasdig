@@ -39,6 +39,11 @@ let again = false;
 const resultHooks = [];
 const jobsHooks = [];
 const noticeHooks = [];
+// The live preview: the frame on screen and the one being fetched, by the
+// number `progress.preview` reports.
+let previewShown = null;
+let previewWanted = null;
+let previewUrl = null;
 // A run's image landed: `fn(result)`, the same body `/generate` used to answer.
 export const onResult = (fn) => resultHooks.push(fn);
 // The queue moved: called after every poll.
@@ -114,6 +119,39 @@ function drawList() {
     </li>`).join('');
 }
 
+// The thumbnail under the progress line, while sd-cli samples. Fetched as a
+// blob rather than by pointing `src` at the route: an older frame is deleted as
+// soon as a newer one is complete, so a re-request could 404 and blank it. The
+// shown frame only changes once the next one is in hand.
+async function drawPreview() {
+  const img = $('livepreview');
+  const live = () => snap.progress?.preview;
+  const n = live();
+  if (typeof n !== 'number') {
+    img.hidden = true;
+    previewShown = previewWanted = null;
+    return;
+  }
+  if (n === previewShown || n === previewWanted) return;
+  previewWanted = n;
+  try {
+    const res = await fetch(`/preview/${n}.png`);
+    if (!res.ok) return; // pruned already; the next poll names a newer one
+    const blob = await res.blob();
+    // The run may have ended, or a newer frame overtaken this one, meanwhile.
+    if (previewWanted !== n || typeof live() !== 'number') return;
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = URL.createObjectURL(blob);
+    img.src = previewUrl;
+    img.hidden = false;
+    previewShown = n;
+  } catch {
+    // A dropped fetch is the next poll's to retry.
+  } finally {
+    if (previewWanted === n) previewWanted = null;
+  }
+}
+
 async function deliverLatest(seq) {
   try {
     const data = await (await fetch('/jobs/latest')).json();
@@ -147,6 +185,7 @@ export async function pollJobs() {
     // All three tabs' readouts: they report the same worker, and only one of
     // them is ever visible.
     for (const id of ['prog', 'vprog', 'cprog']) $(id).textContent = text;
+    drawPreview();
     drawButton();
     if ($('jobsdlg').open) drawList();
     for (const fn of jobsHooks) fn(snap);

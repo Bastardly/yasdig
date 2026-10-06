@@ -41,11 +41,19 @@
          is the other half. -->
     <div class="gohead">
       <button id="go" class="btn btn-run btn-block">Generate</button>
-      <!-- Deliberately not in IDLE_LABELS, so setBusy never touches it: a stop
-           button that greys out for the length of the thing it stops is
-           furniture. It hides itself again when the run ends. -->
-      <button id="stop" class="btn btn-danger btn-block" hidden>Stop</button>
+      <!-- Two halves of stopping, side by side when both show. *Cancel
+           generation* throws away the image in flight (a run goes on to its
+           next); *Stop job* finishes it and ends the run, so it only shows for
+           a run of more than one. Deliberately not in IDLE_LABELS, so setBusy
+           never touches either: a stop button that greys out for the length of
+           the thing it stops is furniture. The Jobs poll shows and hides them. -->
+      <div class="runstop">
+        <button id="cancelgen" class="btn btn-danger btn-block" hidden>Cancel generation</button>
+        <button id="stop" class="btn btn-danger btn-block" hidden>Stop job</button>
+      </div>
       <p class="sub" id="prog"></p>
+      <!-- The run in flight, step by step. Driven by the Jobs poll (jobs.js). -->
+      <img id="livepreview" class="livepreview" alt="Live preview" hidden>
       <div id="err" class="err"></div>
 
 
