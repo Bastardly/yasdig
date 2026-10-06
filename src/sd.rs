@@ -466,6 +466,9 @@ impl<'a> SdRunner<'a> {
         if p.scheduler != crate::config::AUTO_SCHEDULER {
             cmd.args(["--scheduler", &p.scheduler]);
         }
+        if let Some(mode) = cache_flag(p) {
+            cmd.args(["--cache-mode", mode]);
+        }
         cmd.args(["-s", &seed.to_string()]);
         cmd.args(["-o", &path_str(out)]);
         // The live preview: `proj` is a fixed latent-to-RGB matrix per VAE
@@ -528,6 +531,10 @@ impl<'a> SdRunner<'a> {
         let out_tail = drain(stdout, |line| {
             if let Some((step, steps, rate)) = parse_progress(line) {
                 self.monitor.advance(label, step, steps, rate);
+            } else if let Some(skip) = parse_cache_skip(line) {
+                if let Ok(mut s) = self.monitor.0.cache_skip.lock() {
+                    *s = Some(skip);
+                }
             }
         });
         // Taken back out before waiting, since `wait` blocks and the lock it
@@ -648,6 +655,9 @@ struct MonitorInner {
     /// Where sd-cli writes its per-step previews. `None` on a detached
     /// monitor, which then asks for no previews at all — nobody would read them.
     preview: Option<PathBuf>,
+    /// What step caching skipped in the last run, off sd-cli's own log line.
+    /// Reset when a run begins, so it never describes the run before.
+    cache_skip: Mutex<Option<(u32, u32)>>,
 }
 
 impl Monitor {
@@ -679,6 +689,12 @@ impl Monitor {
         std::fs::read(self.preview_dir()?.join(preview_name(n))).ok()
     }
 
+    /// `(skipped, total)` steps the last run's step cache skipped, or `None`
+    /// when it skipped none — off, too few steps, or a mode that didn't engage.
+    pub fn cache_skip(&self) -> Option<(u32, u32)> {
+        *self.0.cache_skip.lock().ok()?
+    }
+
     /// What to show while a job runs, or `None` when nothing is running.
     pub fn snapshot(&self) -> Option<Progress> {
         self.0.progress.lock().ok()?.clone()
@@ -707,6 +723,9 @@ impl Monitor {
         // Cleared here rather than in `cancel`, so a cancel that lands in the
         // gap between two jobs can't kill the next one before it starts.
         self.0.cancelled.store(false, Ordering::SeqCst);
+        if let Ok(mut skip) = self.0.cache_skip.lock() {
+            *skip = None;
+        }
         if let Ok(mut held) = self.0.child.lock() {
             *held = Some(child);
         }
@@ -747,6 +766,37 @@ impl Monitor {
             });
         }
     }
+}
+
+/// sd-cli's `--cache-mode` for a profile, or `None` for no flag. `adaptive`
+/// is one idea sd.cpp implements twice, once per architecture, and a mode on
+/// the wrong one is a warning and an uncached run — see
+/// [`crate::config::CACHE_MODES`].
+fn cache_flag(p: &Profile) -> Option<&'static str> {
+    match p.cache_mode.as_str() {
+        "spectrum" => Some("spectrum"),
+        "adaptive" if p.family.is_unet() => Some("ucache"),
+        "adaptive" => Some("easycache"),
+        _ => None,
+    }
+}
+
+/// `(skipped, total)` out of the line every cache mode logs when it engaged:
+///
+/// ```text
+/// [INFO ] sample-cache.cpp:318 - UCache skipped 9/30 steps (1.43x estimated speedup)
+/// ```
+///
+/// That line is the only proof a mode did anything — one that didn't engage
+/// says so in a warning, or not at all.
+fn parse_cache_skip(line: &str) -> Option<(u32, u32)> {
+    let rest = line.split_once(" skipped ")?.1;
+    let (counts, tail) = rest.split_once(' ')?;
+    if !tail.starts_with("steps") {
+        return None;
+    }
+    let (skipped, total) = counts.split_once('/')?;
+    Some((skipped.parse().ok()?, total.parse().ok()?))
 }
 
 /// What sd-cli's `p-%04d.png` makes of preview `n` (`format_frame_idx`).
@@ -1217,6 +1267,51 @@ binary = "/opt/sd-cli"
         p.scheduler = "karras".into();
         let a = argv(&SdRunner::new(&cfg).base_cmd(&p, "a cat", None, 1, Path::new("o.png"), 1.0));
         assert_eq!(flag(&a, "--scheduler"), Some("karras"));
+    }
+
+    /// `adaptive` is one idea sd.cpp implements once per architecture, and the
+    /// wrong one is a warning and an uncached run — so the family decides.
+    #[test]
+    fn a_step_cache_names_the_mode_the_family_has() {
+        let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
+        let cmd = |family, mode: &str| {
+            let p = Profile {
+                model: PathBuf::from("/models/m.safetensors"),
+                family,
+                cache_mode: mode.into(),
+                ..Default::default()
+            };
+            let a = argv(&SdRunner::new(&cfg).base_cmd(&p, "a cat", None, 1, Path::new("o.png"), 1.0));
+            flag(&a, "--cache-mode").map(str::to_string)
+        };
+        use crate::config::ImageFamily::{Flux, Sdxl, ZImage};
+        assert_eq!(cmd(Sdxl, "off"), None);
+        assert_eq!(cmd(Sdxl, "spectrum").as_deref(), Some("spectrum"));
+        assert_eq!(cmd(Flux, "spectrum").as_deref(), Some("spectrum"));
+        assert_eq!(cmd(Sdxl, "adaptive").as_deref(), Some("ucache"));
+        assert_eq!(cmd(ZImage, "adaptive").as_deref(), Some("easycache"));
+    }
+
+    /// Every mode logs the same shape when it skipped something; that line is
+    /// the only proof it engaged, so nothing else may be read as one.
+    #[test]
+    fn the_skip_line_is_read_and_nothing_else_is() {
+        for line in [
+            "[INFO ] sample-cache.cpp:318 - UCache skipped 9/30 steps (1.43x estimated speedup)",
+            "[INFO ] sample-cache.cpp:299 - EasyCache skipped 9/30 steps (1.43x estimated speedup)",
+            "[INFO ] sample-cache.cpp:353 - Spectrum skipped 9/30 steps (1.43x estimated speedup)",
+            "[INFO ] sample-cache.cpp:323 - UCache skipped 9/30 steps",
+        ] {
+            assert_eq!(parse_cache_skip(line), Some((9, 30)), "{line}");
+        }
+        for line in [
+            "  |=====>        | 3/20 - 1.23s/it",
+            "[INFO ] sample-cache.cpp:309 - EasyCache completed without skipping steps",
+            "[WARN ] sample-cache.cpp:75 - UCache requested but not supported for this model type",
+            "[INFO ] a prompt that skipped 3/4 beats",
+        ] {
+            assert_eq!(parse_cache_skip(line), None, "{line}");
+        }
     }
 
     /// LoRAs are inline in the prompt, which is sd.cpp's spelling — and the

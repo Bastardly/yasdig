@@ -81,6 +81,9 @@ pub struct Settings {
     /// `--scheduler`, or `"auto"` to send none and let sd.cpp pick the model's
     /// own. See [`Profile::scheduler`].
     pub scheduler: String,
+    /// Step caching for the generate pass: `off`, `spectrum` or `adaptive`.
+    /// See [`Profile::cache_mode`].
+    pub cache_mode: String,
     pub upscale_factor: f32,
     /// What performs that enlarge: `None` is FSR (EASU), a name is an ESRGAN
     /// model under the upscaler dir. See [`Profile::upscaler`].
@@ -151,6 +154,8 @@ pub struct PartialSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduler: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upscale_factor: Option<f32>,
     /// Absent inherits, a name pins, the same one-way shape `refine_cfg_scale`
     /// below has: a template can name a model, and has no way to say "back to
@@ -208,6 +213,10 @@ impl Default for Settings {
             // and Flux.2 have schedules of their own, and forcing `discrete`
             // onto them would quietly make them worse.
             scheduler: crate::config::AUTO_SCHEDULER.to_string(),
+            // Off until measured: a skipped step is a guess about the model's
+            // output, and which mode guesses well on which family is a
+            // measurement nobody has made here yet.
+            cache_mode: crate::config::CACHE_OFF.to_string(),
             upscale_factor: 2.0,
             // FSR: free, and needs no file. An ESRGAN model is a download.
             upscaler: None,
@@ -271,6 +280,7 @@ impl Settings {
             cfg_scale: over.cfg_scale.unwrap_or(self.cfg_scale),
             sampler: over.sampler.clone().unwrap_or_else(|| self.sampler.clone()),
             scheduler: over.scheduler.clone().unwrap_or_else(|| self.scheduler.clone()),
+            cache_mode: over.cache_mode.clone().unwrap_or_else(|| self.cache_mode.clone()),
             upscale_factor: over.upscale_factor.unwrap_or(self.upscale_factor),
             upscaler: over.upscaler.clone().or_else(|| self.upscaler.clone()),
             sharpness: over.sharpness.unwrap_or(self.sharpness),
@@ -420,6 +430,7 @@ impl Settings {
             cfg_scale: self.cfg_scale,
             sampler: self.sampler.clone(),
             scheduler: self.scheduler.clone(),
+            cache_mode: self.cache_mode.clone(),
             upscale_factor: self.upscale_factor,
             upscaler: self.upscaler.clone(),
             sharpness: self.sharpness,
@@ -844,6 +855,21 @@ mod tests {
     /// A file written before the scheduler existed reads as Auto — what those
     /// images ran with — and a model can pin Auto back over a global choice,
     /// which an `Option` (the `upscaler` shape) could not say.
+    #[test]
+    fn the_step_cache_defaults_off_and_a_model_can_pin_it_back_off() {
+        let old: Settings = toml::from_str("steps = 20\n").unwrap();
+        assert_eq!(old.cache_mode, crate::config::CACHE_OFF);
+
+        let global = Settings { cache_mode: "spectrum".into(), ..Settings::default() };
+        let back: Settings = toml::from_str(&toml::to_string_pretty(&global).unwrap()).unwrap();
+        assert_eq!(back.cache_mode, "spectrum");
+        assert_eq!(global.as_profile("m").cache_mode, "spectrum");
+
+        let pin: PartialSettings = toml::from_str("cache_mode = \"off\"\n").unwrap();
+        assert_eq!(global.merged_with(&pin).cache_mode, "off");
+        assert_eq!(global.merged_with(&PartialSettings::default()).cache_mode, "spectrum");
+    }
+
     #[test]
     fn the_scheduler_defaults_to_auto_and_auto_can_be_pinned() {
         let old: Settings = toml::from_str("steps = 20\nsampler = \"euler\"\n").unwrap();

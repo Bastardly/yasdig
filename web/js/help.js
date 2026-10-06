@@ -127,6 +127,30 @@ export const TOPICS = [
         ['Flux, Krea 2, Qwen-Image', '<code>euler</code> + Auto'],
       ], false)}`,
   },
+  {
+    id: 'stepcache',
+    title: 'Step caching',
+    html: `
+      <h2>Step caching</h2>
+      <p>Near the end of a render, one step often changes the picture very little.
+      A step cache notices and skips the model for that step, reusing or
+      predicting its output instead. Generate finishes sooner; the cost is that
+      a skipped step is an estimate, not the real thing.</p>
+      ${table(['Setting', 'What it does'], [
+        ['Off', 'Every step is computed. The default.'],
+        ['Spectrum', 'Fits a curve through the steps so far and predicts the next ones. Works on every model.'],
+        ['Adaptive', 'Reuses the last result while the input has barely moved. UCache on SD 1.x, SD 2.x and SDXL, EasyCache on the others — picked for you, since each only works on its own kind of model.'],
+      ])}
+      <p><b>Only Generate is cached.</b> Refine and Hi-res always run every step:
+      they are what you press for the best version of an image you have
+      already chosen, so a cheap first draft is where the shortcut belongs.</p>
+      <p><b>How to tell it did something:</b> under the timings, a line says how
+      many steps it skipped. No line means it skipped none — a few-step model
+      has no room to, which is a real answer rather than a fault.</p>
+      <p>Try it with a fixed seed, Off against on, and compare both the time and
+      the picture. The live preview shows a composition going wrong early, and
+      <i>Cancel generation</i> throws that one away.</p>`,
+  },
 ];
 
 const KEY = 'rustimage.help.topic';

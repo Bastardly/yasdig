@@ -185,8 +185,11 @@ function syncSummaries() {
     `${$('steps').value} steps`, `CFG ${$('cfg').value}`, $('sampler').value,
     // Auto is the model's own and says nothing worth the space.
     $('scheduler').value === 'auto' ? null : $('scheduler').value,
+    $('cachemode').value === 'off' ? null : `${$('cachemode').value} cache`,
   ].filter(Boolean).join(' · '));
-  $('sum-gen').classList.toggle('on', n > 1);
+  // A step cache trades exactness for time, so it is a departure from the
+  // plain path the summary should not let a folded section hide.
+  $('sum-gen').classList.toggle('on', n > 1 || $('cachemode').value !== 'off');
 
   const after = [
     $('opthires').checked ? 'hi-res' : null,
@@ -256,6 +259,7 @@ function syncAdvanced() {
   $('cfg').value = m.cfg_scale;
   $('sampler').value = m.sampler;
   $('scheduler').value = m.scheduler;
+  $('cachemode').value = m.cache_mode;
   $('w').value = m.base_width;
   $('h').value = m.base_height;
   $('upscale').value = m.upscale_factor;
@@ -445,6 +449,7 @@ export function setUpscaler(name) {
 const MODEL_KNOBS = [
   ['steps', 'steps'], ['cfg_scale', 'cfg'], ['sampler', 'sampler', 'text'],
   ['scheduler', 'scheduler', 'text'],
+  ['cache_mode', 'cachemode', 'text'],
   ['width', 'w'], ['height', 'h'],
   ['upscale_factor', 'upscale'], ['upscaler', 'upscaler', 'choice'],
   ['hires_steps', 'hsteps'], ['hires_strength', 'hstrength'], ['hires_cfg_scale', 'hcfg', 'blank'],
@@ -627,6 +632,10 @@ export function render(data) {
   const max = Math.max(...stages.map(([, ms]) => ms), 1);
   const bars = stages.filter(([, ms]) => ms > 0)
     .map(([name, ms]) => bar(name, ms, max)).join('');
+  // The only proof a step cache engaged: sd-cli logs what it skipped, and a
+  // mode that did nothing logs nothing, so no line is the honest answer.
+  const cached = t.cache_skipped
+    ? `<p class="sub">Step cache skipped ${t.cache_skipped} of ${t.cache_steps} steps</p>` : '';
 
   S.imageId = data.image_id;
   // The seed box is left exactly as typed. Writing the drawn seed back into it
@@ -681,7 +690,7 @@ export function render(data) {
       <b id="seedval" class="pin" title="Put this seed in the box, to generate it again">${data.seed}</b>
       · total <b>${total} ms</b>${tags}</div>
     ${rolled}
-    <div class="bars">${bars}</div>
+    <div class="bars">${bars}</div>${cached}
     `;
 
   P('result').querySelector('img').addEventListener('click', () => showFullSize(S.currentSrc));
@@ -889,6 +898,9 @@ function genPayload() {
     cfg_scale: numOr('cfg'),
     sampler: $('sampler').value || null,
     scheduler: $('scheduler').value || null,
+    // Only the generate pass (or the pass over a source) uses it: Refine and
+    // Hi-res run uncached on the server whatever this says.
+    cache_mode: $('cachemode').value || null,
     // The same six the escalations send, from the same place — they set where
     // this image's passes start, and `/refine` and `/hires` can move them
     // afterwards. The two CFGs are among them, and null for an empty box still

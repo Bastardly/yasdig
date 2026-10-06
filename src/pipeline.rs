@@ -198,6 +198,8 @@ pub struct GenRequest {
     pub cfg_scale: Option<f32>,
     pub sampler: Option<String>,
     pub scheduler: Option<String>,
+    /// Step caching for this pass; `None` keeps the profile's.
+    pub cache_mode: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
     /// The FSR (EASU) enlarge every base render goes through on its way to the
@@ -277,6 +279,8 @@ pub struct Img2ImgRequest {
     pub cfg_scale: Option<f32>,
     pub sampler: Option<String>,
     pub scheduler: Option<String>,
+    /// Step caching for this pass; `None` keeps the profile's.
+    pub cache_mode: Option<String>,
     pub refine_steps: Option<u32>,
     pub refine_strength: Option<f32>,
     pub refine_cfg_scale: Option<f32>,
@@ -442,6 +446,11 @@ pub struct Timings {
     pub fsr_ms: u128,
     pub refine_ms: u128,
     pub hires_ms: u128,
+    /// Steps the generate pass's step cache skipped, of `cache_steps`. Both 0
+    /// when it skipped none, which is also what an escalation reports — those
+    /// run uncached ([`Profile::uncached`]).
+    pub cache_skipped: u32,
+    pub cache_steps: u32,
 }
 
 pub struct GenResult {
@@ -824,6 +833,11 @@ impl Engine {
                 profile.scheduler = v.clone();
             }
         }
+        if let Some(v) = &req.cache_mode {
+            if !v.is_empty() {
+                profile.cache_mode = v.clone();
+            }
+        }
         if let Some(v) = req.width {
             profile.width = v;
         }
@@ -935,6 +949,8 @@ impl Engine {
         let t = Instant::now();
         sd.txt2img(tpl, &prompt, neg, seed, &lowres)?;
         let gen_ms = t.elapsed().as_millis();
+        // Read now: an ESRGAN enlarge below is another sd-cli run, which resets it.
+        let (cache_skipped, cache_steps) = self.monitor.cache_skip().unwrap_or_default();
 
         // 2) Upscale, unsharpened — EASU by default, which is cheap and enough
         //    on its own for a draft, or an ESRGAN model. Quality is escalated
@@ -1020,7 +1036,14 @@ impl Engine {
             hires_passes: 0,
             step: 0,
         };
-        let result = entry.result(id, png, Timings { gen_ms, upscale_ms, fsr_ms, ..Default::default() });
+        let result = entry.result(id, png, Timings {
+            gen_ms,
+            upscale_ms,
+            fsr_ms,
+            cache_skipped,
+            cache_steps,
+            ..Default::default()
+        });
         // `pin` is a run holding this image for the hi-res and refine still to
         // come — see [`Live::pins`].
         lock(&self.retained).store(id, Slot::Image, entry, pin);
@@ -1060,6 +1083,11 @@ impl Engine {
         if let Some(v) = &req.scheduler {
             if !v.is_empty() {
                 profile.scheduler = v.clone();
+            }
+        }
+        if let Some(v) = &req.cache_mode {
+            if !v.is_empty() {
+                profile.cache_mode = v.clone();
             }
         }
         if let Some(v) = req.source_strength {
@@ -1179,6 +1207,7 @@ impl Engine {
             "img2img source",
         )?;
         let gen_ms = t.elapsed().as_millis();
+        let (cache_skipped, cache_steps) = self.monitor.cache_skip().unwrap_or_default();
 
         // 3) Sharpen for display. Dimensions come from here, not from `fit_to`:
         //    sd.cpp rounds an init image to the latent grid and only warns.
@@ -1239,7 +1268,13 @@ impl Engine {
             hires_passes: 0,
             step: 0,
         };
-        let result = entry.result(id, png, Timings { gen_ms, fsr_ms, ..Default::default() });
+        let result = entry.result(id, png, Timings {
+            gen_ms,
+            fsr_ms,
+            cache_skipped,
+            cache_steps,
+            ..Default::default()
+        });
         lock(&self.retained).store(id, Slot::Image, entry, pin);
         Ok(result)
     }
@@ -1491,9 +1526,10 @@ impl Engine {
         let display = scratch.path(self.scratch.join(format!("{id}-{step}-full.png")));
         let sd = self.sd();
 
+        // Uncached: a finishing pass is the quality rung (`Profile::uncached`).
         let t = Instant::now();
         sd.img2img(
-            &p.profile,
+            &p.profile.uncached(),
             &p.prompt,
             p.negative.as_deref(),
             p.seed,
@@ -1611,8 +1647,9 @@ impl Engine {
 
         // 2) The detail pass itself.
         let t = Instant::now();
+        // Uncached, as refine is: see `Profile::uncached`.
         sd.img2img(
-            &p.profile,
+            &p.profile.uncached(),
             &p.prompt,
             p.negative.as_deref(),
             p.seed,

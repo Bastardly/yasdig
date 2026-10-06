@@ -163,6 +163,16 @@ pub const SAMPLERS: &[&str] = &[
 /// What [`Profile::scheduler`] holds to send no `--scheduler` at all.
 pub const AUTO_SCHEDULER: &str = "auto";
 
+/// [`Profile::cache_mode`]'s values, and deliberately not sd-cli's six. sd.cpp
+/// runs a mode on the wrong architecture as a `LOG_WARN` and an uncached
+/// render (`src/runtime/sample-cache.cpp`): UCache is UNet-only, EasyCache
+/// DiT-only. So `adaptive` is that one idea — reuse the last output while the
+/// input barely moves — and `base_cmd` names whichever of the two the family
+/// has. Every value is then right for every family, which is what lets the
+/// global form, a recipe and a per-model pin hold any of them.
+pub const CACHE_MODES: [&str; 3] = [CACHE_OFF, "spectrum", "adaptive"];
+pub const CACHE_OFF: &str = "off";
+
 /// Every `--scheduler` we pass on, from sd-cli's list
 /// (`src/stable-diffusion.cpp:110`), plus [`AUTO_SCHEDULER`]. Two of its
 /// sixteen are left out: `ltx2` and `logit_normal` are the defaults of LTX-2
@@ -375,6 +385,10 @@ pub struct Profile {
     /// global choice. `"auto"` is a value, so a model can pin it over a global
     /// `karras`.
     pub scheduler: String,
+    /// Step caching on the generate pass: one of [`CACHE_MODES`]. Refine and
+    /// hi-res never use it — see [`Profile::uncached`]. A sidecar written
+    /// before this existed reads as `off`, which is what it ran with.
+    pub cache_mode: String,
     pub upscale_factor: f32,
     /// What performs that enlarge. `None` is FSR's EASU; a name is an ESRGAN
     /// model under [`Config::upscaler_dir`], extension included — the same
@@ -624,6 +638,19 @@ impl Profile {
         )
     }
 
+    /// This profile with step caching off — what Refine and Hi-res run on.
+    /// Those passes are the quality ladder, pressed for the best version of an
+    /// image already chosen; a skipped step is a cheap first draft's trade.
+    /// They also have the fewest steps to skip: Spectrum's warmup alone is 4.
+    /// A clone handed to the pass, never written back, so the retained profile
+    /// still says how the *generate* ran.
+    pub fn uncached(&self) -> Profile {
+        Profile {
+            cache_mode: CACHE_OFF.to_string(),
+            ..self.clone()
+        }
+    }
+
     /// The CFG the refine pass runs at: its own knob, or the base CFG.
     ///
     /// Unset follows `cfg_scale` rather than resolving to a number at load, so
@@ -669,6 +696,14 @@ impl Profile {
             }
         }
         check_sampling(&format!("'{}'", self.name), &self.sampler, &self.scheduler, Some(self.family))?;
+        if !CACHE_MODES.contains(&self.cache_mode.as_str()) {
+            bail!(
+                "'{}': step cache '{}' is not one of {}",
+                self.name,
+                self.cache_mode,
+                CACHE_MODES.join(", ")
+            );
+        }
         // The name guard is here as well as at the route because this profile is
         // about to become a command line: a name that re-cuts sd.cpp's tag regex
         // would not fail, it would apply some *other* file.
@@ -3420,6 +3455,43 @@ lora_dir = "adapters"
             "a carried grade is not a starting point — GenResult.start is the one \
              the viewer resets to"
         );
+    }
+
+    /// The page's step cache values are the server's three, and a raw sd-cli
+    /// mode is not one of them: `ucache` on a DiT is the silent no-op the
+    /// three exist to rule out.
+    #[test]
+    fn the_step_cache_takes_three_values_and_none_of_sd_clis() {
+        let page = crate::web::lookup("/index.html").expect("index.html is served");
+        let html = std::str::from_utf8(page.bytes).unwrap();
+        let start = html.find("<select id=\"cachemode\">").expect("#cachemode is in the page");
+        let body = &html[start..start + html[start..].find("</select>").unwrap()];
+        let values: Vec<&str> =
+            body.split("value=\"").skip(1).map(|v| &v[..v.find('"').unwrap()]).collect();
+        assert_eq!(values, CACHE_MODES);
+
+        let p = |mode: &str| Profile {
+            name: "m".into(),
+            model: PathBuf::from("/models/m.safetensors"),
+            cache_mode: mode.into(),
+            ..Default::default()
+        };
+        for mode in CACHE_MODES {
+            assert!(p(mode).validate().is_ok(), "{mode}");
+        }
+        assert!(p("ucache").validate().is_err());
+        assert_eq!(Profile::default().cache_mode, CACHE_OFF, "an old sidecar ran uncached");
+    }
+
+    /// What Refine and Hi-res run on: the same profile with the cache off.
+    #[test]
+    fn a_finishing_pass_runs_uncached_and_otherwise_unchanged() {
+        let p = Profile { cache_mode: "spectrum".into(), steps: 33, ..Default::default() };
+        let u = p.uncached();
+        assert_eq!(u.cache_mode, CACHE_OFF);
+        assert_eq!(serde_json::to_value(Profile { cache_mode: CACHE_OFF.into(), ..p.clone() }).unwrap(),
+                   serde_json::to_value(&u).unwrap());
+        assert_eq!(p.cache_mode, "spectrum", "the retained profile keeps the choice");
     }
 
     /// Every name the page offers is one the server takes. The markup is the

@@ -1561,6 +1561,7 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         sampler: Option<String>,
         #[serde(default)]
         scheduler: Option<String>,
+        cache_mode: Option<String>,
         #[serde(default)]
         width: Option<u32>,
         #[serde(default)]
@@ -1640,6 +1641,7 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         cfg_scale: dto.cfg_scale,
         sampler: dto.sampler,
         scheduler: dto.scheduler,
+        cache_mode: dto.cache_mode,
         width: dto.width,
         height: dto.height,
         upscale_factor: dto.upscale_factor,
@@ -1756,6 +1758,7 @@ fn handle_img2img(
         sampler: Option<String>,
         #[serde(default)]
         scheduler: Option<String>,
+        cache_mode: Option<String>,
         #[serde(default)]
         refine_steps: Option<u32>,
         #[serde(default)]
@@ -1838,6 +1841,7 @@ fn handle_img2img(
         cfg_scale: dto.cfg_scale,
         sampler: dto.sampler,
         scheduler: dto.scheduler,
+        cache_mode: dto.cache_mode,
         refine_steps: dto.refine_steps,
         refine_strength: dto.refine_strength,
         refine_cfg_scale: dto.refine_cfg_scale,
@@ -2261,7 +2265,7 @@ fn result_json(res: &GenResult) -> String {
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
          \"hires_passes\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\
          \"filters\":{},\"filters_start\":{},\"prompt\":{},\
-         \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{}}}}}",
+         \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"cache_skipped\":{},\"cache_steps\":{}}}}}",
         b64,
         res.width,
         res.height,
@@ -2287,6 +2291,8 @@ fn result_json(res: &GenResult) -> String {
         res.timings.fsr_ms,
         res.timings.refine_ms,
         res.timings.hires_ms,
+        res.timings.cache_skipped,
+        res.timings.cache_steps,
     )
 }
 
@@ -2369,7 +2375,7 @@ fn build_models_json(cfg: &Config) -> String {
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
                  \"family\":{},\"family_label\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
-                 \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\"scheduler\":{},\
+                 \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\"scheduler\":{},\"cache_mode\":{},\
                  \"upscale_factor\":{},\"upscaler\":{},\
                  \"refine_steps\":{},\"refine_strength\":{},\"refine_cfg_scale\":{},\
                  \"hires_steps\":{},\"hires_strength\":{},\"hires_cfg_scale\":{},\
@@ -2392,6 +2398,7 @@ fn build_models_json(cfg: &Config) -> String {
                 p.cfg_scale,
                 json_str(&p.sampler),
                 json_str(&p.scheduler),
+                json_str(&p.cache_mode),
                 // The panel's Output upscale box starts here. It is the one
                 // generation knob that changes what "the image" is, so the page
                 // needs the number and not just the `out_*` above, which is that

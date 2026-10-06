@@ -173,6 +173,16 @@
           </select>
         </div>
       </div>
+      <!-- Three values, valid on every family: `adaptive` is UCache on a UNet and
+           EasyCache on a DiT, picked by the server. See config::CACHE_MODES. -->
+      <div>
+        <label for="cachemode">Step cache</label>
+        <select id="cachemode">
+          <option value="off">Off</option>
+          <option value="spectrum">Spectrum</option>
+          <option value="adaptive">Adaptive</option>
+        </select>
+      </div>
       <!-- How many. A run is one queued job however many images it makes; see
            *## The job queue* in CLAUDE.md. -->
       <div>

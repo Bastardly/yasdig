@@ -795,6 +795,37 @@ Three things break silently:
   as a blob and swaps only when it is in hand, since the one on screen may already be
   pruned and re-requesting its URL would 404.
 
+## Step caching
+
+`Profile::cache_mode`, sd-cli's `--cache-mode` (`docs/caching.md` in the clone), on the
+generate pass and the pass over a source only. An ordinary generation knob down the
+seven-step table, with the Settings row in *Image* rather than the UNet section: every
+value fits every family and no recipe pins it, so the global one reaches them all. Off by
+default until somebody has measured which mode is a free win on which family; that
+measurement is what would put one in a `recipe()`.
+
+Four things break silently:
+
+- **A mode on the wrong architecture is a `LOG_WARN` and an uncached render**
+  (`src/runtime/sample-cache.cpp`): UCache is UNet-only, EasyCache and Cache-DiT DiT-only.
+  So the values are `config::CACHE_MODES` — `off`, `spectrum` (both kinds) and
+  `adaptive`, which `cache_flag` turns into `ucache` or `easycache` by
+  `ImageFamily::is_unet`. Offering sd-cli's raw names would let a global `ucache` turn
+  every DiT render into a no-op, or make the form filter options per family. A new
+  mode goes in as a value that fits every family, or not at all.
+- **Refine and Hi-res run on `Profile::uncached()`**, a clone, never written back — the
+  retained profile still says how the *generate* ran, which is what its sidecar is for.
+  A finishing pass is the quality rung, and a cheap draft is where a guessed step belongs.
+- **The skip line is the only proof it engaged.** `parse_cache_skip` reads sd-cli's
+  `… skipped 9/30 steps` into the `Monitor`, which `begin` resets, so
+  `Engine::run` reads it straight after the txt2img — an ESRGAN enlarge is another
+  sd-cli run and would reset it. A run that skipped nothing shows no line, which is the
+  honest answer for a 4-step model.
+- **Video is not wired yet**, deliberately: Wan is a DiT and both modes would apply, but
+  that is a `VideoModel` field and `video_cmd`, once video renders again. sd-cli has no
+  way to save or load conditioning either, so there is no text-encoder cache and no
+  `work/cache/` for one.
+
 ## Samplers, schedulers and the Help tab
 
 `config::SAMPLERS` and `config::SCHEDULERS` are sd-cli's two name tables,

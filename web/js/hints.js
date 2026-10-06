@@ -98,6 +98,11 @@ const HELP = [
     text: 'Where the steps are spent between full noise and none. Auto lets '
         + 'sd.cpp pick the model’s own, which is the right answer for Flux and '
         + 'Flux.2. The Help tab compares them.' },
+  { ids: ['cachemode'],
+    text: 'Skips denoising steps whose result can be predicted, so Generate '
+        + 'finishes sooner, at some cost in exactness. Refine and Hi-res always '
+        + 'run every step. Leave it Off for few-step models, which have nothing '
+        + 'to skip; the Help tab says what the two modes do.' },
   { ids: ['loras'],
     text: 'Small files that patch the checkpoint’s weights — a style, a '
         + 'character, a 4-step distillation. They come from models/loras/, and '
