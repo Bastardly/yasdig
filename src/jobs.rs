@@ -41,6 +41,9 @@ pub enum Kind {
     /// Redraw a painted region of the image in hand. One pass, so a Stop
     /// kills it like a Refine.
     Redraw,
+    /// Enlarge the image in hand with FSR or an upscaler model, no diffusion.
+    /// One pass, like a Refine.
+    Upscale,
     Video,
     Enlarge,
     Convert,
@@ -535,6 +538,8 @@ mod tests {
     #[test]
     fn a_redraw_is_indivisible_and_named_on_the_wire() {
         assert!(!Kind::Redraw.is_run());
+        assert!(!Kind::Upscale.is_run());
+        assert_eq!(serde_json::to_string(&Kind::Upscale).unwrap(), "\"upscale\"");
         assert_eq!(serde_json::to_string(&Kind::Redraw).unwrap(), "\"redraw\"");
         let q = Queue::new();
         let id = q.push(Kind::Redraw, "m".into(), None, "redraw", None, true);

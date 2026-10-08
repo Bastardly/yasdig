@@ -346,6 +346,10 @@
           <input id="hiresscale" type="number" step="0.1" min="1" max="4">
         </div>
       </div>
+      <label for="hprompt">Hi-res prompt (optional)</label>
+      <prompt-box>
+        <textarea id="hprompt" rows="2" placeholder="blank uses the image's own prompt"></textarea>
+      </prompt-box>
     </details>
 
     <details id="fold-refine" class="fold">
@@ -364,6 +368,10 @@
       </div>
       <label for="rstrength">Refine strength</label>
       <input id="rstrength" type="number" step="0.05" min="0.05" max="0.95">
+      <label for="rprompt">Refine prompt (optional)</label>
+      <prompt-box>
+        <textarea id="rprompt" rows="2" placeholder="blank uses the image's own prompt"></textarea>
+      </prompt-box>
     </details>
 
     <!-- Writes the boxes above to user/model-settings.toml for the selected
@@ -759,26 +767,31 @@
   </div>
   <button type="button" id="lbclose" aria-label="Close viewer">&times;</button>
 </dialog>
-<!-- Redraw: paint over part of the Image tab's result and redraw just that.
-     The viewer's layout — a fixed panel beside a zoomable, pannable picture —
-     because large images want 1:1, and the live preview is in the panel because
-     watching the crop form is how you know to cancel. Opened from the Redraw
-     button in the result's action row (redraw.js). -->
+<!-- Refine: the one place an image is finished. Nothing painted refines the
+     whole picture; something painted redraws just that area (the code calls that
+     pass Redraw: redraw.js, /redraw). Hi-res stays above the image: it sets the
+     final size, so it comes before refining, not inside it. The viewer's layout —
+     a fixed panel beside a zoomable, pannable picture — because large images
+     want 1:1, and the live preview is in the panel because watching the pass
+     form is how you know to cancel. Opened from Refine… in the result's action
+     row. -->
 <dialog id="redraw">
   <div class="lbside">
-    <div class="posthead"><b>Redraw</b></div>
+    <div class="posthead"><b>Refine</b></div>
     <div class="lbzoom">
       <button type="button" id="rdfit" class="btn btn-choice">Fit</button>
       <button type="button" id="rdfull" class="btn btn-choice">1:1</button>
     </div>
-    <p class="sub">Drag to paint over what should change. Right-drag erases;
-      Space+drag pans at 1:1.</p>
-    <label for="rpprompt">What should be there</label>
+    <p class="sub">With nothing painted, Refine works on the whole image. Paint
+      over an area to refine just that. Right-drag erases; Space+drag pans at 1:1.</p>
+    <label for="rpprompt">Prompt for this pass</label>
     <prompt-box>
       <textarea id="rpprompt" rows="3" placeholder="blank uses this image's own prompt"></textarea>
     </prompt-box>
+    <!-- One box, two numbers: the label says which. Whole image mirrors the
+         Refine pass fold's strength; area keeps its own (redraw.js). -->
     <div class="rdrow">
-      <label for="rpstrength">Strength</label>
+      <label for="rpstrength" id="rpstrengthlabel">Strength (whole image)</label>
       <input id="rpstrength" type="number" step="0.05" min="0.05" max="0.95" value="0.5">
     </div>
     <div class="slider">
@@ -793,8 +806,24 @@
       <button type="button" id="rperase" class="btn btn-choice">Eraser</button>
       <button type="button" id="rpclear" class="btn">Clear</button>
     </div>
-    <button type="button" id="redrawgo" class="btn btn-run btn-block" disabled>Redraw</button>
+    <button type="button" id="redrawgo" class="btn btn-run btn-block" disabled>Refine image</button>
     <button type="button" id="rdcancel" class="btn btn-danger btn-block" hidden>Cancel generation</button>
+    <!-- Upscale: bigger with no diffusion — FSR or an upscaler model. Unlike
+         Hi-res it re-draws nothing, so it can't undo a refine: last for a bigger
+         file, or first for a refine at the new size. Whole-image, so it waits
+         while something is painted. Neutral: the amber is the Refine button's. -->
+    <div class="lbgroup">Upscale</div>
+    <div class="rdupscale">
+      <select id="rdfactor" title="How much bigger">
+        <option value="1.5">1.5×</option>
+        <option value="2" selected>2×</option>
+        <option value="3">3×</option>
+        <option value="4">4×</option>
+      </select>
+      <select id="rdupscaler" title="FSR is instant; a model is slower and sharper"></select>
+    </div>
+    <button type="button" id="rdupscale" class="btn btn-block">Upscale</button>
+    <p class="sub" id="rdupnote"></p>
     <p class="sub" id="rdprog"></p>
     <img class="livepreview" alt="Live preview" hidden>
     <div id="rperr" class="err"></div>

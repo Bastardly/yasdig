@@ -445,6 +445,12 @@ pub struct EscalateRequest {
     /// panel and the boundary is the route, not the body.
     pub refine_cfg_scale: Option<Option<f32>>,
     pub hires_cfg_scale: Option<Option<f32>>,
+    /// What this pass is asked for. `None` or blank is the image's own prompt.
+    /// Not on `Profile` and not applied by `apply`: it belongs to the pass,
+    /// never to the image — `Pending.prompt` keeps describing the picture, and
+    /// the step's history label says what the pass was asked (`pass_prompt`).
+    pub refine_prompt: Option<String>,
+    pub hires_prompt: Option<String>,
 }
 
 /// What a Redraw asks for: which pixels, and optionally what to put there.
@@ -681,6 +687,30 @@ impl Snapshot {
 /// the one deletes the other. Made on first request (`history_thumb`).
 fn thumb_path(raw: &Path) -> PathBuf {
     raw.with_extension("thumb.png")
+}
+
+/// The prompt a finishing pass runs with: its own, when one was typed, with
+/// any `{variable}` rolled off the image's seed — or the image's own prompt,
+/// already rolled when it was generated. Never written back: the image keeps
+/// describing itself, and only the step's label says what this pass was asked.
+fn pass_prompt(own: Option<&str>, image: &str, vars: &variables::Variables, seed: i64) -> Result<String> {
+    match own.map(str::trim) {
+        Some(text) if !text.is_empty() => variables::expand(text, vars, seed),
+        _ => Ok(image.to_string()),
+    }
+}
+
+/// A history step's label: what made it, and what it was asked for when that
+/// differs from the image's own prompt — cut short, since it is a list row.
+fn step_label(what: &str, own: Option<&str>) -> String {
+    match own.map(str::trim) {
+        Some(text) if !text.is_empty() => {
+            let short: String = text.chars().take(40).collect();
+            let more = if text.chars().count() > 40 { "…" } else { "" };
+            format!("{what}: {short}{more}")
+        }
+        _ => what.to_string(),
+    }
 }
 
 /// `next` with the history `prev` leaves it: every step after the one `prev`
@@ -1695,11 +1725,14 @@ impl Engine {
         let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
         let sd = self.sd();
 
+        let vars = self.cfg.settings().variables;
+        let prompt = pass_prompt(over.refine_prompt.as_deref(), &p.prompt, &vars, p.seed)?;
+
         // Uncached: a finishing pass is the quality rung (`Profile::uncached`).
         let t = Instant::now();
         sd.img2img(
             &p.profile.uncached(),
-            &p.prompt,
+            &prompt,
             p.negative.as_deref(),
             p.seed,
             &p.raw,
@@ -1738,7 +1771,7 @@ impl Engine {
             step,
             ..p
         };
-        let entry = advance(&prev, entry, "Refine".into());
+        let entry = advance(&prev, entry, step_label("Refine", over.refine_prompt.as_deref()));
         let result = entry.result(id, png, Timings { fsr_ms, refine_ms, ..Default::default() });
         self.keep(id, entry);
         Ok(result)
@@ -1820,10 +1853,7 @@ impl Engine {
         // of any `{variable}` follows it, as everywhere else.
         let seed = p.seed.wrapping_add(step as i64);
         let vars = self.cfg.settings().variables;
-        let prompt = match req.prompt.as_deref().map(str::trim) {
-            Some(text) if !text.is_empty() => variables::expand(text, &vars, seed)?,
-            _ => p.prompt.clone(),
-        };
+        let prompt = pass_prompt(req.prompt.as_deref(), &p.prompt, &vars, seed)?;
 
         let t = Instant::now();
         self.sd().redraw(
@@ -1866,16 +1896,65 @@ impl Engine {
             step,
             ..p
         };
-        // What the history list calls it: the prompt as typed, cut short.
-        let label = match req.prompt.as_deref().map(str::trim) {
-            Some(text) if !text.is_empty() => {
-                let short: String = text.chars().take(40).collect();
-                format!("Redraw: {short}{}", if text.chars().count() > 40 { "…" } else { "" })
-            }
-            _ => "Redraw".into(),
-        };
-        let entry = advance(&prev, entry, label);
+        // "Area" is what the page calls a redraw: the dialog's Refine with
+        // something painted.
+        let entry = advance(&prev, entry, step_label("Area", req.prompt.as_deref()));
         let result = entry.result(id, png, Timings { fsr_ms, redraw_ms, ..Default::default() });
+        self.keep(id, entry);
+        Ok(result)
+    }
+
+    /// Enlarge the image with no diffusion at all: FSR's EASU, or an upscaler
+    /// model (`upscaler` names one under `Config::upscaler_dir`, `None` is
+    /// EASU) — the same `enlarge` a generate's first stage uses, pointed at the
+    /// image in hand. A step in its history like any pass.
+    ///
+    /// Unlike Hi-res it re-draws nothing, so it can't undo a refine: it can be
+    /// the last step (a bigger file) or come before a refine (detail added at
+    /// the new size). Reads `raw` and publishes through `publish`, so the
+    /// display filters still run once, over the enlarged pixels (invariant 1),
+    /// with the detail pair restarted for the new size (invariant 6).
+    pub fn upscale(&mut self, id: u64, factor: f32, upscaler: Option<String>) -> Result<GenResult> {
+        if !(factor > 1.0 && factor <= MAX_UPSCALE) {
+            bail!("upscale must be more than 1× and at most {MAX_UPSCALE}×");
+        }
+        let p = lock(&self.retained).get(id, "upscale")?;
+        let model = self.cfg.check_upscaler(&upscaler)?;
+        let step = p.step + 1;
+        let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut scratch = Scratch::default();
+        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
+
+        let t = Instant::now();
+        self.enlarge(&p.raw, &raw, factor, model.as_deref())?;
+        let upscale_ms = t.elapsed().as_millis();
+
+        let t = Instant::now();
+        let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let fsr_ms = t.elapsed().as_millis();
+
+        scratch.keep(&raw);
+        scratch.keep(&display);
+        let prev = p.clone();
+        let entry = Pending {
+            raw,
+            raw_w: w,
+            raw_h: h,
+            display,
+            filters,
+            step,
+            ..p
+        };
+        // "Upscale 2× · FSR", "Upscale 4× · 4x-UltraSharp": which one ran is
+        // what tells two upscale steps apart in the list.
+        let by = upscaler
+            .as_deref()
+            .map(|n| Path::new(n).file_stem().map_or(n.to_string(), |s| s.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "FSR".into());
+        let entry = advance(&prev, entry, format!("Upscale {factor}× · {by}"));
+        let result = entry.result(id, png, Timings { fsr_ms, upscale_ms, ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }
@@ -1955,12 +2034,14 @@ impl Engine {
             p.raw.clone()
         };
 
-        // 2) The detail pass itself.
+        // 2) The detail pass itself, with its own prompt when one was typed.
+        //    Uncached, as refine is: see `Profile::uncached`.
+        let vars = self.cfg.settings().variables;
+        let prompt = pass_prompt(over.hires_prompt.as_deref(), &p.prompt, &vars, p.seed)?;
         let t = Instant::now();
-        // Uncached, as refine is: see `Profile::uncached`.
         sd.img2img(
             &p.profile.uncached(),
-            &p.prompt,
+            &prompt,
             p.negative.as_deref(),
             p.seed,
             &init,
@@ -2010,7 +2091,7 @@ impl Engine {
             step,
             ..p
         };
-        let entry = advance(&prev, entry, format!("Hi-res {upscale}×"));
+        let entry = advance(&prev, entry, step_label(&format!("Hi-res {upscale}×"), over.hires_prompt.as_deref()));
         let result = entry.result(id, png, Timings { fsr_ms, hires_ms, ..Default::default() });
         self.keep(id, entry);
         Ok(result)
@@ -2636,7 +2717,7 @@ fn random_seed() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{advance, after_model, fit_to, AfterModel, Pending, Retained, Slot, MAX_HISTORY};
+    use super::{advance, after_model, fit_to, pass_prompt, step_label, AfterModel, Pending, Retained, Slot, MAX_HISTORY};
     use crate::config::{Filters, Profile};
     use crate::fsr::out_size;
     use std::path::Path;
@@ -2717,6 +2798,31 @@ mod tests {
         assert!(r.get(1, "t").is_err() && !a.raw.exists());
         assert!(r.pin(1).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A pass's prompt is its own when typed, rolled off the seed it was given,
+    /// and the image's own otherwise — blank and whitespace included.
+    #[test]
+    fn a_pass_prompt_falls_back_to_the_images_own() {
+        let mut vars = crate::variables::Variables::new();
+        vars.insert("color".into(), vec!["red".into(), "blue".into(), "green".into()]);
+        let image = "a crab in a red hat";
+        assert_eq!(pass_prompt(None, image, &vars, 1).unwrap(), image);
+        assert_eq!(pass_prompt(Some("   "), image, &vars, 1).unwrap(), image);
+        assert_eq!(pass_prompt(Some(" sharper fabric "), image, &vars, 1).unwrap(), "sharper fabric");
+        let rolled = pass_prompt(Some("a {color} scarf"), image, &vars, 5).unwrap();
+        assert!(!rolled.contains('{'), "{rolled}");
+        assert_eq!(rolled, pass_prompt(Some("a {color} scarf"), image, &vars, 5).unwrap(), "the seed decides");
+        assert!(pass_prompt(Some("{nope}"), image, &vars, 1).is_err(), "an unknown name is an error, as everywhere");
+    }
+
+    #[test]
+    fn a_step_label_says_what_the_pass_was_asked() {
+        assert_eq!(step_label("Refine", None), "Refine");
+        assert_eq!(step_label("Refine", Some("  ")), "Refine");
+        assert_eq!(step_label("Area", Some("an open hand")), "Area: an open hand");
+        let long = "x".repeat(60);
+        assert_eq!(step_label("Hi-res 2×", Some(&long)), format!("Hi-res 2×: {}…", "x".repeat(40)));
     }
 
     /// Every pass is a step: the image it replaced stays, and stepping back

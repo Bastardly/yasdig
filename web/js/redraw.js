@@ -1,9 +1,9 @@
 import { $, esc, numOr, post } from './dom.js';
 import { S } from './state.js';
-import { setBusy, setIdle } from './busy.js';
+import { isBusy, onIdle, setBusy, setIdle } from './busy.js';
 import { onJobs, runningJob, soonJobs, stopJob } from './jobs.js';
 import { zoomPane } from './viewer.js';
-import { takeResult } from './image.js';
+import { refine, takeResult, upscalerOptions, upscalersReady } from './image.js';
 
 // Redraw: paint over part of the Image tab's result and redraw just that part
 // (`POST /redraw`, `Engine::redraw`), in a dialog of its own — the viewer's
@@ -25,8 +25,12 @@ let painted = false;
 let eraser = false;
 // Space is held: a left drag pans instead of painting, as in every paint program.
 let space = false;
-// A redraw request is out: the button is setBusy's until it comes back.
-let waiting = false;
+// The area's own strength. The whole image's is the Refine pass fold's box,
+// so the dialog and the fold always agree and *Save as defaults* sees it; the
+// one Strength box in the dialog shows whichever the mask says applies.
+let areaStrength = 0.5;
+// Which of the two the Strength box showed last, so a switch can save it first.
+let strengthFor = null;
 // The result the dialog is showing: its id, size, history and step.
 let shown = null;
 let pane = null;
@@ -136,14 +140,98 @@ function stroke(e) {
 // Whether a pass on some image is running. The history is locked meanwhile: a
 // step back and a pass that lands afterwards would disagree about which state
 // is current, and the pass would win without saying so.
-const passRunning = () => ['refine', 'hires', 'redraw'].includes(runningJob()?.kind);
+const PASSES = ['refine', 'hires', 'redraw', 'upscale'];
+const passRunning = () => PASSES.includes(runningJob()?.kind);
 
+// What the dialog's buttons say and allow, from the mask and the result on
+// screen. Painted is "Refine area" (the redraw pass); nothing painted is
+// "Refine image" (the refine pass) — the mask decides, so there is no mode to
+// remember. A button waiting on its own request is setBusy's until it's back.
 function syncButtons() {
   $('rperase').classList.toggle('active', eraser);
-  if (!waiting) $('redrawgo').disabled = !painted || S.imageId === null;
-  const j = runningJob();
-  $('rdcancel').hidden = !(j && j.kind === 'redraw');
+  const live = S.imageId !== null && !!shown;
+  syncStrength();
+  if (!isBusy('redrawgo')) {
+    $('redrawgo').textContent = painted ? 'Refine area' : 'Refine image';
+    $('redrawgo').disabled = !live || (!painted && !shown.can_refine);
+    $('redrawgo').title = !painted && live && !shown.can_refine
+      ? 'This model has no refine pass (Refine steps is 0)' : '';
+  }
+  // Upscale is whole-image and changes the size the mask was painted at, so it
+  // waits while something is painted, as a refine of the whole image would.
+  if (!isBusy('rdupscale')) {
+    $('rdupscale').disabled = !live || painted;
+    $('rdupscale').title = painted ? 'Clear the mask to upscale the whole image' : '';
+  }
+  if (live) {
+    // The size the server will land on: `fsr::out_size`, whichever upscaler.
+    const f = Number($('rdfactor').value);
+    $('rdupnote').textContent =
+      `${shown.width}×${shown.height} → ${Math.round(shown.width * f)}×${Math.round(shown.height * f)}`;
+  }
+  // Blank uses: the area its image's own prompt; the whole image the Refine
+  // pass fold's prompt when there is one.
+  const fold = $('rprompt').value.trim();
+  $('rpprompt').placeholder = painted || !fold
+    ? "blank uses this image's own prompt"
+    : `blank uses the Refine pass prompt: ${fold}`;
+  $('rdcancel').hidden = !passRunning();
   for (const b of $('rdhistory').querySelectorAll('button')) b.disabled = passRunning();
+}
+
+// The Strength box shows the number for what the button will do. On a switch
+// it is labelled first and its value swapped, never reinterpreted: an area at
+// 0.5 must not become a whole-image refine at 0.5.
+function syncStrength() {
+  const mode = painted ? 'area' : 'image';
+  if (mode === strengthFor) return;
+  strengthFor = mode;
+  $('rpstrengthlabel').textContent = painted ? 'Strength (area)' : 'Strength (whole image)';
+  $('rpstrength').value = painted ? areaStrength : $('rstrength').value;
+}
+
+function takeStrength() {
+  const v = $('rpstrength').value;
+  if (strengthFor === 'area') {
+    areaStrength = Number(v);
+  } else {
+    // Into the fold, through an `input` event, so its summary and *Save as
+    // defaults* hear it the way they hear a typed number.
+    $('rstrength').value = v;
+    $('rstrength').dispatchEvent(new Event('input', { bubbles: true }));
+  }
+}
+
+const dialogErr = (m) => { $('rperr').textContent = m; };
+
+// The two whole-image passes go through image.js's `escalate`, which keeps the
+// stale-image reopen and the busy label; this only adds the dialog's prompt.
+// Bigger, with no diffusion. Through the queue like the passes — a model runs
+// on the GPU, an ESRGAN in sd-cli — and back as an ordinary result.
+async function upscale() {
+  if (S.imageId === null || painted) return;
+  $('rperr').textContent = '';
+  setBusy('rdupscale', 'Upscaling…', 'upscale');
+  soonJobs();
+  try {
+    takeResult(await post('/upscale', {
+      image_id: S.imageId,
+      factor: Number($('rdfactor').value),
+      upscaler: $('rdupscaler').value || null,
+    }));
+  } catch (e) {
+    const msg = String(e.message || e);
+    $('rperr').textContent = /cancelled by request/.test(msg)
+      ? 'Cancelled. The image is as it was.' : msg;
+  } finally {
+    setIdle('rdupscale');
+    syncButtons();
+  }
+}
+
+async function refineImage() {
+  await refine($('rpprompt').value.trim() || null, dialogErr);
+  syncButtons();
 }
 
 // What the server reads: black, white where painted, at the image's own size.
@@ -161,8 +249,7 @@ function maskPng() {
 async function redraw() {
   if (!painted || S.imageId === null || !master) return;
   $('rperr').textContent = '';
-  waiting = true;
-  setBusy('redrawgo', 'Redrawing…', 'redraw');
+  setBusy('redrawgo', 'Refining area…', 'redraw');
   soonJobs();
   try {
     takeResult(await post('/redraw', {
@@ -178,7 +265,6 @@ async function redraw() {
       ? 'Cancelled. The image is as it was.' : msg;
   } finally {
     setIdle('redrawgo');
-    waiting = false;
     syncButtons();
   }
 }
@@ -227,6 +313,9 @@ export function syncRedraw(data) {
 
 export function openRedraw(data) {
   shown = null;
+  fillUpscalers();
+  // Re-read the Strength box from scratch: the fold's may have changed since.
+  strengthFor = null;
   syncRedraw(data);
   $('rperr').textContent = '';
   $('redraw').showModal();
@@ -234,6 +323,17 @@ export function openRedraw(data) {
   $('rdimg').src = S.currentSrc;
   pane.shown();
   drawHistory();
+}
+
+// The upscalers the page knows (FSR plus every runnable model), kept on the
+// one picked when it is still offered. Filled on open, since the listing
+// arrives after boot and a model can be added while the server runs.
+async function fillUpscalers() {
+  await upscalersReady;
+  const sel = $('rdupscaler');
+  const keep = sel.value;
+  sel.innerHTML = upscalerOptions;
+  if ([...sel.options].some((o) => o.value === keep && !o.disabled)) sel.value = keep;
 }
 
 function syncVals() {
@@ -278,10 +378,25 @@ export function initRedraw() {
   });
   $('rperase').addEventListener('click', () => { eraser = !eraser; syncButtons(); });
   $('rpclear').addEventListener('click', clearMask);
-  $('redrawgo').addEventListener('click', redraw);
+  $('redrawgo').addEventListener('click', () => (painted ? redraw() : refineImage()));
+  $('rpstrength').addEventListener('input', takeStrength);
+  $('rdupscale').addEventListener('click', upscale);
+  $('rdfactor').addEventListener('change', syncButtons);
+  // The fold's strength or prompt edited with the dialog shut: picked up on
+  // the next open, since `syncStrength` only re-reads on a switch.
+  $('rstrength').addEventListener('input', () => {
+    if (strengthFor === 'image' && document.activeElement !== $('rpstrength')) {
+      $('rpstrength').value = $('rstrength').value;
+    }
+  });
+  // setIdle puts back a fixed label; this button's depends on the mask.
+  onIdle(() => { if (open()) syncButtons(); });
+  // Whatever pass the button is shown for: the same test decides both, so the
+  // button can't again appear for a pass it doesn't stop. Each is one sd-cli
+  // run, so stopping it is killing it (`Stopped::Cancel`).
   $('rdcancel').addEventListener('click', () => {
     const j = runningJob();
-    if (j && j.kind === 'redraw') stopJob(j.id);
+    if (j && PASSES.includes(j.kind)) stopJob(j.id);
   });
   $('rdclose').addEventListener('click', () => $('redraw').close());
   $('rpsoft').addEventListener('input', () => { syncVals(); place(); });

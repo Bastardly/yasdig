@@ -3,7 +3,7 @@ import { onJobs, runningKind, stopKind } from './jobs.js';
 
 // What each button says at rest, so a button that was waiting can be put back.
 export const IDLE_LABELS = {
-  go: 'Generate', refine: 'Refine image', hires: 'Hi-res pass', redrawgo: 'Redraw',
+  go: 'Generate', redrawgo: 'Refine image', rdupscale: 'Upscale', hires: 'Hi-res pass',
   saveout: 'Save to output', lbsave: 'Save as new output',
   vgo: 'Generate clip', venlarge: 'Enlarge frames',
   cgo: 'Convert',
@@ -34,6 +34,10 @@ function draw(id) {
   b.disabled = true;
   b.textContent = w.kind && runningKind() !== w.kind ? 'Queued…' : w.label;
 }
+
+// Whether a button is waiting on its own request — for a module that draws the
+// button's resting label itself (the Refine dialog's, which depends on its mask).
+export const isBusy = (id) => waiting.has(id);
 
 export function setBusy(id, label, kind = null) {
   waiting.set(id, { label, kind });

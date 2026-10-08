@@ -129,41 +129,55 @@ export const TOPICS = [
   },
   {
     id: 'redraw',
-    title: 'Redraw',
+    title: 'Refine',
     html: `
-      <h2>Redraw</h2>
-      <p>Keeps an image that is almost right. Paint over what should change — a hand,
-      a face, a stray object — and press <b>Redraw</b>: only that area is redrawn,
-      and every pixel outside it stays exactly as it was.</p>
-      <h3>How</h3>
-      <p>Press <b>Redraw…</b> beside the image. Drag to paint; right-drag, or the
-      <b>Eraser</b>, takes paint away. Switch to <b>1:1</b> for detail and hold
-      <b>Space</b> to drag the picture around. The mask shows only while the pointer
-      is over the picture, so moving off it shows you the result clean. Type what
-      should be there, or leave the box blank to redraw from the image\u2019s own
-      prompt. The live preview shows the area forming; <i>Cancel generation</i>
-      stops it and leaves the image as it was.</p>
-      ${table(['Strength', 'What it does'], [
+      <h2>Refine</h2>
+      <p>The one place an image is finished. Press <b>Refine…</b> beside the image.
+      The dialog shows the picture at Fit or <b>1:1</b> (hold <b>Space</b> to drag
+      it around), with a prompt box, the live preview and the image\u2019s History.</p>
+      <h3>Whole image or an area — the mask decides</h3>
+      ${table(['', 'What happens'], [
+        ['Nothing painted', '<b>Refine image</b>: a light pass over the whole picture, at the Refine pass\u2019s steps and strength. Good for detail and texture.'],
+        ['Something painted', '<b>Refine area</b>: only the painted part is redrawn, enlarged to the model\u2019s size first, then blended back in. Every pixel outside it stays exactly as it was.'],
+      ])}
+      <p><b>Upscale</b> makes the image bigger with no new drawing at all: FSR
+      (instant) or an upscaler model from your upscalers folder (slower, sharper).
+      Because it draws nothing new it can\u2019t undo a refine, so it can be the last
+      step — a bigger file — or come before a refine, which then adds detail at the
+      new size. It waits while something is painted, and it is a History step like
+      the rest.</p>
+      <p><b>Hi-res comes first</b>, from the button above the image: it sets the
+      final size and re-draws the whole picture lightly on the way, which would
+      partly undo a refine done before it. Enlarge, then refine.</p>
+      <p>Drag to paint, right-drag or the <b>Eraser</b> to take paint away. The mask
+      shows only while the pointer is over the picture, so moving off it shows the
+      result clean. <b>Edge softness</b> is how far past the paint the new pixels
+      fade into the old; what you painted is always replaced in full.</p>
+      <h3>The prompt</h3>
+      <p>Each pass can be asked for something of its own — "sharper fabric
+      texture", "an open hand". Blank uses, in order: the Refine pass or Hi-res pass
+      prompt from the panel on the left, then the image\u2019s own. (Hi-res uses the
+      Hi-res pass panel\u2019s prompt.) The image keeps
+      its prompt either way; the History says what each pass was asked.</p>
+      <p>A whole-image refine is light (strength 0.2–0.35), so a prompt there brings
+      out detail rather than changing what is in the picture. "Make it a red dress"
+      is a painted area, or a stronger refine.</p>
+      ${table(['Area strength', 'What it does'], [
         ['0.4–0.6', 'Keeps the shape and colours, fixes the detail. The default, 0.5, is here.'],
         ['0.8', 'Replaces what was there, matched to its surroundings.'],
         ['0.9–0.95', 'Starts the area over. For removing or swapping an object.'],
       ])}
-      <p><b>Edge softness</b> is how far past the paint the new pixels fade into the
-      old. What you painted is always replaced in full. Raise it when a strong
-      redraw leaves an edge; 0 is a hard one.</p>
       <h3>Going back</h3>
-      <p>Every pass on an image — Redraw, Refine, Hi-res — is a step in its
-      <b>History</b>, in the dialog. Click a step to go back to it (Ctrl+Z and
-      Ctrl+Shift+Z step through). Fixed the fingers, then ruined the hat? Click the
-      fingers step and redraw the hat again: the bad hat is replaced, the fingers
-      are kept. An image keeps its last twelve steps and always its original.</p>
-      <h3>Why small things come back sharper</h3>
-      <p>The painted area and a margin around it are cut out and enlarged to the
-      model\u2019s own size before they are redrawn, then shrunk back in. A face 80
-      pixels wide is drawn at 1024, not at 80 — which is why a redraw can fix
-      what a whole re-roll can\u2019t. The Outputs tab has no Redraw, because a
-      saved output already has its sharpening in its pixels; pick it under
-      <i>Image to image</i> to work on it.</p>`,
+      <p>Every pass is a step in the <b>History</b>. Click a step to go back to it
+      (Ctrl+Z and Ctrl+Shift+Z step through). A new pass from an earlier step
+      replaces the ones after it. An image keeps its last twelve steps and always
+      its original.</p>
+      <h3>In a batch</h3>
+      <p><i>After each generation</i> runs Hi-res and Refine on every image, with the
+      prompts from the Hi-res pass and Refine pass panels. A <code>{variable}</code>
+      in them rolls per image.</p>
+      <p>The Outputs tab has no Refine, because a saved output already has its
+      sharpening in its pixels; pick it under <i>Image to image</i> to work on it.</p>`,
   },
   {
     id: 'stepcache',

@@ -20,7 +20,7 @@ so.
   setting. Blocked: sd-cli can't save or load conditioning. Check again on every
   sd.cpp bump.
 
-## 1. Find faces automatically, with no Python (I don't think this is needed)
+## 1. Find faces automatically, with no Python 
 
 sd.cpp's ADetailer needs a Python script to convert its YOLOv8 detector.
 rustimage already reads PyTorch weights itself (`src/sr/weights.rs`) and runs
@@ -63,43 +63,14 @@ the two are one feature.
 UI: a few numbered reference slots on the Image tab from the `sourceSlot` factory
 (upload, paste, drop, pick from Outputs), so the prompt can say "image 1".
 
-## 3c. Prompted refinement, all in one dialog
+## 3c. Prompted refinement, all in one dialog — done 2026-10-08
 
-Give Refine and Hi-res a prompt of their own, and make the Redraw dialog the one
-place for refining an image.
-
-**It's possible, and cheap on the server.** Refine and Hi-res are img2img passes
-that currently re-use the image's own prompt (`p.prompt` in `Engine::refine` /
-`Engine::hires`). An optional `prompt` on `EscalateRequest` does the job: blank
-means the image's own, as Redraw does now. Like Redraw's, it belongs to the pass,
-not the image: `Pending.prompt` keeps describing the picture, the history label
-shows what the pass was asked for ("Refine: sharper fabric"), and `{variables}`
-expand with the pass's seed.
-
-**The dialog becomes Refine.**
-- The Redraw button in the action row becomes **Refine…**, and the plain Refine
-  button above the image goes away.
-- In the dialog, one prompt box and one button. **Nothing painted** refines the
-  whole image at the Refine strength and steps. **Something painted** redraws just
-  that area. The button says which ("Refine image" / "Refine area"), so the mask
-  decides and there's no mode to remember.
-- Hi-res moves in too: the scale and a **Hi-res** button in the same panel, using
-  the same prompt box. That gives every finishing pass the live preview, Cancel
-  generation and History.
-- The Hi-res button and scale select above the image could then go as well, which
-  leaves the action row as Save, View & adjust and Refine…. Worth deciding when it's
-  built: Hi-res without the dialog is one click today.
-
-**Bulk runs keep their prompts in the main menu.** The *After each generation*
-fold gets an optional **Refine prompt** and **Hi-res prompt** (blank = the image's
-own). They're captured at queue time like everything else in a run, so a batch of
-eight gets the same finishing instruction, with `{variables}` rolled per image.
-They also belong in *Save as defaults for this model*.
-
-**One thing to say in the Help text:** a prompt far from what's in the picture does
-little at low strength, and at high strength it starts changing the composition.
-Refine's usual 0.2–0.35 suits "more detail in the fabric" more than "make it a red
-dress"; that one is a Redraw with a mask, or a stronger refine.
+Built. Refine and Hi-res take a prompt of their own, and the Redraw dialog became
+the **Refine** dialog: nothing painted refines the whole image, something painted
+refines that area. Hi-res stays above the image, since it sets the final size and
+comes before refining. The action row is Hi-res, Save, View & adjust and Refine…. The Refine pass and Hi-res pass folds have optional prompts for bulk
+runs. Unlike this note first said, those prompts are **not** per-model: a prompt is
+the page's, like the main prompt, so *Save as defaults* doesn't store them.
 
 ## 4. Before/after compare
 
@@ -133,7 +104,7 @@ README's download list into one click.
 Every sidecar already records the prompt, model, LoRAs and seed. A search box over
 the grid ("crab", "Klein", "detail LoRA") keeps a long archive useful.
 
-## Picks
+## Order
 
-- **Next for fun:** #2, outpainting.
-- **The one most worth building:** #1, native face finding.
+3c is done. Next: **#4 compare** (small, in the same dialog, and it judges every
+refine), then **#2 outpainting**, then **#3/#3b editing and references on Klein**.

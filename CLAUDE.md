@@ -801,7 +801,35 @@ Paint over part of the Image tab's result and redraw just that part:
 `src/redraw.rs` (the geometry and the compositing, pure and GPU-free tested),
 `Engine::redraw`, `POST /redraw`, `SdRunner::redraw` (`img2img_cmd` plus
 `--mask`) and `web/js/redraw.js`, a dialog of its own (`#redraw`) opened from the
-result's action row. An escalation in every respect that matters — reads `raw`,
+result's action row.
+
+**The page calls the dialog *Refine*, and the code keeps `redraw` for the area
+pass** — it is accurate, and a second rename in a week was churn. The dialog is the
+one place an image is finished: the mask decides its main button (nothing painted →
+"Refine image", `/refine`; painted → "Refine area", `/redraw`). **Hi-res stays in
+the action row, not the dialog**: it sets the final size and re-diffuses the whole
+picture, partly undoing a refine made before it, so it is a step *before* finishing
+rather than one of its tools — it was in the dialog for a day and read wrong. The
+row is Hi-res (with its scale), Save, View & adjust and Refine…. **Upscale *is* in
+the dialog** (`Engine::upscale`, `POST /upscale`, `Kind::Upscale`): `enlarge` — EASU
+or an upscaler model, the generate's first stage — over the image in hand, no
+diffusion. It draws nothing new, so it can't undo a refine and doesn't share Hi-res's
+reason to be outside; it is a history step, publishes through `publish` with the
+detail filters restarted for the new size, and waits while a mask is painted. The dialog's
+whole-image pass goes through `image.js`'s exported `refine` → `escalate`, which
+keeps the stale-image reopen; `escalate` takes an error sink so a failure lands in the
+dialog, not behind it. The one Strength box shows two numbers, labelled: the whole
+image's *is* the Refine fold's `#rstrength` (so *Save as defaults* sees it), the
+area's is its own — switched by `syncStrength`, never reinterpreted.
+
+**Each pass has its own prompt** — `EscalateRequest.refine_prompt`/`hires_prompt`,
+and the redraw's `prompt` — through `pass_prompt` (blank → the image's own,
+`{variables}` rolled off the image's seed) and named in the step's label by
+`step_label`. They are escalation-only and **not on `Profile`**: the image keeps
+describing itself, so they never reach `Pending.prompt` or a sidecar, and they are
+page-level like `prompt`, not per-model. The fold prompts (`#rprompt`, `#hprompt`)
+ride in `escalateSettings()`, so a run's after-each passes get them, and the dialog's
+box wins over them when typed. An escalation in every respect that matters — reads `raw`,
 publishes through `publish()`, a priority job that pins its image, uncached — so
 Refine, Hi-res and Save follow it with nothing special. `--mask` works on every
 family, not only inpainting checkpoints: sd.cpp blends the original latent back in
@@ -1466,8 +1494,7 @@ that now address a different image, which would work and would be wrong. Coming
 *back* to the Image tab calls `restoreImage`, which renders `lastImage` again: the
 server still holds it (the Outputs viewer has a slot of its own, `Slot::Output`), and
 a run may have made a newer one meanwhile. Before that, leaving the tab lost the
-picture, which is half of what "navigating away loses things" meant. It also means the ids `render()` writes (`refine`, `hires`, `saveout`,
-`upfactor`, `viewadjust`) exist in at most one pane at a time, which is why
+picture, which is half of what "navigating away loses things" meant. It also means the ids `render()` writes (`hires`, `upfactor`, `saveout`, `viewadjust`, `redrawopen`) exist in at most one pane at a time, which is why
 `IDLE_LABELS` and `setUpFactor` need no second set of them.
 
 A pane is down to four keys — `result`, `err`, `refmodel`, `hiresmodel` — and the two it lost say

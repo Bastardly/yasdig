@@ -99,14 +99,20 @@ const HELP = [
         + 'sd.cpp pick the model’s own, which is the right answer for Flux and '
         + 'Flux.2. The Help tab compares them.' },
   { ids: ['rpprompt'],
-    text: 'What should appear where you painted — "a red scarf", "an open hand". '
-        + 'Leave it blank to redraw the area from this image\u2019s own prompt, which '
-        + 'is usually right for fixing a hand or a face. Used for this redraw only; '
-        + 'the image keeps its prompt.' },
+    text: 'What this pass is asked for. Over a painted area: what should appear '
+        + 'there — "a red scarf", "an open hand". Over the whole image: what to bring '
+        + 'out — "sharper fabric texture". Blank uses the Refine pass prompt, or the '
+        + 'image\u2019s own. Used for this pass only; the image keeps its prompt.' },
+  { ids: ['rprompt', 'hprompt'],
+    text: 'Optional: what this pass is asked for, instead of the image\u2019s own '
+        + 'prompt. Used by After each generation and, when its own box is blank, by '
+        + 'the Refine dialog. A refine is a light pass, so it suits detail ("sharper '
+        + 'fabric") more than a different object — that is a painted area.' },
   { ids: ['rpstrength'],
-    text: 'How much of what is under the mask to throw away. 0.5, the default, '
-        + 'keeps its shape and colours and fixes the detail; 0.8 replaces it while '
-        + 'matching the surroundings; 0.95 starts that area over.' },
+    text: 'How much of the picture the pass may change. The whole image follows the '
+        + 'Refine pass fold (a light 0.2–0.35 adds detail). An area keeps its own: '
+        + '0.5, the default, keeps its shape and fixes the detail; 0.8 replaces it; '
+        + '0.95 starts that area over.' },
   { ids: ['rpsoft'],
     text: 'How far past what you painted the new pixels fade into the old. '
         + 'What you painted is always replaced in full; this is the blend around '

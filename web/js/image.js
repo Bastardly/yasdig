@@ -628,7 +628,7 @@ export function render(data) {
   lastImage = data;
   const t = data.timings;
   const stages = [['generate', t.gen_ms], ['upscale', t.upscale_ms ?? 0], ['fsr', t.fsr_ms],
-                  ['refine', t.refine_ms], ['hi-res', t.hires_ms], ['redraw', t.redraw_ms ?? 0]];
+                  ['refine', t.refine_ms], ['hi-res', t.hires_ms], ['area', t.redraw_ms ?? 0]];
   const total = stages.reduce((sum, [, ms]) => sum + ms, 0);
   const max = Math.max(...stages.map(([, ms]) => ms), 1);
   const bars = stages.filter(([, ms]) => ms > 0)
@@ -646,15 +646,15 @@ export function render(data) {
   // which covers the reason it was ever written back.
   // Hi-res first: it's the pass that enlarges, and refine is the finishing
   // touch you run on whatever size you ended up at.
+  // Hi-res first: it sets the final size, and refining comes after it — at the
+  // size the image ends up at. Refine itself lives in the Refine dialog
+  // (redraw.js), with the prompt, the mask, the live preview and the history.
   let actions = '';
   if (data.can_hires) {
     // From `upFactor`, not a hardcoded 2: this select is destroyed and rebuilt
     // on every render, so the choice has to live outside it to survive one.
     actions += `<select id="upfactor" title="Upscale before the hi-res pass">${upOptions()}</select>
       <button id="hires" class="btn btn-run">Hi-res pass</button>`;
-  }
-  if (data.can_refine) {
-    actions += '<button id="refine" class="btn btn-run">Refine image</button>';
   }
   // Always offered, including for a plain generate — a base render can be worth
   // keeping too. Only generations are archived automatically; this is how a
@@ -664,8 +664,8 @@ export function render(data) {
   // image opens the same viewer, but an affordance nobody can see is a feature
   // nobody finds — and the sliders used to be visible furniture.
   actions += '<button id="viewadjust" class="btn">View &amp; adjust</button>';
-  // Neutral: opening the dialog spends nothing; its own button does.
-  actions += '<button id="redrawopen" class="btn">Redraw…</button>';
+  // Neutral: opening the dialog spends nothing; its own buttons do.
+  actions += '<button id="redrawopen" class="btn">Refine…</button>';
 
   // The prompt as it was actually conditioned. Shown only when it differs from
   // the box, which happens for exactly three reasons: a `{variable}` was drawn —
@@ -698,6 +698,10 @@ export function render(data) {
 
   P('result').querySelector('img').addEventListener('click', () => showFullSize(S.currentSrc));
   $('redrawopen').addEventListener('click', () => openRedraw(data));
+  if ($('hires')) $('hires').addEventListener('click', hires);
+  if ($('upfactor')) {
+    $('upfactor').addEventListener('change', (e) => setUpFactor(parseFloat(e.target.value)));
+  }
   // The Redraw dialog follows the image on screen while it is open: a redraw,
   // a step back, or a batch image landing.
   syncRedraw(data);
@@ -711,12 +715,7 @@ export function render(data) {
   $('seedval').addEventListener('click', () => {
     $('seed').value = data.seed;
   });
-  if ($('refine')) $('refine').addEventListener('click', refine);
-  if ($('hires')) $('hires').addEventListener('click', hires);
   if ($('saveout')) $('saveout').addEventListener('click', saveOutput);
-  if ($('upfactor')) {
-    $('upfactor').addEventListener('change', (e) => setUpFactor(parseFloat(e.target.value)));
-  }
 
   // Which archived generation this descends from, so the grid can show it.
   // Survives a refine or hi-res: those don't create a work item, they escalate
@@ -783,10 +782,10 @@ async function reopen(workId) {
   return null;
 }
 
-async function escalate(which, path, payload, label, kind) {
+async function escalate(which, path, payload, label, kind, err = escErr) {
   if (S.imageId === null) return;
   setBusy(which, label, kind);
-  escErr('');
+  err('');
   soonJobs();
   try {
     try {
@@ -802,7 +801,7 @@ async function escalate(which, path, payload, label, kind) {
     const msg = String(e.message || e);
     // *Cancel generation* on this pass: nothing went wrong, and the image
     // under the buttons is still the one the pass started from.
-    escErr(/cancelled by request/.test(msg) ? 'Cancelled. The image is as it was.' : msg);
+    err(/cancelled by request/.test(msg) ? 'Cancelled. The image is as it was.' : msg);
     // The image is gone, so the controls are dead; keep the picture on
     // screen. Any other failure is retryable — the server kept its
     // intermediates.
@@ -844,6 +843,10 @@ export const escalateSettings = () => {
     // whatever was last set, which is the one thing these must never do.
     refine_cfg_scale: numOr('rcfg'),
     hires_cfg_scale: numOr('hcfg'),
+    // Each pass's own prompt: blank is the image's own, on the server. Read by
+    // a run's after-each passes, and by the dialog when its own box is blank.
+    refine_prompt: $('rprompt').value.trim() || null,
+    hires_prompt: $('hprompt').value.trim() || null,
   };
 };
 
@@ -857,14 +860,22 @@ export const escalateModels = () => ({
   hires_model: P('hiresmodel').value || null,
 });
 
-// Each button sends its own checkpoint. Empty means "the one that made the
-// image", which is what an unchosen select sends and what the server reads an
-// empty string as.
-const refine = () => escalate('refine', '/refine',
-  { model: P('refmodel').value || null, ...escalateSettings() }, 'Refining…', 'refine');
-const hires = () => escalate('hires', '/hires',
-  { model: P('hiresmodel').value || null, upscale: parseFloat($('upfactor').value),
-    ...escalateSettings() }, 'Hi-res pass…', 'hires');
+// Each pass sends its own checkpoint: empty means "the one that made the
+// image", which is what an unchosen select sends.
+//
+// Refine is the Refine dialog's whole-image pass. The dialog's prompt wins over
+// the fold's when typed (the fold's is already in `escalateSettings()`), and
+// `err` is where a failure goes: the dialog is modal, so `#rerr` behind it is a
+// line nobody reads.
+export const refine = (prompt, err) => escalate('redrawgo', '/refine', {
+  model: P('refmodel').value || null, ...escalateSettings(),
+  ...(prompt ? { refine_prompt: prompt } : {}),
+}, 'Refining…', 'refine', err);
+// Hi-res is the action row's, with the Hi-res fold's prompt.
+const hires = () => escalate('hires', '/hires', {
+  model: P('hiresmodel').value || null, upscale: parseFloat($('upfactor').value),
+  ...escalateSettings(),
+}, 'Hi-res pass…', 'hires');
 
 // ---- Runs -------------------------------------------------------------------
 //
@@ -999,7 +1010,7 @@ const stoppableRun = () => {
 // an image of a run, or a Refine, Hi-res or Redraw press.
 const cancellable = () => {
   const j = runningJob();
-  return j && (isRunKind(j) || ['refine', 'hires', 'redraw'].includes(j.kind)) ? j : null;
+  return j && (isRunKind(j) || ['refine', 'hires', 'redraw', 'upscale'].includes(j.kind)) ? j : null;
 };
 
 // Stop after the image in flight has finished its whole pipeline. The hi-res,

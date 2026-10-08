@@ -1095,29 +1095,45 @@ pick it in the Image tab's **Image to image** fold — that starts a real pass f
 strength you choose. Grading it further is exactly what this tab is for; re-rendering it is a
 different question, asked in a different place.
 
-### Redraw
+### Refine
 
-For an image that is almost right. **Redraw…** beside the result opens a dialog laid
-out like the viewer: paint over what should change — a hand, a face, a stray object —
-optionally type what should be there (blank redraws it from the image's own prompt),
-and press **Redraw**. Only the painted area is redrawn; every pixel outside it keeps
-its exact original value. Right-drag erases, **1:1** and Space+drag work on a large
-image at full size, and the mask only shows while the pointer is over the picture, so
-the result is easy to judge. The live preview is in the dialog too.
+**Hi-res pass** above the result enlarges it and adds detail at the new size — do that
+first, since it re-draws the whole picture lightly and would partly undo a refine made
+before it. **Refine…** beside it opens the one place an image is finished: a dialog laid
+out like the viewer, with Fit and **1:1** (Space+drag pans), a prompt box, the live
+preview and the image's **History**. What its main button does depends on the mask:
 
-It works on every model, not just inpainting checkpoints, and small things come back
-*sharper*: the painted area and a margin around it are cut out, enlarged to the
-model's own size, redrawn, shrunk back and blended in. **Strength** 0.5 (the default)
-keeps the shape and fixes the detail, 0.8 replaces it, 0.95 starts that area over.
-**Edge softness** is how far past the paint the new pixels fade into the old — what you
-painted is always replaced in full.
+- **Nothing painted — Refine image.** A light img2img pass over the whole picture, at
+  the Refine pass's steps and strength: detail and texture rather than new content.
+- **Something painted — Refine area.** Only the painted part is redrawn. It is cut
+  out with a margin, enlarged to the model's own size, redrawn, shrunk back and blended
+  in, so small things come back *sharper* and every pixel outside keeps its exact
+  value. It works on every model, not just inpainting checkpoints. **Strength** for
+  an area is its own (0.5 keeps the shape and fixes the detail, 0.8 replaces it, 0.95
+  starts over), and **Edge softness** is how far past the paint the new pixels fade
+  into the old.
 
-Every pass on an image — Redraw, Refine and Hi-res — is a step in its **History**,
-listed in the dialog with a thumbnail each. Click one to go back (or Ctrl+Z /
-Ctrl+Shift+Z): fixed the fingers, ruined the hat, step back to the fingers and try the
-hat again. A new pass from an earlier step replaces the ones after it. An image keeps
-its last twelve steps and always its original; history is scratch, gone with the image
-or the server. Outputs have no Redraw — pick one under *Image to image* instead.
+- **Upscale** makes it bigger with no diffusion: FSR, or any runnable model from
+  `models/upscalers/` (the same choice as *Output upscale*), at 1.5× to 4×. It draws
+  nothing new, so unlike Hi-res it can't undo a refine — make it the last step for a
+  bigger file, or upscale and then refine to add detail at the new size.
+
+Each pass can be given its own prompt ("sharper fabric texture", "an open hand").
+Blank uses the Refine pass prompt from the panel on the left, then the image's own
+(Hi-res uses the Hi-res pass panel's); the image keeps its prompt either way, and the History says what each
+step was asked. Right-drag erases, and the mask only shows while the pointer is over
+the picture.
+
+Every pass — Refine, Refine area, Hi-res — is a step in the History, with a thumbnail
+each. Click one to go back (or Ctrl+Z / Ctrl+Shift+Z): fixed the fingers, ruined the
+hat, step back to the fingers and try the hat again. A new pass from an earlier step
+replaces the ones after it. An image keeps its last twelve steps and always its
+original; history is scratch, gone with the image or the server. Outputs have no
+Refine — pick one under *Image to image* instead.
+
+For a batch, the *After each generation* fold runs Hi-res and Refine on every image
+with the prompts from the Hi-res pass and Refine pass panels; a `{variable}` in them
+rolls per image.
 
 ### Escalating with a different model
 
@@ -1604,13 +1620,21 @@ needs a Vulkan device and nothing else.
   counts, so a pinned seed walks past it. Answers `{ "skipped": true }`, or `400` for a
   job that isn't a running run, or in the moment between two passes of one image.
 - `POST /refine` — `{ "image_id": 3 }`. img2img over the retained image at its current
-  size, no rescale.
+  size, no rescale. Optional `refine_prompt` (`/hires`: `hires_prompt`) is what the
+  pass is asked for; blank or absent uses the image's own prompt, which the image
+  keeps either way. `/generate` and `/img2img` take the same two for their
+  after-each passes.
 - `POST /redraw` — `{ "image_id": 3, "mask": "<base64 PNG or data: URL>", "prompt":
   "a red scarf", "strength": 0.5, "feather": 16 }`. Redraws where the mask is white.
   The mask must be the image's own size; the rest is optional (blank prompt = the
   image's own, strength 0.5, `feather` — edge softness in image pixels, 0–128 —
   16). Queued ahead of everything not yet running, like `/refine`, and answers in its
   shape, with `timings.redraw_ms`.
+- `POST /upscale` — `{ "image_id": 3, "factor": 2, "upscaler": "4x-UltraSharp.pth" }`.
+  Enlarges the retained image with no diffusion: FSR when `upscaler` is absent, `null`
+  or empty, otherwise that model from the upscalers dir. `factor` is more than 1 and
+  at most 4; the size is `fsr::out_size` whichever ran. A history step, queued and
+  answered like `/refine`, with `timings.upscale_ms`.
 - `POST /history/goto` — `{ "image_id": 3, "index": 1 }`. Make that step of the
   image's history the live one. Every result carries `history` (each step's label,
   oldest first) and `at` (the step on screen). A `publish`, no diffusion — answered on

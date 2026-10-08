@@ -26,6 +26,8 @@
 //!   POST /refine      -> {image_id, ...overrides}   img2img in place, no rescale
 //!   POST /redraw     -> {image_id, mask, prompt?, strength?}  redraw the
 //!                        painted part; `mask` is a base64 PNG, white = redraw
+//!   POST /upscale     -> {image_id, factor, upscaler?}  enlarge with FSR or an
+//!                        upscaler model, no diffusion; a history step
 //!   POST /history/goto -> {image_id, index}  step back (or forward) to an
 //!                        earlier state of the image; every pass is a step
 //!   GET  /history/{id}/{index}.png   a step's thumbnail
@@ -181,6 +183,13 @@ enum Work {
     /// Redraw the painted part of a retained image (`Engine::redraw`). Pinned
     /// while it waits, like the two above.
     Redraw { id: u64, req: pipeline::RedrawRequest },
+    /// Enlarge a retained image with no diffusion (`Engine::upscale`). Pinned
+    /// while it waits, like the passes above.
+    Upscale {
+        id: u64,
+        factor: f32,
+        upscaler: Option<String>,
+    },
     /// Generate a clip. Minutes long rather than seconds, which is what made
     /// `SdRunner::run` stream its output — `GET /progress` is the only thing
     /// that makes this bearable, and it answers on the connection thread while
@@ -479,6 +488,11 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
             lock(&engine.retained()).unpin(id);
             queue.finish(t.id, r);
         }
+        Work::Upscale { id, factor, upscaler } => {
+            let r = engine.upscale(id, factor, upscaler).map(|r| latest(queue, &r));
+            lock(&engine.retained()).unpin(id);
+            queue.finish(t.id, r);
+        }
         Work::Redraw { id, req } => {
             let r = engine.redraw(id, &req).map(|r| latest(queue, &r));
             lock(&engine.retained()).unpin(id);
@@ -633,6 +647,7 @@ fn handle_conn(
         ("POST", "/refine") => handle_refine(&mut conn, lanes, &req.body),
         ("POST", "/hires") => handle_hires(&mut conn, lanes, &req.body),
         ("POST", "/redraw") => handle_redraw(&mut conn, lanes, &req.body),
+        ("POST", "/upscale") => handle_upscale(&mut conn, lanes, &req.body),
         ("POST", "/history/goto") => handle_goto(&mut conn, lanes, &req.body),
         // A history step's thumbnail. Off the queue like every thumbnail; both
         // numbers are the whole whitelist.
@@ -1614,6 +1629,11 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         hires_strength: Option<f32>,
         #[serde(default)]
         hires_cfg_scale: Option<f32>,
+        /// The after-each passes' own prompts; see `EscalateRequest`.
+        #[serde(default)]
+        refine_prompt: Option<String>,
+        #[serde(default)]
+        hires_prompt: Option<String>,
         /// The two escalation checkpoints, as the *generate* body spells them.
         /// They name no pass this request runs; they are archived with the work
         /// item so reopening it restores the pickers. `/refine` and `/hires` take
@@ -1651,7 +1671,7 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         None => return Ok(()),
     };
 
-    let escalate = run_escalation(
+    let mut escalate = run_escalation(
         dto.refine_steps,
         dto.refine_strength,
         dto.refine_cfg_scale,
@@ -1659,6 +1679,10 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         dto.hires_strength,
         dto.hires_cfg_scale,
     );
+    // The fold's pass prompts, for the after-each passes. `{variables}` roll
+    // per image, off each image's own seed (`Engine::pass_prompt`).
+    escalate.refine_prompt = dto.refine_prompt.clone();
+    escalate.hires_prompt = dto.hires_prompt.clone();
     let total = (!dto.looping).then(|| dto.count.unwrap_or(1));
     let after = dto.after;
 
@@ -1718,6 +1742,10 @@ fn run_escalation(
         hires_strength,
         refine_cfg_scale: Some(refine_cfg_scale),
         hires_cfg_scale: Some(hires_cfg_scale),
+        // Set by the caller off the same body: they are strings, and passing
+        // them through here would take this to eight positional arguments.
+        refine_prompt: None,
+        hires_prompt: None,
     }
 }
 
@@ -1801,6 +1829,11 @@ fn handle_img2img(
         hires_strength: Option<f32>,
         #[serde(default)]
         hires_cfg_scale: Option<f32>,
+        /// The after-each passes' own prompts; see `EscalateRequest`.
+        #[serde(default)]
+        refine_prompt: Option<String>,
+        #[serde(default)]
+        hires_prompt: Option<String>,
         /// See `/generate`'s. No `upscale_factor` beside them: this pass has no
         /// EASU stage to scale.
         #[serde(default)]
@@ -1848,7 +1881,7 @@ fn handle_img2img(
     }
 
 
-    let escalate = run_escalation(
+    let mut escalate = run_escalation(
         dto.refine_steps,
         dto.refine_strength,
         dto.refine_cfg_scale,
@@ -1856,6 +1889,10 @@ fn handle_img2img(
         dto.hires_strength,
         dto.hires_cfg_scale,
     );
+    // The fold's pass prompts, for the after-each passes. `{variables}` roll
+    // per image, off each image's own seed (`Engine::pass_prompt`).
+    escalate.refine_prompt = dto.refine_prompt.clone();
+    escalate.hires_prompt = dto.hires_prompt.clone();
     let total = (!dto.looping).then(|| dto.count.unwrap_or(1));
     let after = dto.after;
 
@@ -1977,6 +2014,12 @@ struct EscalateDto {
     refine_cfg_scale: Option<Option<f32>>,
     #[serde(default, deserialize_with = "double_option")]
     hires_cfg_scale: Option<Option<f32>>,
+    /// The pass's own prompt; absent, `null` and blank all mean the image's
+    /// own. Only the one belonging to this route does anything.
+    #[serde(default)]
+    refine_prompt: Option<String>,
+    #[serde(default)]
+    hires_prompt: Option<String>,
 }
 
 impl EscalateDto {
@@ -1989,6 +2032,8 @@ impl EscalateDto {
             hires_strength: self.hires_strength,
             refine_cfg_scale: self.refine_cfg_scale,
             hires_cfg_scale: self.hires_cfg_scale,
+            refine_prompt: self.refine_prompt.clone(),
+            hires_prompt: self.hires_prompt.clone(),
         }
     }
 }
@@ -2073,6 +2118,34 @@ impl RedrawDto {
             .decode(b64.trim())
             .context("the mask is not valid base64")
     }
+}
+
+/// `POST /upscale {image_id, factor, upscaler?}`: enlarge the image in hand
+/// with FSR (`upscaler` absent, `null` or empty) or a model from the upscalers
+/// folder. Queued and waited on like `/refine`; no diffusion.
+fn handle_upscale(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+        factor: f32,
+        #[serde(default)]
+        upscaler: Option<String>,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else {
+        return Ok(());
+    };
+    escalate(
+        conn,
+        lanes,
+        jobs::Kind::Upscale,
+        dto.image_id,
+        None,
+        Work::Upscale {
+            id: dto.image_id,
+            factor: dto.factor,
+            upscaler: dto.upscaler.filter(|u| !u.is_empty()),
+        },
+    )
 }
 
 /// `POST /history/goto {image_id, index}`: make a step of the image's history
@@ -2272,7 +2345,11 @@ fn handle_stop_job(
     let what = match lanes.queue.stop(dto.id) {
         jobs::Stopped::Removed(work) => {
             // A queued button press was holding its image.
-            if let Work::Refine { id, .. } | Work::Hires { id, .. } | Work::Redraw { id, .. } = work {
+            if let Work::Refine { id, .. }
+            | Work::Hires { id, .. }
+            | Work::Redraw { id, .. }
+            | Work::Upscale { id, .. } = work
+            {
                 lock(&lanes.retained).unpin(id);
             }
             "removed"
@@ -3327,6 +3404,23 @@ mod tests {
     /// box unclearable — and `/hires` routes the whole struct through
     /// `#[serde(flatten)]`'s buffered content deserializer, which is where a
     /// regression here would hide. No GPU needed to catch either.
+    /// A pass's own prompt: absent and `null` both leave the image's own, and
+    /// the hi-res one rides through the flatten like every other knob.
+    #[test]
+    fn an_escalation_carries_its_own_prompt() {
+        let bare: EscalateDto = serde_json::from_str(r#"{"image_id":7}"#).unwrap();
+        assert_eq!(bare.overrides().refine_prompt, None);
+        let null: EscalateDto =
+            serde_json::from_str(r#"{"image_id":7,"refine_prompt":null}"#).unwrap();
+        assert_eq!(null.overrides().refine_prompt, None);
+        let set: EscalateDto =
+            serde_json::from_str(r#"{"image_id":7,"refine_prompt":"sharper fabric"}"#).unwrap();
+        assert_eq!(set.overrides().refine_prompt.as_deref(), Some("sharper fabric"));
+        let h: HiresDto =
+            serde_json::from_str(r#"{"image_id":7,"upscale":2.0,"hires_prompt":"crisp"}"#).unwrap();
+        assert_eq!(h.esc.overrides().hires_prompt.as_deref(), Some("crisp"));
+    }
+
     #[test]
     fn escalate_body_tells_an_empty_cfg_box_from_a_missing_one() {
         let bare: EscalateDto = serde_json::from_str(r#"{"image_id":7}"#).unwrap();

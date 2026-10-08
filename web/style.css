@@ -557,6 +557,11 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .redrawtools { display: flex; gap: var(--sp-2); margin: var(--sp-3) 0; }
 .redrawtools .btn { flex: 1; }
 #rdcancel { margin-top: var(--sp-2); }
+.rdupscale { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
+.rdupscale select { min-width: 0; }
+.rdupscale #rdfactor { flex: 0 0 auto; width: auto; }
+.rdupscale #rdupscaler { flex: 1; }
+#rdupscale { margin-top: var(--sp-2); }
 .rdhistory { list-style: none; margin: var(--sp-2) 0 0; padding: 0; display: grid; gap: var(--sp-2); }
 .rdhistory button {
   display: flex; align-items: center; gap: var(--sp-2); width: 100%; text-align: left;
