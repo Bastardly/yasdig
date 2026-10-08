@@ -118,6 +118,9 @@ const HELP = [
         + 'What you painted is always replaced in full; this is the blend around '
         + 'it. Raise it when a strong redraw leaves a visible edge, lower it to '
         + 'keep the change tight. 0 is a hard edge.' },
+  { ids: ['rdcmp'],
+    text: 'Which step Compare puts on the left. It starts on the step before the '
+        + 'one on screen; pick the first to see how far the image has come.' },
   { ids: ['rpbrush'],
     text: 'Brush size on screen, so it feels the same in the column, fitted and at '
         + '1:1. Right-drag erases; Space+drag pans. Paint over all of what should '

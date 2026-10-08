@@ -31,6 +31,8 @@
 //!   POST /history/goto -> {image_id, index}  step back (or forward) to an
 //!                        earlier state of the image; every pass is a step
 //!   GET  /history/{id}/{index}.png   a step's thumbnail
+//!   POST /history/view -> {image_id, index}  a step as shown now, with today's
+//!                        filters, for the before/after compare; changes nothing
 //!   POST /hires       -> {image_id, upscale, ...overrides}
 //!                        img2img with an enlarge first. Both queue ahead of
 //!                        everything not yet running, wait their turn and answer
@@ -160,6 +162,9 @@ enum JobKind {
     /// Step to another state in an image's history (`Display::goto`). A
     /// `publish`, so the display lane's — it answers mid-render.
     Goto { id: u64, index: usize },
+    /// A step as the page would show it, for the before/after compare
+    /// (`Display::view_step`). Reads only.
+    ViewStep { id: u64, index: usize },
 }
 
 /// The diffusion lane's work, as the job queue (`crate::jobs`) carries it.
@@ -447,6 +452,12 @@ fn run(args: &[String]) -> Result<()> {
                     }
                     JobKind::SaveOutput(id) => display.save_output(id).map(|p| saved_json(&p)),
                     JobKind::Goto { id, index } => display.goto(id, index).map(|r| result_json(&r)),
+                    JobKind::ViewStep { id, index } => display.view_step(id, index).map(|(png, w, h)| {
+                        format!(
+                            "{{\"image_base64\":\"{}\",\"width\":{w},\"height\":{h}}}",
+                            base64::engine::general_purpose::STANDARD.encode(&png)
+                        )
+                    }),
                 };
                 let _ = job.reply.send(result);
             }
@@ -669,6 +680,7 @@ fn handle_conn(
         ("POST", "/redraw") => handle_redraw(&mut conn, lanes, &req.body),
         ("POST", "/upscale") => handle_upscale(&mut conn, lanes, &req.body),
         ("POST", "/history/goto") => handle_goto(&mut conn, lanes, &req.body),
+        ("POST", "/history/view") => handle_view_step(&mut conn, lanes, &req.body),
         // A history step's thumbnail. Off the queue like every thumbnail; both
         // numbers are the whole whitelist.
         ("GET", p) if p.starts_with("/history/") && p.ends_with(".png") => {
@@ -2181,6 +2193,28 @@ fn handle_goto(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resul
             conn,
             &lanes.display,
             JobKind::Goto {
+                id: dto.image_id,
+                index: dto.index,
+            },
+            400,
+        ),
+        None => Ok(()),
+    }
+}
+
+/// `POST /history/view {image_id, index}`: a step as the page would show it,
+/// with today's filters, for the compare slider. Changes nothing.
+fn handle_view_step(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+        index: usize,
+    }
+    match parse_json::<Dto>(conn, body)? {
+        Some(dto) => submit(
+            conn,
+            &lanes.display,
+            JobKind::ViewStep {
                 id: dto.image_id,
                 index: dto.index,
             },

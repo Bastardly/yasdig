@@ -72,11 +72,12 @@ comes before refining. The action row is Hi-res, Save, View & adjust and Refineâ
 runs. Unlike this note first said, those prompts are **not** per-model: a prompt is
 the page's, like the main prompt, so *Save as defaults* doesn't store them.
 
-## 4. Before/after compare
+## 4. Before/after compare â€” done 2026-10-08
 
-A split slider in the viewer or the Redraw dialog, comparing the current step with
-any earlier one. History already keeps every step, so this is mostly page work,
-and it's exactly what judging a redraw or a refine needs.
+Built in the Refine dialog: **Compare** (or **C**) splits the picture between an
+earlier step and now, with a line you drag. *Compare with* picks the step. Both
+halves carry the current grade and sharpening, and a smaller step is stretched to
+the same box, so an upscale can be judged too.
 
 ## 5. Comparison grids (X/Y plots)
 
@@ -106,5 +107,5 @@ the grid ("crab", "Klein", "detail LoRA") keeps a long archive useful.
 
 ## Order
 
-3c is done. Next: **#4 compare** (small, in the same dialog, and it judges every
-refine), then **#2 outpainting**, then **#3/#3b editing and references on Klein**.
+3c and #4 are done. Next: **#2 outpainting**, then **#3/#3b editing and
+references on Klein**.

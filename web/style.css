@@ -562,6 +562,32 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .rdupscale #rdfactor { flex: 0 0 auto; width: auto; }
 .rdupscale #rdupscaler { flex: 1; }
 #rdupscale { margin-top: var(--sp-2); }
+/* Compare: the earlier step over the image, clipped at the split (redraw.js
+   sets the clip and the line's position); the labels sit in the image's top
+   corners. The line is the state colour, like every selection mark here. */
+.rdview.comparing { cursor: ew-resize; }
+/* The mask waits while comparing: the pointer drives the split, not a brush. */
+.rdview.comparing .maskview { display: none; }
+.rdtag-now { transform: translateX(-100%); }
+.rdbefore { position: absolute; pointer-events: none; user-select: none; }
+.rdsplit {
+  position: absolute; width: 2px; margin-left: -1px; pointer-events: none;
+  background: var(--state);
+}
+.rdsplit::after {
+  content: ''; position: absolute; top: 50%; left: 50%; width: 14px; height: 14px;
+  margin: -7px 0 0 -7px; border-radius: 50%; background: var(--state);
+}
+.rdtag {
+  position: absolute; pointer-events: none; padding: 2px var(--sp-2);
+  border-radius: var(--r-sm); background: var(--scrim-soft); color: var(--text);
+  font-size: var(--fs-sm); max-width: 45%; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#rdcmprow { margin-top: var(--sp-3); }
+.rdcmp { display: flex; gap: var(--sp-2); }
+.rdcmp select { flex: 1; min-width: 0; }
+.rdcmp .btn { flex: 0 0 auto; }
 .rdhistory { list-style: none; margin: var(--sp-2) 0 0; padding: 0; display: grid; gap: var(--sp-2); }
 .rdhistory button {
   display: flex; align-items: center; gap: var(--sp-2); width: 100%; text-align: left;

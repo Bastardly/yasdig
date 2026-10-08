@@ -831,11 +831,26 @@
     <p class="sub">Every pass is a step. Click one to go back to it; Ctrl+Z and
       Ctrl+Shift+Z step through. A new pass from an earlier step replaces the
       ones after it.</p>
+    <!-- Compare, beside the step it puts on the left. The whole row is hidden
+         with only one step, since there is nothing to compare with. -->
+    <div id="rdcmprow" hidden>
+      <label for="rdcmp">Compare with</label>
+      <div class="rdcmp">
+        <select id="rdcmp"></select>
+        <button type="button" id="rdcompare" class="btn btn-choice" title="Before and after, split by a line you drag (C)">Compare</button>
+      </div>
+    </div>
     <ol id="rdhistory" class="rdhistory"></ol>
   </div>
   <div class="lbview fit rdview" id="rdview">
     <img id="rdimg" alt="image being redrawn" draggable="false">
     <canvas id="rdmask" class="maskview"></canvas>
+    <!-- Compare: an earlier step laid over the image, clipped at the split.
+         Placed by the same `lay()` as the mask, so the three never drift. -->
+    <img id="rdbefore" class="rdbefore" alt="" draggable="false" hidden>
+    <div id="rdsplit" class="rdsplit" hidden></div>
+    <span id="rdtagbefore" class="rdtag rdtag-before" hidden></span>
+    <span id="rdtagnow" class="rdtag rdtag-now" hidden></span>
   </div>
   <button type="button" id="rdclose" class="lbclose" aria-label="Close Redraw">&times;</button>
 </dialog>

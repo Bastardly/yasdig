@@ -167,6 +167,13 @@ export const TOPICS = [
         ['0.8', 'Replaces what was there, matched to its surroundings.'],
         ['0.9–0.95', 'Starts the area over. For removing or swapping an object.'],
       ])}
+      <h3>Comparing</h3>
+      <p><b>Compare</b> (or <b>C</b>) shows an earlier step on the left and the
+      image now on the right, split by a line you drag — or click to move it. Pick
+      the earlier step under <i>Compare with</i>; it starts on the one just before.
+      Both halves carry the same grade and sharpening, so what differs is what the
+      pass did. A smaller earlier step is stretched to the same size, which is how to
+      judge an upscale. Painting waits while comparing.</p>
       <h3>Going back</h3>
       <p>Every pass is a step in the <b>History</b>. Click a step to go back to it
       (Ctrl+Z and Ctrl+Shift+Z step through). A new pass from an earlier step

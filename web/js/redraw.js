@@ -35,6 +35,16 @@ let strengthFor = null;
 let shown = null;
 let pane = null;
 let frame = 0;
+// Compare: on or off, which step is on the left, where the split is (a
+// fraction of the image's width), and an epoch that drops a before-image
+// answer a newer request overtook — `cancelPost`'s pattern. `beforeKey` is
+// what the image on the left was fetched for, so a redraw of the dialog that
+// changed nothing doesn't fetch it again.
+let comparing = false;
+let cmpWith = null;
+let split = 0.5;
+let beforeEpoch = 0;
+let beforeKey = null;
 
 const open = () => $('redraw').open;
 
@@ -53,23 +63,55 @@ function clearMask() {
   syncButtons();
 }
 
-// Lay the mask's view over the image: same box, in the pane's coordinates, so
-// it scrolls with the picture at 1:1. The CSS blur previews the edge softness
-// at the scale the image is displayed.
+// Lay an element over the image: same box, in the pane's coordinates, so it
+// scrolls with the picture at 1:1. The mask, the before image and the split
+// all go through here, so the three can't drift apart.
+function lay(el) {
+  const img = $('rdimg');
+  el.style.left = `${img.offsetLeft}px`;
+  el.style.top = `${img.offsetTop}px`;
+  el.style.width = `${img.clientWidth}px`;
+  el.style.height = `${img.clientHeight}px`;
+}
+
+// The mask's view. Display-sized; the CSS blur previews the edge softness at
+// the scale the image is shown at.
 function place() {
   const img = $('rdimg'), c = $('rdmask');
   const w = img.clientWidth, h = img.clientHeight;
-  if (!w || !master) return;
-  c.style.left = `${img.offsetLeft}px`;
-  c.style.top = `${img.offsetTop}px`;
-  c.style.width = `${w}px`;
-  c.style.height = `${h}px`;
+  if (!w) return;
+  layCompare();
+  if (!master) return;
+  lay(c);
   const dpr = window.devicePixelRatio || 1;
   c.width = Math.max(1, Math.round(Math.min(w * dpr, master.width)));
   c.height = Math.max(1, Math.round(Math.min(h * dpr, master.height)));
   const scale = w / master.width;
   c.style.filter = `blur(${(Number($('rpsoft').value) * scale) / 2}px)`;
   draw();
+}
+
+// The before image over the left of the split, the line at the split, and a
+// label in each top corner. An earlier, smaller step is stretched to the same
+// box on purpose: judging an upscale is judging detail at one size.
+function layCompare() {
+  const show = comparing && !!$('rdbefore').getAttribute('src');
+  for (const id of ['rdbefore', 'rdsplit', 'rdtagbefore', 'rdtagnow']) $(id).hidden = !show;
+  if (!show) return;
+  const img = $('rdimg');
+  const w = img.clientWidth, h = img.clientHeight;
+  const x = Math.round(w * split);
+  lay($('rdbefore'));
+  $('rdbefore').style.clipPath = `inset(0 ${w - x}px 0 0)`;
+  const line = $('rdsplit');
+  line.style.left = `${img.offsetLeft + x}px`;
+  line.style.top = `${img.offsetTop}px`;
+  line.style.height = `${h}px`;
+  const pad = 8;
+  $('rdtagbefore').style.left = `${img.offsetLeft + pad}px`;
+  $('rdtagbefore').style.top = `${img.offsetTop + pad}px`;
+  $('rdtagnow').style.left = `${img.offsetLeft + w - pad}px`;
+  $('rdtagnow').style.top = `${img.offsetTop + pad}px`;
 }
 
 function draw() {
@@ -95,7 +137,14 @@ function draw() {
 function stroke(e) {
   // A pan (Space, middle button) was taken by the pane, which ran first — or
   // was refused because the pane is fitted, and is still not a stroke.
-  if (e.defaultPrevented || space || !master || (e.button !== 0 && e.button !== 2)) return;
+  if (e.defaultPrevented || space) return;
+  // Comparing, the pointer moves the split instead: the mask is hidden, and a
+  // stroke nobody can see is a stroke nobody meant.
+  if (comparing) {
+    if (e.button === 0) dragSplit(e);
+    return;
+  }
+  if (!master || (e.button !== 0 && e.button !== 2)) return;
   e.preventDefault();
   const img = $('rdimg'), view = $('rdview'), c = $('rdmask');
   const erase = eraser || e.button === 2;
@@ -135,6 +184,83 @@ function stroke(e) {
   view.addEventListener('pointermove', move);
   view.addEventListener('pointerup', up);
   view.addEventListener('pointercancel', up);
+}
+
+// The split follows the pointer from the press — a click jumps it there, a
+// drag carries it — clamped to the image.
+function dragSplit(e) {
+  e.preventDefault();
+  const view = $('rdview');
+  const at = (ev) => {
+    const r = $('rdimg').getBoundingClientRect();
+    split = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+    layCompare();
+  };
+  at(e);
+  const up = () => {
+    view.removeEventListener('pointermove', at);
+    view.removeEventListener('pointerup', up);
+    view.removeEventListener('pointercancel', up);
+  };
+  view.setPointerCapture(e.pointerId);
+  view.addEventListener('pointermove', at);
+  view.addEventListener('pointerup', up);
+  view.addEventListener('pointercancel', up);
+}
+
+// Compare needs a second step; with one, there is nothing to put beside it.
+const canCompare = () => (shown?.history?.length ?? 0) > 1;
+
+function setCompare(on) {
+  comparing = on && canCompare();
+  $('rdcompare').classList.toggle('active', comparing);
+  $('rdview').classList.toggle('comparing', comparing);
+  if (comparing) fetchBefore();
+  layCompare();
+}
+
+// The step on the left, as the page would show it now — the server runs it
+// through `publish` with today's filters (`/history/view`), so a sharpened
+// "now" is never measured against an unsharpened "before".
+async function fetchBefore() {
+  if (!comparing || !shown || cmpWith === null) return;
+  const key = `${shown.image_id}:${shown.at}:${shown.step}:${cmpWith}`;
+  if (key === beforeKey) { layCompare(); return; }
+  // Hidden until the new one is in hand: the old left half beside a new right
+  // half would be a comparison of the wrong pair, however briefly.
+  $('rdbefore').removeAttribute('src');
+  layCompare();
+  const epoch = ++beforeEpoch;
+  try {
+    const data = await post('/history/view', { image_id: shown.image_id, index: cmpWith });
+    if (epoch !== beforeEpoch) return;
+    beforeKey = key;
+    $('rdbefore').src = `data:image/png;base64,${data.image_base64}`;
+    $('rdtagbefore').textContent = `Before: ${shown.history[cmpWith]}`;
+    $('rdtagnow').textContent = `Now: ${shown.history[shown.at]}`;
+    layCompare();
+  } catch (e) {
+    if (epoch !== beforeEpoch) return;
+    $('rperr').textContent = String(e.message || e);
+    setCompare(false);
+  }
+}
+
+// The *Compare with* select: every step but the one on screen. The pick is
+// kept while it still names another step; otherwise the one just before the
+// current, or the next when the current is the original.
+function drawCompare() {
+  const steps = shown?.history ?? [];
+  const ok = canCompare();
+  $('rdcmprow').hidden = !ok;
+  $('rdcompare').disabled = !ok;
+  if (!ok) { if (comparing) setCompare(false); return; }
+  if (cmpWith === null || cmpWith === shown.at || cmpWith >= steps.length) {
+    cmpWith = shown.at > 0 ? shown.at - 1 : 1;
+  }
+  $('rdcmp').innerHTML = steps.map((label, i) => (i === shown.at ? ''
+    : `<option value="${i}"${i === cmpWith ? ' selected' : ''}>${i + 1}. ${esc(label)}</option>`)).join('');
+  if (comparing) fetchBefore();
 }
 
 // Whether a pass on some image is running. The history is locked meanwhile: a
@@ -204,8 +330,6 @@ function takeStrength() {
 
 const dialogErr = (m) => { $('rperr').textContent = m; };
 
-// The two whole-image passes go through image.js's `escalate`, which keeps the
-// stale-image reopen and the busy label; this only adds the dialog's prompt.
 // Bigger, with no diffusion. Through the queue like the passes — a model runs
 // on the GPU, an ESRGAN in sd-cli — and back as an ordinary result.
 async function upscale() {
@@ -229,6 +353,8 @@ async function upscale() {
   }
 }
 
+// The whole-image refine goes through image.js's `escalate`, which keeps the
+// stale-image reopen and the busy label; this only adds the dialog's prompt.
 async function refineImage() {
   await refine($('rpprompt').value.trim() || null, dialogErr);
   syncButtons();
@@ -288,6 +414,7 @@ function drawHistory() {
       <img src="/history/${shown.image_id}/${i}.png" alt="" loading="lazy">
       <span>${i + 1}. ${esc(label)}</span>
     </button></li>`).reverse().join('');
+  drawCompare();
   syncButtons();
 }
 
@@ -313,6 +440,8 @@ export function syncRedraw(data) {
 
 export function openRedraw(data) {
   shown = null;
+  // The viewer's sliders may have moved since: the left side is fetched again.
+  beforeKey = null;
   fillUpscalers();
   // Re-read the Strength box from scratch: the fold's may have changed since.
   strengthFor = null;
@@ -364,6 +493,9 @@ export function initRedraw() {
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && shown) {
       e.preventDefault();
       goto(shown.at + (e.shiftKey ? 1 : -1));
+    } else if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      setCompare(!comparing);
     }
   });
   document.addEventListener('keyup', (e) => {
@@ -376,6 +508,8 @@ export function initRedraw() {
     const b = e.target.closest('[data-step]');
     if (b && !b.disabled) goto(Number(b.dataset.step));
   });
+  $('rdcompare').addEventListener('click', () => setCompare(!comparing));
+  $('rdcmp').addEventListener('change', () => { cmpWith = Number($('rdcmp').value); fetchBefore(); });
   $('rperase').addEventListener('click', () => { eraser = !eraser; syncButtons(); });
   $('rpclear').addEventListener('click', clearMask);
   $('redrawgo').addEventListener('click', () => (painted ? redraw() : refineImage()));

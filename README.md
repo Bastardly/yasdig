@@ -1125,6 +1125,11 @@ Blank uses the Refine pass prompt from the panel on the left, then the image's o
 step was asked. Right-drag erases, and the mask only shows while the pointer is over
 the picture.
 
+**Compare** (or **C**) puts an earlier step on the left and the image now on the right,
+split by a line you drag; *Compare with* picks the step. Both halves carry the same
+grade and sharpening, and a smaller earlier step is stretched to the same box, so what
+you see is what the pass changed.
+
 Every pass — Refine, Refine area, Hi-res — is a step in the History, with a thumbnail
 each. Click one to go back (or Ctrl+Z / Ctrl+Shift+Z): fixed the fingers, ruined the
 hat, step back to the fingers and try the hat again. A new pass from an earlier step
@@ -1640,6 +1645,9 @@ needs a Vulkan device and nothing else.
   image's history the live one. Every result carries `history` (each step's label,
   oldest first) and `at` (the step on screen). A `publish`, no diffusion — answered on
   the display lane, so it never waits behind a render.
+- `POST /history/view` — `{ "image_id": 3, "index": 0 }`. That step as the page would
+  show it now — through the display filters currently applied — as `{ image_base64,
+  width, height }`. Changes nothing; the before half of Compare.
 - `GET /history/{image_id}/{index}.png` — a step's 256 px thumbnail, made on first
   request.
 - `POST /hires` — `{ "image_id": 3, "upscale": 2 }`. FSR-upscale toward

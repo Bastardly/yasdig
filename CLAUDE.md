@@ -897,7 +897,7 @@ Every pass on an image — Refine, Hi-res, Redraw — is a step that can be gone
 to: `Pending.history` (`Snapshot`s: raw, profile, pass counts, step, label) and
 `Pending.at`, `Display::goto`, `POST /history/goto`, and
 `GET /history/{id}/{index}.png`. Scratch, like everything a `Pending` owns: never in
-a sidecar. Five things break silently:
+a sidecar. Six things break silently:
 
 - **A pass no longer deletes the image it replaced** — `advance` keeps it as a
   step and deletes only its `display`, which `publish` can make again. A new pass
@@ -915,6 +915,14 @@ a sidecar. Five things break silently:
 - **Filters are not in a `Snapshot`.** Stepping keeps the grade where it is — the
   user's look, carried the way `Filters::restart` carries it — and the step's
   profile comes back with it, because a Hi-res on another checkpoint swapped it.
+- **Compare's before half goes through `publish` with the filters applied now**
+  (`Display::view_step`, `POST /history/view`), never the raw file: an
+  unsharpened, ungraded before beside a finished now would rig every comparison.
+  It writes nothing, and reads its step through `Pending::step` — the one door
+  `goto` uses too. On the page the before image, the split line and the mask are
+  all placed by one `lay()`, so they can't drift apart; `beforeKey` keeps a
+  redraw of the dialog from refetching, and an epoch drops an answer a newer
+  request overtook.
 
 ## Step caching
 

@@ -772,6 +772,13 @@ impl Pending {
         }
     }
 
+    /// Step `index` of the history, or `None` past its end. The one place
+    /// `goto` and `view_step` read a step from, so the two can't disagree
+    /// about what index 2 is.
+    fn step(&self, index: usize) -> Option<Snapshot> {
+        self.steps().into_iter().nth(index)
+    }
+
     /// Everything this image owns: the display, and every step's raw and
     /// thumbnail — the current one among them.
     fn remove_files(&self) {
@@ -2212,10 +2219,7 @@ impl Display {
     pub fn goto(&mut self, id: u64, index: usize) -> Result<GenResult> {
         let p = lock(&self.retained).get(id, "step through")?;
         let history = p.steps();
-        let s = history
-            .get(index)
-            .with_context(|| format!("this image has no step {index}"))?
-            .clone();
+        let s = p.step(index).with_context(|| format!("this image has no step {index}"))?;
         let t = Instant::now();
         let (png, w, h) = publish(&self.fsr, &s.raw, &p.display, &p.filters)?;
         let fsr_ms = t.elapsed().as_millis();
@@ -2237,6 +2241,24 @@ impl Display {
             bail!("that image changed while stepping through its history — try again");
         }
         Ok(result)
+    }
+
+    /// Step `index` as the page would show it, for the Refine dialog's
+    /// before/after compare — and nothing else: no write to `Retained`, no
+    /// history move, the live image untouched. Through `publish` with the
+    /// filters on screen *now*, never the raw file: a before shown unsharpened
+    /// beside a sharpened now would rig every comparison. Display lane, so it
+    /// answers mid-render like the sliders.
+    pub fn view_step(&mut self, id: u64, index: usize) -> Result<(Vec<u8>, u32, u32)> {
+        let p = lock(&self.retained).get(id, "compare")?;
+        let s = p.step(index).with_context(|| format!("this image has no step {index}"))?;
+        static N: AtomicU64 = AtomicU64::new(0);
+        let tmp = self
+            .scratch
+            .join(format!("{id}-view-{}.png", N.fetch_add(1, Ordering::Relaxed)));
+        let shown = publish(&self.fsr, &s.raw, &tmp, &p.filters);
+        let _ = std::fs::remove_file(&tmp);
+        shown
     }
 
     /// Bring an archived generation back as a live result: a fresh `image_id`
@@ -2831,6 +2853,23 @@ mod tests {
         r.unpin(1);
         assert!(r.get(1, "t").is_err() && !a.raw.exists());
         assert!(r.pin(1).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `goto` and `view_step` read a step through one door: index 0 of a fresh
+    /// image is the image itself, every step of a history is its own raw, and
+    /// past the end is nothing.
+    #[test]
+    fn a_step_is_read_from_one_place() {
+        let dir = scratch("step");
+        let g = live(&dir, "g");
+        assert_eq!(g.step(0).map(|s| s.raw), Some(g.raw.clone()));
+        assert!(g.step(1).is_none());
+        let a = pass(&dir, &g, "a");
+        let b = pass(&dir, &a, "b");
+        let raws: Vec<_> = (0..3).map(|i| b.step(i).unwrap().raw).collect();
+        assert_eq!(raws, [g.raw.clone(), a.raw.clone(), b.raw.clone()]);
+        assert!(b.step(3).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
