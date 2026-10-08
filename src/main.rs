@@ -388,7 +388,27 @@ fn run(args: &[String]) -> Result<()> {
                 let _ = ready_tx.send(Ok((engine.adapter_name(), engine.display(), engine.retained())));
                 loop {
                     let ticket = worker_queue.next();
-                    diffuse(&mut engine, &saver, &worker_queue, ticket);
+                    let id = ticket.id;
+                    // A panic here used to end the thread with the job still
+                    // marked running: its request waited for ever, and so did
+                    // everything queued behind it. Caught, it fails that one
+                    // job and the worker takes the next — a wgpu validation
+                    // panic on an oversized upscale was the case that found
+                    // it. A pinned image the job held stays pinned (its files
+                    // go with the next start), which is the price of not
+                    // trusting state a panic left half-written.
+                    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        diffuse(&mut engine, &saver, &worker_queue, ticket)
+                    }));
+                    if let Err(payload) = caught {
+                        let why = payload
+                            .downcast_ref::<String>()
+                            .cloned()
+                            .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                            .unwrap_or_else(|| "unknown cause".into());
+                        eprintln!("[rustimage] GPU worker caught a panic in job {id}: {why}");
+                        worker_queue.abort(id, format!("the GPU worker failed on this job: {why}"));
+                    }
                 }
             }
             Err(e) => {
@@ -2356,7 +2376,17 @@ fn handle_stop_job(
         }
         jobs::Stopped::Stopping => "stopping",
         jobs::Stopped::Cancel => {
-            monitor.cancel();
+            // Only an sd-cli run can be killed. FSR and the `sr` models run on
+            // this process's own GPU device, a pass at a time, with nothing to
+            // stop part-way — say so, rather than answer "cancelled" and let it
+            // finish anyway.
+            if !monitor.cancel() {
+                return conn.respond(
+                    400,
+                    "application/json",
+                    error_json("this pass runs on the GPU directly and can't be stopped part-way — it will finish on its own in a moment").as_bytes(),
+                );
+            }
             "cancelled"
         }
         jobs::Stopped::Unknown => {

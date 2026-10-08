@@ -19,7 +19,7 @@
 //! thing before and after a hi-res pass.
 
 use crate::config::Filters;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use bytemuck::{Pod, Zeroable};
 use std::path::Path;
 use wgpu::util::DeviceExt;
@@ -157,9 +157,14 @@ impl Fsr {
         // the tile, 340 MB for a 288² tile. Asking for what the adapter offers,
         // capped at 1 GiB, lets `sr::plan_tile` pick tiles by the real limit.
         let offered = adapter.limits();
+        // And the adapter's whole texture size, not wgpu's 8192 default: the
+        // largest image is a setting (`Settings::max_image_side`), and the
+        // device has to be able to go as far as that setting is allowed to.
+        // Asking costs nothing until a texture that big is made.
         let limits = wgpu::Limits {
             max_storage_buffer_binding_size: offered.max_storage_buffer_binding_size.min(1 << 30),
             max_buffer_size: offered.max_buffer_size.min(1 << 30),
+            max_texture_dimension_2d: offered.max_texture_dimension_2d,
             ..wgpu::Limits::default()
         };
 
@@ -410,6 +415,54 @@ impl Fsr {
             .to_rgba8();
         let (in_w, in_h) = img.dimensions();
         let (out_w, out_h) = out_size((in_w, in_h), upscale_factor);
+        self.check_fits(out_w.max(in_w), out_h.max(in_h))?;
+        // Anything the checks above didn't foresee is caught here rather than
+        // reaching wgpu's uncaptured-error handler, which *panics* — and a panic
+        // takes the GPU worker thread down with the request still waiting on
+        // it, so the page waits for ever. An error scope turns it into an `Err`.
+        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let done = self.process_inner(&img, out_png, (in_w, in_h), (out_w, out_h), filters);
+        if let Some(e) = pollster::block_on(self.device.pop_error_scope()) {
+            bail!("the GPU refused the post-process at {out_w}×{out_h}: {e}");
+        }
+        done
+    }
+
+    /// The largest side this device can process, input or output: the
+    /// adapter's texture cap, which `new` asks for in full (16384 on a 7900
+    /// XTX). The *chosen* limit, `Settings::max_image_side`, sits under it and
+    /// is checked first, by `Engine::check_side`.
+    pub fn max_side(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
+    /// Refuse a size the device can't hold, in words, before any GPU call: the
+    /// texture side, and the readback buffer for the result (`process_inner`
+    /// copies the whole output into one).
+    fn check_fits(&self, w: u32, h: u32) -> Result<()> {
+        let max = self.max_side();
+        if w.max(h) > max {
+            bail!(
+                "{w}×{h} is past this GPU's limit of {max} px on a side, which no setting \
+                 can raise — upscale by less, or from a smaller step in the history"
+            );
+        }
+        let readback = u64::from((w * 4).next_multiple_of(256)) * u64::from(h);
+        let cap = self.device.limits().max_buffer_size;
+        if readback > cap {
+            bail!("{w}×{h} needs a {readback}-byte readback, past this GPU's {cap}-byte buffer limit");
+        }
+        Ok(())
+    }
+
+    fn process_inner(
+        &self,
+        img: &image::RgbaImage,
+        out_png: &Path,
+        (in_w, in_h): (u32, u32),
+        (out_w, out_h): (u32, u32),
+        filters: &Filters,
+    ) -> Result<(u32, u32)> {
 
         // Source texture (uploaded), intermediate (upscaled), and final.
         let src = self.make_texture(
@@ -442,7 +495,7 @@ impl Fsr {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &img,
+            img,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(in_w * 4),

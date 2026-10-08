@@ -279,6 +279,18 @@ impl<T: Clone> Queue<T> {
         true
     }
 
+    /// The worker panicked on `id`. Whatever it was, answer it as failed — a
+    /// run as `fail_run` would, anything else through its waiting request — so
+    /// nothing waits on a job the worker will never finish.
+    pub fn abort(&self, id: u64, message: String) {
+        let run = self.lock().entries.iter().any(|e| e.id == id && e.kind.is_run());
+        if run {
+            self.fail_run(id, message);
+        } else {
+            self.finish(id, Err(anyhow!(message)));
+        }
+    }
+
     /// *Cancel generation*: mark the image a running run has in flight as
     /// cancelled on purpose, so the caller can kill its child and the worker
     /// counts the failure that follows as the image being done rather than as
@@ -545,6 +557,25 @@ mod tests {
         let id = q.push(Kind::Redraw, "m".into(), None, "redraw", None, true);
         q.next();
         assert!(matches!(q.stop(id), Stopped::Cancel));
+    }
+
+    /// A panic on the worker must still answer the job: a waiting request
+    /// gets an error, a run leaves a notice, and both leave the queue.
+    #[test]
+    fn an_aborted_job_answers_and_leaves() {
+        let q = Queue::new();
+        let (tx, rx) = mpsc::channel();
+        let id = q.push(Kind::Upscale, "m".into(), None, "upscale", Some(tx), true);
+        q.next();
+        q.abort(id, "worker panicked".into());
+        assert!(rx.recv().unwrap().is_err());
+        assert_eq!(q.len(), 0);
+
+        let run = q.push(Kind::Generate, "m".into(), Some(3), "run", None, false);
+        q.next();
+        q.abort(run, "worker panicked".into());
+        assert_eq!(q.len(), 0);
+        assert_eq!(q.snapshot().notices.last().unwrap().message, "worker panicked");
     }
 
     #[test]

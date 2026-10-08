@@ -730,7 +730,10 @@ test:
 - **Stop is two things.** A waiting entry is removed (its request answered with an
   error, its pinned image let go). A running run is marked `stopping` and ends at
   the image boundary — the image in flight is finished, passes and save included,
-  as the old Stop did. Anything else running is killed (`monitor.cancel`).
+  as the old Stop did. Anything else running is killed (`monitor.cancel`) — when
+  it is an sd-cli run. FSR and the `sr` models run on our own device with no
+  process to kill, so a Stop on one answers 400 saying it will finish, rather
+  than "cancelled" over a pass that carries on.
 - **Cancel generation is the third, and it is a kill that the run survives**
   (`POST /jobs/skip`). `Queue::skip` marks the running entry *before* the route
   kills the child, so `diffuse` can never see the failure without the mark, and
@@ -741,8 +744,22 @@ test:
   the next real failure into a silent skip. A Refine or Hi-res press has no next
   image, so the page sends it to `/jobs/stop` instead.
 
-Four things break silently:
+Five things break silently:
 
+- **A panic on the worker fails that job; it must never end the thread.** The
+  loop in `main.rs` wraps `diffuse` in `catch_unwind` and calls `Queue::abort`,
+  which answers the waiting request (or leaves a run's notice). Before it, a wgpu
+  validation panic on an oversized upscale killed the thread with the job marked
+  running, so its button waited for ever and so did everything queued behind it.
+  `Fsr::process` is the other half: it checks sizes against the device
+  (`check_fits`, `max_side` — the adapter's whole texture size, which `Fsr::new`
+  asks for instead of wgpu's 8192 default) and runs inside a wgpu error scope,
+  because wgpu's uncaptured-error handler *panics*. **Under the GPU's limit sits a
+  chosen one**, `Settings::max_image_side` (default 8192, page-level, `PAGE_ONLY`),
+  checked by `Engine::check_side` *before* any work — Upscale, Hi-res's target, and
+  a generate's output size before its txt2img — so the message can name the setting
+  and the GPU's figure rather than a pass failing minutes in. The two are separate on
+  purpose: what the device can hold and what the page can show are different limits.
 - **A run's request answers `{job}` at once; its images come through
   `/jobs/latest`.** The worker publishes every stage with `set_latest`, the page
   sees `latest_seq` move and fetches it. A run can be a loop, and nothing about

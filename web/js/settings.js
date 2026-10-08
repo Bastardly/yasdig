@@ -76,6 +76,8 @@ export const FIELDS = [
   { key: 'cache_mode', from: 'cachemode', kind: 'mirror' },
   { key: 'upscale_factor', from: 'upscale', kind: 'num', min: 1, max: 4, step: 0.1 },
   { key: 'upscaler', from: 'upscaler', kind: 'upscaler' },
+  // A limit, not a default for any control: so its own label and its own help.
+  { key: 'max_image_side', label: 'Largest image side', help: 'setmaxside', kind: 'int', min: 1024, max: 32768, step: 512 },
   { key: 'refine_steps', from: 'rsteps', kind: 'int', min: 0, max: 100 },
   { key: 'refine_strength', from: 'rstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
   { key: 'refine_cfg_scale', from: 'rcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },

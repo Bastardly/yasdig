@@ -1136,6 +1136,11 @@ impl Engine {
         let sd = self.sd();
         let neg = negative.as_deref();
 
+        // Before the render rather than at the enlarge: a 4096 base at 4× is
+        // past any limit, and two minutes of txt2img shouldn't find that out.
+        let (ow, oh) = crate::fsr::out_size((tpl.width, tpl.height), tpl.upscale_factor);
+        self.check_side(ow, oh)?;
+
         // 1) Distilled generation at base resolution.
         let t = Instant::now();
         sd.txt2img(tpl, &prompt, neg, seed, &lowres)?;
@@ -1920,6 +1925,10 @@ impl Engine {
         }
         let p = lock(&self.retained).get(id, "upscale")?;
         let model = self.cfg.check_upscaler(&upscaler)?;
+        // Before the work, not after: a model pass can run for minutes and only
+        // then meet the post-process's limit. Upscaling an upscale doubles fast.
+        let (w, h) = crate::fsr::out_size((p.raw_w, p.raw_h), factor);
+        self.check_side(w, h)?;
         let step = p.step + 1;
         let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();
@@ -1998,6 +2007,7 @@ impl Engine {
 
         let target_w = ((p.raw_w as f32) * upscale).round() as u32;
         let target_h = ((p.raw_h as f32) * upscale).round() as u32;
+        self.check_side(target_w, target_h)?;
         // Largest size the diffusion pass may run at, snapped to a multiple of
         // 64 so the latent dimensions stay clean. Only the width is snapped:
         // FSR scales both axes by one factor, so the height follows from it.
@@ -2095,6 +2105,30 @@ impl Engine {
         let result = entry.result(id, png, Timings { fsr_ms, hires_ms, ..Default::default() });
         self.keep(id, entry);
         Ok(result)
+    }
+
+    /// Refuse a size past the largest image allowed, *before* any work: the
+    /// chosen limit (`Settings::max_image_side`, read per job like every
+    /// setting) under the GPU's own (`Fsr::max_side`). The message names the
+    /// setting, so the way to go bigger is in the error, and says when the GPU
+    /// is the one in the way, since no setting gets past that.
+    fn check_side(&self, w: u32, h: u32) -> Result<()> {
+        let gpu = lock(&self.fsr).max_side();
+        let chosen = self.cfg.settings().max_image_side;
+        if w.max(h) <= chosen.min(gpu) {
+            return Ok(());
+        }
+        if w.max(h) <= gpu {
+            bail!(
+                "{w}×{h} is past the largest image size, {chosen} px on a side. Raise \
+                 \"Largest image side\" in Settings → Image (this GPU allows up to {gpu}), \
+                 or make it smaller. Very large images can be slow to show in the page."
+            );
+        }
+        bail!(
+            "{w}×{h} is past this GPU's limit of {gpu} px on a side, which no setting can \
+             raise — make it smaller, or start from a smaller step in the history."
+        )
     }
 
     /// See [`enlarge`], which this is wired to the engine's own FSR device and

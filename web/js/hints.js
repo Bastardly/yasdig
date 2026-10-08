@@ -328,6 +328,11 @@ const HELP = [
   { ids: ['setclearvid'],
     text: 'When you press Close server, delete every clip on the Video tab, and '
         + 'the enlarged frames made from them. Only Close server does this.' },
+  { ids: ['setmaxside'],
+    text: 'The longest side Upscale, Hi-res or Output upscale may make, in pixels. '
+        + 'Past it you get a message instead of an image. 8192 by default: a bigger '
+        + 'image can be slow to show in the page. Your GPU sets the real maximum. '
+        },
   { ids: ['setflash'],
     text: 'Pass --diffusion-fa to the refine and hi-res passes when they run '
         + 'large. Worth about 6× at 2048² on this card (122 s → 20 s), so leave '

@@ -1,7 +1,7 @@
 import { $, esc, numOr, post } from './dom.js';
 import { S } from './state.js';
 import { isBusy, onIdle, setBusy, setIdle } from './busy.js';
-import { onJobs, runningJob, soonJobs, stopJob } from './jobs.js';
+import { onJobs, runningJob, soonJobs } from './jobs.js';
 import { zoomPane } from './viewer.js';
 import { refine, takeResult, upscalerOptions, upscalersReady } from './image.js';
 
@@ -394,9 +394,17 @@ export function initRedraw() {
   // Whatever pass the button is shown for: the same test decides both, so the
   // button can't again appear for a pass it doesn't stop. Each is one sd-cli
   // run, so stopping it is killing it (`Stopped::Cancel`).
-  $('rdcancel').addEventListener('click', () => {
+  $('rdcancel').addEventListener('click', async () => {
     const j = runningJob();
-    if (j && PASSES.includes(j.kind)) stopJob(j.id);
+    if (!j || !PASSES.includes(j.kind)) return;
+    // Straight to the route rather than `stopJob`, which keeps its failures
+    // quiet: an FSR upscale can't be stopped part-way, and the server says so.
+    try {
+      await post('/jobs/stop', { id: j.id });
+    } catch (e) {
+      $('rperr').textContent = String(e.message || e);
+    }
+    soonJobs();
   });
   $('rdclose').addEventListener('click', () => $('redraw').close());
   $('rpsoft').addEventListener('input', () => { syncVals(); place(); });

@@ -115,6 +115,14 @@ pub struct Settings {
     /// Empty `work/videos/`, and the enlarged frames of each clip.
     pub clear_videos_on_close: bool,
 
+    /// The longest side any enlarge may produce — Upscale, Hi-res, a generate's
+    /// output upscale. Page-level: a limit of this machine and this browser, not
+    /// of a checkpoint. The GPU's own limit (`Fsr::max_side`, 16384 on a 7900
+    /// XTX) is the ceiling above it; this is the lower, chosen one, at 8192 by
+    /// default because a bigger PNG crossing to the page as base64 is the thing
+    /// that struggles first. `Engine::check_side` is where it is enforced.
+    pub max_image_side: u32,
+
     /// The `[variables]` table: `{animal}` in a prompt and the words it can
     /// stand for. See [`crate::variables`].
     ///
@@ -253,6 +261,7 @@ impl Default for Settings {
             clear_workitems_on_close: false,
             clear_outputs_on_close: false,
             clear_videos_on_close: false,
+            max_image_side: DEFAULT_MAX_IMAGE_SIDE,
             variables: Variables::new(),
         }
     }
@@ -305,6 +314,7 @@ impl Settings {
             clear_workitems_on_close: self.clear_workitems_on_close,
             clear_outputs_on_close: self.clear_outputs_on_close,
             clear_videos_on_close: self.clear_videos_on_close,
+            max_image_side: self.max_image_side,
             variables: self.variables.clone(),
         }
     }
@@ -408,6 +418,14 @@ impl Settings {
         }
         if self.hires_max_side < 64 {
             bail!("hires_max_side is {}, must be 64 or more", self.hires_max_side);
+        }
+        // The GPU's own limit is checked where it is known, at the enlarge
+        // (`Engine::check_side`); this only refuses what no GPU allows.
+        if !(1024..=MAX_IMAGE_SIDE_CEILING).contains(&self.max_image_side) {
+            bail!(
+                "max_image_side is {}, must be between 1024 and {MAX_IMAGE_SIDE_CEILING}",
+                self.max_image_side
+            );
         }
         variables::validate(&self.variables)?;
         self.as_profile("settings").validate()
@@ -735,6 +753,14 @@ pub fn update_model(
     Ok(out)
 }
 
+/// [`Settings::max_image_side`] out of the box. wgpu's own default texture
+/// limit, and about where a result stops displaying comfortably in the page.
+pub const DEFAULT_MAX_IMAGE_SIDE: u32 = 8192;
+
+/// No GPU wgpu runs on goes past this (Vulkan's largest `maxImageDimension2D`
+/// in practice is 16384, some report 32768), so a bigger number is a typo.
+pub const MAX_IMAGE_SIDE_CEILING: u32 = 32768;
+
 /// The fields of [`Settings`] that are the page's rather than a model's.
 const PAGE_ONLY: &[&str] = &[
     "prompt",
@@ -744,6 +770,7 @@ const PAGE_ONLY: &[&str] = &[
     "clear_workitems_on_close",
     "clear_outputs_on_close",
     "clear_videos_on_close",
+    "max_image_side",
 ];
 
 /// `GET /model-settings`: every model's base and overrides.
@@ -855,6 +882,21 @@ mod tests {
     /// A file written before the scheduler existed reads as Auto — what those
     /// images ran with — and a model can pin Auto back over a global choice,
     /// which an `Option` (the `upscaler` shape) could not say.
+    /// The largest image is the page's, not a model's: it round-trips through
+    /// the file, is checked for sense, and a per-model entry may not set it.
+    #[test]
+    fn the_largest_image_side_is_a_page_setting() {
+        let old: Settings = toml::from_str("steps = 20\n").unwrap();
+        assert_eq!(old.max_image_side, DEFAULT_MAX_IMAGE_SIDE);
+        let big = Settings { max_image_side: 16384, ..Settings::default() };
+        let back: Settings = toml::from_str(&toml::to_string_pretty(&big).unwrap()).unwrap();
+        assert_eq!(back.max_image_side, 16384);
+        assert!(big.validate().is_ok());
+        assert!(Settings { max_image_side: 512, ..Settings::default() }.validate().is_err());
+        assert!(Settings { max_image_side: 65536, ..Settings::default() }.validate().is_err());
+        assert!(PAGE_ONLY.contains(&"max_image_side"));
+    }
+
     #[test]
     fn the_step_cache_defaults_off_and_a_model_can_pin_it_back_off() {
         let old: Settings = toml::from_str("steps = 20\n").unwrap();

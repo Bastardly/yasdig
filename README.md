@@ -434,6 +434,7 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `clear_workitems_on_close` | when **Close server** is pressed, delete every work item on the Current shelf. Default `false`. Favorites are never touched |
 | `clear_outputs_on_close` | the same for `work/output/` — saved images and uploads. Default `false`. Favorite outputs are never touched |
 | `clear_videos_on_close` | the same for `work/videos/`, and the enlarged frames made from each clip. Default `false` |
+| `max_image_side` | the longest side Upscale, Hi-res or a generate's output upscale may produce (default 8192, 1024–32768). Past it, the pass is refused with a message naming this setting and the GPU's own limit, which nothing can raise (16384 on a 7900 XTX). Larger images are slow to show in the page |
 | `[variables]` | named word lists a prompt draws from — `animal = ["crab", "horse"]` makes `{animal}` in any prompt one of them. See [Prompt variables](#prompt-variables) |
 
 All three denoise strengths must be between **0.05 and 0.95** — a
