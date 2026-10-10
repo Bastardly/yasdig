@@ -1,4 +1,5 @@
 import { $, esc } from './dom.js';
+import { fetchCatalog, openGetModels } from './getmodels.js';
 
 // The Help tab: a menu of topics on the left, one topic on the right.
 //
@@ -10,6 +11,11 @@ import { $, esc } from './dom.js';
 // The tooltips (`hints.js`) say what a control *is*; this is where choosing
 // between its values goes. They point here rather than repeating it, for the
 // rule `HELP` already states: one copy of each sentence.
+//
+// A row may carry `fill(el)`, run each time the topic is shown, for a part that
+// is the server's to know. *Intro to models* uses it for its family table, so
+// the parts each family needs come from the same `/catalog` the Get models tab
+// draws, not from a second copy written here.
 
 // A name/use table, the shape every comparison here takes. The first column is
 // a value you can pick, so it is set as code — except where it names models.
@@ -21,6 +27,121 @@ const table = (head, rows, code = true) => `
   </table>`;
 
 export const TOPICS = [
+  {
+    id: 'models',
+    title: 'Intro to models',
+    html: `
+      <h2>Intro to models</h2>
+      <p>A <b>model</b> is what draws the picture. It is a big file of learned
+      numbers — 2 to 20 GB — and each one has its own look and its own idea of
+      good settings. The <b>Get models</b> tab downloads a working set for each
+      kind this app runs, so this page is for when you want to know what you are
+      looking at, or go looking for more.</p>
+
+      <h3>One file, or several</h3>
+      <p>An <b>SDXL or SD 1.5 checkpoint</b> is one file with everything inside.
+      Drop it in <code>models/checkpoints</code> and pick it.</p>
+      <p>The newer models — <b>Flux, Klein, Z-Image, Krea 2, Qwen-Image</b> — come as
+      a <b>diffusion model</b> plus separate <b>parts</b>:</p>
+      ${table(['Part', 'What it does'], [
+        ['Text encoder', 'Reads your prompt and turns it into something the model understands. Often a whole language model (Qwen3, T5), and often as large as the model itself.'],
+        ['VAE', 'Turns the model’s compressed result into pixels at the end. Small, but it has to be the right one: the wrong VAE gives coloured noise.'],
+      ], false)}
+      <p>The parts must match the model <b>exactly</b>. A text encoder of the
+      wrong size loads without complaint and quietly ignores your prompt. rustimage
+      reads every file to find out what it is, so file names and folders don’t
+      matter — but it can only pick from what you have. Each model’s parts are in
+      the <i>Models</i> fold on the Image tab.</p>
+
+      <h3>What each family needs</h3>
+      <div id="helpfamilies"><p class="sub">Reading the catalog…</p></div>
+
+      <h3>File types</h3>
+      ${table(['Ending', 'What it is'], [
+        ['.safetensors', 'The usual format. Often full precision (fp16 or bf16) — the largest version of a model.'],
+        ['.gguf', 'A packed format that can be <b>quantized</b>: stored in fewer bits, so smaller and lighter on memory.'],
+        ['.ckpt, .pt, .pth', 'Older formats. Fine for upscalers; prefer .safetensors for anything else.'],
+      ])}
+      <p><b>Quantization</b> is the <code>Q8_0</code>, <code>Q6_K</code>,
+      <code>Q4_K</code> in a GGUF’s name: the bits per number. <b>Q8</b> looks the
+      same as the original at half the size. <b>Q6</b> and <b>Q5</b> are very close.
+      <b>Q4</b> is about a quarter of the size and starts to lose fine detail — the
+      way to fit a 20B model on one card.</p>
+      <p><b>Avoid fp8 files</b> on this app. AMD cards can’t compute in fp8, so an
+      fp8 file runs at twice its size. The <b>Convert</b> tab turns one into a
+      GGUF that runs at its real size.</p>
+
+      <h3>Where to find more</h3>
+      <p><b>Hugging Face</b> (<code>huggingface.co</code>) is where models are
+      published: the original releases, and GGUF versions by people like
+      <code>city96</code>, <code>leejet</code>, <code>unsloth</code> and
+      <code>QuantStack</code>. A repository holds many files; open its
+      <i>Files</i> tab and download <b>one</b> — the quantization that fits your
+      card — not the whole thing. Some repositories ask you to log in and accept a
+      licence first.</p>
+      <p><b>Civitai</b> (<code>civitai.com</code>) is the community’s shelf:
+      thousands of fine-tuned checkpoints and <b>LoRAs</b>, mostly SDXL, Pony,
+      Illustrious and SD 1.5. Check the <i>Base model</i> on a page before
+      downloading. Some downloads need a free account.</p>
+      <p><b>Check the licence.</b> Every model, checkpoint and LoRA comes with
+      its own terms, and they differ a lot: some allow anything, some forbid
+      commercial use of the images, some are for research only, and some ask
+      you to accept terms before downloading. The licence is on the model’s page
+      (on Hugging Face, in the model card and the <i>License</i> tag; on Civitai,
+      under the model’s permissions). A quantized copy — a GGUF someone else made —
+      is still under the original model’s licence. That includes the files the
+      Get models tab downloads; each card links their pages.</p>
+      <p>A <b>LoRA</b> is a small add-on (10–300 MB) that teaches a model a style,
+      a character or a detail. It only works on the family it was trained for —
+      an SDXL LoRA does nothing on Flux — and the LoRA picker greys out the ones
+      that don’t fit. They go in <code>models/loras</code>.</p>
+
+      <h3>Where files go</h3>
+      ${table(['Folder', 'What goes in it'], [
+        ['models/checkpoints', 'One-file models: SDXL, SD 1.5, and their fine-tunes'],
+        ['models/diffusion_models', 'Diffusion models that need parts: Flux, Klein, Z-Image, Krea 2, Qwen-Image'],
+        ['models/text_encoders', 'Text encoders: Qwen, T5, CLIP-L'],
+        ['models/vae', 'VAEs'],
+        ['models/loras', 'LoRAs'],
+        ['models/upscalers', 'Upscaler models (ESRGAN, SPAN, SwinIR…)'],
+      ])}
+      <p>These are the folders ComfyUI uses, so its download instructions work
+      here. They are for you: rustimage reads every file under
+      <code>models/</code>, so a model is found wherever it is — except that
+      LoRAs and upscalers must be in their own folders.</p>`,
+    async fill(el) {
+      const box = el.querySelector('#helpfamilies');
+      let cat;
+      try {
+        cat = await fetchCatalog();
+      } catch (e) {
+        box.innerHTML = `<p class="sub">Could not read the catalog: ${esc(String(e))}</p>`;
+        return;
+      }
+      if (!box.isConnected) return;
+      const gb = (b) => (b / 1e9).toFixed(1) + ' GB';
+      const parts = (e) => e.files.map((f) => f.slot_label).join(' + ');
+      // Done reads green and needs no button; missing reads amber, the colour
+      // that says something is still to be done, with the button under it.
+      const state = (e) => {
+        const n = e.files.filter((f) => f.state !== 'have').length;
+        return n
+          ? `<span class="famstate missing">${n} file${n > 1 ? 's' : ''} missing</span>`
+            + `<br><button type="button" class="btn spaced" data-family="${e.family}">Get it</button>`
+          : '<span class="famstate done">✓ all here</span>';
+      };
+      box.innerHTML = table(['Family', 'Needs', 'Recommended set', ''], cat.entries.map((e) => [
+        esc(e.family_label),
+        esc(parts(e)),
+        `${esc(e.label)}, ${gb(e.bytes)}<br><span class="sub">${esc(e.note)}</span>`,
+        state(e),
+      ]), false) + '<p class="sub">SD 1.5 and SD 2 checkpoints also run: one file each, from Civitai.</p>';
+      box.addEventListener('click', (ev) => {
+        const b = ev.target.closest('[data-family]');
+        if (b) openGetModels(b.dataset.family);
+      });
+    },
+  },
   {
     id: 'samplers',
     title: 'Samplers',
@@ -250,6 +371,7 @@ function show(id) {
     b.classList.toggle('active', b.dataset.topic === topic.id);
   }
   $('helpdoc').innerHTML = topic.html;
+  topic.fill?.($('helpdoc'));
   // Per browser, every access in a try/catch — the rule `initFolds` follows.
   try { localStorage.setItem(KEY, topic.id); } catch { /* ignore */ }
 }

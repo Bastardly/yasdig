@@ -94,8 +94,10 @@
 
 mod bundle;
 mod config;
+mod catalog;
 mod convert;
 mod discover;
+mod downloads;
 mod foldscale;
 mod fsr;
 mod home;
@@ -273,6 +275,8 @@ struct Lanes {
     display: Sender<Job>,
     queue: Jobs,
     retained: Arc<Mutex<Retained>>,
+    /// The Get models tab's lane — curl, no GPU, never the job queue.
+    downloads: downloads::Downloads,
 }
 
 /// The most images one run may ask for. Not a resource limit — the loop is
@@ -472,6 +476,7 @@ fn run(args: &[String]) -> Result<()> {
         display: display_tx,
         queue,
         retained,
+        downloads: downloads::Downloads::start(&cfg).context("spawning the download worker")?,
     };
 
     println!("[rustimage] listening on {url}");
@@ -752,7 +757,10 @@ fn handle_conn(
             "application/json",
             format!("{{\"cancelled\":{}}}", monitor.cancel()).as_bytes(),
         ),
-        ("POST", "/shutdown") => handle_shutdown(&mut conn, cfg, monitor, &req.body),
+        ("POST", "/shutdown") => {
+            lanes.downloads.cancel_all();
+            handle_shutdown(&mut conn, cfg, monitor, &req.body)
+        }
 
         // The archive. List, thumbnail and delete are answered right here rather
         // than through `submit` — they never touch the GPU, and the worker is
@@ -809,6 +817,14 @@ fn handle_conn(
         ("GET", "/loras") => handle_list_loras(&mut conn, cfg),
         // Same shape and reason, minus the header read — see `UpscalerFile`.
         ("GET", "/upscalers") => handle_list_upscalers(&mut conn, cfg),
+        // The Get models tab. Its own lane (`downloads`), so all four answer
+        // here: a download is network, not GPU, and must neither wait behind a
+        // render nor hold one up. The body names a catalog id and nothing else.
+        ("GET", "/catalog") => match serde_json::to_vec(&lanes.downloads.status(cfg)) {
+            Ok(body) => conn.respond(200, "application/json", &body),
+            Err(e) => conn.respond(500, "application/json", error_json(&format!("{e}")).as_bytes()),
+        },
+        ("POST", p) if p.starts_with("/downloads/") => handle_download(&mut conn, cfg, lanes, p, &req.body),
         ("GET", "/video-models") => handle_video_models(&mut conn, cfg),
         ("POST", "/video") => handle_video(&mut conn, lanes, &req.body),
         ("POST", "/videos/enlarge") => handle_enlarge_clip(&mut conn, lanes, &req.body),
@@ -1158,6 +1174,30 @@ fn handle_list_upscalers(conn: &mut http::Connection, cfg: &Config) -> Result<()
             "application/json",
             error_json(&format!("listing upscalers: {e}")).as_bytes(),
         ),
+    }
+}
+
+fn handle_download(
+    conn: &mut http::Connection,
+    cfg: &Config,
+    lanes: &Lanes,
+    path: &str,
+    body: &[u8],
+) -> Result<()> {
+    let entry = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["entry"].as_str().map(str::to_string))
+        .unwrap_or_default();
+    let d = &lanes.downloads;
+    let r = match path {
+        "/downloads/start" => d.enqueue(cfg, &entry).map(|n| format!("{{\"queued\":{n}}}")),
+        "/downloads/cancel" => d.cancel(&entry).map(|()| "{}".into()),
+        "/downloads/clear" => d.clear(&entry).map(|()| "{}".into()),
+        _ => return conn.respond(404, "text/plain", b"not found"),
+    };
+    match r {
+        Ok(body) => conn.respond(200, "application/json", body.as_bytes()),
+        Err(e) => conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
     }
 }
 

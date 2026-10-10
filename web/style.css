@@ -409,7 +409,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .bar { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-1) 0; font-size: var(--fs-micro); }
 .bar .name { width: var(--bar-name); color: var(--text-dim); }
 .bar .track { flex: 1; background: var(--ink-800); border-radius: var(--r-sm); height: 10px; overflow: hidden; }
-.bar .fill { height: 100%; background: var(--state); }
+.bar .fill { display: block; height: 100%; background: var(--state); }  /* a span: inline would take no width */
 .bar .val { width: var(--bar-val); text-align: right; color: var(--text); font-family: var(--font-num); font-variant-numeric: tabular-nums; }
 
 /* ============================ Work items, clips, pickers ============================ */
@@ -492,6 +492,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .helptable th { text-align: left; color: var(--text-dim); font-weight: 600; padding: var(--sp-1) var(--sp-2); }
 .helptable td { vertical-align: top; padding: var(--sp-2); border-top: var(--line); }
 .helptable td:first-child { width: 34%; }
+/* Intro to models' family table: whether a family's files are all here. */
+.famstate.done { color: var(--go); }
+.famstate.missing { color: var(--accent-hi); }
 
 /* ============================ The viewer ============================ */
 
@@ -705,3 +708,17 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* Links leave the app — only to a model's page so far — so they read as text
+   with an underline, not as a button or a state colour. */
+a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
+a:hover { color: var(--accent-hi); }
+
+/* The Get models tab: a card per catalog entry. The file table borrows
+   `.helptable`; its first column is a slot name, not a third of the width. */
+.gmcard { margin-bottom: var(--sp-4); }
+.gmhead { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-3); }
+.gmhead .sub { margin: 0; }
+.gmfiles td:first-child { width: 22%; }
+.gmfiles td:last-child { width: 40%; }
+.gmfiles .bar { margin: 0; }

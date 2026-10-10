@@ -208,6 +208,23 @@ libstdc++ or newer. `.github/workflows/release.yml` makes the files to publish: 
 
 ### Get a model
 
+**The Get models tab is the easy way.** It lists one recommended set per family —
+the model and every file it needs beside it, with sizes — marks what you already
+have, and downloads the rest into the right folders with progress, cancel and
+resume. A part you already have under another name is recognised by its header and
+not downloaded again. It runs `curl`, which ships with Windows 10 and later and with
+most Linux distributions (`doctor` says whether it is found), and it fetches only
+the URLs compiled into the program (`src/catalog.toml`) — all from ungated Hugging
+Face repositories, so no account or token is needed. **Each model has its own
+licence** — some forbid commercial use or are for research only, and a GGUF
+repackage carries the original's — so check it before using what you make; every
+card links the pages its files come from. Downloads run beside renders,
+not in their queue. **Help → Intro to models** explains what the files are and where
+to find more.
+
+The rest of this section is the manual route, and what to do for a model the tab
+doesn't list.
+
 Put model files anywhere under `models/`. Every file is **identified by reading its
 header** — the tensor names inside it — so neither the file name nor the folder
 matters, and a file that isn't an image model (an LTX video model, a loose VAE) is
@@ -237,7 +254,7 @@ few steps and CFG 1: set that once with *Save as defaults for this model* (see
 |---|---|
 | the model — Z-Image-Turbo | [safetensors](https://huggingface.co/Comfy-Org/z_image_turbo/tree/main/split_files/diffusion_models) or [GGUF](https://huggingface.co/leejet/Z-Image-Turbo-GGUF/tree/main) |
 | the text encoder — Qwen3-4B | [safetensors](https://huggingface.co/Comfy-Org/z_image_turbo/tree/main/split_files/text_encoders) or [GGUF](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/tree/main) |
-| the VAE — Flux's `ae.safetensors` | [FLUX.1-schnell](https://huggingface.co/black-forest-labs/FLUX.1-schnell/tree/main) |
+| the VAE — Flux's `ae.safetensors` | [FLUX.1-schnell](https://huggingface.co/second-state/FLUX.1-schnell-GGUF/tree/main) (Black Forest Labs' own repo asks you to log in; this copy is the same file) |
 
 With only some of them, the model is listed greyed out and `doctor` prints the path
 it is waiting for. The bf16 set is ~20 GB and fits a 24 GB card; a GGUF quantization
@@ -269,7 +286,7 @@ to use once it has an edit mode:
 |---|---|
 | the model | 4B [GGUF](https://huggingface.co/leejet/FLUX.2-klein-4B-GGUF/tree/main) or [safetensors](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/tree/main); 9B [GGUF](https://huggingface.co/leejet/FLUX.2-klein-9B-GGUF/tree/main) (`Q8_0`, 9.9 GB) |
 | the text encoder | 4B: Qwen3-4B, the same file as Z-Image's. 9B: Qwen3-8B, [GGUF](https://huggingface.co/unsloth/Qwen3-8B-GGUF/tree/main) (`Q8_0`) |
-| the VAE — Flux.2's | [`flux2-vae.safetensors`](https://huggingface.co/Comfy-Org/flux2-dev/tree/main/split_files/vae) |
+| the VAE — Flux.2's | [`flux2-vae.safetensors`](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/tree/main/split_files/vae) |
 
 **Krea 2** — about 15 GB:
 
@@ -1833,6 +1850,21 @@ needs a Vulkan device and nothing else.
   flight. The conversion itself queues on the worker: no GPU is involved, but it
   saturates the cores and the disk for minutes and must not do that underneath a render.
   Going through the worker is also what gives it `/progress` and `/cancel` for free.
+- `GET /catalog` — the Get models tab: `{curl, finished, models_dir, entries}`. Each
+  entry is a recommended set from `src/catalog.toml` (`id`, `family`, `family_label`,
+  `label`, `note`, `bytes`) with its `files`, each carrying `slot`, `slot_label`, `dest`
+  (under the models dir), `bytes`, `page` (its Hugging Face repository, where its
+  licence is — derived from the URL) and a `state`: `have` (with `name`, the file that fills
+  it — any file whose header fits the slot, not only `dest`), `missing`, `queued`,
+  `downloading` or `partial` (with `got`, the `.part` file's length), `failed` (with
+  `why`), or `wrong` (`dest` exists and is something else, which is never overwritten).
+  `finished` counts files landed since start; the page reloads its models when it moves.
+- `POST /downloads/start`, `/downloads/cancel`, `/downloads/clear` — `{entry}`, a catalog
+  id and nothing else: the page never names a URL or a path. Start queues the entry's
+  files that nothing on disk fills yet; cancel drops queued ones and kills a running
+  curl, **keeping** its `.part` so start resumes it; clear deletes the `.part` files
+  nothing is writing. Answered on the connection thread — downloads have their own lane,
+  not the GPU queue. An unknown id is a 400.
 - `POST /video` — `prompt` and `model` are required; everything else optional:
   ```json
   { "prompt": "…", "model": "wan2.2-ti2v-5b", "negative": null, "seed": -1,

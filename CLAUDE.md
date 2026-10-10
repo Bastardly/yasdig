@@ -684,6 +684,63 @@ name the gallery. Two things break silently:
   reason. `ensure_output_thumb` writes beside whichever copy it found, so a
   favourite whose original is gone still keeps its tile.
 
+## Downloads
+
+The Get models tab: `src/catalog.toml` (compiled in), `src/catalog.rs`,
+`src/downloads.rs`, `GET /catalog`, `POST /downloads/{start,cancel,clear}` and
+`web/js/getmodels.js`. One recommended set per runnable family, each file named by
+the `ImageFamily::slots()` key it fills (or `"model"`). The Help tab's *Intro to
+models* draws its family table from the same `/catalog`, through a `fill()` hook on
+its `TOPICS` row — so the page holds no list of what a family needs.
+
+**curl is a subprocess, never a linked client** — sd.cpp's rule again. A Rust HTTP
+client means a TLS stack in the one-file build; curl is on every Linux box and in
+Windows 10+, and already does HF's CDN redirect, retries, proxies and `-C -`.
+`doctor` warns when it is missing, and the tab says so.
+
+Six things break silently:
+
+- **The catalog is the only source of a URL or a destination.** The routes take a
+  catalog `id` and nothing else; that is the whitelist, `valid_id`'s rule. `parse`
+  refuses a non-`huggingface.co/…/resolve/` URL, a dest that isn't plain
+  `Normal` components ending `.safetensors`/`.gguf`, and a slot the family has no
+  row for. **A shared file comes from each card's own model's repo**, since the
+  card links it as where the licence is (a Flux card linking a Z-Image repo was the
+  bug report); entries sharing a `dest` from different URLs must carry one
+  `sha256` (HF's `X-Linked-Etag`), or a resume could splice two files.
+- **Every URL and `bytes` was HEAD-checked by hand** (2026-10-10), through the
+  redirect, against an ungated repo. Re-check when an entry changes: a wrong size is
+  refused after the whole download, and a gated repo is a 401 for everyone without
+  a token (BFL's own `ae.safetensors` is; second-state's mirrors are the same
+  bytes). Re-take a shared file's hash from every repo it is listed under.
+- **A file is `<dest>.part` until its length is right, then renamed.** Discovery
+  only reads model extensions, so a half file is never listed. Progress is that
+  file's length read per poll — nothing parses curl's meter. A `.part` already full
+  length is finished without asking the server, which would 416 a range past the end.
+- **Present means "a scanned file fits the slot", not "`dest` exists".** The same
+  `fits` test the Models fold uses, so a Qwen3-8B under any name counts and isn't
+  fetched twice; for the model, any image model of the family. A `dest` holding
+  something else is `wrong` and never overwritten. State is keyed by `dest`, not by
+  entry, so the VAE three entries share is one download shown on three cards.
+- **After the rename the file is `identify`'d against its slot.** A catalog entry
+  pointing at the wrong file is reported on the card at once, not minutes into a
+  render. The file is kept: it is a whole download, and the card names what it is.
+- **Its own lane, never the job queue**, and *Close server* cancels it
+  (`cancel_all`) — the process exiting would otherwise orphan curl, still writing
+  gigabytes. Cancel keeps the `.part`; only *Remove partial* deletes it.
+
+Each card links the repositories its files come from (`File::page`, derived from
+the URL so it can't drift from it) under a licence line, and the tab and the Help
+topic both say to check the terms. **No licence names are stored in the catalog**,
+deliberately: they change, a repackage inherits the original's, and a wrong one
+printed by us would read as permission. The page is the answer.
+
+On the page, `finished` moving between polls is what calls `loadModels()`, so a
+model whose last file lands becomes pickable with no reload. The poll runs while
+anything is queued or downloading, whichever tab is showing. The Image tab's
+`#getparts` line appears when a model is listed greyed out, and opens the tab on
+that family's card (`openGetModels`).
+
 ## Close server
 
 `POST /shutdown` (`handle_shutdown`) and `src/shutdown.rs`: the way out of a
@@ -1167,6 +1224,7 @@ resolves the imports itself. `index.html` loads exactly one of them:
 | `video.js` | the Video tab: models, generate, the clip grid, the first frame (a `sourceSlot`) |
 | `player.js` | the canvas frame player and `renderClip` |
 | `convert.js` | the Convert tab |
+| `getmodels.js` | the Get models tab: `/catalog`, the cards, the poll, `openGetModels` |
 | `prompt-box.js` | the one custom element, and the weighting shortcut on it |
 | `prompt-weight.js` | `adjust`: the string maths behind Ctrl+↑/↓. Pure, and the one file with a test |
 | `help.js` | the Help tab: `TOPICS`, one row per topic, drawn into a menu and a page |

@@ -97,7 +97,13 @@ a sketch pad: draw rough shapes, generate from them. Not yet checked which
 ControlNet models the current sd.cpp build runs well, so this starts with a
 header-reading spike, like the families did.
 
-## 7. Model downloader
+## 7. Model downloader — done 2026-10-10
+
+Built: the **Get models** tab (`src/catalog.toml`, curl as a subprocess, resume,
+parts recognised under any name) and Help → *Intro to models*. Next: more entries
+(SD 1.5, an SDXL fine-tune, Qwen-Image-Edit once it is a family) and TAESD
+preview files once those are wanted.
+
 
 For the AMD community this may matter more than any feature. The app already knows
 exactly which file a greyed-out model is missing and where it belongs. A *Get
@@ -111,7 +117,27 @@ the grid ("crab", "Klein", "detail LoRA") keeps a long archive useful.
 
 ## Order
 
-Done: 3c, #4, and #3/#3b on Klein (a References button in Generation; Edit in the
+Done: 3c, #4, #7, and #3/#3b on Klein (a References button in Generation; Edit in the
 Refine dialog). Parked: #2 on `outpaintingV1`. Next candidates: Qwen-Image-Edit and
 FLUX.1 Kontext as families (they reuse the reference plumbing), or #5 comparison
 grids.
+
+
+# Powered by Stable-diffusion.cpp and Vulkan
+Remove the text "Vulkan · stable-diffusion.cpp + native FSR upscale — no Python." and create a
+footer with the text Powered by Stable-diffusion.cpp and Vulkan with a link to each product.
+
+# Handling licence
+This project will be released under Apache 2.0. stable-diffusion.cpp  is MIT and we should mention that all downloaded models have different licences.
+
+# Small image menu restyle
+Move models segment above generation. It feels unnatural that it's all the way down there. I was wrong in suggesting that in the first place.
+
+Currently the summery text is white, which makes it blend into the rest of the UI
+So I think the summery text should have:     color: var(--accent-hi); and the 
+.foldstate.on should use the color var(--go); instead.
+
+# Hide video tab
+Currently, since I'm planning on releasing the app soon, I decided to focus on the image generation workflow.
+In this regard, the video tab feels like an odd side note, so I think we should hide the tab for now.
+Or make it a setting under "Nightly features" at the bottom, with default off.

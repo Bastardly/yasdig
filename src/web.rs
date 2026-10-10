@@ -49,6 +49,7 @@ pub const WEB_FILES: &[WebFile] = &[
     row!("js/busy.js", "text/javascript; charset=utf-8"),
     row!("js/convert.js", "text/javascript; charset=utf-8"),
     row!("js/dom.js", "text/javascript; charset=utf-8"),
+    row!("js/getmodels.js", "text/javascript; charset=utf-8"),
     row!("js/gridmark.js", "text/javascript; charset=utf-8"),
     row!("js/hints.js", "text/javascript; charset=utf-8"),
     row!("js/image.js", "text/javascript; charset=utf-8"),

@@ -9,6 +9,7 @@ import { sourceSlot } from './source-slot.js';
 import { wireHints } from './hints.js';
 import { openRedraw, syncRedraw } from './redraw.js';
 import { onRefsChange, references, refsActive, syncRefs } from './refs.js';
+import { openGetModels } from './getmodels.js';
 
 // The checkpoint list the server published. Exported because the work-item
 // grid looks a name up in it; only this module refills it.
@@ -561,7 +562,8 @@ export async function loadModels() {
           if (!m.exists) {
             opt.disabled = true;
             opt.textContent += ' (missing files)';
-            opt.title = 'Waiting for:\n' + m.missing.join('\n');
+            opt.title = 'Waiting for:\n' + m.missing.join('\n')
+              + '\n\nThe Get models tab can download them.';
           }
           group.appendChild(opt);
         }
@@ -571,8 +573,21 @@ export async function loadModels() {
     // What a first run looks like: the folders exist, nothing is in them. The
     // server rescans per request, so a reload is all it takes after the copy.
     if (!models.length) {
-      $('err').textContent = 'No image models yet. Put a .safetensors or .gguf model into '
-        + 'models/checkpoints (in the folder rustimage is in), then reload this page.';
+      $('err').textContent = 'No image models yet. The Get models tab downloads one, or put a '
+        + '.safetensors or .gguf model into models/checkpoints (in the folder rustimage is in) '
+        + 'and reload this page.';
+    } else if ($('err').textContent.startsWith('No image models yet')) {
+      $('err').textContent = '';
+    }
+    // A greyed-out model is a family whose parts the Get models tab can fetch.
+    // The link goes to the first such family; the tab lists the rest.
+    const waiting = models.filter((m) => !m.exists);
+    $('getparts').hidden = !waiting.length;
+    if (waiting.length) {
+      $('getparts').innerHTML = `${waiting.length === 1 ? 'One model is' : `${waiting.length} models are`} `
+        + `waiting for files (${waiting.map((m) => esc(m.name)).join(', ')}). `
+        + '<button type="button" class="btn">Get the missing files…</button>';
+      $('getparts').querySelector('button').onclick = () => openGetModels(waiting[0].family);
     }
     syncAdvanced();
   } catch (e) {

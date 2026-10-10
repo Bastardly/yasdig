@@ -21,6 +21,7 @@ import { initVideo } from './video.js';
 import { initConvert } from './convert.js';
 import { initSettings } from './settings.js';
 import { initHelp } from './help.js';
+import { initGetModels } from './getmodels.js';
 import { initModelSettings } from './modelsettings.js';
 import { stopPlayback } from './player.js';
 import './prompt-box.js';
@@ -35,6 +36,7 @@ function showTab(name) {
   $('tab-outputs').hidden = name !== 'outputs';
   $('tab-video').hidden = name !== 'video';
   $('tab-convert').hidden = name !== 'convert';
+  $('tab-getmodels').hidden = name !== 'getmodels';
   $('tab-help').hidden = name !== 'help';
   $('tab-settings').hidden = name !== 'settings';
   // Nothing is playing on a tab nobody is looking at. A 24 fps canvas timer is
@@ -135,6 +137,7 @@ initWorkItems();
 initOutputs();
 initVideo();
 initConvert();
+initGetModels();
 initHelp();
 // After initImage(), because it applies the stored hi-res scale through
 // `setUpFactor`, which addresses a select initImage() fills the options of.

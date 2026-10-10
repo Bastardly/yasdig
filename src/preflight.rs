@@ -511,6 +511,19 @@ pub fn check(cfg: &Config) -> Report {
         ));
     }
 
+    // curl is what the Get models tab downloads with (`downloads`). A warning,
+    // not an error: every model can still be fetched by hand.
+    if crate::downloads::curl_available() {
+        info.push("curl: found (the Get models tab can download)".into());
+    } else {
+        warnings.push(
+            "curl was not found on the PATH, so the Get models tab can't download.\n\
+             Install it (it ships with Windows 10 and later and with most Linux\n\
+             distributions), or fetch the files by hand — README.md, Get a model."
+                .into(),
+        );
+    }
+
     Report {
         errors,
         warnings,

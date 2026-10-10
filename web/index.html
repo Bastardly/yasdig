@@ -17,6 +17,7 @@
     <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
     <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
     <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
+    <button type="button" class="btn btn-choice tab" data-tab="getmodels">Get models</button>
     <button type="button" class="btn btn-choice tab" data-tab="help">Help</button>
     <button type="button" class="btn btn-choice tab" data-tab="settings">Settings</button>
     <!-- Not a tab, so not `.tab`: it opens the queue in a dialog over whatever
@@ -306,6 +307,11 @@
       <summary>Models <span class="foldstate" id="modelsum"></span></summary>
       <label for="template">Diffusion model</label>
       <select id="template"></select>
+      <!-- Filled by loadModels when a model is listed greyed out: the Get
+           models tab knows which files it is waiting for and can fetch them.
+           Right under the select, because a greyed-out model can't be picked —
+           so this line, not anything about the selected model, is the way in. -->
+      <p class="sub" id="getparts" hidden></p>
       <div id="partrows"></div>
       <label data-help="loras">LoRAs</label>
       <div id="loras"></div>
@@ -655,6 +661,33 @@
       <div id="cresult"></div>
     </div>
   </div>
+  </div>
+
+  <!-- ==================== Get models ====================
+       The catalog the server compiled in (`src/catalog.toml`), one card per
+       recommended set, with what each file is on this disk. The page sends a
+       catalog id and nothing else; `getmodels.js` draws everything from
+       `/catalog`. -->
+  <div class="layout" id="tab-getmodels" hidden>
+  <div class="card col-controls">
+    <b>Get models</b>
+    <p class="sub">One recommended set per model family: the model and every
+    file it needs beside it, each going to the right folder. A file you already
+    have — under any name — is not downloaded again.</p>
+    <p class="sub"><b>Check the licence before you use what you make.</b>
+    Every model has its own: some allow commercial use, some are for
+    non-commercial or research use only, some ask you to accept terms. Each
+    card links the pages its files come from, and a quantized copy (GGUF) is
+    under the licence of the model it was made from. rustimage only fetches
+    the files; the terms are between you and the people who made them.</p>
+    <p class="sub">Downloads keep going while you generate. <b>Cancel</b> keeps
+    what has arrived, so <b>Resume</b> carries on from there.</p>
+    <p class="sub" id="gmdir"></p>
+    <div id="gmerr" class="err"></div>
+    <nav class="helpnav spaced" id="gmnav" aria-label="Model families"></nav>
+    <p class="sub">More models, and LoRAs: Help → Intro to models.</p>
+  </div>
+  <div class="col-result" id="gmlist"></div>
   </div>
 
   <!-- ==================== Help ====================
