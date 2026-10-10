@@ -360,6 +360,7 @@ impl<'a> SdRunner<'a> {
             cmd.args(["--control-video", &path_str(c)]);
         }
         cmd.args(crate::config::memory_args(m.memory_mode(), &m.extra_args));
+        cmd.args(crate::config::gpu_reserve_args(self.cfg.settings().gpu_reserve_gb, &m.extra_args));
         if m.vae_tiling {
             cmd.arg("--vae-tiling");
         }
@@ -542,6 +543,7 @@ impl<'a> SdRunner<'a> {
         // Every pass, not just the generate: a refine that doesn't fit is the
         // same failure as a generate that doesn't. `auto` adds nothing.
         cmd.args(crate::config::memory_args(&p.memory, &p.extra_args));
+        cmd.args(crate::config::gpu_reserve_args(self.cfg.settings().gpu_reserve_gb, &p.extra_args));
         cmd.args(["-s", &seed.to_string()]);
         cmd.args(["-o", &path_str(out)]);
         // The live preview: `proj` is a fixed latent-to-RGB matrix per VAE
@@ -631,10 +633,18 @@ impl<'a> SdRunner<'a> {
         // before the exit status is known — and it is what says *when* a run
         // that died ran out of memory.
         let mut last: Option<(Phase, u32, u32)> = None;
+        // The last *sampling* step on its own: with the model streamed onto the
+        // card a segment at a time, byte-rate bars interleave with the steps,
+        // and the last bar overall says "loading" mid-drawing.
+        let mut last_step: Option<(u32, u32)> = None;
         let out_tail = drain(stdout, |line| {
             if let Some((step, steps, rate)) = parse_progress(line) {
                 self.monitor.advance(label, step, steps, rate);
-                last = Some((Phase::of_rate(rate), step, steps));
+                let phase = Phase::of_rate(rate);
+                if matches!(phase, Phase::Sampling) {
+                    last_step = Some((step, steps));
+                }
+                last = Some((phase, step, steps));
             } else if let Some(spec) = parse_auto_fit(line) {
                 if diffusion {
                     self.monitor.set_placement(spec.as_deref().and_then(describe_params));
@@ -671,11 +681,8 @@ impl<'a> SdRunner<'a> {
             // offer the ways out rather than grep a sentence for them.
             let gpu = out_tail.iter().chain(err_tail.iter()).any(|l| is_out_of_memory(l));
             if gpu || killed_by_system(&status) {
-                let (phase, step, steps) = match last {
-                    None | Some((Phase::Loading, ..)) => ("loading", 0, 0),
-                    Some((_, s, n)) if s < n => ("drawing", s, n),
-                    Some((_, s, n)) => ("decoding", s, n),
-                };
+                let (phase, step, steps) = oom_phase(out_tail.iter().chain(err_tail.iter()), last, last_step);
+                let shortfall = out_tail.iter().chain(err_tail.iter()).rev().find_map(|l| parse_shortfall(l));
                 return Err(OutOfMemory {
                     kind: if gpu { "gpu" } else { "ram" },
                     phase,
@@ -683,6 +690,28 @@ impl<'a> SdRunner<'a> {
                     steps,
                     placement: self.monitor.placement(),
                     mode,
+                    ram_needed: ram_mode_bytes(&args),
+                    reserve_gb: args
+                        .iter()
+                        .position(|a| a == "--max-vram")
+                        .and_then(|i| args.get(i + 1))
+                        .and_then(|v| v.strip_prefix('-'))
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0.0),
+                    lost: out_tail
+                        .iter()
+                        .chain(err_tail.iter())
+                        .any(|l| l.contains("Not enough memory for command submission") || l.contains("ErrorDeviceLost")),
+                    need_device_mb: shortfall.map(|s| s.0),
+                    need_budget_mb: shortfall.map(|s| s.1),
+                    avail_device_mb: shortfall.map(|s| s.2),
+                    avail_budget_mb: shortfall.map(|s| s.3),
+                    references: args.iter().filter(|a| *a == "-r").count() as u32,
+                    gtt_total: gtt().map(|g| g.0),
+                    gtt_free: gtt().map(|g| g.0.saturating_sub(g.1)),
+                    encoder_on_card_mb: out_tail.iter().find_map(|l| parse_encoder_on_card(l)),
+                    // Read after the child is gone, so its own memory is back.
+                    ram_free: available_ram(),
                     label: label.to_string(),
                     log: format!(
                         "--- stderr ---\n{}\n--- stdout (last {TAIL_LINES} lines) ---\n{}",
@@ -728,6 +757,35 @@ fn killed_by_system(_: &std::process::ExitStatus) -> bool {
     false
 }
 
+/// When a run that ran out of memory died: `loading`, `references`, `drawing`
+/// or `decoding`, with the last sampling step done.
+///
+/// sd.cpp's own failure lines first — they name the stage — and only then the
+/// last progress bar. The bar alone misleads once a model is streamed onto the
+/// card segment by segment: each segment prints a byte-rate bar, so a run that
+/// died preparing step 1's weights *looks* like one still loading the model.
+fn oom_phase<'a>(
+    lines: impl Iterator<Item = &'a String> + Clone,
+    last: Option<(Phase, u32, u32)>,
+    last_step: Option<(u32, u32)>,
+) -> (&'static str, u32, u32) {
+    let said = |needles: &[&str]| lines.clone().any(|l| needles.iter().any(|n| l.contains(n)));
+    let (s, n) = last_step.unwrap_or((0, 0));
+    if said(&["vae decode compute failed", "decode_first_stage failed"]) {
+        ("decoding", s, n)
+    } else if said(&["failed to encode reference image", "vae encode compute failed"]) {
+        ("references", 0, 0)
+    } else if said(&["sampling failed", "diffusion model compute failed"]) {
+        ("drawing", s, n)
+    } else {
+        match last {
+            None | Some((Phase::Loading, ..)) => ("loading", 0, 0),
+            Some((_, s, n)) if s < n => ("drawing", s, n),
+            Some((_, s, n)) => ("decoding", s, n),
+        }
+    }
+}
+
 /// A run that ran out of memory, typed so the page can offer what to do about
 /// it — the Memory setting, a smaller size, a smaller file — instead of
 /// matching words in a sentence. [`oom_json`] finds it in an error's chain.
@@ -735,7 +793,7 @@ fn killed_by_system(_: &std::process::ExitStatus) -> bool {
 pub struct OutOfMemory {
     /// `gpu`, or `ram` for system memory.
     pub kind: &'static str,
-    /// `loading`, `drawing` or `decoding`: the last progress sd-cli reported.
+    /// `loading`, `references`, `drawing` or `decoding` — see [`oom_phase`].
     pub phase: &'static str,
     pub step: u32,
     pub steps: u32,
@@ -744,6 +802,44 @@ pub struct OutOfMemory {
     /// The memory mode the command ran with: one of `MEMORY_MODES`, or
     /// `custom` for a placement written into `extra_args`.
     pub mode: &'static str,
+    /// What System RAM would hold for this command, in bytes: see
+    /// [`ram_mode_bytes`]. The box shows it beside the option and only offers
+    /// the option when it fits in `ram_free`.
+    pub ram_needed: Option<u64>,
+    /// System RAM available once the run had ended (`MemAvailable`), in bytes —
+    /// the figure sd.cpp's own planner starts from. `None` off Linux.
+    pub ram_free: Option<u64>,
+    /// GB the command kept free on the card (`--max-vram -N`), 0 for none.
+    pub reserve_gb: f32,
+    /// The driver, not sd.cpp, refused the work: RADV's "Not enough memory for
+    /// command submission" and a lost device. sd.cpp's own check had passed,
+    /// so the card was packed too tight rather than too small — what a reserve
+    /// is for.
+    pub lost: bool,
+    /// sd.cpp's own figures from its "cannot make enough memory available"
+    /// line, in MB: what the step needed and what was there, on the device and
+    /// in the budget sd.cpp planned with. They tell a full card (device short)
+    /// from a budget starved by a reserve (device fine, budget short).
+    pub need_device_mb: Option<f64>,
+    pub avail_device_mb: Option<f64>,
+    pub need_budget_mb: Option<f64>,
+    pub avail_budget_mb: Option<f64>,
+    /// How many reference images rode along (`-r`). Each is a whole image's
+    /// worth of tokens in every step — four of them make a drawing five times
+    /// the size the output alone would be.
+    pub references: u32,
+    /// The GPU's window onto system RAM (amdgpu's GTT), total and free, in
+    /// bytes — `None` off amdgpu. This, not free RAM, is what System RAM has to
+    /// fit in: sd.cpp keeps RAM-resident weights in the device's *pinned host*
+    /// buffer type (`model_manager.cpp`, `params_buffer_type_for`), and the
+    /// kernel caps that pool at half of RAM by default. Past it a submission
+    /// can't be made resident — RADV's "Not enough memory for command
+    /// submission" and a lost device, which a reserve can't fix.
+    pub gtt_total: Option<u64>,
+    pub gtt_free: Option<u64>,
+    /// MB of text encoder sd.cpp kept on the card for the whole run, off its
+    /// "total params memory size" line — only needed for the first seconds.
+    pub encoder_on_card_mb: Option<f64>,
     #[serde(skip)]
     pub label: String,
     #[serde(skip)]
@@ -754,7 +850,9 @@ impl std::fmt::Display for OutOfMemory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let what = if self.kind == "gpu" { "GPU memory" } else { "system memory (RAM)" };
         let when = match self.phase {
-            "drawing" => format!("while drawing (step {} of {})", self.step, self.steps),
+            "drawing" if self.steps > 0 => format!("while drawing (step {} of {})", self.step, self.steps),
+            "drawing" => "at the start of drawing".to_string(),
+            "references" => "while reading the reference images".to_string(),
             "decoding" => "while turning the result into pixels (the VAE decode)".to_string(),
             _ => "while loading the model".to_string(),
         };
@@ -776,6 +874,88 @@ pub fn oom_json(e: &anyhow::Error) -> Option<serde_json::Value> {
     e.chain()
         .find_map(|c| c.downcast_ref::<OutOfMemory>())
         .and_then(|o| serde_json::to_value(o).ok())
+}
+
+/// The bytes System RAM (`*=cpu,te=disk`) holds for a command: every weight
+/// file it names except the text encoders, which that mode reads, uses and
+/// releases. A bundled checkpoint (`-m`) carries its encoder inside, so it is
+/// counted whole — an upper bound, which is the safe side to be wrong on.
+/// `None` when the command names no weight file this can size.
+fn ram_mode_bytes(args: &[String]) -> Option<u64> {
+    const HELD: [&str; 6] = [
+        "-m",
+        "--diffusion-model",
+        "--high-noise-diffusion-model",
+        "--vae",
+        "--audio-vae",
+        "--clip_vision",
+    ];
+    let sizes: Vec<u64> = args
+        .windows(2)
+        .filter(|w| HELD.contains(&w[0].as_str()))
+        .filter_map(|w| std::fs::metadata(&w[1]).ok().map(|m| m.len()))
+        .collect();
+    (!sizes.is_empty()).then(|| sizes.iter().sum())
+}
+
+/// sd.cpp's model-manager line, as `(need device, need budget, available
+/// device, available budget)` in MB:
+///
+/// ```text
+/// model manager cannot make enough memory available on Vulkan0: need 6337.42 MB device / 6151.92 MB budget, available 21786.55 MB device / 5759.43 MB budget
+/// ```
+fn parse_shortfall(line: &str) -> Option<(f64, f64, f64, f64)> {
+    let rest = line.split_once("cannot make enough memory available")?.1;
+    let nums: Vec<f64> = rest
+        .split_whitespace()
+        .filter_map(|w| w.parse::<f64>().ok())
+        .collect();
+    match nums[..] {
+        [a, b, c, d, ..] => Some((a, b, c, d)),
+        _ => None,
+    }
+}
+
+/// The text encoders' share of the card, off sd.cpp's summary line:
+///
+/// ```text
+/// total params memory size = 25150.24MB (VRAM 7669.77MB, RAM 17480.47MB): text_encoders 7669.77MB(VRAM), diffusion_model 17316.04MB(RAM), …
+/// ```
+fn parse_encoder_on_card(line: &str) -> Option<f64> {
+    let rest = line.split_once("text_encoders ")?.1;
+    let (mb, tail) = rest.split_once("MB(")?;
+    tail.starts_with("VRAM").then(|| mb.trim().parse().ok()).flatten()
+}
+
+/// The discrete GPU's GTT as `(total, used)` in bytes, from amdgpu's sysfs —
+/// the card with the most VRAM, so an integrated GPU beside it isn't the one
+/// read. `None` where there is no amdgpu.
+pub fn gtt() -> Option<(u64, u64)> {
+    let read = |p: PathBuf| -> Option<u64> { std::fs::read_to_string(p).ok()?.trim().parse().ok() };
+    std::fs::read_dir("/sys/class/drm")
+        .ok()?
+        .flatten()
+        .map(|e| e.path().join("device"))
+        .filter_map(|d| {
+            let vram = read(d.join("mem_info_vram_total"))?;
+            Some((vram, read(d.join("mem_info_gtt_total"))?, read(d.join("mem_info_gtt_used"))?))
+        })
+        .max_by_key(|(vram, ..)| *vram)
+        .map(|(_, total, used)| (total, used))
+}
+
+/// `MemAvailable` from `/proc/meminfo`, in bytes — what sd.cpp's auto-fit
+/// plans RAM with (`backend_fit.cpp`, `available_ram_bytes`). `None` where
+/// there is no such file.
+pub fn available_ram() -> Option<u64> {
+    let info = std::fs::read_to_string("/proc/meminfo").ok()?;
+    parse_mem_available(&info)
+}
+
+fn parse_mem_available(info: &str) -> Option<u64> {
+    let line = info.lines().find(|l| l.starts_with("MemAvailable:"))?;
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib * 1024)
 }
 
 /// auto-fit's decision, off the line `backend_fit.cpp` prints at INFO:
@@ -1702,11 +1882,82 @@ binary = "/opt/sd-cli"
         let oom = oom.unwrap();
         assert_eq!((oom.kind, oom.phase, oom.mode), ("gpu", "decoding", "auto"));
         assert!(oom.to_string().contains("VAE decode"));
+        // Streamed segment by segment: byte-rate bars after the last step, then
+        // sd.cpp's own sampling failure. That is drawing, not loading — the
+        // run this was found on read "while loading the model".
+        let (_, oom) = run(
+            "printf '  |=>  | 1/4 - 1.00s/it\\n  |####| 4/4 - 1.85GB/s\\n'; \
+             echo 'model manager cannot make enough memory available on Vulkan0' ; \
+             echo '[ERROR  ] diffusion_engine.cpp:2532 - Diffusion model sampling failed' >&2; exit 1",
+            &["-p", "x"],
+        );
+        let oom = oom.unwrap();
+        assert_eq!((oom.phase, oom.step, oom.steps), ("drawing", 1, 4));
+        let (_, oom) = run(
+            "printf '  |####| 4/4 - 1.85GB/s\\n'; echo 'cannot make enough memory available'; \
+             echo 'Diffusion model sampling failed' >&2; exit 1",
+            &["-p", "x"],
+        );
+        assert!(oom.unwrap().to_string().contains("at the start of drawing"));
+        let (_, oom) = run(
+            "echo 'ErrorOutOfDeviceMemory'; echo 'failed to encode reference image 2' >&2; exit 1",
+            &["-p", "x"],
+        );
+        assert_eq!(oom.unwrap().phase, "references");
+        // The driver refusing a submission sd.cpp's own check let through: a
+        // lost device, with the reserve the command ran with read back.
+        let (_, oom) = run(
+            "echo 'radv/amdgpu: Not enough memory for command submission.' >&2; \
+             echo 'Diffusion model sampling failed' >&2; exit 134",
+            &["-p", "x", "--max-vram", "-3"],
+        );
+        let oom = oom.unwrap();
+        assert!(oom.lost);
+        assert_eq!((oom.kind, oom.phase, oom.reserve_gb), ("gpu", "drawing", 3.0));
+        // A budget starved by a reserve: the card had 21.8 GB, the budget 5.8.
+        // The figures, the encoder left on the card and the references ride along.
+        let (_, oom) = run(
+            "echo '[INFO ] diffusion_engine.cpp:1237 - total params memory size = 25150.24MB (VRAM 7669.77MB, RAM 17480.47MB): text_encoders 7669.77MB(VRAM), diffusion_model 17316.04MB(RAM)'; \
+             echo '[WARN ] model_manager.cpp:1762 - model manager cannot make enough memory available on Vulkan0: need 6337.42 MB device / 6151.92 MB budget, available 21786.55 MB device / 5759.43 MB budget'; \
+             echo 'Diffusion model sampling failed' >&2; exit 1",
+            &["-p", "x", "-r", "a.png", "-r", "b.png", "--max-vram", "-16"],
+        );
+        let oom = oom.unwrap();
+        assert_eq!((oom.need_device_mb, oom.avail_device_mb), (Some(6337.42), Some(21786.55)));
+        assert_eq!((oom.need_budget_mb, oom.avail_budget_mb), (Some(6151.92), Some(5759.43)));
+        assert_eq!((oom.references, oom.reserve_gb, oom.encoder_on_card_mb), (2, 16.0, Some(7669.77)));
+        assert_eq!(parse_encoder_on_card("text_encoders 7669.77MB(RAM), x"), None);
         // Before any step: loading. And an ordinary crash is not one.
         let (_, oom) = run("echo 'cannot make enough memory available' ; exit 1", &[]);
         assert_eq!(oom.unwrap().phase, "loading");
         let (e, oom) = run("echo 'generate failed'; exit 1", &[]);
         assert!(oom.is_none() && oom_json(&e).is_none());
+    }
+
+    /// System RAM's figure counts the files it holds and not the text
+    /// encoders it releases; MemAvailable is read in bytes.
+    #[test]
+    fn ram_needed_counts_held_weights_but_not_the_text_encoder() {
+        let dir = std::env::temp_dir().join(format!("rustimage-ramneed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, len: usize| {
+            let p = dir.join(name);
+            std::fs::write(&p, vec![0u8; len]).unwrap();
+            p.to_string_lossy().into_owned()
+        };
+        let (model, vae, llm) = (file("m.gguf", 1000), file("v.safetensors", 30), file("te.gguf", 500));
+        let args: Vec<String> =
+            ["-M", "img_gen", "--diffusion-model", &model, "--vae", &vae, "--llm", &llm, "-p", "x"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        assert_eq!(ram_mode_bytes(&args), Some(1030));
+        assert_eq!(ram_mode_bytes(&["-p".into(), "x".into()]), None);
+        assert_eq!(
+            parse_mem_available("MemTotal:  31000000 kB\nMemAvailable:   26000000 kB\n"),
+            Some(26_000_000 * 1024)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

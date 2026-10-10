@@ -73,6 +73,8 @@ function currentModel() {
 export const oomOptions = () => ({
   memory: 'memory',
   smallerFile: currentModel() ? () => openGetModels(currentModel().family) : null,
+  // Opens the References dialog, where a pick is removed.
+  references: () => $('refsopen').click(),
 });
 
 // One step down on the base size, a quarter fewer pixels per side, snapped to

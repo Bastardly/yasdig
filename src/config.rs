@@ -184,6 +184,17 @@ pub const CACHE_OFF: &str = "off";
 pub const MEMORY_MODES: [&str; 3] = [MEMORY_AUTO, "ram", "disk"];
 pub const MEMORY_AUTO: &str = "auto";
 
+/// `--max-vram -N` for [`crate::settings::Settings::gpu_reserve_gb`]: keep N GB
+/// of the card free, in every memory mode — with auto-fit it shrinks the plan's
+/// budget, without it the runner's capacity checks (`docs/backend.md`). Nothing
+/// at 0, and nothing when `extra_args` already sets a budget.
+pub fn gpu_reserve_args(reserve_gb: f32, extra_args: &[String]) -> Vec<String> {
+    if reserve_gb <= 0.0 || extra_args.iter().any(|a| a == "--max-vram" || a.starts_with("--max-vram=")) {
+        return Vec::new();
+    }
+    vec!["--max-vram".to_string(), format!("-{reserve_gb}")]
+}
+
 /// The sd-cli arguments for a memory mode.
 ///
 /// - `ram`: every weight in system RAM, moved to the card a segment at a time.
@@ -3590,6 +3601,16 @@ lora_dir = "adapters"
             "a carried grade is not a starting point — GenResult.start is the one \
              the viewer resets to"
         );
+    }
+
+    /// The reserve is one `--max-vram -N` or nothing: nothing at 0, and nothing
+    /// when `extra_args` already sets a budget of its own.
+    #[test]
+    fn a_gpu_reserve_is_one_negative_max_vram() {
+        assert!(gpu_reserve_args(0.0, &[]).is_empty());
+        assert_eq!(gpu_reserve_args(3.0, &[]), ["--max-vram", "-3"]);
+        assert_eq!(gpu_reserve_args(2.5, &[]), ["--max-vram", "-2.5"]);
+        assert!(gpu_reserve_args(3.0, &["--max-vram".into(), "20".into()]).is_empty());
     }
 
     /// Both Memory selects offer exactly the server's three, in its order, and

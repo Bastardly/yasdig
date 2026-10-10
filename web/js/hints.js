@@ -338,6 +338,11 @@ const HELP = [
   { ids: ['setclearvid'],
     text: 'When you press Close server, delete every clip on the Video tab, and '
         + 'the enlarged frames made from them. Only Close server does this.' },
+  { ids: ['setgpureserve'],
+    text: 'How much of the graphics card to keep free while a model draws. 0 lets '
+        + 'stable-diffusion.cpp fill it to the brim; the desktop, the browser and the '
+        + 'driver then sometimes have too little, and the run stops with “device lost”. '
+        + '2–4 GB is usually enough. For this machine, every model.' },
   { ids: ['setmaxside'],
     text: 'The longest side Upscale, Hi-res or Output upscale may make, in pixels. '
         + 'Past it you get a message instead of an image. 8192 by default: a bigger '

@@ -124,6 +124,14 @@ pub struct Settings {
     /// default because a bigger PNG crossing to the page as base64 is the thing
     /// that struggles first. `Engine::check_side` is where it is enforced.
     pub max_image_side: u32,
+    /// GB of the card kept free of sd.cpp's weights and buffers: `--max-vram
+    /// -N` on every diffusion run, in every memory mode. sd.cpp packs the card
+    /// to its live free memory minus 512 MiB, and the desktop, the browser and
+    /// the driver's own bookkeeping need more slack than that — RADV answers a
+    /// submission that doesn't fit with a lost device ("Not enough memory for
+    /// command submission"). Page-level, because that slack is this machine's,
+    /// not a checkpoint's. 0 is sd.cpp's own behaviour.
+    pub gpu_reserve_gb: f32,
 
     /// The `[variables]` table: `{animal}` in a prompt and the words it can
     /// stand for. See [`crate::variables`].
@@ -269,6 +277,9 @@ impl Default for Settings {
             clear_outputs_on_close: false,
             clear_videos_on_close: false,
             max_image_side: DEFAULT_MAX_IMAGE_SIDE,
+            // sd.cpp's own packing until someone needs more slack: the
+            // out-of-memory box offers it when a run dies of exactly that.
+            gpu_reserve_gb: 0.0,
             variables: Variables::new(),
         }
     }
@@ -323,6 +334,7 @@ impl Settings {
             clear_outputs_on_close: self.clear_outputs_on_close,
             clear_videos_on_close: self.clear_videos_on_close,
             max_image_side: self.max_image_side,
+            gpu_reserve_gb: self.gpu_reserve_gb,
             variables: self.variables.clone(),
         }
     }
@@ -433,6 +445,12 @@ impl Settings {
             bail!(
                 "max_image_side is {}, must be between 1024 and {MAX_IMAGE_SIDE_CEILING}",
                 self.max_image_side
+            );
+        }
+        if !(0.0..=MAX_GPU_RESERVE_GB).contains(&self.gpu_reserve_gb) {
+            bail!(
+                "gpu_reserve_gb is {}, must be between 0 and {MAX_GPU_RESERVE_GB}",
+                self.gpu_reserve_gb
             );
         }
         variables::validate(&self.variables)?;
@@ -783,7 +801,12 @@ const PAGE_ONLY: &[&str] = &[
     "clear_outputs_on_close",
     "clear_videos_on_close",
     "max_image_side",
+    "gpu_reserve_gb",
 ];
+
+/// The most of the card [`Settings::gpu_reserve_gb`] may keep free. Past this
+/// a 24 GB card has too little left to draw with, and a smaller one none.
+pub const MAX_GPU_RESERVE_GB: f32 = 16.0;
 
 /// `GET /model-settings`: every model's base and overrides.
 ///
@@ -907,6 +930,13 @@ mod tests {
         assert!(Settings { max_image_side: 512, ..Settings::default() }.validate().is_err());
         assert!(Settings { max_image_side: 65536, ..Settings::default() }.validate().is_err());
         assert!(PAGE_ONLY.contains(&"max_image_side"));
+        // The card reserve: page-level, off by default, bounded, round-trips.
+        assert!(PAGE_ONLY.contains(&"gpu_reserve_gb"));
+        assert_eq!(Settings::default().gpu_reserve_gb, 0.0);
+        let r = Settings { gpu_reserve_gb: 3.0, ..Settings::default() };
+        assert_eq!(toml::from_str::<Settings>(&toml::to_string_pretty(&r).unwrap()).unwrap().gpu_reserve_gb, 3.0);
+        assert!(Settings { gpu_reserve_gb: -1.0, ..Settings::default() }.validate().is_err());
+        assert!(Settings { gpu_reserve_gb: 20.0, ..Settings::default() }.validate().is_err());
     }
 
     #[test]

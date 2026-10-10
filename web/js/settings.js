@@ -81,6 +81,8 @@ export const FIELDS = [
   { key: 'upscaler', from: 'upscaler', kind: 'upscaler' },
   // A limit, not a default for any control: so its own label and its own help.
   { key: 'max_image_side', label: 'Largest image side', help: 'setmaxside', kind: 'int', min: 1024, max: 32768, step: 512 },
+  // Also a limit of this machine rather than a default for a control.
+  { key: 'gpu_reserve_gb', label: 'Keep free on the GPU (GB)', help: 'setgpureserve', kind: 'num', min: 0, max: 16, step: 0.5 },
   { key: 'refine_steps', from: 'rsteps', kind: 'int', min: 0, max: 100 },
   { key: 'refine_strength', from: 'rstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
   { key: 'refine_cfg_scale', from: 'rcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
@@ -358,6 +360,21 @@ function markDirty() {
   $('setmsg').classList.toggle('unsaved', dirty);
   document.querySelector('.tab[data-tab="settings"]').classList.toggle('unsaved', dirty);
   return dirty;
+}
+
+// A value something else on the page has already saved — the out-of-memory
+// box's "keep N GB of the card free". Written into its control *and* into the
+// last-saved snapshot, so the next Save can't quietly put the old number back
+// and the form doesn't call it an unsaved edit. Any edit in progress elsewhere
+// in the form is left as it is.
+export function adoptSaved(key, value) {
+  const f = rows().find((r) => r.key === key);
+  if (!f || saved === null) return;
+  put(f, value);
+  const snap = JSON.parse(saved);
+  snap[key] = take(f);
+  saved = JSON.stringify(snap);
+  markDirty();
 }
 
 function settle(s) {

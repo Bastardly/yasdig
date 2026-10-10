@@ -24,7 +24,8 @@ cargo run --release -- upscale in.png out.png <model> [factor]  # model enlarge 
 cargo run --release -- sr-selftest          # `src/sr/` shader ops vs CPU references, plus matmul TFLOPS
 cargo run --release -- fold-scales f.gguf   # fold a scaled-fp8 GGUF's scales into its weights, in place
 
-node --test 'web/js/*.test.js'              # the prompt-weighting string maths, and that the page's module
+node --test 'web/js/*.test.js'              # the prompt-weighting string maths, the out-of-memory box's
+                                            #   choices, and that the page's module
                                             #   graph evaluates (a cyclic import read at top level blanks every tab).
                                             #   Node's built-in runner — no npm, no package.json, no
                                             #   build step, and nothing at runtime needs Node.
@@ -803,6 +804,55 @@ Six things break silently:
   --params-backend "…"` line (only the parts it moved off the card are listed); an
   ESRGAN enlarge after a generate must not wipe the generate's. It lands on
   `Timings::weights`, which is why `Timings` is no longer `Copy`.
+
+**The box only offers System RAM when it fits.** `OutOfMemory` carries
+`ram_needed` — `ram_mode_bytes`, the sizes of the weight files the command
+names except the text encoders that mode releases (a bundled `-m` counted
+whole, the safe side) — and `ram_free`, `MemAvailable` read after the child is
+gone, which is what sd.cpp's planner uses. `ramFits` in `memory.js` keeps back
+sd.cpp's own headroom (the larger of 2 GiB and a tenth), greys the option out
+with both figures when it doesn't fit, and offers Stream from SSD instead. The
+case that made it: a 17.3 GB fp16 Klein 9B plus an 8.3 GB encoder on 26 GB free,
+where the old box steered straight into an out-of-system-memory at every size.
+`memory.test.js` pins the choices; `memory.js` keeps them pure (`options`,
+`ramFits`) for that reason.
+
+**"Device lost" is a reserve, not a mode.** RADV's *"Not enough memory for
+command submission"* comes after sd.cpp's own capacity check has *passed*: it
+packs the card to its live free memory minus 512 MiB, and the desktop, browser
+and driver need more slack. Seen on System RAM with Klein 9B fp16 and 4
+references, where weights staged from RAM are cached on the card. The fix is
+`Settings::gpu_reserve_gb` → `config::gpu_reserve_args` → `--max-vram -N` on
+every run, every mode (with auto-fit it shrinks the plan; without it, the
+runner's checks). Page-level and in `PAGE_ONLY`: it describes the machine.
+`OutOfMemory.lost` and `reserve_gb` carry it to the box, which offers a 3 GB
+reserve first on a lost device and **saves it at once** — the one kind of option
+that does, and it says so — then calls `settings.js`'s `adoptSaved`, so the
+Settings form's last-saved snapshot moves too and its next Save can't put the old
+number back. **It is offered once and never stepped up.** A reserve shrinks the
+budget sd.cpp plans with, and stepping 2 GB per failure walked a real run to
+16 GB, where the card had 21.8 GB free and the budget 5.8 GB. `parse_shortfall`
+reads sd.cpp's `need … device / … budget, available … device / … budget` line,
+and `budgetStarved` turns a device-fine, budget-short failure into *Stop keeping
+the card free*. The same run kept a 7.7 GB text encoder on the card in Auto
+(`parse_encoder_on_card`, off the `total params memory size` line) and had 4
+references (`-r` counted), and the box names both. `oom_phase` reads sd.cpp's failure lines (sampling, decode, reference
+encode) before the progress bars, since streamed segments print byte-rate bars
+mid-drawing.
+
+**System RAM's real limit is the GTT, not free RAM.** sd.cpp allocates
+RAM-resident params in the compute device's *host* buffer type
+(`model_manager.cpp`, `params_buffer_type_for` → `ggml_backend_dev_host_buffer_type`):
+pinned memory the GPU maps, which amdgpu caps at its GTT — half of RAM by
+default (15.2 GiB on the 30 GB dev box). A model bigger than that can't be made
+resident at submission: *"Not enough memory for command submission"*, a lost
+device, at any size and with any reserve. That was the fp16 Klein 9B (17.3 GB)
+saga — Auto's plan put the model "in RAM" too, not knowing the cap. `sd::gtt()`
+reads `mem_info_gtt_total`/`_used` off the card with the most VRAM, `OutOfMemory`
+carries `gtt_total`/`gtt_free`, and `gttShort` in `memory.js` greys System RAM
+out and puts Stream from SSD first — disk residency loads from the file straight
+to the card, never through the pinned pool. Worth an upstream issue: auto-fit's
+RAM budget should be `min(MemAvailable, GTT)`.
 
 **Reopening a work item or a clip does not restore Memory**, though the sidecar
 records it. It says how a run fits on this machine at this moment, not what the

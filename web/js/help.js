@@ -356,6 +356,14 @@ export const TOPICS = [
         ['System RAM', 'Every weight waits in RAM and moves to the card a piece at a time, so the whole card is free for the drawing. <b>The fix when a big model runs out of GPU memory.</b> The text encoder is read from its file, used for the prompt and then let go, so it doesn’t hold RAM while the picture is drawn. Needs RAM about the size of the model; a little slower.'],
         ['Stream from SSD', 'The model and its text encoder are re-read from their files as they’re needed. The least memory of the three — for when RAM is what runs out. Slower. It only reads, so it doesn’t wear the drive.'],
       ], false)}
+      <p><b>System RAM has a second limit.</b> The graphics card reaches system RAM
+      through a window the Linux driver sizes at half your RAM by default (the
+      <i>GTT</i> — about 15 GB on a 30 GB machine). Weights kept in RAM have to
+      fit in that window, however much RAM is free. A full-precision 9B model
+      (17 GB) doesn’t, and the run stops with “device lost”; the error box then
+      offers Stream from SSD, which goes from the file straight to the card. The
+      window can be made larger with a kernel setting (<code>ttm.pages_limit</code>),
+      or a Q8 file of the model fits it as it is.</p>
       <p>Auto guesses how much room the drawing will need and fills the rest of
       the card with weights. A 9B model at two megapixels can need more than
       the guess, which is when System RAM helps.</p>
@@ -375,6 +383,17 @@ export const TOPICS = [
       size</b>, or a <b>smaller file</b>. Pick one, then <b>Try again</b> re-runs
       exactly what failed. Nothing is saved until you press <i>Save as
       defaults</i>.</p>
+      <p>System RAM comes with its figure — <i>needs about 17.6 GB of RAM;
+      26.0 GB is free</i> — counted from the model’s own files. When it won’t fit
+      with room to spare, it is shown greyed out and Stream from SSD is offered
+      instead: a full-precision 9B can need more RAM than a 32 GB machine has
+      free.</p>
+      <p><b>“Device lost”</b> is a different failure: stable-diffusion.cpp’s own
+      check said the work fits, and the graphics driver still had no room for
+      it, because the desktop and the browser use the card too. The box then
+      offers to <b>keep 3 GB of the card free</b>. That is a setting for this
+      machine, not a model, so it is saved at once (Settings → <i>Keep free on
+      the GPU</i>) and applies to every run after.</p>
       <p>Running out <b>while turning the result into pixels</b> is the VAE.
       stable-diffusion.cpp already retries that in tiles by itself, so what is
       left is a smaller size.</p>
