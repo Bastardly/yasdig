@@ -84,6 +84,8 @@ pub struct Settings {
     /// Step caching for the generate pass: `off`, `spectrum` or `adaptive`.
     /// See [`Profile::cache_mode`].
     pub cache_mode: String,
+    /// Where the weights live: `auto`, `ram` or `disk`. See [`Profile::memory`].
+    pub memory: String,
     pub upscale_factor: f32,
     /// What performs that enlarge: `None` is FSR (EASU), a name is an ESRGAN
     /// model under the upscaler dir. See [`Profile::upscaler`].
@@ -164,6 +166,8 @@ pub struct PartialSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upscale_factor: Option<f32>,
     /// Absent inherits, a name pins, the same one-way shape `refine_cfg_scale`
     /// below has: a template can name a model, and has no way to say "back to
@@ -225,6 +229,9 @@ impl Default for Settings {
             // output, and which mode guesses well on which family is a
             // measurement nobody has made here yet.
             cache_mode: crate::config::CACHE_OFF.to_string(),
+            // sd.cpp's auto-fit: no flag at all, which is what every run made
+            // before this existed used on the image side.
+            memory: crate::config::MEMORY_AUTO.to_string(),
             upscale_factor: 2.0,
             // FSR: free, and needs no file. An ESRGAN model is a download.
             upscaler: None,
@@ -290,6 +297,7 @@ impl Settings {
             sampler: over.sampler.clone().unwrap_or_else(|| self.sampler.clone()),
             scheduler: over.scheduler.clone().unwrap_or_else(|| self.scheduler.clone()),
             cache_mode: over.cache_mode.clone().unwrap_or_else(|| self.cache_mode.clone()),
+            memory: over.memory.clone().unwrap_or_else(|| self.memory.clone()),
             upscale_factor: over.upscale_factor.unwrap_or(self.upscale_factor),
             upscaler: over.upscaler.clone().or_else(|| self.upscaler.clone()),
             sharpness: over.sharpness.unwrap_or(self.sharpness),
@@ -449,6 +457,7 @@ impl Settings {
             sampler: self.sampler.clone(),
             scheduler: self.scheduler.clone(),
             cache_mode: self.cache_mode.clone(),
+            memory: self.memory.clone(),
             upscale_factor: self.upscale_factor,
             upscaler: self.upscaler.clone(),
             sharpness: self.sharpness,

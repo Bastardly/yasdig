@@ -125,6 +125,12 @@ const HELP = [
     text: 'Brush size on screen, so it feels the same in the column, fitted and at '
         + '1:1. Right-drag erases; Space+drag pans. Paint over all of what should '
         + 'change — Edge softness blends it into the picture beyond that.' },
+  { ids: ['memory', 'vmemory'],
+    text: 'Where the model’s weights wait while it draws. Auto lets sd.cpp decide '
+        + 'by free memory — the card first. System RAM keeps them in RAM and moves '
+        + 'them to the card as needed, leaving the whole card for the work: the '
+        + 'fix when a big model runs out of GPU memory. Stream from SSD re-reads '
+        + 'them from the file, for when RAM runs out; slower. The Help tab says more.' },
   { ids: ['cachemode'],
     text: 'Skips denoising steps whose result can be predicted, so Generate '
         + 'finishes sooner, at some cost in exactness. Refine and Hi-res always '

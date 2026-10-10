@@ -338,6 +338,55 @@ export const TOPICS = [
       sharpening in its pixels; pick it under <i>Image to image</i> to work on it.</p>`,
   },
   {
+    id: 'memory',
+    title: 'Memory',
+    html: `
+      <h2>Memory</h2>
+      <p>A run needs two kinds of memory. <b>GPU memory</b> (VRAM, 24 GB on a
+      7900 XTX) holds the work of drawing — the picture-in-progress, attention —
+      and whatever weights are on the card. <b>System memory</b> (RAM) holds the
+      weights that aren’t. A big model with its text encoder can be 20 GB or more,
+      so where those weights live is what decides whether a run fits.</p>
+
+      <h3>The Memory setting</h3>
+      <p>In the <i>Models</i> fold, per model (<i>Save as defaults for this
+      model</i> keeps it), and on the Video tab.</p>
+      ${table(['Setting', 'What it does'], [
+        ['Auto', 'stable-diffusion.cpp measures free memory and places each part: on the card first, then in RAM, then read from the SSD. The default, and right for anything that fits.'],
+        ['System RAM', 'Every weight waits in RAM and moves to the card a piece at a time, so the whole card is free for the drawing. <b>The fix when a big model runs out of GPU memory.</b> Needs RAM about the size of the model’s files; a little slower.'],
+        ['Stream from SSD', 'The model and its text encoder are re-read from their files as they’re needed. The least memory of the three — for when RAM is what runs out. Slower. It only reads, so it doesn’t wear the drive.'],
+      ], false)}
+      <p>Auto guesses how much room the drawing will need and fills the rest of
+      the card with weights. A 9B model at two megapixels can need more than
+      the guess, which is when System RAM helps.</p>
+
+      <h3>When a run runs out</h3>
+      <p>The error says which memory ran out and when — loading the model,
+      drawing (with the step), or turning the result into pixels — and offers
+      what fits: <b>System RAM</b>, <b>Stream from SSD</b>, a <b>smaller
+      size</b>, or a <b>smaller file</b>. Pick one, then <b>Try again</b> re-runs
+      exactly what failed. Nothing is saved until you press <i>Save as
+      defaults</i>.</p>
+      <p>Running out <b>while turning the result into pixels</b> is the VAE.
+      stable-diffusion.cpp already retries that in tiles by itself, so what is
+      left is a smaller size.</p>
+      <p>Running out of <b>system memory</b> looks different: the system stops the
+      run with no message, and rustimage says so. Close what you don’t need, or
+      use Stream from SSD.</p>
+
+      <h3>The lasting fix: a smaller file</h3>
+      <p>A <b>Q8</b> GGUF needs about half the memory of the original, <b>Q6</b>
+      a bit less again, and <b>Q4</b> about a quarter — with Q8 indistinguishable
+      and Q4 starting to lose fine detail. <b>fp8 files run at twice their
+      size</b> on AMD cards. The <b>Get models</b> tab has GGUF sets for every
+      family, and the <b>Convert</b> tab turns a file you have into one.</p>
+
+      <h3>After a run</h3>
+      <p>When any weights weren’t on the card, a line under the timings says
+      where they were — <i>text encoder in system RAM</i>, <i>model streamed from
+      the SSD</i>. That explains a slow run before it becomes a failed one.</p>`,
+  },
+  {
     id: 'stepcache',
     title: 'Step caching',
     html: `

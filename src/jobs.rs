@@ -104,6 +104,10 @@ pub enum Stopped<T> {
 pub struct Notice {
     pub seq: u64,
     pub message: String,
+    /// What `sd::oom_json` found when the run ran out of memory, so the page
+    /// can offer the ways out. Absent for every other failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oom: Option<serde_json::Value>,
 }
 
 #[derive(serde::Serialize)]
@@ -288,7 +292,7 @@ impl<T: Clone> Queue<T> {
     pub fn abort(&self, id: u64, message: String) {
         let run = self.lock().entries.iter().any(|e| e.id == id && e.kind.is_run());
         if run {
-            self.fail_run(id, message);
+            self.fail_run(id, message, None);
         } else {
             self.finish(id, Err(anyhow!(message)));
         }
@@ -342,7 +346,7 @@ impl<T: Clone> Queue<T> {
     /// one too — VRAM, a missing checkpoint, a pass the model hasn't got — so
     /// the run ends here rather than repeating it, and the message is kept for
     /// the page, since no request is waiting on a run.
-    pub fn fail_run(&self, id: u64, message: String) {
+    pub fn fail_run(&self, id: u64, message: String, oom: Option<serde_json::Value>) {
         let mut s = self.lock();
         s.running = None;
         if let Some(i) = s.entries.iter().position(|e| e.id == id) {
@@ -350,7 +354,7 @@ impl<T: Clone> Queue<T> {
         }
         s.seq += 1;
         let seq = s.seq;
-        s.notices.push_back(Notice { seq, message });
+        s.notices.push_back(Notice { seq, message, oom });
         while s.notices.len() > MAX_NOTICES {
             s.notices.pop_front();
         }
@@ -588,7 +592,7 @@ mod tests {
         let q = Queue::new();
         let id = q.push(Kind::Img2img, "m".into(), Some(5), "run", None, false);
         q.next();
-        q.fail_run(id, "out of memory".into());
+        q.fail_run(id, "out of memory".into(), None);
         let snap = q.snapshot();
         assert!(snap.jobs.is_empty());
         assert_eq!(snap.notices[0].message, "out of memory");

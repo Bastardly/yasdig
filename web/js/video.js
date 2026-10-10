@@ -1,4 +1,5 @@
 import { $, esc, post, numOr } from './dom.js';
+import { showError } from './memory.js';
 import { S } from './state.js';
 import { setBusy, setIdle, cancelRun } from './busy.js';
 import { soonJobs } from './jobs.js';
@@ -81,6 +82,7 @@ function syncVideo() {
   $('vsampler').value = m.sampler;
   $('vshift').value = m.flow_shift ?? '';
   $('vtiling').checked = !!m.vae_tiling;
+  $('vmemory').value = m.memory_mode ?? 'ram';
   // The second expert's knobs only exist for the pair.
   $('vmoe').hidden = !m.is_moe;
   $('vhsteps').value = m.high_noise_steps ?? '';
@@ -147,6 +149,7 @@ function vidPayload() {
     flow_shift: numOr('vshift'),
     sampler: $('vsampler').value || null,
     vae_tiling: $('vtiling').checked,
+    memory: $('vmemory').value || null,
   };
 }
 
@@ -169,11 +172,11 @@ async function startClip() {
     // The marker SdRunner::run puts in a killed pass's error. A clip the user
     // stopped is not a failure, and reporting a stack of sd-cli stderr for it
     // would read as one.
-    $('verr').textContent = msg.includes('cancelled by request')
+    showError($('verr'), msg.includes('cancelled by request')
       ? 'Stopped. Nothing was kept — the partial frames are swept.'
       : msg.includes('removed from the job queue')
         ? 'Removed from the queue before it started.'
-        : msg;
+        : msg, e.oom, { memory: 'vmemory', retry: startClip });
   } finally {
     vrunning = false;
     $('vstop').hidden = true;
@@ -295,6 +298,9 @@ function applyClip(c) {
   $('vsampler').value = v.sampler;
   $('vshift').value = v.flow_shift ?? '';
   $('vtiling').checked = !!v.vae_tiling;
+  // A clip from before `memory` ran with `--offload-to-cpu` unless its entry
+  // said otherwise — which is `ram`.
+  $('vmemory').value = v.memory ?? (v.offload_to_cpu === false ? 'auto' : 'ram');
   $('vmoe').hidden = !(currentVideoModel() || {}).is_moe;
   $('vhsteps').value = v.high_noise_steps ?? '';
   $('vhcfg').value = v.high_noise_cfg_scale ?? '';

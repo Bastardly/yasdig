@@ -722,3 +722,14 @@ a:hover { color: var(--accent-hi); }
 .gmfiles td:first-child { width: 22%; }
 .gmfiles td:last-child { width: 40%; }
 .gmfiles .bar { margin: 0; }
+
+/* The out-of-memory box (`memory.js`): what a run that ran out of memory shows
+   in place of its error text. The options are a two-column list — the button,
+   and in a line why — so the cost of each is read before it is pressed. */
+.oombox { color: var(--text); white-space: normal; }
+.oomopts { display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-2) var(--sp-3);
+           align-items: center; margin-top: var(--sp-3); }
+.oomopts .sub { margin: 0; }
+.oomlog { max-height: 240px; overflow: auto; font-family: var(--font-num); font-size: var(--fs-micro);
+          color: var(--text-dim); white-space: pre-wrap; }
+@media (max-width: 899px) { .oomopts { grid-template-columns: 1fr; } }

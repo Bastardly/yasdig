@@ -179,7 +179,7 @@ export async function pollJobs() {
     for (const n of snap.notices) {
       if (n.seq > seenNotice) {
         seenNotice = n.seq;
-        for (const fn of noticeHooks) fn(n.message);
+        for (const fn of noticeHooks) fn(n.message, n.oom ?? null);
       }
     }
     if (snap.latest_seq > seenSeq) await deliverLatest(snap.latest_seq);

@@ -236,6 +236,9 @@ pub struct GenRequest {
     pub scheduler: Option<String>,
     /// Step caching for this pass; `None` keeps the profile's.
     pub cache_mode: Option<String>,
+    /// Where the weights live ([`crate::config::MEMORY_MODES`]); `None` keeps
+    /// the profile's.
+    pub memory: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
     /// The FSR (EASU) enlarge every base render goes through on its way to the
@@ -321,6 +324,9 @@ pub struct Img2ImgRequest {
     pub scheduler: Option<String>,
     /// Step caching for this pass; `None` keeps the profile's.
     pub cache_mode: Option<String>,
+    /// Where the weights live ([`crate::config::MEMORY_MODES`]); `None` keeps
+    /// the profile's.
+    pub memory: Option<String>,
     pub refine_steps: Option<u32>,
     pub refine_strength: Option<f32>,
     pub refine_cfg_scale: Option<f32>,
@@ -373,6 +379,8 @@ pub struct VideoRequest {
     pub flow_shift: Option<f32>,
     pub sampler: Option<String>,
     pub vae_tiling: Option<bool>,
+    /// Where the weights live; `None` keeps the model's.
+    pub memory: Option<String>,
 }
 
 /// A finished clip, plus how long it took. The timing is the point on this
@@ -455,6 +463,11 @@ pub struct EscalateRequest {
     /// the step's history label says what the pass was asked (`pass_prompt`).
     pub refine_prompt: Option<String>,
     pub hires_prompt: Option<String>,
+    /// Where the weights live for this pass. On an escalation because it
+    /// describes how the pass about to run fits, not the image in hand: the
+    /// retry after an out-of-memory is exactly this field changing. Applied
+    /// after [`Engine::swap_model`], so it survives a swap to another model.
+    pub memory: Option<String>,
 }
 
 /// What an Edit asks for: an instruction, and any further reference images.
@@ -466,6 +479,8 @@ pub struct EditRequest {
     /// Further references (output stems) after the image itself, which is
     /// always reference 1 — so the prompt names these "image 2" onwards.
     pub references: Vec<String>,
+    /// Where the weights live for this pass; `None` keeps the image's.
+    pub memory: Option<String>,
 }
 
 /// What a Redraw asks for: which pixels, and optionally what to put there.
@@ -478,6 +493,8 @@ pub struct RedrawRequest {
     pub prompt: Option<String>,
     /// `None` is [`REDRAW_STRENGTH`].
     pub strength: Option<f32>,
+    /// Where the weights live for this pass; `None` keeps the image's.
+    pub memory: Option<String>,
     /// Edge softness in image pixels (`redraw::feather`); `None` is
     /// [`REDRAW_SOFTNESS`].
     pub feather: Option<u32>,
@@ -491,6 +508,17 @@ pub const REDRAW_STRENGTH: f32 = 0.5;
 /// Edge softness when a request names none: enough that a strong redraw
 /// doesn't leave a seam at 1024², little enough to stay where it was painted.
 pub const REDRAW_SOFTNESS: u32 = 16;
+
+/// A pass's memory choice onto the profile it runs with, checked. Blank keeps it.
+fn set_memory(profile: &mut Profile, memory: Option<&str>) -> Result<()> {
+    if let Some(v) = memory.filter(|v| !v.is_empty()) {
+        if !crate::config::MEMORY_MODES.contains(&v) {
+            bail!("memory '{v}' is not one of {}", crate::config::MEMORY_MODES.join(", "));
+        }
+        profile.memory = v.to_string();
+    }
+    Ok(())
+}
 
 impl EscalateRequest {
     /// Fold onto the retained profile, then re-check it: the panel can put a
@@ -514,11 +542,14 @@ impl EscalateRequest {
         if let Some(v) = self.hires_cfg_scale {
             profile.hires_cfg_scale = v;
         }
+        if let Some(v) = self.memory.as_deref().filter(|v| !v.is_empty()) {
+            profile.memory = v.to_string();
+        }
         profile.validate()
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Timings {
     pub gen_ms: u128,
     /// An ESRGAN model's share of the initial enlarge, reduce included. 0 when
@@ -533,6 +564,10 @@ pub struct Timings {
     /// run uncached ([`Profile::uncached`]).
     pub cache_skipped: u32,
     pub cache_steps: u32,
+    /// Where the pass's weights were when any were off the card ("text
+    /// encoder in system RAM"), read straight after its sd-cli run like the
+    /// cache numbers. It explains a slow pass before it becomes a failed one.
+    pub weights: Option<String>,
 }
 
 pub struct GenResult {
@@ -1054,6 +1089,11 @@ impl Engine {
                 profile.cache_mode = v.clone();
             }
         }
+        if let Some(v) = &req.memory {
+            if !v.is_empty() {
+                profile.memory = v.clone();
+            }
+        }
         if let Some(v) = req.width {
             profile.width = v;
         }
@@ -1281,6 +1321,7 @@ impl Engine {
             fsr_ms,
             cache_skipped,
             cache_steps,
+            weights: self.monitor.placement(),
             ..Default::default()
         });
         // `pin` is a run holding this image for the hi-res and refine still to
@@ -1327,6 +1368,11 @@ impl Engine {
         if let Some(v) = &req.cache_mode {
             if !v.is_empty() {
                 profile.cache_mode = v.clone();
+            }
+        }
+        if let Some(v) = &req.memory {
+            if !v.is_empty() {
+                profile.memory = v.clone();
             }
         }
         if let Some(v) = req.source_strength {
@@ -1514,6 +1560,7 @@ impl Engine {
             fsr_ms,
             cache_skipped,
             cache_steps,
+            weights: self.monitor.placement(),
             ..Default::default()
         });
         lock(&self.retained).store(id, Slot::Image, entry, pin);
@@ -1573,6 +1620,9 @@ impl Engine {
         }
         if let Some(v) = req.vae_tiling {
             m.vae_tiling = v;
+        }
+        if let Some(v) = req.memory.as_deref().filter(|v| !v.is_empty()) {
+            m.memory = Some(v.to_string());
         }
         m.validate()?;
 
@@ -1818,7 +1868,7 @@ impl Engine {
             ..p
         };
         let entry = advance(&prev, entry, step_label("Refine", over.refine_prompt.as_deref()));
-        let result = entry.result(id, png, Timings { fsr_ms, refine_ms, ..Default::default() });
+        let result = entry.result(id, png, Timings { fsr_ms, refine_ms, weights: self.monitor.placement(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }
@@ -1833,7 +1883,8 @@ impl Engine {
     /// The prompt is the pass's own and is not written back: `Pending.prompt`
     /// keeps describing the picture.
     pub fn redraw(&mut self, id: u64, req: &RedrawRequest) -> Result<GenResult> {
-        let p = lock(&self.retained).get(id, "redraw")?;
+        let mut p = lock(&self.retained).get(id, "redraw")?;
+        set_memory(&mut p.profile, req.memory.as_deref())?;
         self.cfg.check_loras(&p.profile.loras, p.profile.family)?;
         let strength = req.strength.unwrap_or(REDRAW_STRENGTH);
         if !(MIN_STRENGTH..=MAX_STRENGTH).contains(&strength) {
@@ -1945,7 +1996,7 @@ impl Engine {
         // "Area" is what the page calls a redraw: the dialog's Refine with
         // something painted.
         let entry = advance(&prev, entry, step_label("Area", req.prompt.as_deref()));
-        let result = entry.result(id, png, Timings { fsr_ms, redraw_ms, ..Default::default() });
+        let result = entry.result(id, png, Timings { fsr_ms, redraw_ms, weights: self.monitor.placement(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }
@@ -1963,7 +2014,8 @@ impl Engine {
     /// picture is the result — nothing is composited — so it is a history step
     /// like any pass, and Compare shows what changed.
     pub fn edit(&mut self, id: u64, req: &EditRequest) -> Result<GenResult> {
-        let p = lock(&self.retained).get(id, "edit")?;
+        let mut p = lock(&self.retained).get(id, "edit")?;
+        set_memory(&mut p.profile, req.memory.as_deref())?;
         if !p.profile.family.takes_references() {
             bail!(
                 "Edit needs a model that takes reference images (Flux.2 Klein); this \
@@ -2052,7 +2104,7 @@ impl Engine {
             ..p
         };
         let entry = advance(&prev, entry, step_label("Edit", Some(instruction)));
-        let result = entry.result(id, png, Timings { gen_ms, fsr_ms, ..Default::default() });
+        let result = entry.result(id, png, Timings { gen_ms, fsr_ms, weights: self.monitor.placement(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }
@@ -2250,7 +2302,7 @@ impl Engine {
             ..p
         };
         let entry = advance(&prev, entry, step_label(&format!("Hi-res {upscale}×"), over.hires_prompt.as_deref()));
-        let result = entry.result(id, png, Timings { fsr_ms, hires_ms, ..Default::default() });
+        let result = entry.result(id, png, Timings { fsr_ms, hires_ms, weights: self.monitor.placement(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }

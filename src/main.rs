@@ -517,7 +517,7 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
             Err(_) if queue.skipped(t.id) => {
                 queue.image_done(t.id);
             }
-            Err(e) => queue.fail_run(t.id, format!("{e:#}")),
+            Err(e) => queue.fail_run(t.id, format!("{e:#}"), sd::oom_json(&e)),
         },
         Work::Refine { id, over } => {
             let r = engine.refine(id, &over).map(|r| latest(queue, &r));
@@ -1001,6 +1001,9 @@ struct VideoModelDto {
     /// True for the mixture-of-experts pair: the page shows the second set of
     /// step/CFG boxes only when they mean something.
     is_moe: bool,
+    /// The memory mode the model runs with, resolved — `memory` beside it is
+    /// the raw entry, which an old `offload_to_cpu` key leaves unset.
+    memory_mode: String,
     /// Which component files aren't on disk. A greyed-out entry that says *what*
     /// is missing is the download list the config comments promise.
     missing: Vec<String>,
@@ -1211,6 +1214,7 @@ fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> 
             frame_grid: m.family.frame_grid(),
             forced_fps: m.family.forced_fps(),
             is_moe: m.family.is_moe(),
+            memory_mode: m.memory_mode().to_string(),
             missing: m.missing().iter().map(|p| p.display().to_string()).collect(),
             duration: m.duration(),
             model: m,
@@ -1261,6 +1265,8 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         sampler: Option<String>,
         #[serde(default)]
         vae_tiling: Option<bool>,
+        #[serde(default)]
+        memory: Option<String>,
     }
 
     let dto: Dto = match parse_json::<Dto>(conn, body)? {
@@ -1285,6 +1291,7 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         flow_shift: dto.flow_shift,
         sampler: dto.sampler,
         vae_tiling: dto.vae_tiling,
+        memory: dto.memory,
     };
 
     let label = req.model.clone();
@@ -1691,6 +1698,8 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         scheduler: Option<String>,
         cache_mode: Option<String>,
         #[serde(default)]
+        memory: Option<String>,
+        #[serde(default)]
         width: Option<u32>,
         #[serde(default)]
         height: Option<u32>,
@@ -1783,6 +1792,7 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         sampler: dto.sampler,
         scheduler: dto.scheduler,
         cache_mode: dto.cache_mode,
+        memory: dto.memory,
         width: dto.width,
         height: dto.height,
         upscale_factor: dto.upscale_factor,
@@ -1834,6 +1844,9 @@ fn run_escalation(
         // them through here would take this to eight positional arguments.
         refine_prompt: None,
         hires_prompt: None,
+        // The after-each passes run with the generate's own, already on the
+        // retained profile.
+        memory: None,
     }
 }
 
@@ -1905,6 +1918,8 @@ fn handle_img2img(
         #[serde(default)]
         scheduler: Option<String>,
         cache_mode: Option<String>,
+        #[serde(default)]
+        memory: Option<String>,
         #[serde(default)]
         refine_steps: Option<u32>,
         #[serde(default)]
@@ -1997,6 +2012,7 @@ fn handle_img2img(
         sampler: dto.sampler,
         scheduler: dto.scheduler,
         cache_mode: dto.cache_mode,
+        memory: dto.memory,
         refine_steps: dto.refine_steps,
         refine_strength: dto.refine_strength,
         refine_cfg_scale: dto.refine_cfg_scale,
@@ -2108,6 +2124,9 @@ struct EscalateDto {
     refine_prompt: Option<String>,
     #[serde(default)]
     hires_prompt: Option<String>,
+    /// Where the weights live for this pass; absent keeps the image's.
+    #[serde(default)]
+    memory: Option<String>,
 }
 
 impl EscalateDto {
@@ -2122,6 +2141,7 @@ impl EscalateDto {
             hires_cfg_scale: self.hires_cfg_scale,
             refine_prompt: self.refine_prompt.clone(),
             hires_prompt: self.hires_prompt.clone(),
+            memory: self.memory.clone(),
         }
     }
 }
@@ -2179,6 +2199,7 @@ fn handle_redraw(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Res
                 prompt: dto.prompt,
                 strength: dto.strength,
                 feather: dto.feather,
+                memory: dto.memory,
             },
         },
     )
@@ -2194,6 +2215,8 @@ struct RedrawDto {
     strength: Option<f32>,
     #[serde(default)]
     feather: Option<u32>,
+    #[serde(default)]
+    memory: Option<String>,
 }
 
 impl RedrawDto {
@@ -2219,12 +2242,14 @@ fn handle_edit(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resul
         prompt: Option<String>,
         #[serde(default)]
         references: Vec<String>,
+        #[serde(default)]
+        memory: Option<String>,
     }
     let Some(dto) = parse_json::<Dto>(conn, body)? else {
         return Ok(());
     };
     let id = dto.image_id;
-    let req = pipeline::EditRequest { prompt: dto.prompt, references: dto.references };
+    let req = pipeline::EditRequest { prompt: dto.prompt, references: dto.references, memory: dto.memory };
     escalate(conn, lanes, jobs::Kind::Edit, id, None, Work::Edit { id, req })
 }
 
@@ -2438,11 +2463,7 @@ fn enqueue_wait(
         .context("gpu worker dropped the reply channel")?;
     match result {
         Ok(json) => conn.respond(200, "application/json", json.as_bytes()),
-        Err(e) => conn.respond(
-            err_status,
-            "application/json",
-            error_json(&format!("{e:#}")).as_bytes(),
-        ),
+        Err(e) => conn.respond(err_status, "application/json", error_body(&e).as_bytes()),
     }
 }
 
@@ -2581,11 +2602,7 @@ fn submit(
 
     match result {
         Ok(json) => conn.respond(200, "application/json", json.as_bytes()),
-        Err(e) => conn.respond(
-            err_status,
-            "application/json",
-            error_json(&format!("{e:#}")).as_bytes(),
-        ),
+        Err(e) => conn.respond(err_status, "application/json", error_body(&e).as_bytes()),
     }
 }
 
@@ -2604,7 +2621,7 @@ fn result_json(res: &GenResult) -> String {
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
          \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\"can_edit\":{},\
          \"filters\":{},\"filters_start\":{},\"prompt\":{},\
-         \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{}}}}}",
+         \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{},\"weights\":{}}}}}",
         b64,
         res.width,
         res.height,
@@ -2637,6 +2654,7 @@ fn result_json(res: &GenResult) -> String {
         res.timings.redraw_ms,
         res.timings.cache_skipped,
         res.timings.cache_steps,
+        res.timings.weights.as_deref().map_or("null".to_string(), json_str),
     )
 }
 
@@ -2719,7 +2737,7 @@ fn build_models_json(cfg: &Config) -> String {
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
                  \"family\":{},\"family_label\":{},\"references\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
-                 \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\"scheduler\":{},\"cache_mode\":{},\
+                 \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\"scheduler\":{},\"cache_mode\":{},\"memory\":{},\
                  \"upscale_factor\":{},\"upscaler\":{},\
                  \"refine_steps\":{},\"refine_strength\":{},\"refine_cfg_scale\":{},\
                  \"hires_steps\":{},\"hires_strength\":{},\"hires_cfg_scale\":{},\
@@ -2746,6 +2764,7 @@ fn build_models_json(cfg: &Config) -> String {
                 json_str(&p.sampler),
                 json_str(&p.scheduler),
                 json_str(&p.cache_mode),
+                json_str(&p.memory),
                 // The panel's Output upscale box starts here. It is the one
                 // generation knob that changes what "the image" is, so the page
                 // needs the number and not just the `out_*` above, which is that
@@ -2777,6 +2796,16 @@ fn build_models_json(cfg: &Config) -> String {
         })
         .collect();
     format!("[{}]", items.join(","))
+}
+
+/// A failed job's body: `{error}`, plus `oom` when it ran out of memory, so the
+/// page can offer the Memory setting and the other ways out.
+fn error_body(e: &anyhow::Error) -> String {
+    let mut v = serde_json::json!({ "error": format!("{e:#}") });
+    if let Some(oom) = sd::oom_json(e) {
+        v["oom"] = oom;
+    }
+    v.to_string()
 }
 
 fn error_json(msg: &str) -> String {
@@ -3459,6 +3488,31 @@ fn json_str(s: &str) -> String {
 mod tests {
     use super::{band_amplitudes, check_bands, grating, BandRow, DEPTH, DETAIL, GRIT};
     use super::{clip_frame, history_path, workitems, EscalateDto, HiresDto, RedrawDto};
+
+    /// A failed job's body carries `oom` exactly when the failure was the typed
+    /// out-of-memory, wrapped in context or not — and nothing for any other.
+    #[test]
+    fn an_error_body_says_oom_only_for_running_out_of_memory() {
+        let oom = crate::sd::OutOfMemory {
+            kind: "gpu",
+            phase: "drawing",
+            step: 7,
+            steps: 20,
+            placement: None,
+            mode: "auto",
+            label: "generate".into(),
+            log: String::new(),
+        };
+        let e = anyhow::Error::new(oom).context("refine");
+        let v: serde_json::Value = serde_json::from_str(&super::error_body(&e)).unwrap();
+        assert_eq!(v["oom"]["phase"], "drawing");
+        assert_eq!(v["oom"]["step"], 7);
+        assert!(v["error"].as_str().unwrap().contains("ran out of GPU memory while drawing (step 7 of 20)"));
+        let plain: serde_json::Value =
+            serde_json::from_str(&super::error_body(&anyhow::anyhow!("no such model"))).unwrap();
+        assert!(plain.get("oom").is_none());
+        assert_eq!(plain["error"], "no such model");
+    }
 
     /// The history thumbnail's guard: two whole numbers or nothing.
     #[test]

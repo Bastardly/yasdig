@@ -359,9 +359,7 @@ impl<'a> SdRunner<'a> {
         if let Some(c) = io.control {
             cmd.args(["--control-video", &path_str(c)]);
         }
-        if m.offload_to_cpu {
-            cmd.arg("--offload-to-cpu");
-        }
+        cmd.args(crate::config::memory_args(m.memory_mode(), &m.extra_args));
         if m.vae_tiling {
             cmd.arg("--vae-tiling");
         }
@@ -541,6 +539,9 @@ impl<'a> SdRunner<'a> {
         if let Some(mode) = cache_flag(p) {
             cmd.args(["--cache-mode", mode]);
         }
+        // Every pass, not just the generate: a refine that doesn't fit is the
+        // same failure as a generate that doesn't. `auto` adds nothing.
+        cmd.args(crate::config::memory_args(&p.memory, &p.extra_args));
         cmd.args(["-s", &seed.to_string()]);
         cmd.args(["-o", &path_str(out)]);
         // The live preview: `proj` is a fixed latent-to-RGB matrix per VAE
@@ -591,6 +592,29 @@ impl<'a> SdRunner<'a> {
             let _ = std::fs::remove_dir_all(dir);
             std::fs::create_dir_all(dir).ok();
         }
+        // What the command asks of memory, read off its own arguments so the
+        // report says what actually ran. A prompt is what marks a diffusion
+        // run — an upscale or a convert leaves the last one's placement alone.
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let params = args
+            .iter()
+            .position(|a| a == "--params-backend")
+            .and_then(|i| args.get(i + 1).cloned());
+        let mode = match params.as_deref() {
+            Some("cpu") => "ram",
+            Some(p) if p.contains("disk") => "disk",
+            Some(_) => "custom",
+            None if args.iter().any(|a| a == "--offload-to-cpu") => "ram",
+            None => crate::config::MEMORY_AUTO,
+        };
+        let diffusion = args.iter().any(|a| a == "-p");
+        if diffusion {
+            self.monitor.set_placement(match (&params, mode) {
+                (Some(p), _) => describe_params(p),
+                (None, "ram") => describe_params("cpu"),
+                _ => None,
+            });
+        }
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd
             .spawn()
@@ -600,9 +624,18 @@ impl<'a> SdRunner<'a> {
         let errors = std::thread::spawn(move || drain(stderr, |_| {}));
 
         self.monitor.begin(label, child);
+        // The last progress seen, kept here because `end` clears the monitor's
+        // before the exit status is known — and it is what says *when* a run
+        // that died ran out of memory.
+        let mut last: Option<(Phase, u32, u32)> = None;
         let out_tail = drain(stdout, |line| {
             if let Some((step, steps, rate)) = parse_progress(line) {
                 self.monitor.advance(label, step, steps, rate);
+                last = Some((Phase::of_rate(rate), step, steps));
+            } else if let Some(spec) = parse_auto_fit(line) {
+                if diffusion {
+                    self.monitor.set_placement(spec.as_deref().and_then(describe_params));
+                }
             } else if let Some(skip) = parse_cache_skip(line) {
                 if let Ok(mut s) = self.monitor.0.cache_skip.lock() {
                     *s = Some(skip);
@@ -630,16 +663,31 @@ impl<'a> SdRunner<'a> {
                 bail!("sd-cli {label} {CANCELLED}");
             }
             // sd.cpp's out-of-memory is a warning a few lines before a generic
-            // "failed": said plainly first, with what to do, the raw tail after.
-            if out_tail.iter().chain(err_tail.iter()).any(|l| is_out_of_memory(l)) {
-                bail!(
-                    "sd-cli {label} ran out of GPU memory. Try a smaller image (or a lower \
-                     Output upscale before it), fewer reference images, or a smaller \
-                     quantization of the model (the Convert tab makes one).\n--- stderr ---\n{}\n\
-                     --- stdout (last {TAIL_LINES} lines) ---\n{}",
-                    joined(&err_tail),
-                    joined(&out_tail),
-                );
+            // "failed"; the system's is a SIGKILL from the OOM killer with no
+            // message at all. Either way the error is typed, so the page can
+            // offer the ways out rather than grep a sentence for them.
+            let gpu = out_tail.iter().chain(err_tail.iter()).any(|l| is_out_of_memory(l));
+            if gpu || killed_by_system(&status) {
+                let (phase, step, steps) = match last {
+                    None | Some((Phase::Loading, ..)) => ("loading", 0, 0),
+                    Some((_, s, n)) if s < n => ("drawing", s, n),
+                    Some((_, s, n)) => ("decoding", s, n),
+                };
+                return Err(OutOfMemory {
+                    kind: if gpu { "gpu" } else { "ram" },
+                    phase,
+                    step,
+                    steps,
+                    placement: self.monitor.placement(),
+                    mode,
+                    label: label.to_string(),
+                    log: format!(
+                        "--- stderr ---\n{}\n--- stdout (last {TAIL_LINES} lines) ---\n{}",
+                        joined(&err_tail),
+                        joined(&out_tail)
+                    ),
+                }
+                .into());
             }
             bail!(
                 "sd-cli {label} exited with {status}\n--- stderr ---\n{}\n--- stdout (last {TAIL_LINES} lines) ---\n{}",
@@ -659,6 +707,117 @@ fn is_out_of_memory(line: &str) -> bool {
     line.contains("cannot make enough memory available")
         || line.contains("ErrorOutOfDeviceMemory")
         || line.contains("failed to allocate")
+        // RADV's, on a submission the driver couldn't back; the device is
+        // lost right after, which is the line people see.
+        || line.contains("Not enough memory for command submission")
+}
+
+/// Whether the child was ended by the system rather than by us: SIGKILL with
+/// no cancel of ours is Linux's OOM killer, which is how running out of
+/// *system* memory looks — no message, just gone.
+#[cfg(unix)]
+fn killed_by_system(status: &std::process::ExitStatus) -> bool {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal() == Some(9)
+}
+#[cfg(not(unix))]
+fn killed_by_system(_: &std::process::ExitStatus) -> bool {
+    false
+}
+
+/// A run that ran out of memory, typed so the page can offer what to do about
+/// it — the Memory setting, a smaller size, a smaller file — instead of
+/// matching words in a sentence. [`oom_json`] finds it in an error's chain.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OutOfMemory {
+    /// `gpu`, or `ram` for system memory.
+    pub kind: &'static str,
+    /// `loading`, `drawing` or `decoding`: the last progress sd-cli reported.
+    pub phase: &'static str,
+    pub step: u32,
+    pub steps: u32,
+    /// Where the weights were, when anything was off the card.
+    pub placement: Option<String>,
+    /// The memory mode the command ran with: one of `MEMORY_MODES`, or
+    /// `custom` for a placement written into `extra_args`.
+    pub mode: &'static str,
+    #[serde(skip)]
+    pub label: String,
+    #[serde(skip)]
+    pub log: String,
+}
+
+impl std::fmt::Display for OutOfMemory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let what = if self.kind == "gpu" { "GPU memory" } else { "system memory (RAM)" };
+        let when = match self.phase {
+            "drawing" => format!("while drawing (step {} of {})", self.step, self.steps),
+            "decoding" => "while turning the result into pixels (the VAE decode)".to_string(),
+            _ => "while loading the model".to_string(),
+        };
+        let fix = match (self.kind, self.phase, self.mode) {
+            ("ram", ..) => "Set Memory to Stream from SSD, or use a smaller file of the model.",
+            (_, "decoding", _) => "sd.cpp already retried the decode in tiles; a smaller size is what fits.",
+            (_, _, "auto") => "Set Memory to System RAM: the weights then wait in RAM and the whole card is free for the work.",
+            _ => "Try a smaller size, Stream from SSD, or a smaller file of the model.",
+        };
+        write!(f, "sd-cli {} ran out of {what} {when}. {fix}\n{}", self.label, self.log)
+    }
+}
+
+impl std::error::Error for OutOfMemory {}
+
+/// The [`OutOfMemory`] in an error's chain, as JSON for the page — `None` for
+/// every other failure.
+pub fn oom_json(e: &anyhow::Error) -> Option<serde_json::Value> {
+    e.chain()
+        .find_map(|c| c.downcast_ref::<OutOfMemory>())
+        .and_then(|o| serde_json::to_value(o).ok())
+}
+
+/// auto-fit's decision, off the line `backend_fit.cpp` prints at INFO:
+///
+/// ```text
+/// [INFO ] backend_fit.cpp:474 - auto-fit: --backend "diffusion=vulkan0,te=vulkan0" --params-backend "te=cpu"
+/// ```
+///
+/// `Some(None)` is the line with no params part — everything on the card.
+fn parse_auto_fit(line: &str) -> Option<Option<String>> {
+    let rest = line.split_once("auto-fit: --backend ")?.1;
+    Some(
+        rest.split_once("--params-backend \"")
+            .and_then(|(_, p)| p.split_once('"'))
+            .map(|(p, _)| p.to_string()),
+    )
+}
+
+/// A `--params-backend` spec in words, or `None` when it puts nothing off the
+/// card. A bare value applies to every part.
+pub fn describe_params(spec: &str) -> Option<String> {
+    let place = |v: &str| match v {
+        "cpu" => "in system RAM".to_string(),
+        "disk" => "streamed from the SSD".to_string(),
+        other => format!("on {other}"),
+    };
+    let parts: Vec<String> = spec
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|a| match a.split_once('=') {
+            Some((k, v)) => {
+                let what = match k.to_ascii_lowercase().as_str() {
+                    "diffusion" | "model" | "unet" | "dit" => "model",
+                    "te" | "clip" | "llm" | "t5xxl" | "cond" => "text encoder",
+                    "vae" | "tae" => "VAE",
+                    "*" | "all" | "default" => "everything",
+                    _ => k,
+                };
+                format!("{what} {}", place(v))
+            }
+            None => format!("everything {}", place(a)),
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
 }
 
 /// What one `vid_gen` pass reads and writes.
@@ -705,6 +864,16 @@ pub enum Phase {
 }
 
 impl Phase {
+    /// sd.cpp's byte-progress bar reports `MB/s`/`GB/s` while loading weights;
+    /// the sampler reports `s/it`/`it/s`.
+    fn of_rate(rate: &str) -> Phase {
+        if rate.ends_with("B/s") {
+            Phase::Loading
+        } else {
+            Phase::Sampling
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Phase::Loading => "loading",
@@ -752,6 +921,12 @@ struct MonitorInner {
     /// What step caching skipped in the last run, off sd-cli's own log line.
     /// Reset when a run begins, so it never describes the run before.
     cache_skip: Mutex<Option<(u32, u32)>>,
+    /// Where the last diffusion run kept its weights, when anything was off the
+    /// card — see [`describe_params`]. Set from the command's own
+    /// `--params-backend`, or from auto-fit's plan line once sd-cli prints it.
+    /// Only a run with a prompt sets it, so an ESRGAN enlarge after a generate
+    /// leaves the generate's standing.
+    placement: Mutex<Option<String>>,
 }
 
 impl Monitor {
@@ -787,6 +962,18 @@ impl Monitor {
     /// when it skipped none — off, too few steps, or a mode that didn't engage.
     pub fn cache_skip(&self) -> Option<(u32, u32)> {
         *self.0.cache_skip.lock().ok()?
+    }
+
+    /// Where the last diffusion run kept its weights, or `None` when they were
+    /// all on the card.
+    pub fn placement(&self) -> Option<String> {
+        self.0.placement.lock().ok()?.clone()
+    }
+
+    fn set_placement(&self, p: Option<String>) {
+        if let Ok(mut held) = self.0.placement.lock() {
+            *held = p;
+        }
     }
 
     /// What to show while a job runs, or `None` when nothing is running.
@@ -849,11 +1036,7 @@ impl Monitor {
         if let Ok(mut p) = self.0.progress.lock() {
             *p = Some(Progress {
                 label: label.to_string(),
-                phase: if rate.ends_with("B/s") {
-                    Phase::Loading
-                } else {
-                    Phase::Sampling
-                },
+                phase: Phase::of_rate(rate),
                 step,
                 steps,
                 rate: rate.to_string(),
@@ -1110,7 +1293,10 @@ flow_shift = 3.0
         assert_eq!(flag(&a, "--video-frames"), Some("33"));
         assert_eq!(flag(&a, "--fps"), Some("16"));
         assert_eq!(flag(&a, "--flow-shift"), Some("3"));
-        assert!(a.contains(&"--offload-to-cpu".to_string()));
+        // `ram`, spelled as what sd.cpp turns `--offload-to-cpu` into, and
+        // never the alias as well.
+        assert_eq!(flag(&a, "--params-backend"), Some("cpu"));
+        assert!(!a.contains(&"--offload-to-cpu".to_string()));
         assert!(a.contains(&"--diffusion-fa".to_string()));
         // Off by default, and the OOM escalation that costs time.
         assert!(!a.contains(&"--vae-tiling".to_string()));
@@ -1410,12 +1596,102 @@ binary = "/opt/sd-cli"
 
     /// The model manager's warning and ggml's allocation failures read as out
     /// of memory; an ordinary failure line does not.
+    /// `auto` is the absence of a flag — any explicit `--params-backend` turns
+    /// sd.cpp's auto-fit off — and the other two are one `--params-backend`
+    /// each, never beside `--offload-to-cpu`. A placement written into
+    /// `extra_args` is the more specific choice and suppresses ours.
+    #[test]
+    fn memory_modes_are_one_params_backend_or_none() {
+        let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
+        let cmd = |memory: &str, extra: &[&str]| {
+            let p = Profile {
+                model: PathBuf::from("/models/sdxl.safetensors"),
+                memory: memory.into(),
+                extra_args: extra.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            };
+            argv(&SdRunner::new(&cfg).base_cmd(&p, "a cat", None, 1, Path::new("out.png"), 1.0))
+        };
+        let count = |a: &[String]| a.iter().filter(|x| *x == "--params-backend").count();
+        let auto = cmd("auto", &[]);
+        assert_eq!(count(&auto), 0);
+        assert!(!auto.iter().any(|x| x == "--offload-to-cpu" || x == "--auto-fit"));
+        let ram = cmd("ram", &[]);
+        assert_eq!((count(&ram), flag(&ram, "--params-backend")), (1, Some("cpu")));
+        let disk = cmd("disk", &[]);
+        assert_eq!(flag(&disk, "--params-backend"), Some("diffusion=disk,te=disk"));
+        assert_eq!(count(&disk), 1);
+        let hand = cmd("ram", &["--params-backend", "te=cpu"]);
+        assert_eq!((count(&hand), flag(&hand, "--params-backend")), (1, Some("te=cpu")));
+        assert_eq!(count(&cmd("disk", &["--offload-to-cpu"])), 0);
+    }
+
+    /// auto-fit's own line, in `backend_fit.cpp:474`'s format, read into words.
+    #[test]
+    fn the_auto_fit_line_says_where_the_weights_went() {
+        let both = "[INFO ] backend_fit.cpp:474 - auto-fit: --backend \"diffusion=vulkan0,te=vulkan0,vae=vulkan0\" --params-backend \"te=cpu,vae=disk\"";
+        assert_eq!(parse_auto_fit(both), Some(Some("te=cpu,vae=disk".into())));
+        let fits = "[INFO ] backend_fit.cpp:474 - auto-fit: --backend \"diffusion=vulkan0,te=vulkan0\"";
+        assert_eq!(parse_auto_fit(fits), Some(None));
+        assert_eq!(parse_auto_fit("[INFO ] auto-fit plan:"), None);
+        assert_eq!(
+            describe_params("te=cpu,vae=disk").as_deref(),
+            Some("text encoder in system RAM, VAE streamed from the SSD")
+        );
+        assert_eq!(describe_params("cpu").as_deref(), Some("everything in system RAM"));
+        assert_eq!(
+            describe_params("diffusion=disk,te=disk").as_deref(),
+            Some("model streamed from the SSD, text encoder streamed from the SSD")
+        );
+        assert_eq!(describe_params("diffusion=vulkan1").as_deref(), Some("model on vulkan1"));
+        assert_eq!(describe_params(""), None);
+    }
+
+    /// The whole path through a real child: sd.cpp-shaped progress, then the
+    /// two ways a run dies of memory. The error is typed, carries when it
+    /// happened and what the command asked for, and `oom_json` finds it.
+    #[cfg(unix)]
+    #[test]
+    fn running_out_of_memory_is_a_typed_error_with_its_phase() {
+        let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
+        let runner = SdRunner::new(&cfg);
+        let run = |script: &str, args: &[&str]| {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", script, "sh"]).args(args);
+            let e = runner.run_tail(cmd, "generate").unwrap_err();
+            let oom = e.chain().find_map(|c| c.downcast_ref::<OutOfMemory>()).cloned();
+            (e, oom)
+        };
+        // System memory: killed mid-sampling, with no message.
+        let (e, oom) = run("printf '  |=>  | 3/20 - 1.00s/it\\n'; kill -9 $$", &["-p", "x", "--params-backend", "cpu"]);
+        let oom = oom.expect("a SIGKILL is the OOM killer");
+        assert_eq!((oom.kind, oom.phase, oom.step, oom.steps, oom.mode), ("ram", "drawing", 3, 20, "ram"));
+        assert_eq!(oom.placement.as_deref(), Some("everything in system RAM"));
+        let json = oom_json(&e).unwrap();
+        assert_eq!(json["kind"], "ram");
+        assert!(json.get("log").is_none(), "the log rides in the message, not twice");
+        // GPU memory after the last step: the decode.
+        let (_, oom) = run(
+            "printf '  |====| 20/20 - 1.00s/it\\n'; echo 'ggml_vulkan: Device memory allocation failed: ErrorOutOfDeviceMemory' >&2; exit 1",
+            &["-p", "x"],
+        );
+        let oom = oom.unwrap();
+        assert_eq!((oom.kind, oom.phase, oom.mode), ("gpu", "decoding", "auto"));
+        assert!(oom.to_string().contains("VAE decode"));
+        // Before any step: loading. And an ordinary crash is not one.
+        let (_, oom) = run("echo 'cannot make enough memory available' ; exit 1", &[]);
+        assert_eq!(oom.unwrap().phase, "loading");
+        let (e, oom) = run("echo 'generate failed'; exit 1", &[]);
+        assert!(oom.is_none() && oom_json(&e).is_none());
+    }
+
     #[test]
     fn out_of_memory_is_recognised() {
         assert!(is_out_of_memory(
             "[WARN   ] model_manager.cpp:1762 - model manager cannot make enough memory available on Vulkan0: need 7441.11 MB"
         ));
         assert!(is_out_of_memory("ggml_vulkan: Device memory allocation failed: ErrorOutOfDeviceMemory"));
+        assert!(is_out_of_memory("radv: Not enough memory for command submission."));
         assert!(!is_out_of_memory("[ERROR  ] main.cpp:965  - generate failed"));
     }
 

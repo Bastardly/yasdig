@@ -151,7 +151,8 @@ name        = "wan2.2-i2v-a14b"
 description = "Wan 2.2 I2V A14B — the MoE pair; one expert resident per step"
 family      = "wan22_a14b"
 # Only one expert is active at a time, so one expert's worth of weights is what
-# the card holds — the 24 GB is not the limit. `offload_to_cpu` keeps *both* in
+# the card holds — the 24 GB is not the limit. `memory = "ram"` (the default for
+# a video model, and the Video tab's Memory select) keeps *both* in
 # system RAM, and that is the wall: 14B at Q4_K_M is roughly 8 GB, so the pair
 # plus the ~7 GB encoder is around 23 GB against 30 GB total. It fits, but not
 # by much, and the estimate is arithmetic rather than a measurement — peak RSS
@@ -191,6 +192,9 @@ flow_shift = 3.0
 # two on a Wan model — turn this on first. It costs time, not quality.
 # vae_tiling = true
 #
-# Further OOM escalations, in the order worth trying:
+# Further OOM escalations, in the order worth trying. `disk` re-reads the
+# experts and the encoder from their files, which is what to try when RAM —
+# not the card — is what runs out:
+# memory = "disk"
 # extra_args = ["--auto-fit", "off"]
 #

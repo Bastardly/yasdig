@@ -10,6 +10,7 @@ import { wireHints } from './hints.js';
 import { openRedraw, syncRedraw } from './redraw.js';
 import { onRefsChange, references, refsActive, syncRefs } from './refs.js';
 import { openGetModels } from './getmodels.js';
+import { showError, MEMORY_LABELS } from './memory.js';
 
 // The checkpoint list the server published. Exported because the work-item
 // grid looks a name up in it; only this module refills it.
@@ -65,6 +66,23 @@ const WORKING_SIDES = [768, 1024, 1536, 2048, 3072];
 
 function currentModel() {
   return models.find((m) => m.name === $('template').value);
+}
+
+// What every out-of-memory box on this tab can offer besides a retry: the
+// Memory select, and the Get models card for a smaller file of this family.
+export const oomOptions = () => ({
+  memory: 'memory',
+  smallerFile: currentModel() ? () => openGetModels(currentModel().family) : null,
+});
+
+// One step down on the base size, a quarter fewer pixels per side, snapped to
+// 64 like the boxes. Only for a render from noise: a source brings its size.
+function smallerSize() {
+  for (const id of ['w', 'h']) {
+    const v = parseInt($(id).value, 10);
+    if (Number.isFinite(v)) $(id).value = Math.max(256, Math.round((v * 0.75) / 64) * 64);
+    $(id).dispatchEvent(new Event('input', { bubbles: true }));
+  }
 }
 
 // ---- The Models fold -------------------------------------------------------
@@ -147,6 +165,10 @@ function syncModelsSummary() {
   });
   // The LoRAs live in this fold too, so the line names them — by file name
   // without its extension, the way the rows' own labels read.
+  // Only when it isn't Auto: the line says what departs from the plain path.
+  if ($('memory').value && $('memory').value !== 'auto') {
+    bits.push(`Memory: ${MEMORY_LABELS[$('memory').value] ?? $('memory').value}`);
+  }
   const loras = imageLoras.get();
   if (loras.length) {
     bits.push(`LoRA: ${loras.map((l) => baseName(l.name).replace(/\.[^.]+$/, '')).join(', ')}`);
@@ -268,6 +290,7 @@ function syncAdvanced() {
   $('sampler').value = m.sampler;
   $('scheduler').value = m.scheduler;
   $('cachemode').value = m.cache_mode;
+  $('memory').value = m.memory ?? 'auto';
   $('w').value = m.base_width;
   $('h').value = m.base_height;
   $('upscale').value = m.upscale_factor;
@@ -458,6 +481,7 @@ const MODEL_KNOBS = [
   ['steps', 'steps'], ['cfg_scale', 'cfg'], ['sampler', 'sampler', 'text'],
   ['scheduler', 'scheduler', 'text'],
   ['cache_mode', 'cachemode', 'text'],
+  ['memory', 'memory', 'text'],
   ['width', 'w'], ['height', 'h'],
   ['upscale_factor', 'upscale'], ['upscaler', 'upscaler', 'choice'],
   ['hires_steps', 'hsteps'], ['hires_strength', 'hstrength'], ['hires_cfg_scale', 'hcfg', 'blank'],
@@ -656,8 +680,11 @@ export function render(data) {
     .map(([name, ms]) => bar(name, ms, max)).join('');
   // The only proof a step cache engaged: sd-cli logs what it skipped, and a
   // mode that did nothing logs nothing, so no line is the honest answer.
-  const cached = t.cache_skipped
-    ? `<p class="sub">Step cache skipped ${t.cache_skipped} of ${t.cache_steps} steps</p>` : '';
+  const cached = (t.cache_skipped
+    ? `<p class="sub">Step cache skipped ${t.cache_skipped} of ${t.cache_steps} steps</p>` : '')
+    // Where the weights were when any were off the card — what explains a
+    // slow pass before it becomes one that ran out of memory.
+    + (t.weights ? `<p class="sub">Weights: ${esc(t.weights)}</p>` : '');
 
   S.imageId = data.image_id;
   // The seed box is left exactly as typed. Writing the drawn seed back into it
@@ -822,7 +849,12 @@ async function escalate(which, path, payload, label, kind, err = escErr) {
     const msg = String(e.message || e);
     // *Cancel generation* on this pass: nothing went wrong, and the image
     // under the buttons is still the one the pass started from.
-    err(/cancelled by request/.test(msg) ? 'Cancelled. The image is as it was.' : msg);
+    // Out of memory: the retry is this same pass, with the Memory select as
+    // it stands by then — which is what the box's buttons change.
+    err(/cancelled by request/.test(msg) ? 'Cancelled. The image is as it was.' : msg, e.oom, {
+      ...oomOptions(),
+      retry: () => escalate(which, path, { ...payload, memory: $('memory').value || null }, label, kind, err),
+    });
     // The image is gone, so the controls are dead; keep the picture on
     // screen. Any other failure is retryable — the server kept its
     // intermediates.
@@ -855,6 +887,8 @@ async function escalate(which, path, payload, label, kind, err = escErr) {
 // more on the way to /generate.
 export const escalateSettings = () => {
   return {
+    // Every pass: a Refine that ran out of memory is retried with this changed.
+    memory: $('memory').value || null,
     refine_steps: numOr('rsteps'),
     refine_strength: numOr('rstrength'),
     hires_steps: numOr('hsteps'),
@@ -1162,9 +1196,12 @@ export function initImage() {
   onResult(takeResult);
   onJobs(syncStopButton);
   // A run that failed has no request waiting on it; its message comes here.
-  onNotice((msg) => {
-    $('err').textContent = /cancelled by request/.test(msg)
-      ? 'Stopped. The image in flight was not kept.' : msg;
+  onNotice((msg, oom) => {
+    if (/cancelled by request/.test(msg)) {
+      $('err').textContent = 'Stopped. The image in flight was not kept.';
+      return;
+    }
+    showError($('err'), msg, oom, { ...oomOptions(), retry: () => $('go').click(), smaller: smallerSize });
   });
 
   loadModels();

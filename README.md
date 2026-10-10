@@ -308,11 +308,11 @@ to use once it has an edit mode:
 VAE, so the copy the Video tab already has is found and offered — there is no need for
 a second one under `vae/`. Everything else in the video folder stays the Video tab's.
 
-If a model still runs out of memory, `--offload-to-cpu` keeps the weights in system RAM
-and moves each part to the card only while it runs. Add it to that one model's
-`extra_args` (see [Per-model settings](#per-model-settings)) rather than to every
-model: it costs RAM equal to the whole set, which on most machines is the scarcer of
-the two.
+If a model runs out of memory, the error says which memory and when, and offers the
+ways out as buttons — chiefly the **Memory** setting in the *Models* fold: *System RAM*
+keeps the weights in RAM and leaves the card for the work, *Stream from SSD* re-reads
+them from the file when RAM is what ran out. *Save as defaults for this model* keeps the
+choice for that model only. Help → Memory explains the three.
 
 ### Smoke-test sd.cpp on its own
 
@@ -433,6 +433,7 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `width` / `height` | base generation size, default `768` each (small = fast) |
 | `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `30`, `6.0`, `euler` (Turbo → few steps, cfg 1). `sampler` is any of sd.cpp's 21 (`config::SAMPLERS`) |
 | `scheduler` | sd.cpp's `--scheduler`, default `auto`: no flag, so sd.cpp picks the model's own (`flux`/`flux2` for those families, `discrete` for SD and SDXL). `ays` is refused outside SD 1.5 and SDXL, the only models it has tables for. The Help tab compares them |
+| `memory` | Where the weights live while a pass runs: `auto` (default — sd.cpp's auto-fit places each part on the card, then in RAM, then on disk, by free memory), `ram` (`--params-backend cpu`: every weight in RAM, leaving the card for the work — the fix for a big model out of GPU memory) or `disk` (`--params-backend diffusion=disk,te=disk`: re-read from the file, the least RAM, slower). Every pass uses it, Refine and Hi-res included. Per model through *Save as defaults for this model*; a `--params-backend` in `extra_args` wins over it |
 | `cache_mode` | Step caching for the generate pass: `off` (default), `spectrum` or `adaptive` — UCache on SD 1.x, SD 2.x and SDXL, EasyCache on the DiT families, chosen by the server since each only works on its own kind. Refine and Hi-res always run uncached. The result says how many steps it skipped |
 | `upscale_factor` | the enlarge every base render goes through, default `2.0` (768 → 1536) — not a diffusion pass. Also a box in the Image tab's *After each generation* fold, where `1` means no enlarge at all |
 | `upscaler` *(opt)* | what does that enlarge: unset (the default) is FSR's EASU; a file name under the upscaler dir, extension included, is an ESRGAN model. See [Upscalers](#upscalers) |
@@ -562,7 +563,7 @@ flow_shift = 3.0
 | `negative_prompt` | defaults to Wan's own published negative prompt, so you never retype 400 characters of Chinese |
 | `loras` *(opt)* | sd.cpp's inline names without the brackets: `"name:1"`, or `"\|high_noise\|name:1"` to target an expert |
 | `lora_dir` *(opt)* | `--lora-model-dir` |
-| `offload_to_cpu` | default **true**; it is what makes the A14B pair possible at all |
+| `memory` | `auto`, `ram` (default) or `disk` — the same three as the image side's Memory setting, and the Video tab has the select. `ram` is what makes the A14B pair possible at all. An entry still saying `offload_to_cpu = true` reads as `ram`, `false` as `auto` |
 | `vae_tiling` | default false. The *first* thing to turn on if a clip dies in the decode — Wan's VAE is the memory-hungry end |
 | `flash_attn` | `--diffusion-fa`, default true |
 | `weight_type` / `extra_args` | as on the image side. `["--auto-fit", "off"]` and `["--rng", "cpu"]` live here |
@@ -582,7 +583,7 @@ counts go through the latent frame count and back, and because that division tru
 **34 Wan frames run as 33**: asking for more can give you fewer.
 
 Two notes on memory, against a 24 GB card and 30 GB of RAM. Only one A14B expert is
-resident per step, so the *card* is not the limit. `offload_to_cpu` holds **both**, so
+resident per step, so the *card* is not the limit. `memory = "ram"` holds **both**, so
 system RAM is: 14B at Q4_K_M is roughly 8 GB an expert, which puts the pair plus a ~7 GB
 encoder at around 23 GB — it fits 30 GB, but not by much. Q8_0 (~15 GB an expert) does
 not fit at all. Those are arithmetic, not measurements; peak RSS during a run is the

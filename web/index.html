@@ -313,6 +313,15 @@
            so this line, not anything about the selected model, is the way in. -->
       <p class="sub" id="getparts" hidden></p>
       <div id="partrows"></div>
+      <!-- Where the weights live while a pass runs (config::MEMORY_MODES). With
+           the parts because it is about this model's files, and per model:
+           *Save as defaults for this model* is how "Klein 9B needs RAM" sticks. -->
+      <label for="memory">Memory</label>
+      <select id="memory">
+        <option value="auto">Auto</option>
+        <option value="ram">System RAM</option>
+        <option value="disk">Stream from SSD (slower)</option>
+      </select>
       <label data-help="loras">LoRAs</label>
       <div id="loras"></div>
       <button type="button" id="loraadd" class="btn spaced">+ Add LoRA</button>
@@ -595,6 +604,12 @@
            others: Wan's VAE is the memory-hungry end of the pipeline, and
            tiling it costs time rather than quality. -->
       <label><input type="checkbox" id="vtiling"> VAE tiling (if the decode runs out of VRAM)</label>
+      <label for="vmemory">Memory</label>
+      <select id="vmemory">
+        <option value="auto">Auto</option>
+        <option value="ram">System RAM</option>
+        <option value="disk">Stream from SSD (slower)</option>
+      </select>
     </div>
   </div>
 

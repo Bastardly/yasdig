@@ -741,6 +741,67 @@ anything is queued or downloading, whichever tab is showing. The Image tab's
 `#getparts` line appears when a model is listed greyed out, and opens the tab on
 that family's card (`openGetModels`).
 
+## Memory
+
+`Profile::memory` (`config::MEMORY_MODES`: `auto`, `ram`, `disk`) and
+`VideoModel::memory_mode`, turned into sd-cli arguments by `config::memory_args`;
+the typed out-of-memory error `sd::OutOfMemory`; `web/js/memory.js`, the box that
+offers the ways out. An ordinary generation knob down the seven-step table, and on
+`EscalateRequest`, `EditRequest`, `RedrawRequest` and `VideoRequest` too, because
+it describes how the pass about to run *fits*, not the image in hand — the retry
+after an out-of-memory error is exactly this field changing.
+
+**sd.cpp's `--auto-fit` is on by default** (`docs/backend.md`): it places each
+part's weights on the card, then in RAM, then on disk, by the free memory it
+measures, splits the compute into segments when it must, and retries a failed
+VAE decode with tiling by itself. `auto` is that. Its weakness is that it
+*guesses* the compute room (2 GiB for a diffusion model) and fills the rest of
+the card with weights, so a 9B at two megapixels runs out of GPU memory with
+the weights fitting fine. `ram` (`--params-backend cpu`) is the fix: weights in
+RAM, the whole card for the work. `disk` (`--params-backend
+diffusion=disk,te=disk`) is for when RAM is what runs out.
+
+Six things break silently:
+
+- **An explicit `--params-backend` turns auto-fit off** (`diffusion_engine.cpp:875`),
+  and `--offload-to-cpu` *is* one (`*=cpu`, `common.cpp`). So `auto` must stay the
+  absence of a flag, and `memory_args` never emits the alias. The Video tab used
+  to pass `--offload-to-cpu` on every model, which silently cost it auto-fit and
+  the disk fallback.
+- **A placement in `extra_args` wins.** `memory_args` returns nothing when one is
+  there, so two `--params-backend` never leave the winner to argument order.
+  `memory_modes_are_one_params_backend_or_none` pins both.
+- **`[[video]]`'s old `offload_to_cpu` is read, never written**
+  (`skip_serializing`): `true` and absent are `ram`, `false` is `auto`, and a
+  `memory` beside it wins. `memory_mode()` is the one place that decides; the page
+  gets the resolved value as `memory_mode`, since `memory` alone is unset on an
+  old entry.
+- **The error is typed, not a sentence the page greps.** `run_tail` returns
+  `OutOfMemory` (`kind` gpu or ram, `phase`, step, placement, mode), `oom_json`
+  finds it through any `.context()`, and it rides to the page as `oom` on a run's
+  `Notice` and on a waiting request's `error_body`. Running out of *system* memory
+  is a SIGKILL with no message — the OOM killer — so `killed_by_system` reads it
+  off the exit status, *after* the cancel check, since our own Stop is a kill too.
+  `running_out_of_memory_is_a_typed_error_with_its_phase` drives a real `sh`
+  child through all of it.
+- **The phase is `run_tail`'s own last progress, not the monitor's**: `end()`
+  clears the monitor before the exit status is known. No step is loading, a step
+  short of the last is drawing, the last step done is the decode — where sd.cpp
+  has already retried in tiles, so the box offers only a smaller size there.
+- **Placement is only set by a run with a prompt** (`-p`). It comes from the
+  command's own `--params-backend`, or from auto-fit's `auto-fit: --backend "…"
+  --params-backend "…"` line (only the parts it moved off the card are listed); an
+  ESRGAN enlarge after a generate must not wipe the generate's. It lands on
+  `Timings::weights`, which is why `Timings` is no longer `Copy`.
+
+On the page `showError(el, msg, oom, opts)` is every sink's: plain text without
+`oom`, the box with it. A button sets a control (the Memory select, or the base
+size for a render from noise) and nothing more; *Try again* is the caller's
+`retry` — `$('go').click()` for a run, the same `escalate`/redraw/edit call with
+the select as it stands for a pass, `startClip` for video. `post()` puts the
+field on the thrown error as `e.oom`; the notice hook passes it as a second
+argument.
+
 ## Close server
 
 `POST /shutdown` (`handle_shutdown`) and `src/shutdown.rs`: the way out of a
@@ -1218,6 +1279,7 @@ resolves the imports itself. `index.html` loads exactly one of them:
 | `gridmark.js` | click-to-mark: the marks, the action table, the buttons, the requests |
 | `source-slot.js` | *Start from*: the source-image slot factory, the upload, drop and paste |
 | `loras.js` | the LoRA picker factory (one instance, on the Image tab) |
+| `memory.js` | `showError`: an error as text, or the out-of-memory box with its ways out |
 | `redraw.js` | the Redraw dialog: the mask, painting, the request, the history list |
 | `refs.js` | the References button and dialog: four `sourceSlot`s, `references()`, `syncRefs` |
 | `outputs.js` | `fetchOutputs`, `outputGrid`, and the Outputs tab |

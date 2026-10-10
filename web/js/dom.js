@@ -28,6 +28,9 @@ export async function post(path, payload) {
   if (!resp.ok || data.error) {
     const err = new Error(data.error || ('HTTP ' + resp.status));
     err.status = resp.status;
+    // A pass that ran out of memory says so in a typed field (`sd::oom_json`),
+    // which `memory.js` turns into the ways out.
+    err.oom = data.oom ?? null;
     throw err;
   }
   return data;

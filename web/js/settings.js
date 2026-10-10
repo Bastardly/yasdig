@@ -74,6 +74,9 @@ export const FIELDS = [
   // Here and not with the UNet rows above: every value is right for every
   // family (`config::CACHE_MODES`) and no recipe pins it, so it reaches them all.
   { key: 'cache_mode', from: 'cachemode', kind: 'mirror' },
+  // Where the weights live (`config::MEMORY_MODES`). Global like the cache
+  // mode; a model that needs RAM says so in its own defaults.
+  { key: 'memory', from: 'memory', kind: 'mirror' },
   { key: 'upscale_factor', from: 'upscale', kind: 'num', min: 1, max: 4, step: 0.1 },
   { key: 'upscaler', from: 'upscaler', kind: 'upscaler' },
   // A limit, not a default for any control: so its own label and its own help.

@@ -3,7 +3,8 @@ import { S } from './state.js';
 import { isBusy, onIdle, setBusy, setIdle } from './busy.js';
 import { onJobs, runningJob, soonJobs } from './jobs.js';
 import { zoomPane } from './viewer.js';
-import { refine, takeResult, upscalerOptions, upscalersReady } from './image.js';
+import { oomOptions, refine, takeResult, upscalerOptions, upscalersReady } from './image.js';
+import { showError } from './memory.js';
 import { references } from './refs.js';
 
 // Redraw: paint over part of the Image tab's result and redraw just that part
@@ -338,7 +339,19 @@ function takeStrength() {
   }
 }
 
-const dialogErr = (m) => { $('rperr').textContent = m; };
+const dialogErr = (m, oom = null, opts = {}) => showError($('rperr'), m, oom, opts);
+
+// A pass in this dialog that failed: plain text, or the out-of-memory box
+// whose *Try again* runs `retry` — the same pass, with the Memory select as it
+// stands by then.
+function passErr(e, retry) {
+  const msg = String(e.message || e);
+  if (/cancelled by request/.test(msg)) {
+    $('rperr').textContent = 'Cancelled. The image is as it was.';
+    return;
+  }
+  showError($('rperr'), msg, e.oom, { ...oomOptions(), retry });
+}
 
 // Bigger, with no diffusion. Through the queue like the passes — a model runs
 // on the GPU, an ESRGAN in sd-cli — and back as an ordinary result.
@@ -373,11 +386,11 @@ async function edit() {
   setBusy('rdedit', 'Editing…', 'edit');
   soonJobs();
   try {
-    takeResult(await post('/edit', { image_id: S.imageId, prompt: said, references: references() }));
+    takeResult(await post('/edit', {
+      image_id: S.imageId, prompt: said, references: references(), memory: $('memory').value || null,
+    }));
   } catch (e) {
-    const msg = String(e.message || e);
-    $('rperr').textContent = /cancelled by request/.test(msg)
-      ? 'Cancelled. The image is as it was.' : msg;
+    passErr(e, edit);
   } finally {
     setIdle('rdedit');
     syncButtons();
@@ -415,11 +428,10 @@ async function redraw() {
       prompt: $('rpprompt').value.trim() || null,
       strength: numOr('rpstrength'),
       feather: Number($('rpsoft').value),
+      memory: $('memory').value || null,
     }));
   } catch (e) {
-    const msg = String(e.message || e);
-    $('rperr').textContent = /cancelled by request/.test(msg)
-      ? 'Cancelled. The image is as it was.' : msg;
+    passErr(e, redraw);
   } finally {
     setIdle('redrawgo');
     syncButtons();

@@ -173,6 +173,45 @@ pub const AUTO_SCHEDULER: &str = "auto";
 pub const CACHE_MODES: [&str; 3] = [CACHE_OFF, "spectrum", "adaptive"];
 pub const CACHE_OFF: &str = "off";
 
+/// [`Profile::memory`]'s values: where the weights are kept while a pass runs.
+///
+/// `auto` sends no flag, so sd.cpp's auto-fit places each part on the GPU, then
+/// in RAM, then on disk, by the free memory it measures (`docs/backend.md`).
+/// The other two are an explicit `--params-backend`, and **any** explicit one
+/// turns auto-fit off (`diffusion_engine.cpp:875`) — which is why `auto` must
+/// stay the absence of a flag, and why `--offload-to-cpu` (sd.cpp's alias for
+/// `--params-backend *=cpu`) is never emitted beside it. See [`memory_args`].
+pub const MEMORY_MODES: [&str; 3] = [MEMORY_AUTO, "ram", "disk"];
+pub const MEMORY_AUTO: &str = "auto";
+
+/// The sd-cli arguments for a memory mode.
+///
+/// - `ram`: every weight in system RAM, moved to the card a segment at a time.
+///   For a run out of *GPU* memory: auto-fit reserves a guessed 2 GiB for the
+///   computation and fills the rest of the card with weights, and a 9B at two
+///   megapixels needs more than the guess — with the weights off the card the
+///   whole card is the computation's.
+/// - `disk`: the diffusion model and text encoder re-read from their files as
+///   needed. For a run out of *system* memory. The VAE is small and is left to
+///   its runtime backend, the card.
+///
+/// Empty when `extra_args` already places parameters: a hand-written placement
+/// is the more specific choice, and two `--params-backend` would leave which
+/// one wins to sd-cli's argument order.
+pub fn memory_args(mode: &str, extra_args: &[String]) -> Vec<&'static str> {
+    let placed = extra_args
+        .iter()
+        .any(|a| a == "--params-backend" || a == "--offload-to-cpu" || a.starts_with("--params-backend="));
+    if placed {
+        return Vec::new();
+    }
+    match mode {
+        "ram" => vec!["--params-backend", "cpu"],
+        "disk" => vec!["--params-backend", "diffusion=disk,te=disk"],
+        _ => Vec::new(),
+    }
+}
+
 /// How many reference images one generation may take. Each costs attention
 /// tokens like the image itself, so four is already several images' worth.
 pub const MAX_REFERENCES: usize = 4;
@@ -393,6 +432,11 @@ pub struct Profile {
     /// hi-res never use it — see [`Profile::uncached`]. A sidecar written
     /// before this existed reads as `off`, which is what it ran with.
     pub cache_mode: String,
+    /// Where the weights live while a pass runs: one of [`MEMORY_MODES`]. Every
+    /// pass — refine and hi-res included — runs with it, since the point is
+    /// that the pass fits at all. An old sidecar reads as `auto`, which is what
+    /// it ran with.
+    pub memory: String,
     pub upscale_factor: f32,
     /// What performs that enlarge. `None` is FSR's EASU; a name is an ESRGAN
     /// model under [`Config::upscaler_dir`], extension included — the same
@@ -723,6 +767,14 @@ impl Profile {
         // whitelist every other output stem does.
         if let Some(bad) = self.references.iter().find(|r| !crate::workitems::valid_id(r)) {
             bail!("'{}': '{bad}' is not an output image", self.name);
+        }
+        if !MEMORY_MODES.contains(&self.memory.as_str()) {
+            bail!(
+                "'{}': memory '{}' is not one of {}",
+                self.name,
+                self.memory,
+                MEMORY_MODES.join(", ")
+            );
         }
         if !CACHE_MODES.contains(&self.cache_mode.as_str()) {
             bail!(
@@ -1617,11 +1669,18 @@ pub struct VideoModel {
     /// the models dir.
     #[serde(default)]
     pub lora_dir: Option<PathBuf>,
-    /// `--offload-to-cpu`. Defaults **on**: it is what makes the A14B pair
-    /// possible at all on a 24 GB card, and every example in `docs/wan.md`
-    /// passes it. Turning it off is a speed-for-memory trade, not a fix.
-    #[serde(default = "default_true")]
-    pub offload_to_cpu: bool,
+    /// Where the weights live, one of [`MEMORY_MODES`] — read through
+    /// [`VideoModel::memory_mode`]. Unset means `ram`, which is what this
+    /// used to be as `offload_to_cpu = true`: it is what makes the A14B pair
+    /// possible on a 24 GB card, and every example in `docs/wan.md` passes it.
+    /// `auto` hands placement to sd.cpp's auto-fit, which the old flag turned
+    /// off without saying so.
+    #[serde(default)]
+    pub memory: Option<String>,
+    /// The `[[video]]` key this replaced. Read, so an entry written before
+    /// `memory` keeps its meaning — `false` is `auto` — and never written back.
+    #[serde(default, skip_serializing)]
+    pub offload_to_cpu: Option<bool>,
     /// `--vae-tiling`. Off by default because it costs time, but it is the
     /// *first* thing to turn on if a clip dies in the decode — Wan's VAEs are
     /// the memory-hungry part of the pipeline, not the transformer.
@@ -1703,6 +1762,16 @@ fn default_video_negative() -> String {
 }
 
 impl VideoModel {
+    /// The memory mode this model runs with: `memory` when set, else the old
+    /// `offload_to_cpu` key's meaning, else `ram`.
+    pub fn memory_mode(&self) -> &str {
+        match (&self.memory, self.offload_to_cpu) {
+            (Some(m), _) => m,
+            (None, Some(false)) => MEMORY_AUTO,
+            (None, _) => "ram",
+        }
+    }
+
     /// A model built from a file the scanner identified, carrying its family's
     /// [`recipe`](VideoFamily::recipe) and nothing else.
     ///
@@ -1739,7 +1808,8 @@ impl VideoModel {
             negative_prompt: default_video_negative(),
             loras: Vec::new(),
             lora_dir: None,
-            offload_to_cpu: true,
+            memory: Some("ram".into()),
+            offload_to_cpu: None,
             vae_tiling: false,
             flash_attn: true,
             weight_type: None,
@@ -1788,6 +1858,9 @@ impl VideoModel {
             bail!("a [[video]] entry has an empty name");
         }
         let n = &self.name;
+        if !MEMORY_MODES.contains(&self.memory_mode()) {
+            bail!("video '{n}': memory '{}' is not one of {}", self.memory_mode(), MEMORY_MODES.join(", "));
+        }
         if self.family.is_moe() && self.high_noise_diffusion_model.is_none() {
             bail!(
                 "video '{n}': family {} is a mixture-of-experts pair and needs \
@@ -3179,13 +3252,33 @@ lora_dir = "adapters"
         assert!(p.validate().is_err(), "a negative CFG must be rejected");
     }
 
+    /// `[[video]]` entries written before `memory` keep their meaning: the old
+    /// `offload_to_cpu = false` is `auto`, `true` and absent are `ram`. The old
+    /// key is never written back, and a value outside the three is refused.
+    #[test]
+    fn a_video_entrys_old_offload_key_reads_as_a_memory_mode() {
+        let with = |line: &str| {
+            let cfg = parse(&format!("{MINIMAL}{line}\n")).expect("parses");
+            cfg.video[0].clone()
+        };
+        assert_eq!(with("").memory_mode(), "ram");
+        assert_eq!(with("offload_to_cpu = true").memory_mode(), "ram");
+        assert_eq!(with("offload_to_cpu = false").memory_mode(), "auto");
+        assert_eq!(with("memory = \"disk\"\noffload_to_cpu = true").memory_mode(), "disk");
+        let json = serde_json::to_value(with("offload_to_cpu = false")).unwrap();
+        assert!(json.get("offload_to_cpu").is_none());
+        assert!(with("memory = \"auto\"").validate().is_ok());
+        let err = parse(&format!("{MINIMAL}memory = \"lots\"\n")).unwrap_err();
+        assert!(format!("{err:#}").contains("auto, ram, disk"), "{err:#}");
+    }
+
     #[test]
     fn a_minimal_video_entry_parses_and_inherits() {
         let cfg = parse(MINIMAL).expect("minimal entry should parse");
         let m = &cfg.video[0];
         assert_eq!(m.family, VideoFamily::Wan22Ti2v5b);
         assert_eq!((m.width, m.height, m.frames), (832, 480, 33));
-        assert!(m.offload_to_cpu && m.flash_attn && !m.vae_tiling);
+        assert!(m.memory_mode() == "ram" && m.flash_attn && !m.vae_tiling);
         // The negative prompt is inherited rather than retyped, which is the
         // whole reason it defaults in code.
         assert!(m.negative_prompt.contains("最差质量"));
@@ -3492,6 +3585,26 @@ lora_dir = "adapters"
             "a carried grade is not a starting point — GenResult.start is the one \
              the viewer resets to"
         );
+    }
+
+    /// Both Memory selects offer exactly the server's three, in its order, and
+    /// a value the server refuses can't be picked. `auto` validates; a
+    /// profile with anything else is refused by name.
+    #[test]
+    fn the_memory_selects_offer_the_servers_three() {
+        let page = crate::web::lookup("/index.html").expect("index.html is served");
+        let html = std::str::from_utf8(page.bytes).unwrap();
+        for id in ["memory", "vmemory"] {
+            let open = format!("<select id=\"{id}\">");
+            let start = html.find(&open).unwrap_or_else(|| panic!("#{id} is in the page"));
+            let body = &html[start..start + html[start..].find("</select>").unwrap()];
+            let values: Vec<&str> =
+                body.split("value=\"").skip(1).map(|v| &v[..v.find('"').unwrap()]).collect();
+            assert_eq!(values, MEMORY_MODES, "#{id}");
+        }
+        assert_eq!(Profile::default().memory, MEMORY_AUTO, "an old sidecar ran with no flag");
+        let bad = Profile { memory: "lots".into(), ..Default::default() };
+        assert!(bad.validate().unwrap_err().to_string().contains("memory"));
     }
 
     /// The page's step cache values are the server's three, and a raw sd-cli

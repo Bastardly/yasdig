@@ -203,6 +203,8 @@ function applyWorkItem(item) {
   $('scheduler').value = p.scheduler ?? 'auto';
   // And from before step caching, with none: off is what it ran with.
   $('cachemode').value = p.cache_mode ?? 'off';
+  // From before the knob: no placement flag, which is Auto.
+  $('memory').value = p.memory ?? 'auto';
   $('w').value = p.width;
   $('h').value = p.height;
   // `?? ''` rather than a fallback number: a sidecar written before this box

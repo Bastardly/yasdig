@@ -1,4 +1,5 @@
 import { $ } from './dom.js';
+import { showError } from './memory.js';
 
 // ---------------------------------------------------------------------------
 // Two tabs put an image on screen, and everything around it — the action row,
@@ -75,4 +76,6 @@ export function clearPane(which) {
 // success, so the slot from the last successful render is still there to write
 // into. It is in this module rather than in image.js because it is pane logic —
 // the viewer's sliders report through it too.
-export const escErr = (msg) => { ($('rerr') || P('err')).textContent = msg; };
+// `oom` and `opts` are an out-of-memory failure's, for `memory.js`'s box.
+export const escErr = (msg, oom = null, opts = {}) =>
+  showError($('rerr') || P('err'), msg, oom, opts);
