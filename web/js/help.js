@@ -128,6 +128,26 @@ export const TOPICS = [
       ], false)}`,
   },
   {
+    id: 'references',
+    title: 'References',
+    html: `
+      <h2>References</h2>
+      <p>Pictures the model looks at while it draws, so it can keep a person, a
+      piece of clothing or a place from your own images. With a model that takes
+      them — <b>Flux.2 Klein</b> for now — a <b>References</b> button appears in
+      the Generation section. Pick up to four images there (Choose, Upload, drag
+      one in, or paste), then name them in the prompt by number:</p>
+      <p><i>"the woman from image 1 wearing the jacket from image 2, walking
+      through a market"</i></p>
+      <p>Each reference costs about as much as the image itself, so four make a
+      generation noticeably slower; large photos are shrunk to the model\u2019s size
+      first. The picks stay when you switch to a model that doesn\u2019t use them,
+      and come back when you switch back. Reopening a work item puts its
+      references back in their slots.</p>
+      <p>To change an image you already have, use <b>Edit</b> in the Refine dialog:
+      it uses the image itself as reference 1.</p>`,
+  },
+  {
     id: 'redraw',
     title: 'Refine',
     html: `
@@ -167,6 +187,16 @@ export const TOPICS = [
         ['0.8', 'Replaces what was there, matched to its surroundings.'],
         ['0.9–0.95', 'Starts the area over. For removing or swapping an object.'],
       ])}
+      <h3>Editing</h3>
+      <p>With a Flux.2 Klein image, <b>Edit</b> changes the whole picture by
+      instruction, with no painting: type what to change — "make it night",
+      "remove the hat", "turn the jacket red" — and press Edit. The image goes to
+      the model as reference 1, so it keeps the picture and changes what you
+      asked. Pictures picked under <i>References</i> go along as image 2 onwards.
+      It is a History step like any other, so Compare shows what changed and
+      Ctrl+Z takes it back. It draws at the model\u2019s own size (1024 for Klein)
+      and scales up to fit, so on a large image a <b>Refine image</b> afterwards
+      brings the fine detail back.</p>
       <h3>Comparing</h3>
       <p><b>Compare</b> (or <b>C</b>) shows an earlier step on the left and the
       image now on the right, split by a line you drag — or click to move it. Pick

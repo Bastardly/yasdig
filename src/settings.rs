@@ -472,6 +472,9 @@ impl Settings {
             // Request-only, like everywhere else a profile is built: a LoRA is
             // reached for per picture, so there is no key for one here.
             loras: Vec::new(),
+            // Request-only too, and for the same reason: references are picked
+            // per picture.
+            references: Vec::new(),
             // Identity, like `model` above: the registry fills these from what
             // the file is. SDXL and bundled is what a profile with no file
             // behind it has always meant.

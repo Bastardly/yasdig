@@ -458,6 +458,15 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   color: var(--text); border: var(--line); border-radius: var(--r-lg);
 }
 #jobsdlg::backdrop { background: var(--scrim-soft); }
+/* References: the Jobs dialog's box, two slots a row. */
+#refsdlg {
+  width: min(640px, 92vw); padding: 0; border: var(--line); border-radius: var(--r-lg);
+  background: var(--ink-700); color: var(--text);
+}
+#refsdlg::backdrop { background: var(--scrim-soft); }
+.refslots { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); margin-top: var(--sp-3); }
+.refnum { color: var(--text-dim); }
+#refsopen { margin-top: var(--sp-3); }
 .jobsbox { padding: var(--sp-4); }
 .joblist { list-style: none; margin: var(--sp-3) 0 0; padding: 0; }
 .jobrow {
@@ -556,7 +565,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .rdrow input { width: 90px; }
 .redrawtools { display: flex; gap: var(--sp-2); margin: var(--sp-3) 0; }
 .redrawtools .btn { flex: 1; }
-#rdcancel { margin-top: var(--sp-2); }
+#rdcancel, #rdedit { margin-top: var(--sp-2); }
 .rdupscale { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
 .rdupscale select { min-width: 0; }
 .rdupscale #rdfactor { flex: 0 0 auto; width: auto; }

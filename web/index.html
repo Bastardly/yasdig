@@ -78,6 +78,25 @@
          what is inside (`syncSummaries` in image.js), so folding one hides
          nothing — the rule the Models fold set. Open or folded is remembered
          per browser, per fold. -->
+    <!-- First, because it is what you reach for most: Generation grew tall,
+         and below it the prompt was pushed off the screen. -->
+    <details id="fold-prompt" class="fold" open>
+      <summary>Prompts <span class="foldstate" id="sum-prompt"></span></summary>
+      <label for="prompt">Prompt</label>
+      <prompt-box>
+        <!-- Empty, and filled from user/settings.toml once `/settings` answers.
+             The default used to be written here twice, which meant the one place
+             you could change it was this file. -->
+        <textarea id="prompt" placeholder="a lovely fluffy crab, cinematic lighting, sharp, in focus"></textarea>
+      </prompt-box>
+
+      <label for="negative">Negative prompt (optional)</label>
+      <prompt-box>
+        <input id="negative" placeholder="blurry, low quality">
+      </prompt-box>
+      <p class="sub" id="negnote" hidden>No negative prompt at CFG 1 — the model ignores it. Raise CFG to use one.</p>
+    </details>
+
     <details id="fold-gen" class="fold" open>
       <summary>Generation <span class="foldstate" id="sum-gen"></span></summary>
       <!-- A base size describes a txt2img: a source brings its own size. -->
@@ -192,6 +211,10 @@
       <div class="checks">
         <label><input type="checkbox" id="autorun"> Keep going until stopped</label>
       </div>
+      <!-- Pictures the model looks at while it draws ("the person from image 1").
+           Shown only for a model that takes them — the server says which
+           (`references` on /models). The picks live in #refsdlg (refs.js). -->
+      <button type="button" id="refsopen" class="btn btn-block" hidden>References…</button>
     </details>
 
     <details id="fold-after" class="fold" open>
@@ -226,22 +249,6 @@
       </div>
     </details>
 
-    <details id="fold-prompt" class="fold" open>
-      <summary>Prompts <span class="foldstate" id="sum-prompt"></span></summary>
-      <label for="prompt">Prompt</label>
-      <prompt-box>
-        <!-- Empty, and filled from user/settings.toml once `/settings` answers.
-             The default used to be written here twice, which meant the one place
-             you could change it was this file. -->
-        <textarea id="prompt" placeholder="a lovely fluffy crab, cinematic lighting, sharp, in focus"></textarea>
-      </prompt-box>
-
-      <label for="negative">Negative prompt (optional)</label>
-      <prompt-box>
-        <input id="negative" placeholder="blurry, low quality">
-      </prompt-box>
-      <p class="sub" id="negnote" hidden>No negative prompt at CFG 1 — the model ignores it. Raise CFG to use one.</p>
-    </details>
 
     <!-- Where the picture begins: noise, or an image. The one thing that used to
          be a whole second tab — a source image plus the same prompt, model, LoRAs
@@ -807,6 +814,10 @@
       <button type="button" id="rpclear" class="btn">Clear</button>
     </div>
     <button type="button" id="redrawgo" class="btn btn-run btn-block" disabled>Refine image</button>
+    <!-- Change the whole picture by instruction, with no painting: the image
+         itself goes to the model as reference 1, the prompt says what to change.
+         Only for a model that takes references (`can_edit`). -->
+    <button type="button" id="rdedit" class="btn btn-run btn-block" hidden>Edit</button>
     <button type="button" id="rdcancel" class="btn btn-danger btn-block" hidden>Cancel generation</button>
     <!-- Upscale: bigger with no diffusion — FSR or an upscaler model. Unlike
          Hi-res it re-draws nothing, so it can't undo a refine: last for a bigger
@@ -853,6 +864,75 @@
     <span id="rdtagnow" class="rdtag rdtag-now" hidden></span>
   </div>
   <button type="button" id="rdclose" class="lbclose" aria-label="Close Redraw">&times;</button>
+</dialog>
+<!-- Reference images for the next generation: up to four, numbered as the
+     prompt names them. Each is a source slot (pick, upload, drop); a paste goes
+     to the first empty one (refs.js). Modal like the Jobs dialog. -->
+<dialog id="refsdlg" aria-labelledby="refstitle">
+  <div class="jobsbox">
+    <div class="wihead">
+      <b id="refstitle">References</b>
+      <button type="button" id="refsdone" class="btn">Done</button>
+    </div>
+    <p class="sub">Pictures the model looks at while it draws. Refer to them in the
+      prompt as image 1, image 2 — "the person from image 1 wearing the jacket from
+      image 2". Each one costs about as much as the image itself.</p>
+    <div class="refslots">
+      <div id="ref1drop" class="drop refslot">
+        <div class="picked">
+          <b class="refnum">1</b>
+          <img id="ref1thumb" alt="" hidden>
+          <span id="ref1name" class="sub"></span>
+          <div class="btnrow">
+            <button type="button" id="ref1pick" class="btn">Choose…</button>
+            <button type="button" id="ref1upload" class="btn">Upload…</button>
+            <button type="button" id="ref1clear" class="btn" hidden>Clear</button>
+          </div>
+        </div>
+        <input type="file" id="ref1file" accept="image/*" hidden>
+      </div>
+      <div id="ref2drop" class="drop refslot">
+        <div class="picked">
+          <b class="refnum">2</b>
+          <img id="ref2thumb" alt="" hidden>
+          <span id="ref2name" class="sub"></span>
+          <div class="btnrow">
+            <button type="button" id="ref2pick" class="btn">Choose…</button>
+            <button type="button" id="ref2upload" class="btn">Upload…</button>
+            <button type="button" id="ref2clear" class="btn" hidden>Clear</button>
+          </div>
+        </div>
+        <input type="file" id="ref2file" accept="image/*" hidden>
+      </div>
+      <div id="ref3drop" class="drop refslot">
+        <div class="picked">
+          <b class="refnum">3</b>
+          <img id="ref3thumb" alt="" hidden>
+          <span id="ref3name" class="sub"></span>
+          <div class="btnrow">
+            <button type="button" id="ref3pick" class="btn">Choose…</button>
+            <button type="button" id="ref3upload" class="btn">Upload…</button>
+            <button type="button" id="ref3clear" class="btn" hidden>Clear</button>
+          </div>
+        </div>
+        <input type="file" id="ref3file" accept="image/*" hidden>
+      </div>
+      <div id="ref4drop" class="drop refslot">
+        <div class="picked">
+          <b class="refnum">4</b>
+          <img id="ref4thumb" alt="" hidden>
+          <span id="ref4name" class="sub"></span>
+          <div class="btnrow">
+            <button type="button" id="ref4pick" class="btn">Choose…</button>
+            <button type="button" id="ref4upload" class="btn">Upload…</button>
+            <button type="button" id="ref4clear" class="btn" hidden>Clear</button>
+          </div>
+        </div>
+        <input type="file" id="ref4file" accept="image/*" hidden>
+      </div>
+    </div>
+    <div id="refserr" class="err"></div>
+  </div>
 </dialog>
 <!-- The job queue. Modal, so nothing behind it takes a click while it is up;
      a click on the backdrop closes it (`jobs.js`), and so does Escape. The

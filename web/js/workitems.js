@@ -3,6 +3,7 @@ import { S } from './state.js';
 import { imageLoras, imageSource, models, render, setParts, setUpscaler, syncCfgPlaceholders,
          syncOutSize, syncParts } from './image.js';
 import { gridMarks } from './gridmark.js';
+import { setReferences } from './refs.js';
 
 // The last listing. It carries each item's full settings, so opening one needs
 // no second request.
@@ -230,6 +231,9 @@ function applyWorkItem(item) {
   // says — but a picker that disagreed would send the wrong set on the next
   // Generate, which is the same trap the boxes above are in.
   imageLoras.set(p.loras ?? []);
+  // The pictures it was drawn with, back in their numbered slots. A sidecar
+  // from before references existed has none, which is what it ran with.
+  setReferences(p.references ?? []);
   // The source pass's strength, and the source itself. Set either way: reopening an
   // image made from noise clears the slot, because what made it is "nothing",
   // and leaving a source picked from before would turn the next Generate into

@@ -44,6 +44,9 @@ pub enum Kind {
     /// Enlarge the image in hand with FSR or an upscaler model, no diffusion.
     /// One pass, like a Refine.
     Upscale,
+    /// Change the whole image by instruction, the image itself the first
+    /// reference. One pass.
+    Edit,
     Video,
     Enlarge,
     Convert,
@@ -551,6 +554,8 @@ mod tests {
     fn a_redraw_is_indivisible_and_named_on_the_wire() {
         assert!(!Kind::Redraw.is_run());
         assert!(!Kind::Upscale.is_run());
+        assert!(!Kind::Edit.is_run());
+        assert_eq!(serde_json::to_string(&Kind::Edit).unwrap(), "\"edit\"");
         assert_eq!(serde_json::to_string(&Kind::Upscale).unwrap(), "\"upscale\"");
         assert_eq!(serde_json::to_string(&Kind::Redraw).unwrap(), "\"redraw\"");
         let q = Queue::new();

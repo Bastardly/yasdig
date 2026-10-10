@@ -286,8 +286,8 @@ sidecar records paths, the wire carries names.
 
 ## The Image tab's folds
 
-Below the run panel, the controls column is all `<details class="fold">`: Generation,
-After each generation, Prompts, Image to image, Models (LoRAs included — they only
+Below the run panel, the controls column is all `<details class="fold">`: Prompts,
+Generation, After each generation, Image to image, Models (LoRAs included — they only
 fit the family they were trained on, so they sit with the model), Hi-res pass, Refine
 pass. *Save as defaults* and the seed stay outside them: the seed is reached for between
 renders (pinned from a result, reset to vary it), so it stays beside the button. Images
@@ -924,6 +924,44 @@ a sidecar. Six things break silently:
   redraw of the dialog from refetching, and an epoch drops an answer a newer
   request overtook.
 
+## References
+
+Pictures the model looks at while it draws — sd-cli's `-r`, on a family that takes
+them (`ImageFamily::takes_references`: the Flux.2 Klein pair, natively). On the page
+they are the generation's, not a fold's: a **References** button in the Generation
+fold, shown only for such a model (`references` on `/models`), opening `#refsdlg`
+with four `sourceSlot`s (`web/js/refs.js`). `Profile.references` holds the output
+stems, request-only like `loras` (built empty by `as_profile`, kept in the sidecar,
+restored by `applyWorkItem`). **Edit** in the Refine dialog (`Engine::edit`,
+`POST /edit`, `Kind::Edit`) is the same plumbing pointed at the image in hand: the
+image itself as reference 1, the dialog's prompt as the instruction, run at the
+image's shape **at the model's base size, never bigger**, and resized back. It was
+capped at `hires_max_side` first, and a 2048 image (any generate's 2× Output
+upscale) ran Klein 9B out of memory: an edit costs the render's tokens plus the
+reference's.
+
+Five things break silently:
+
+- **`-r` is in `txt2img_cmd` only, never `base_cmd`.** Every img2img pass shares
+  `base_cmd`, and a refine or hi-res handed the references would redraw toward them
+  instead of finishing the picture. `references_go_to_txt2img_and_nowhere_else`
+  pins it with a profile that *has* references.
+- **They are copied into scratch and fitted, never adopted** (`stage_reference`):
+  invariant 8, and each reference costs attention tokens like the image itself, so
+  a phone photo is shrunk to the model's size first.
+- **The family gate is the server's, served.** `Profile::validate` refuses
+  references on a family that doesn't take them, past `MAX_REFERENCES` (4), or
+  under a name `valid_id` refuses; the page only shows or hides the button from
+  `/models`. A silent `-r` on SDXL would be ignored by sd-cli, the image made
+  without what was asked for.
+- **`references` is sent whole, `[]` included, to a model that takes them — and
+  not at all otherwise.** Whole, for `loras`' reason (the dialog is the complete
+  answer). Not at all, so picks wait in the dialog across a switch to SDXL rather
+  than being refused by it.
+- **Each slot's own paste is off** (`sourceSlot`'s `paste: false`), and every
+  slot ignores a paste while a dialog is open: four slots plus *Start from* would
+  otherwise all take one paste. The dialog routes it to the first empty slot.
+
 ## Step caching
 
 `Profile::cache_mode`, sd-cli's `--cache-mode` (`docs/caching.md` in the clone), on the
@@ -1124,6 +1162,7 @@ resolves the imports itself. `index.html` loads exactly one of them:
 | `source-slot.js` | *Start from*: the source-image slot factory, the upload, drop and paste |
 | `loras.js` | the LoRA picker factory (one instance, on the Image tab) |
 | `redraw.js` | the Redraw dialog: the mask, painting, the request, the history list |
+| `refs.js` | the References button and dialog: four `sourceSlot`s, `references()`, `syncRefs` |
 | `outputs.js` | `fetchOutputs`, `outputGrid`, and the Outputs tab |
 | `video.js` | the Video tab: models, generate, the clip grid, the first frame (a `sourceSlot`) |
 | `player.js` | the canvas frame player and `renderClip` |

@@ -4,6 +4,7 @@ import { isBusy, onIdle, setBusy, setIdle } from './busy.js';
 import { onJobs, runningJob, soonJobs } from './jobs.js';
 import { zoomPane } from './viewer.js';
 import { refine, takeResult, upscalerOptions, upscalersReady } from './image.js';
+import { references } from './refs.js';
 
 // Redraw: paint over part of the Image tab's result and redraw just that part
 // (`POST /redraw`, `Engine::redraw`), in a dialog of its own — the viewer's
@@ -266,7 +267,7 @@ function drawCompare() {
 // Whether a pass on some image is running. The history is locked meanwhile: a
 // step back and a pass that lands afterwards would disagree about which state
 // is current, and the pass would win without saying so.
-const PASSES = ['refine', 'hires', 'redraw', 'upscale'];
+const PASSES = ['refine', 'hires', 'redraw', 'upscale', 'edit'];
 const passRunning = () => PASSES.includes(runningJob()?.kind);
 
 // What the dialog's buttons say and allow, from the mask and the result on
@@ -282,6 +283,15 @@ function syncButtons() {
     $('redrawgo').disabled = !live || (!painted && !shown.can_refine);
     $('redrawgo').title = !painted && live && !shown.can_refine
       ? 'This model has no refine pass (Refine steps is 0)' : '';
+  }
+  // Edit: only for a model that takes references (the image itself is the
+  // first), whole-image like Upscale, and it needs an instruction to follow.
+  $('rdedit').hidden = !(live && shown.can_edit);
+  if (!isBusy('rdedit')) {
+    const said = $('rpprompt').value.trim();
+    $('rdedit').disabled = !live || painted || !said;
+    $('rdedit').title = painted ? 'Clear the mask to edit the whole image'
+      : !said ? 'Type what to change in the prompt box' : '';
   }
   // Upscale is whole-image and changes the size the mask was painted at, so it
   // waits while something is painted, as a refine of the whole image would.
@@ -349,6 +359,27 @@ async function upscale() {
       ? 'Cancelled. The image is as it was.' : msg;
   } finally {
     setIdle('rdupscale');
+    syncButtons();
+  }
+}
+
+// Change the whole picture by instruction: the image itself is reference 1 on
+// the server, and any picks in the References dialog follow it — so the prompt
+// names those "image 2" onwards.
+async function edit() {
+  const said = $('rpprompt').value.trim();
+  if (S.imageId === null || painted || !said) return;
+  $('rperr').textContent = '';
+  setBusy('rdedit', 'Editing…', 'edit');
+  soonJobs();
+  try {
+    takeResult(await post('/edit', { image_id: S.imageId, prompt: said, references: references() }));
+  } catch (e) {
+    const msg = String(e.message || e);
+    $('rperr').textContent = /cancelled by request/.test(msg)
+      ? 'Cancelled. The image is as it was.' : msg;
+  } finally {
+    setIdle('rdedit');
     syncButtons();
   }
 }
@@ -515,6 +546,9 @@ export function initRedraw() {
   $('redrawgo').addEventListener('click', () => (painted ? redraw() : refineImage()));
   $('rpstrength').addEventListener('input', takeStrength);
   $('rdupscale').addEventListener('click', upscale);
+  $('rdedit').addEventListener('click', edit);
+  // Edit waits for an instruction; the button follows the box as it's typed.
+  $('rpprompt').addEventListener('input', syncButtons);
   $('rdfactor').addEventListener('change', syncButtons);
   // The fold's strength or prompt edited with the dialog shut: picked up on
   // the next open, since `syncStrength` only re-reads on a switch.

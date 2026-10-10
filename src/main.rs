@@ -26,6 +26,8 @@
 //!   POST /refine      -> {image_id, ...overrides}   img2img in place, no rescale
 //!   POST /redraw     -> {image_id, mask, prompt?, strength?}  redraw the
 //!                        painted part; `mask` is a base64 PNG, white = redraw
+//!   POST /edit        -> {image_id, prompt, references?}  change the image by
+//!                        instruction, the image itself as reference 1
 //!   POST /upscale     -> {image_id, factor, upscaler?}  enlarge with FSR or an
 //!                        upscaler model, no diffusion; a history step
 //!   POST /history/goto -> {image_id, index}  step back (or forward) to an
@@ -188,6 +190,9 @@ enum Work {
     /// Redraw the painted part of a retained image (`Engine::redraw`). Pinned
     /// while it waits, like the two above.
     Redraw { id: u64, req: pipeline::RedrawRequest },
+    /// Change a retained image by instruction (`Engine::edit`). Pinned while
+    /// it waits, like the passes above.
+    Edit { id: u64, req: pipeline::EditRequest },
     /// Enlarge a retained image with no diffusion (`Engine::upscale`). Pinned
     /// while it waits, like the passes above.
     Upscale {
@@ -519,6 +524,11 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
             lock(&engine.retained()).unpin(id);
             queue.finish(t.id, r);
         }
+        Work::Edit { id, req } => {
+            let r = engine.edit(id, &req).map(|r| latest(queue, &r));
+            lock(&engine.retained()).unpin(id);
+            queue.finish(t.id, r);
+        }
         Work::Upscale { id, factor, upscaler } => {
             let r = engine.upscale(id, factor, upscaler).map(|r| latest(queue, &r));
             lock(&engine.retained()).unpin(id);
@@ -679,6 +689,7 @@ fn handle_conn(
         ("POST", "/hires") => handle_hires(&mut conn, lanes, &req.body),
         ("POST", "/redraw") => handle_redraw(&mut conn, lanes, &req.body),
         ("POST", "/upscale") => handle_upscale(&mut conn, lanes, &req.body),
+        ("POST", "/edit") => handle_edit(&mut conn, lanes, &req.body),
         ("POST", "/history/goto") => handle_goto(&mut conn, lanes, &req.body),
         ("POST", "/history/view") => handle_view_step(&mut conn, lanes, &req.body),
         // A history step's thumbnail. Off the queue like every thumbnail; both
@@ -1683,6 +1694,10 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         /// the other and never a merge.
         #[serde(default)]
         loras: Option<Vec<LoraRef>>,
+        /// Reference images (output stems), in the order the prompt names
+        /// them. Always sent for a family that takes them; `[]` is none.
+        #[serde(default)]
+        references: Option<Vec<String>>,
         /// See `GenRequest::parts`. A `null` inside the map is kept as `None`
         /// — it means "empty this slot" — so no `double_option` is needed.
         #[serde(default)]
@@ -1743,6 +1758,7 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         sharpness: dto.sharpness,
         clarity: dto.clarity,
         loras: dto.loras,
+        references: dto.references,
         parts: dto.parts,
     };
 
@@ -2152,6 +2168,26 @@ impl RedrawDto {
     }
 }
 
+/// `POST /edit {image_id, prompt, references?}`: change the image by
+/// instruction, the image itself as reference 1. Queued and waited on like
+/// `/refine`.
+fn handle_edit(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+        #[serde(default)]
+        prompt: Option<String>,
+        #[serde(default)]
+        references: Vec<String>,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else {
+        return Ok(());
+    };
+    let id = dto.image_id;
+    let req = pipeline::EditRequest { prompt: dto.prompt, references: dto.references };
+    escalate(conn, lanes, jobs::Kind::Edit, id, None, Work::Edit { id, req })
+}
+
 /// `POST /upscale {image_id, factor, upscaler?}`: enlarge the image in hand
 /// with FSR (`upscaler` absent, `null` or empty) or a model from the upscalers
 /// folder. Queued and waited on like `/refine`; no diffusion.
@@ -2402,7 +2438,8 @@ fn handle_stop_job(
             if let Work::Refine { id, .. }
             | Work::Hires { id, .. }
             | Work::Redraw { id, .. }
-            | Work::Upscale { id, .. } = work
+            | Work::Upscale { id, .. }
+            | Work::Edit { id, .. } = work
             {
                 lock(&lanes.retained).unpin(id);
             }
@@ -2525,7 +2562,7 @@ fn result_json(res: &GenResult) -> String {
     let start = serde_json::to_string(&res.start).unwrap_or_else(|_| "{}".to_string());
     format!(
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
-         \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\
+         \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\"can_edit\":{},\
          \"filters\":{},\"filters_start\":{},\"prompt\":{},\
          \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{}}}}}",
         b64,
@@ -2546,6 +2583,7 @@ fn result_json(res: &GenResult) -> String {
             .unwrap_or_else(|| "null".to_string()),
         res.can_refine,
         res.can_hires,
+        res.can_edit,
         filters,
         start,
         // What was actually conditioned, so the page can show a `{variable}`
@@ -2639,7 +2677,7 @@ fn build_models_json(cfg: &Config) -> String {
                 .unwrap_or_else(|_| "[]".into());
             format!(
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
-                 \"family\":{},\"family_label\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
+                 \"family\":{},\"family_label\":{},\"references\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
                  \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\"scheduler\":{},\"cache_mode\":{},\
                  \"upscale_factor\":{},\"upscaler\":{},\
@@ -2653,6 +2691,9 @@ fn build_models_json(cfg: &Config) -> String {
                 p.exists,
                 json_str(p.family.as_str()),
                 json_str(p.family.label()),
+                // Whether the References button shows: the server's rule,
+                // served, so the page holds no copy of it.
+                p.family.takes_references(),
                 tuned.model.contains_key(&p.name) || tuned.parts.contains_key(&p.name),
                 missing.join(","),
                 parts,

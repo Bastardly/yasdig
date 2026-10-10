@@ -277,6 +277,10 @@ pub struct GenRequest {
     /// Retained on the profile, so a later refine or hi-res runs with the same
     /// adapters. See [`Profile::loras`].
     pub loras: Option<Vec<LoraRef>>,
+    /// Reference images, as output stems, for a family that takes them. The
+    /// same whole-list rule as `loras`: `Some([])` is "none", `None` keeps the
+    /// profile's. See [`Profile::references`].
+    pub references: Option<Vec<String>>,
     /// The separate files picked in the *Models* fold, slot key to a name
     /// relative to the models dir. An absent slot keeps the model's; `null`
     /// empties it, which is only allowed on a bundled checkpoint (its own copy
@@ -453,6 +457,17 @@ pub struct EscalateRequest {
     pub hires_prompt: Option<String>,
 }
 
+/// What an Edit asks for: an instruction, and any further reference images.
+#[derive(Debug, Clone, Default)]
+pub struct EditRequest {
+    /// What to change — "make it night", "remove the hat". Required: an edit
+    /// with no instruction is a re-roll of the same picture.
+    pub prompt: Option<String>,
+    /// Further references (output stems) after the image itself, which is
+    /// always reference 1 — so the prompt names these "image 2" onwards.
+    pub references: Vec<String>,
+}
+
 /// What a Redraw asks for: which pixels, and optionally what to put there.
 #[derive(Debug, Clone)]
 pub struct RedrawRequest {
@@ -545,6 +560,9 @@ pub struct GenResult {
     pub work_id: Option<String>,
     pub can_refine: bool,
     pub can_hires: bool,
+    /// Whether the Refine dialog's Edit applies: the model that made this step
+    /// takes reference images, so the image itself can be one.
+    pub can_edit: bool,
     /// The display filters currently applied, so the UI reflects what the image
     /// actually has rather than what its controls last said.
     pub filters: Filters,
@@ -1090,6 +1108,9 @@ impl Engine {
         if let Some(v) = &req.loras {
             profile.loras = v.clone();
         }
+        if let Some(v) = &req.references {
+            profile.references = v.clone();
+        }
         if let Some(parts) = &req.parts {
             self.cfg.apply_parts(&mut profile, parts)?;
         }
@@ -1148,9 +1169,22 @@ impl Engine {
         let (ow, oh) = crate::fsr::out_size((tpl.width, tpl.height), tpl.upscale_factor);
         self.check_side(ow, oh)?;
 
+        // The references, copied into scratch — never adopted, invariant 8 —
+        // and shrunk to the model's own size when bigger: each costs attention
+        // tokens like the image does, so a phone photo would be several images'
+        // worth of memory and time. Resolved before the render, so a deleted
+        // output fails now rather than after it.
+        let mut refs = Vec::new();
+        for (i, stem) in tpl.references.iter().enumerate() {
+            let src = self.output_source(stem)?;
+            let dst = scratch.path(self.scratch.join(format!("{id}-0-ref{}.png", i + 1)));
+            stage_reference(&src, &dst, tpl.width.max(tpl.height))?;
+            refs.push(dst);
+        }
+
         // 1) Distilled generation at base resolution.
         let t = Instant::now();
-        sd.txt2img(tpl, &prompt, neg, seed, &lowres)?;
+        sd.txt2img(tpl, &prompt, neg, seed, &lowres, &refs)?;
         let gen_ms = t.elapsed().as_millis();
         // Read now: an ESRGAN enlarge below is another sd-cli run, which resets it.
         let (cache_skipped, cache_steps) = self.monitor.cache_skip().unwrap_or_default();
@@ -1916,6 +1950,113 @@ impl Engine {
         Ok(result)
     }
 
+    /// Change the whole picture by instruction ("make it night", "remove the
+    /// hat"), with no painting: a txt2img on the image's own model with **the
+    /// image itself as reference 1**, any further references after it, and the
+    /// instruction as the prompt. A model that takes references reads that as
+    /// "this picture, changed so" — which is what an edit checkpoint is, and
+    /// what Flux.2 Klein does natively.
+    ///
+    /// Run at the image's own shape, its long side capped at `hires_max_side`
+    /// (the size a pass may diffuse at), both axes snapped to the latent grid
+    /// and the result resized back to the image's exact size. The whole
+    /// picture is the result — nothing is composited — so it is a history step
+    /// like any pass, and Compare shows what changed.
+    pub fn edit(&mut self, id: u64, req: &EditRequest) -> Result<GenResult> {
+        let p = lock(&self.retained).get(id, "edit")?;
+        if !p.profile.family.takes_references() {
+            bail!(
+                "Edit needs a model that takes reference images (Flux.2 Klein); this \
+                 image was made with a {} model",
+                p.profile.family.label()
+            );
+        }
+        let instruction = req
+            .prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .context("type what to change — \"make it night\", \"remove the hat\"")?;
+        if req.references.len() + 1 > crate::config::MAX_REFERENCES {
+            bail!(
+                "an edit takes at most {} more references — the image itself is the first",
+                crate::config::MAX_REFERENCES - 1
+            );
+        }
+        if let Some(bad) = req.references.iter().find(|r| !workitems::valid_id(r)) {
+            bail!("'{bad}' is not an output image");
+        }
+        self.cfg.check_loras(&p.profile.loras, p.profile.family)?;
+
+        let step = p.step + 1;
+        let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let seed = p.seed.wrapping_add(step as i64);
+        let vars = self.cfg.settings().variables;
+        let prompt = variables::expand(instruction, &vars, seed)?;
+
+        let mut scratch = Scratch::default();
+        let base = p.profile.width.max(p.profile.height);
+        let mut refs = Vec::new();
+        let first = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-ref1.png")));
+        stage_reference(&p.raw, &first, base)?;
+        refs.push(first);
+        for (i, stem) in req.references.iter().enumerate() {
+            let src = self.output_source(stem)?;
+            let dst = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-ref{}.png", i + 2)));
+            stage_reference(&src, &dst, base)?;
+            refs.push(dst);
+        }
+
+        // The image's own shape at the model's own size — never bigger. An
+        // edit is a txt2img with the image as a reference, so its cost is the
+        // render's tokens *plus* the reference's: at the 2048 a generate's 2×
+        // Output upscale makes, Klein 9B needed ~20k tokens a step and ran out
+        // of memory on a 24 GB card one segment short, at 19 s/it. At the model's
+        // size it is a quarter of that and what the model was trained at; the
+        // result is scaled back to the image's size, and a Refine afterwards
+        // brings a large image's detail back.
+        let long = p.raw_w.max(p.raw_h);
+        let k = long.min(base) as f32 / long as f32;
+        let ew = snap64(((p.raw_w as f32) * k).round() as u32);
+        let eh = snap64(((p.raw_h as f32) * k).round() as u32);
+        let profile = Profile { width: ew, height: eh, ..p.profile.uncached() };
+        let out = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-edit.png")));
+        let t = Instant::now();
+        self.sd().txt2img(&profile, &prompt, p.negative.as_deref(), seed, &out, &refs)?;
+        let gen_ms = t.elapsed().as_millis();
+
+        let t = Instant::now();
+        let img = image::open(&out).with_context(|| format!("reading {}", out.display()))?;
+        let img = if (img.width(), img.height()) == (p.raw_w, p.raw_h) {
+            img
+        } else {
+            img.resize_exact(p.raw_w, p.raw_h, image::imageops::FilterType::Lanczos3)
+        };
+        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
+        img.to_rgb8().save(&raw).with_context(|| format!("writing {}", raw.display()))?;
+        let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let fsr_ms = t.elapsed().as_millis();
+
+        scratch.keep(&raw);
+        scratch.keep(&display);
+        let prev = p.clone();
+        let entry = Pending {
+            raw,
+            raw_w: w,
+            raw_h: h,
+            display,
+            filters,
+            step,
+            ..p
+        };
+        let entry = advance(&prev, entry, step_label("Edit", Some(instruction)));
+        let result = entry.result(id, png, Timings { gen_ms, fsr_ms, ..Default::default() });
+        self.keep(id, entry);
+        Ok(result)
+    }
+
     /// Enlarge the image with no diffusion at all: FSR's EASU, or an upscaler
     /// model (`upscaler` names one under `Config::upscaler_dir`, `None` is
     /// EASU) — the same `enlarge` a generate's first stage uses, pointed at the
@@ -2494,6 +2635,7 @@ impl Pending {
             work_id: self.work_id.clone(),
             can_refine: self.can_refine(),
             can_hires: self.can_hires(),
+            can_edit: self.profile.family.takes_references(),
             filters: self.filters,
             start: Filters::starting_at(self.profile.sharpness, self.profile.clarity),
             prompt: self.prompt.clone(),
@@ -2714,6 +2856,24 @@ fn reduce(src: &Path, dst: &Path, w: u32, h: u32) -> Result<()> {
     img.resize_exact(w, h, image::imageops::FilterType::Lanczos3)
         .save_with_format(dst, image::ImageFormat::Png)
         .with_context(|| format!("writing {}", dst.display()))
+}
+
+/// A reference image, copied into scratch for sd-cli's `-r` — never handed
+/// over in place (invariant 8) — and shrunk to `max_side` when bigger. Each
+/// reference costs attention tokens like the image itself, so an unshrunk
+/// phone photo would be several images' worth of memory and time; one already
+/// small enough is copied byte for byte.
+fn stage_reference(src: &Path, dst: &Path, max_side: u32) -> Result<()> {
+    let img = image::open(src).with_context(|| format!("reading {}", src.display()))?;
+    let (fw, fh) = fit_to((img.width(), img.height()), max_side);
+    if (fw, fh) == (img.width(), img.height()) {
+        std::fs::copy(src, dst).with_context(|| format!("copying {}", src.display()))?;
+    } else {
+        img.resize_exact(fw, fh, image::imageops::FilterType::Lanczos3)
+            .save(dst)
+            .with_context(|| format!("writing {}", dst.display()))?;
+    }
+    Ok(())
 }
 
 /// Round down to a multiple of 64 (never below 64) — SDXL wants clean latent

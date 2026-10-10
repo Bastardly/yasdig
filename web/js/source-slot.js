@@ -107,7 +107,9 @@ function wirePicker() {
 // `tab` is the tab's container id, for the paste guard; `none` is what the name
 // line says with nothing picked; `err` is where a failed upload is reported;
 // `onChange(stem | null)` runs after every change, including a clear.
-export function sourceSlot({ prefix, tab, none, err, onChange = () => {} }) {
+// `paste: false` leaves pasting to the caller — the References dialog has four
+// slots and routes a paste to the first empty one rather than all four.
+export function sourceSlot({ prefix, tab, none, err, onChange = () => {}, paste = true }) {
   const id = (part) => `${prefix}${part}`;
   let stem = null;
 
@@ -170,8 +172,10 @@ export function sourceSlot({ prefix, tab, none, err, onChange = () => {} }) {
     // On the document because there is nothing sensible to focus first, so it
     // checks its own tab is the one showing — two slots, two listeners, at most
     // one of them live — and stays out of the way of pasting into a prompt.
-    document.addEventListener('paste', (e) => {
-      if ($(tab).hidden) return;
+    if (paste) document.addEventListener('paste', (e) => {
+      // Not while a dialog is up: a paste there belongs to the dialog (the
+      // References one routes its own), not to the slot behind it.
+      if ($(tab).hidden || document.querySelector('dialog[open]')) return;
       if (/^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName)) return;
       const file = [...(e.clipboardData?.items || [])]
         .find((i) => i.kind === 'file' && i.type.startsWith('image/'));
@@ -183,5 +187,5 @@ export function sourceSlot({ prefix, tab, none, err, onChange = () => {} }) {
     set(null);
   }
 
-  return { init, set, get: () => stem };
+  return { init, set, take, get: () => stem };
 }

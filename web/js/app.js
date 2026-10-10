@@ -10,6 +10,7 @@ import { $ } from './dom.js';
 import { S, clearPane } from './state.js';
 import { initViewer } from './viewer.js';
 import { initRedraw } from './redraw.js';
+import { initRefs } from './refs.js';
 import { initHints } from './hints.js';
 import { initImage, restoreImage } from './image.js';
 import { initJobs, jobCount } from './jobs.js';
@@ -124,6 +125,8 @@ async function closeServer() {
 initViewer();
 initHints();
 initBusy();
+// Before initImage(): its model list calls syncRefs as soon as it loads.
+initRefs();
 initImage();
 // Before the first render(), which calls syncRedraw — and after initViewer(),
 // whose `zoomPane` it builds its own pane from.

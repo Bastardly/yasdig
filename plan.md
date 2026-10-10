@@ -29,20 +29,24 @@ would give Redraw a **Find faces** button that paints the mask for you. It's a b
 build, and the one that plays most to what makes this project different: nothing
 else in the AMD/Linux space does it without Python.
 
-## 2. Extend the canvas (outpainting)
+## 2. Extend the canvas (outpainting) — parked on `outpaintingV1`
 
-Mostly Redraw machinery: grow the canvas, make the new strip the mask, and redraw
-it so the picture continues. An *Extend ← → ↑ ↓* row in the Redraw dialog, with
-history and the live preview for free. Probably the most fun per hour.
+Built and tried, then parked. What it taught: an ordinary checkpoint (SDXL, Krea 2,
+Klein) at high strength treats a masked strip as a fresh canvas and paints the
+prompt into it — a second subject — however much picture it is shown. A picture-
+heavy crop, a join pass and a background prompt each helped, none enough. The real
+fix is a model built for it: **Flux.1 Fill** or an **SDXL inpainting** checkpoint,
+plus a model picker for the pass. The branch has the working machinery to put one
+behind.
 
-## 3. Image editing in the Redraw dialog
+## 3. Image editing in the Redraw dialog — Klein done 2026-10-08
 
 Already the next planned feature (Kontext, Qwen-Image-Edit, Klein / Krea 2 edit
 LoRAs). The Redraw dialog is its natural home: prompt, image, live preview and
 history are all there. "Make it night" or "remove the hat" with no painting, and
 undo covers edits too.
 
-## 3b. Reference images ("put this person / this jacket in the picture")
+## 3b. Reference images ("put this person / this jacket in the picture") — Klein done 2026-10-08
 
 sd-cli's `-r` / `--ref-image` takes one or more reference images beside the prompt:
 "the woman from image 1 wearing the jacket from image 2, in a market". It's the
@@ -107,5 +111,7 @@ the grid ("crab", "Klein", "detail LoRA") keeps a long archive useful.
 
 ## Order
 
-3c and #4 are done. Next: **#2 outpainting**, then **#3/#3b editing and
-references on Klein**.
+Done: 3c, #4, and #3/#3b on Klein (a References button in Generation; Edit in the
+Refine dialog). Parked: #2 on `outpaintingV1`. Next candidates: Qwen-Image-Edit and
+FLUX.1 Kontext as families (they reuse the reference plumbing), or #5 comparison
+grids.

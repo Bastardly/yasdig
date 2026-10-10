@@ -70,12 +70,34 @@ impl<'a> SdRunner<'a> {
         negative: Option<&str>,
         seed: i64,
         out: &Path,
+        refs: &[PathBuf],
     ) -> Result<()> {
+        let cmd = self.txt2img_cmd(p, prompt, negative, seed, out, refs);
+        self.run(cmd, "txt2img")
+    }
+
+    /// `txt2img`'s command, split out so a test can read it. The reference
+    /// images go here and nowhere else: one `-r` each, in the order the prompt
+    /// names them. `base_cmd` is shared with every img2img pass, and a refine
+    /// handed the references would redraw toward them rather than finish the
+    /// picture it was given.
+    fn txt2img_cmd(
+        &self,
+        p: &Profile,
+        prompt: &str,
+        negative: Option<&str>,
+        seed: i64,
+        out: &Path,
+        refs: &[PathBuf],
+    ) -> Command {
         let mut cmd = self.base_cmd(p, prompt, negative, seed, out, p.cfg_scale);
         cmd.args(["-W", &p.width.to_string()]);
         cmd.args(["-H", &p.height.to_string()]);
         cmd.args(["--steps", &p.steps.to_string()]);
-        self.run(cmd, "txt2img")
+        for r in refs {
+            cmd.args(["-r", &path_str(r)]);
+        }
+        cmd
     }
 
     /// Low-denoise image-to-image. Reads `init`, writes `out`. Drives both the
@@ -607,6 +629,18 @@ impl<'a> SdRunner<'a> {
             if self.monitor.was_cancelled() {
                 bail!("sd-cli {label} {CANCELLED}");
             }
+            // sd.cpp's out-of-memory is a warning a few lines before a generic
+            // "failed": said plainly first, with what to do, the raw tail after.
+            if out_tail.iter().chain(err_tail.iter()).any(|l| is_out_of_memory(l)) {
+                bail!(
+                    "sd-cli {label} ran out of GPU memory. Try a smaller image (or a lower \
+                     Output upscale before it), fewer reference images, or a smaller \
+                     quantization of the model (the Convert tab makes one).\n--- stderr ---\n{}\n\
+                     --- stdout (last {TAIL_LINES} lines) ---\n{}",
+                    joined(&err_tail),
+                    joined(&out_tail),
+                );
+            }
             bail!(
                 "sd-cli {label} exited with {status}\n--- stderr ---\n{}\n--- stdout (last {TAIL_LINES} lines) ---\n{}",
                 joined(&err_tail),
@@ -615,6 +649,16 @@ impl<'a> SdRunner<'a> {
         }
         Ok(err_tail)
     }
+}
+
+/// Whether an sd-cli log line is its way of saying the GPU ran out of memory:
+/// the model manager's "cannot make enough memory available", or ggml-vulkan's
+/// own allocation failure. The run then fails with a generic line, so this is
+/// what tells the person the cause.
+fn is_out_of_memory(line: &str) -> bool {
+    line.contains("cannot make enough memory available")
+        || line.contains("ErrorOutOfDeviceMemory")
+        || line.contains("failed to allocate")
 }
 
 /// What one `vid_gen` pass reads and writes.
@@ -1362,6 +1406,39 @@ binary = "/opt/sd-cli"
         ] {
             assert_eq!(parse_cache_skip(line), None, "{line}");
         }
+    }
+
+    /// The model manager's warning and ggml's allocation failures read as out
+    /// of memory; an ordinary failure line does not.
+    #[test]
+    fn out_of_memory_is_recognised() {
+        assert!(is_out_of_memory(
+            "[WARN   ] model_manager.cpp:1762 - model manager cannot make enough memory available on Vulkan0: need 7441.11 MB"
+        ));
+        assert!(is_out_of_memory("ggml_vulkan: Device memory allocation failed: ErrorOutOfDeviceMemory"));
+        assert!(!is_out_of_memory("[ERROR  ] main.cpp:965  - generate failed"));
+    }
+
+    /// References are `-r`, one each in order, on a txt2img only: the img2img
+    /// passes share `base_cmd`, and a refine must never be handed them.
+    #[test]
+    fn references_go_to_txt2img_and_nowhere_else() {
+        let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
+        let p = Profile {
+            model: PathBuf::from("/models/klein.safetensors"),
+            family: crate::config::ImageFamily::Flux2Klein4b,
+            references: vec!["a".into(), "b".into()],
+            ..Default::default()
+        };
+        let r = SdRunner::new(&cfg);
+        let refs = [PathBuf::from("/s/ref1.png"), PathBuf::from("/s/ref2.png")];
+        let a = argv(&r.txt2img_cmd(&p, "x", None, 1, Path::new("o.png"), &refs));
+        let given: Vec<&str> = a.windows(2).filter(|w| w[0] == "-r").map(|w| w[1].as_str()).collect();
+        assert_eq!(given, ["/s/ref1.png", "/s/ref2.png"]);
+        let none = argv(&r.txt2img_cmd(&p, "x", None, 1, Path::new("o.png"), &[]));
+        assert!(!none.iter().any(|x| x == "-r"));
+        let pass = argv(&r.img2img_cmd(&p, "x", None, 1, Path::new("i.png"), Path::new("o.png"), 0.3, 10, 1.0, false, "x"));
+        assert!(!pass.iter().any(|x| x == "-r"), "the profile's references must not reach a pass");
     }
 
     /// Redraw is img2img plus `--mask` and nothing else — the step floor and

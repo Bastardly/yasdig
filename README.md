@@ -924,6 +924,17 @@ refines to keep every step.
 
 Everything else in `work/` is scratch and is still cleared at startup.
 
+### References
+
+With a model that takes reference images — Flux.2 Klein 4B and 9B for now — a
+**References** button appears in the Generation section. It opens a small dialog with
+four numbered slots (Choose, Upload, drag in or paste); the prompt names them by
+number: *"the woman from image 1 wearing the jacket from image 2, in a market"*. They
+reach sd-cli as `-r`, on the generate only — Refine and Hi-res finish the picture, they
+don't redraw it toward a reference. Large pictures are shrunk to the model's size
+first, since each reference costs about as much as the image. Picks survive switching
+to a model that doesn't use them, and a reopened work item puts its references back.
+
 ### Image to image
 
 The Image tab can start from a picture instead of from noise. The **Image to image**
@@ -1129,6 +1140,14 @@ the picture.
 split by a line you drag; *Compare with* picks the step. Both halves carry the same
 grade and sharpening, and a smaller earlier step is stretched to the same box, so what
 you see is what the pass changed.
+
+**Edit** (Flux.2 Klein images) changes the whole picture by instruction, with no
+painting: type what to change — "make it night", "remove the hat" — and press Edit.
+The image goes to the model as reference 1 and any References picks follow it, so the
+picture is kept and what you asked is changed. It runs at the image's shape at the model's
+own size (1024 for Klein) and is scaled back up — an edit costs the render's tokens
+plus the reference's, and at 2048 that ran Klein 9B out of memory — so a Refine image
+afterwards brings a large image's detail back. A History step like the rest.
 
 Every pass — Refine, Refine area, Hi-res — is a step in the History, with a thumbnail
 each. Click one to go back (or Ctrl+Z / Ctrl+Shift+Z): fixed the fingers, ruined the
@@ -1505,6 +1524,9 @@ needs a Vulkan device and nothing else.
   ```json
   { "prompt": "…", "template": "sdxl-turbo", "negative": null, "seed": -1 }
   ```
+  `references` — output stems, at most 4, for a model that takes reference images
+  (Flux.2 Klein) — are named in the prompt as image 1, image 2; `[]` is none, and a
+  model that doesn't take them refuses any.
   The run itself: `count` images (default 1, at most 1000), or `"loop": true` to keep
   going until stopped; a pinned `seed` advances by one per image. `after` is the
   *After each generation* fold — each pass `null` to skip it, `model` empty or absent
@@ -1636,6 +1658,10 @@ needs a Vulkan device and nothing else.
   image's own, strength 0.5, `feather` — edge softness in image pixels, 0–128 —
   16). Queued ahead of everything not yet running, like `/refine`, and answers in its
   shape, with `timings.redraw_ms`.
+- `POST /edit` — `{ "image_id": 3, "prompt": "make it night", "references": ["…"] }`.
+  Changes the image by instruction on a model that takes references: the image itself
+  is reference 1, `references` (output stems, at most 3) follow it. `prompt` is
+  required. A history step, queued and answered like `/refine`.
 - `POST /upscale` — `{ "image_id": 3, "factor": 2, "upscaler": "4x-UltraSharp.pth" }`.
   Enlarges the retained image with no diffusion: FSR when `upscaler` is absent, `null`
   or empty, otherwise that model from the upscalers dir. `factor` is more than 1 and

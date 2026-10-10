@@ -173,6 +173,10 @@ pub const AUTO_SCHEDULER: &str = "auto";
 pub const CACHE_MODES: [&str; 3] = [CACHE_OFF, "spectrum", "adaptive"];
 pub const CACHE_OFF: &str = "off";
 
+/// How many reference images one generation may take. Each costs attention
+/// tokens like the image itself, so four is already several images' worth.
+pub const MAX_REFERENCES: usize = 4;
+
 /// Every `--scheduler` we pass on, from sd-cli's list
 /// (`src/stable-diffusion.cpp:110`), plus [`AUTO_SCHEDULER`]. Two of its
 /// sixteen are left out: `ltx2` and `logit_normal` are the defaults of LTX-2
@@ -453,6 +457,14 @@ pub struct Profile {
     /// retains and what a sidecar stores, and an image whose record doesn't
     /// name its LoRAs isn't reproducible.
     pub loras: Vec<LoraRef>,
+    /// Reference images this generation was conditioned on, as `work/output/`
+    /// stems in the order the prompt names them ("image 1", "image 2"). Handed
+    /// to sd-cli as `-r` by `txt2img` alone — never `base_cmd`, so a refine or
+    /// hi-res over the result finishes the picture rather than redrawing it
+    /// toward a reference. Request-only like `loras`, for the same reason, and
+    /// on the profile so a sidecar names them and a reopen restores them. Only
+    /// a family that takes them may carry any ([`ImageFamily::takes_references`]).
+    pub references: Vec<String>,
     /// Which architecture `model` is. A sidecar written before families existed
     /// reads as SDXL, which is what every one of them ran.
     pub family: ImageFamily,
@@ -696,6 +708,22 @@ impl Profile {
             }
         }
         check_sampling(&format!("'{}'", self.name), &self.sampler, &self.scheduler, Some(self.family))?;
+        if !self.references.is_empty() && !self.family.takes_references() {
+            bail!(
+                "'{}': a {} model doesn't take reference images — pick a Flux.2 Klein \
+                 model, or clear the references",
+                self.name,
+                self.family.label()
+            );
+        }
+        if self.references.len() > MAX_REFERENCES {
+            bail!("'{}': at most {MAX_REFERENCES} reference images", self.name);
+        }
+        // The stem becomes a path (`output_source`), so it goes through the same
+        // whitelist every other output stem does.
+        if let Some(bad) = self.references.iter().find(|r| !crate::workitems::valid_id(r)) {
+            bail!("'{}': '{bad}' is not an output image", self.name);
+        }
         if !CACHE_MODES.contains(&self.cache_mode.as_str()) {
             bail!(
                 "'{}': step cache '{}' is not one of {}",
@@ -1007,6 +1035,15 @@ impl ImageFamily {
     /// rather than offered and then failing minutes in. Every family listed
     /// today has both; the match stays exhaustive so a new variant has to
     /// decide.
+    /// Whether sd-cli conditions this family on reference images (`-r`). The
+    /// Flux.2 Klein pair do, natively (sd.cpp's `flux2` preset); every other
+    /// runnable family here either has no reference path or needs an edit
+    /// checkpoint or LoRA this build doesn't run yet. Served on `/models`, so
+    /// the page's References button follows it rather than a copy of it.
+    pub fn takes_references(self) -> bool {
+        matches!(self, ImageFamily::Flux2Klein4b | ImageFamily::Flux2Klein9b)
+    }
+
     pub fn runnable(self) -> bool {
         match self {
             ImageFamily::Sd1
@@ -3481,6 +3518,31 @@ lora_dir = "adapters"
         }
         assert!(p("ucache").validate().is_err());
         assert_eq!(Profile::default().cache_mode, CACHE_OFF, "an old sidecar ran uncached");
+    }
+
+    /// Only the Klein pair take reference images, and a profile refuses them
+    /// anywhere else, past four, or under a name that isn't an output stem.
+    #[test]
+    fn references_are_klein_only_four_at_most_and_stems() {
+        for f in ImageFamily::ALL {
+            assert_eq!(
+                f.takes_references(),
+                matches!(f, ImageFamily::Flux2Klein4b | ImageFamily::Flux2Klein9b),
+                "{f:?}"
+            );
+        }
+        let p = |family, refs: &[&str]| Profile {
+            name: "m".into(),
+            model: PathBuf::from("/models/m.safetensors"),
+            family,
+            references: refs.iter().map(|r| r.to_string()).collect(),
+            ..Default::default()
+        };
+        assert!(p(ImageFamily::Flux2Klein4b, &["a-1", "b-2"]).validate().is_ok());
+        assert!(p(ImageFamily::Sdxl, &["a-1"]).validate().is_err());
+        assert!(p(ImageFamily::Flux2Klein9b, &["a", "b", "c", "d", "e"]).validate().is_err());
+        assert!(p(ImageFamily::Flux2Klein4b, &["../etc"]).validate().is_err());
+        assert!(Profile::default().references.is_empty(), "an old sidecar had none");
     }
 
     /// What Refine and Hi-res run on: the same profile with the cache off.

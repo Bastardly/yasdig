@@ -8,6 +8,7 @@ import { loraPicker } from './loras.js';
 import { sourceSlot } from './source-slot.js';
 import { wireHints } from './hints.js';
 import { openRedraw, syncRedraw } from './redraw.js';
+import { onRefsChange, references, refsActive, syncRefs } from './refs.js';
 
 // The checkpoint list the server published. Exported because the work-item
 // grid looks a name up in it; only this module refills it.
@@ -180,6 +181,8 @@ function syncSummaries() {
   // the accent when it is more than one: a folded fold must not hide that the
   // next press starts a batch, or a loop that runs until Stop.
   const n = runTotal();
+  // Counted only where they'll be sent: a model that takes them, no source.
+  const refs = refsActive() && !source ? references().length : 0;
   say('sum-gen', [
     n === Infinity ? 'until stopped' : n > 1 ? `${n} images` : null,
     source ? null : `${$('w').value}×${$('h').value}`,
@@ -187,10 +190,11 @@ function syncSummaries() {
     // Auto is the model's own and says nothing worth the space.
     $('scheduler').value === 'auto' ? null : $('scheduler').value,
     $('cachemode').value === 'off' ? null : `${$('cachemode').value} cache`,
+    refs ? `${refs} ref${refs > 1 ? 's' : ''}` : null,
   ].filter(Boolean).join(' · '));
-  // A step cache trades exactness for time, so it is a departure from the
-  // plain path the summary should not let a folded section hide.
-  $('sum-gen').classList.toggle('on', n > 1 || $('cachemode').value !== 'off');
+  // A step cache trades exactness for time, and references change what is
+  // drawn: departures from the plain path a folded section must not hide.
+  $('sum-gen').classList.toggle('on', n > 1 || $('cachemode').value !== 'off' || refs > 0);
 
   const after = [
     $('opthires').checked ? 'hi-res' : null,
@@ -255,6 +259,8 @@ function syncAdvanced() {
   if (!m) return;
   // Re-greys the LoRA lists against the new model's family.
   imageLoras.refresh();
+  // The References button is the model's to show (`references` on /models).
+  syncRefs(m);
   syncParts();
   $('steps').value = m.steps;
   $('cfg').value = m.cfg_scale;
@@ -963,6 +969,11 @@ function genPayload() {
     // Always sent: `""` is FSR, explicitly, which has to be sayable over a
     // saved default that names a model.
     upscaler: $('upscaler').value,
+    // To a model that takes them, always, `[]` included — the picker is the
+    // whole answer, as for `loras`. To one that doesn't, not at all: the picks
+    // wait in the dialog for a model that does. A pass over a source doesn't
+    // take them (its start image is already the picture it works from).
+    ...(refsActive() ? { references: references() } : {}),
   }];
 }
 
@@ -1010,7 +1021,7 @@ const stoppableRun = () => {
 // an image of a run, or a Refine, Hi-res or Redraw press.
 const cancellable = () => {
   const j = runningJob();
-  return j && (isRunKind(j) || ['refine', 'hires', 'redraw', 'upscale'].includes(j.kind)) ? j : null;
+  return j && (isRunKind(j) || ['refine', 'hires', 'redraw', 'upscale', 'edit'].includes(j.kind)) ? j : null;
 };
 
 // Stop after the image in flight has finished its whole pipeline. The hi-res,
@@ -1076,6 +1087,7 @@ async function saveOutput() {
 
 export function initImage() {
   imageLoras.init();
+  onRefsChange(syncSummaries);
   initFolds();
   $('go').addEventListener('click', startRun);
   $('stop').addEventListener('click', stopRun);
