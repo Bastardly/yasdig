@@ -353,12 +353,20 @@ export const TOPICS = [
       model</i> keeps it), and on the Video tab.</p>
       ${table(['Setting', 'What it does'], [
         ['Auto', 'stable-diffusion.cpp measures free memory and places each part: on the card first, then in RAM, then read from the SSD. The default, and right for anything that fits.'],
-        ['System RAM', 'Every weight waits in RAM and moves to the card a piece at a time, so the whole card is free for the drawing. <b>The fix when a big model runs out of GPU memory.</b> Needs RAM about the size of the model’s files; a little slower.'],
+        ['System RAM', 'Every weight waits in RAM and moves to the card a piece at a time, so the whole card is free for the drawing. <b>The fix when a big model runs out of GPU memory.</b> The text encoder is read from its file, used for the prompt and then let go, so it doesn’t hold RAM while the picture is drawn. Needs RAM about the size of the model; a little slower.'],
         ['Stream from SSD', 'The model and its text encoder are re-read from their files as they’re needed. The least memory of the three — for when RAM is what runs out. Slower. It only reads, so it doesn’t wear the drive.'],
       ], false)}
       <p>Auto guesses how much room the drawing will need and fills the rest of
       the card with weights. A 9B model at two megapixels can need more than
       the guess, which is when System RAM helps.</p>
+
+      <h3>Can the text encoder’s result be kept?</h3>
+      <p>Not between runs. stable-diffusion.cpp can only remember a prompt’s
+      encoding inside one running process, and rustimage starts a fresh one for
+      every pass. What it does instead, in System RAM and Stream from SSD, is
+      let go of the encoder as soon as it has read the prompt — the encoder is
+      the second-largest file in most sets, and it is only needed for the first
+      second or two.</p>
 
       <h3>When a run runs out</h3>
       <p>The error says which memory ran out and when — loading the model,

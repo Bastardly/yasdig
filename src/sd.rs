@@ -600,9 +600,12 @@ impl<'a> SdRunner<'a> {
             .iter()
             .position(|a| a == "--params-backend")
             .and_then(|i| args.get(i + 1).cloned());
+        // By the default part — a bare `cpu` or `*=cpu` is the RAM mode even
+        // with the text encoder released beside it — then by where the model
+        // itself lives.
         let mode = match params.as_deref() {
-            Some("cpu") => "ram",
-            Some(p) if p.contains("disk") => "disk",
+            Some(p) if p.split(',').any(|a| matches!(a.trim(), "cpu" | "*=cpu" | "all=cpu" | "default=cpu")) => "ram",
+            Some(p) if p.split(',').any(|a| a.trim() == "diffusion=disk" || a.trim() == "disk") => "disk",
             Some(_) => "custom",
             None if args.iter().any(|a| a == "--offload-to-cpu") => "ram",
             None => crate::config::MEMORY_AUTO,
@@ -792,32 +795,39 @@ fn parse_auto_fit(line: &str) -> Option<Option<String>> {
 }
 
 /// A `--params-backend` spec in words, or `None` when it puts nothing off the
-/// card. A bare value applies to every part.
+/// card. The default part (a bare value, or `*=`) is "everything" on its own
+/// and "the rest" beside named parts, and comes last: `*=cpu,te=disk` is "text
+/// encoder streamed from the SSD, the rest in system RAM".
 pub fn describe_params(spec: &str) -> Option<String> {
     let place = |v: &str| match v {
         "cpu" => "in system RAM".to_string(),
         "disk" => "streamed from the SSD".to_string(),
         other => format!("on {other}"),
     };
-    let parts: Vec<String> = spec
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|a| match a.split_once('=') {
+    let mut named = Vec::new();
+    let mut default = None;
+    for a in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        match a.split_once('=') {
             Some((k, v)) => {
                 let what = match k.to_ascii_lowercase().as_str() {
-                    "diffusion" | "model" | "unet" | "dit" => "model",
-                    "te" | "clip" | "llm" | "t5xxl" | "cond" => "text encoder",
-                    "vae" | "tae" => "VAE",
-                    "*" | "all" | "default" => "everything",
-                    _ => k,
+                    "*" | "all" | "default" => {
+                        default = Some(place(v));
+                        continue;
+                    }
+                    "diffusion" | "model" | "unet" | "dit" => "model".to_string(),
+                    "te" | "clip" | "llm" | "t5xxl" | "cond" => "text encoder".to_string(),
+                    "vae" | "tae" => "VAE".to_string(),
+                    _ => k.to_string(),
                 };
-                format!("{what} {}", place(v))
+                named.push(format!("{what} {}", place(v)));
             }
-            None => format!("everything {}", place(a)),
-        })
-        .collect();
-    (!parts.is_empty()).then(|| parts.join(", "))
+            None => default = Some(place(a)),
+        }
+    }
+    if let Some(d) = default {
+        named.push(format!("{} {d}", if named.is_empty() { "everything" } else { "the rest" }));
+    }
+    (!named.is_empty()).then(|| named.join(", "))
 }
 
 /// What one `vid_gen` pass reads and writes.
@@ -1295,7 +1305,7 @@ flow_shift = 3.0
         assert_eq!(flag(&a, "--flow-shift"), Some("3"));
         // `ram`, spelled as what sd.cpp turns `--offload-to-cpu` into, and
         // never the alias as well.
-        assert_eq!(flag(&a, "--params-backend"), Some("cpu"));
+        assert_eq!(flag(&a, "--params-backend"), Some("*=cpu,te=disk"));
         assert!(!a.contains(&"--offload-to-cpu".to_string()));
         assert!(a.contains(&"--diffusion-fa".to_string()));
         // Off by default, and the OOM escalation that costs time.
@@ -1617,7 +1627,9 @@ binary = "/opt/sd-cli"
         assert_eq!(count(&auto), 0);
         assert!(!auto.iter().any(|x| x == "--offload-to-cpu" || x == "--auto-fit"));
         let ram = cmd("ram", &[]);
-        assert_eq!((count(&ram), flag(&ram, "--params-backend")), (1, Some("cpu")));
+        // Everything in RAM but the text encoder, which is loaded, used once and
+        // released — held in RAM it would sit there through every step.
+        assert_eq!((count(&ram), flag(&ram, "--params-backend")), (1, Some("*=cpu,te=disk")));
         let disk = cmd("disk", &[]);
         assert_eq!(flag(&disk, "--params-backend"), Some("diffusion=disk,te=disk"));
         assert_eq!(count(&disk), 1);
@@ -1639,6 +1651,10 @@ binary = "/opt/sd-cli"
             Some("text encoder in system RAM, VAE streamed from the SSD")
         );
         assert_eq!(describe_params("cpu").as_deref(), Some("everything in system RAM"));
+        assert_eq!(
+            describe_params("*=cpu,te=disk").as_deref(),
+            Some("text encoder streamed from the SSD, the rest in system RAM")
+        );
         assert_eq!(
             describe_params("diffusion=disk,te=disk").as_deref(),
             Some("model streamed from the SSD, text encoder streamed from the SSD")
@@ -1663,10 +1679,18 @@ binary = "/opt/sd-cli"
             (e, oom)
         };
         // System memory: killed mid-sampling, with no message.
-        let (e, oom) = run("printf '  |=>  | 3/20 - 1.00s/it\\n'; kill -9 $$", &["-p", "x", "--params-backend", "cpu"]);
+        let (e, oom) = run(
+            "printf '  |=>  | 3/20 - 1.00s/it\\n'; kill -9 $$",
+            &["-p", "x", "--params-backend", "*=cpu,te=disk"],
+        );
         let oom = oom.expect("a SIGKILL is the OOM killer");
         assert_eq!((oom.kind, oom.phase, oom.step, oom.steps, oom.mode), ("ram", "drawing", 3, 20, "ram"));
-        assert_eq!(oom.placement.as_deref(), Some("everything in system RAM"));
+        assert_eq!(oom.placement.as_deref(), Some("text encoder streamed from the SSD, the rest in system RAM"));
+        // The SSD mode by where the model lives, and a hand-written spec as custom.
+        let (_, oom) = run("kill -9 $$", &["-p", "x", "--params-backend", "diffusion=disk,te=disk"]);
+        assert_eq!(oom.unwrap().mode, "disk");
+        let (_, oom) = run("kill -9 $$", &["-p", "x", "--params-backend", "te=cpu"]);
+        assert_eq!(oom.unwrap().mode, "custom");
         let json = oom_json(&e).unwrap();
         assert_eq!(json["kind"], "ram");
         assert!(json.get("log").is_none(), "the log rides in the message, not twice");

@@ -784,6 +784,16 @@ Six things break silently:
   off the exit status, *after* the cancel check, since our own Stop is a kill too.
   `running_out_of_memory_is_a_typed_error_with_its_phase` drives a real `sh`
   child through all of it.
+- **`ram` is `*=cpu,te=disk`, not `cpu`.** The text encoder is needed for
+  the first second or two and nothing after; RAM residency would hold it
+  through every step (8.7 GB for Klein 9B's Qwen3-8B on a 30 GB machine), and
+  disk residency loads, uses and releases it — at the price of re-reading the
+  file per pass, which the OS cache mostly answers. `run_tail` reads the mode
+  off the *default* part (`*=cpu`, a bare `cpu`), so the error and the result
+  line still say `ram`. The upstream conditioning cache (`--conditioning-cache-size`,
+  sd.cpp `e6281b6`, newer than our clone) is an in-process LRU, empty in every
+  fresh sd-cli; using it means a long-lived `sd-server`, which keeps the models
+  resident between runs — the opposite trade.
 - **The phase is `run_tail`'s own last progress, not the monitor's**: `end()`
   clears the monitor before the exit status is known. No step is loading, a step
   short of the last is drawing, the last step done is the decode — where sd.cpp
@@ -793,6 +803,12 @@ Six things break silently:
   --params-backend "…"` line (only the parts it moved off the card are listed); an
   ESRGAN enlarge after a generate must not wipe the generate's. It lands on
   `Timings::weights`, which is why `Timings` is no longer `Copy`.
+
+**Reopening a work item or a clip does not restore Memory**, though the sidecar
+records it. It says how a run fits on this machine at this moment, not what the
+picture is made of, and restoring it made a reopened *Stream from SSD* item a
+silent mode switch for every run after — found while chasing an "Auto fails at
+576" that was really the restored mode plus auto-fit's free-memory roll.
 
 On the page `showError(el, msg, oom, opts)` is every sink's: plain text without
 `oom`, the box with it. A button sets a control (the Memory select, or the base

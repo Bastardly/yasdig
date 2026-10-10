@@ -298,9 +298,8 @@ function applyClip(c) {
   $('vsampler').value = v.sampler;
   $('vshift').value = v.flow_shift ?? '';
   $('vtiling').checked = !!v.vae_tiling;
-  // A clip from before `memory` ran with `--offload-to-cpu` unless its entry
-  // said otherwise — which is `ram`.
-  $('vmemory').value = v.memory ?? (v.offload_to_cpu === false ? 'auto' : 'ram');
+  // Memory is not restored, for the image tab's reason: it is how a run fits
+  // on this machine now, not part of the clip.
   $('vmoe').hidden = !(currentVideoModel() || {}).is_moe;
   $('vhsteps').value = v.high_noise_steps ?? '';
   $('vhcfg').value = v.high_noise_cfg_scale ?? '';

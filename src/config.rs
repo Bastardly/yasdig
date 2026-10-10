@@ -190,7 +190,12 @@ pub const MEMORY_AUTO: &str = "auto";
 ///   For a run out of *GPU* memory: auto-fit reserves a guessed 2 GiB for the
 ///   computation and fills the rest of the card with weights, and a 9B at two
 ///   megapixels needs more than the guess — with the weights off the card the
-///   whole card is the computation's.
+///   whole card is the computation's. Except the text encoder, which is
+///   `disk`: it is needed for the first second or two and nothing after, and
+///   disk residency loads, uses and *releases* it (`docs/backend.md`) where RAM
+///   residency would hold it through every step — 8.7 GB for Klein 9B's
+///   Qwen3-8B. The price is re-reading its file per pass, which the OS cache
+///   mostly answers. `*` is sd.cpp's default key; the module key overrides it.
 /// - `disk`: the diffusion model and text encoder re-read from their files as
 ///   needed. For a run out of *system* memory. The VAE is small and is left to
 ///   its runtime backend, the card.
@@ -206,7 +211,7 @@ pub fn memory_args(mode: &str, extra_args: &[String]) -> Vec<&'static str> {
         return Vec::new();
     }
     match mode {
-        "ram" => vec!["--params-backend", "cpu"],
+        "ram" => vec!["--params-backend", "*=cpu,te=disk"],
         "disk" => vec!["--params-backend", "diffusion=disk,te=disk"],
         _ => Vec::new(),
     }

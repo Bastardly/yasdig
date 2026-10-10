@@ -17,8 +17,19 @@ so.
 - **Making a cache mode a family default.** Measure Off / Spectrum / Adaptive per
   family. Where one is a free win, set it in that family's `recipe()`.
 - **Text-encoder cache in `work/cache/`**, cleared by *Close server* with no
-  setting. Blocked: sd-cli can't save or load conditioning. Check again on every
-  sd.cpp bump.
+  setting. Still blocked: upstream's conditioning cache (`e6281b6`, 2026-09-23,
+  `--conditioning-cache-size`) is in-process only, so a fresh sd-cli per pass
+  never hits it. The memory half shipped instead: System RAM releases the text
+  encoder after the prompt (`*=cpu,te=disk`).
+- **A persistent `sd-server` instead of an sd-cli per pass.** Gets the
+  conditioning cache and skips reloading the model every image — likely the
+  biggest speed win left — at the price of models resident between runs, and a
+  rework of the queue's cancel, progress and preview handling. Still a
+  subprocess, so within the project's rules.
+- **Bump sd.cpp** (81 commits past 59c23bc as of 2026-10-10): flash attention
+  honoured in LLM text encoders (#1987), GPU-memory report and LLM-encoding
+  fixes (#2020), VAE tiling retries limited to allocation failures (#2019).
+  Re-transcribe `SAMPLERS`/`SCHEDULERS` and recheck the auto-fit line format.
 
 ## 1. Find faces automatically, with no Python 
 
@@ -122,7 +133,6 @@ Refine dialog). Parked: #2 on `outpaintingV1`. Next candidates: Qwen-Image-Edit 
 FLUX.1 Kontext as families (they reuse the reference plumbing), or #5 comparison
 grids.
 
-
 # Powered by Stable-diffusion.cpp and Vulkan
 Remove the text "Vulkan · stable-diffusion.cpp + native FSR upscale — no Python." and create a
 footer with the text Powered by Stable-diffusion.cpp and Vulkan with a link to each product.
@@ -137,7 +147,9 @@ Currently the summery text is white, which makes it blend into the rest of the U
 So I think the summery text should have:     color: var(--accent-hi); and the 
 .foldstate.on should use the color var(--go); instead.
 
-# Hide video tab
+Give prompt textareas a default height of 220px
+
+# Hide video and convert tab
 Currently, since I'm planning on releasing the app soon, I decided to focus on the image generation workflow.
-In this regard, the video tab feels like an odd side note, so I think we should hide the tab for now.
-Or make it a setting under "Nightly features" at the bottom, with default off.
+In this regard, the video and convert tab feels like an odd side note, so I think we should hide the tabs for now.
+We should make them a setting under "Nightly features" at the bottom, with default off. This will allow us to work with them more easily. The if people decides to try them anyway, the were warned in the setting that these features are WIP.

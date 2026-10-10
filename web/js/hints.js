@@ -129,7 +129,8 @@ const HELP = [
     text: 'Where the model’s weights wait while it draws. Auto lets sd.cpp decide '
         + 'by free memory — the card first. System RAM keeps them in RAM and moves '
         + 'them to the card as needed, leaving the whole card for the work: the '
-        + 'fix when a big model runs out of GPU memory. Stream from SSD re-reads '
+        + 'fix when a big model runs out of GPU memory. It also lets go of the text '
+        + 'encoder once the prompt is read. Stream from SSD re-reads '
         + 'them from the file, for when RAM runs out; slower. The Help tab says more.' },
   { ids: ['cachemode'],
     text: 'Skips denoising steps whose result can be predicted, so Generate '
