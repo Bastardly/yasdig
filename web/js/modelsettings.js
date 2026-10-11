@@ -19,17 +19,18 @@ import { wireHints } from './hints.js';
 // different save, and one Save button writing two files would make "Unsaved
 // changes" mean two things.
 
-// Page-level rows, which no model has an opinion about.
-const PAGE_ONLY = new Set([
-  'prompt', 'negative', 'variables', 'hires_scale',
-  'clear_workitems_on_close', 'clear_outputs_on_close', 'clear_videos_on_close',
-]);
+// Page-level rows, which no model has an opinion about, are marked `page: true`
+// on the `FIELDS` row itself. This used to be a second list kept here by hand;
+// it fell behind the server's `PAGE_ONLY` (max_image_side and the rows after
+// it), every save then carried a key the server refuses for a model, and
+// saving per model failed for every model. `fields_mark_exactly_the_page_only_keys`
+// now checks the marks against the server's list.
 // A function, not a constant, and that is load-bearing: `settings.js` imports
 // this module back, so reading `FIELDS` at the top level runs before that
 // module has declared it — a ReferenceError that takes the whole module graph,
 // and every tab, down with it. The CLAUDE.md rule "a module's top level
 // declares and nothing else" is exactly this.
-const rows = () => FIELDS.filter((f) => !f.title && !PAGE_ONLY.has(f.key));
+const rows = () => FIELDS.filter((f) => !f.title && !f.page);
 
 const idOf = (f) => `pm-${f.key}`;
 

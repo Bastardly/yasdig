@@ -21,15 +21,16 @@ so.
   `--conditioning-cache-size`) is in-process only, so a fresh sd-cli per pass
   never hits it. The memory half shipped instead: System RAM releases the text
   encoder after the prompt (`*=cpu,te=disk`).
-- **A persistent `sd-server` instead of an sd-cli per pass.** Gets the
-  conditioning cache and skips reloading the model every image — likely the
-  biggest speed win left — at the price of models resident between runs, and a
-  rework of the queue's cancel, progress and preview handling. Still a
-  subprocess, so within the project's rules.
-- **Bump sd.cpp** (81 commits past 59c23bc as of 2026-10-10): flash attention
-  honoured in LLM text encoders (#1987), GPU-memory report and LLM-encoding
-  fixes (#2020), VAE tiling retries limited to allocation failures (#2019).
-  Re-transcribe `SAMPLERS`/`SCHEDULERS` and recheck the auto-fit line format.
+- **A persistent `sd-server` instead of an sd-cli per pass — measured and
+  shelved (2026-10-11).** The result line's *Of which loading weights* (sd.cpp's
+  own load lines, summed) put loading at 3.5 s of 21 s on a Q8 Klein 9B at 1024²
+  and 6.3 s of 41 s on Krea 2: 15–17%, because the OS file cache serves the
+  weights between runs. Not worth ~85 MB more in the release, a second process
+  holding 10–20 GB between runs, and a cold restart on every Cancel. Revisit only
+  if that share grows (a cold disk, a slower drive, a much bigger model). The
+  design is in the 2026-10-10 conversation: `/sdcpp/v1/img_gen`, previews in the
+  job status, a running job can't be cancelled.
+- **Bump sd.cpp** — done 2026-10-10, now at `f89d9b1`.
 
 ## 1. Find faces automatically, with no Python 
 

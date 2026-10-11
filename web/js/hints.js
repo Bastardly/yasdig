@@ -338,6 +338,18 @@ const HELP = [
   { ids: ['setclearvid'],
     text: 'When you press Close server, delete every clip on the Video tab, and '
         + 'the enlarged frames made from them. Only Close server does this.' },
+  { ids: ['setvaedirect'],
+    text: 'Computes the VAE — the step that turns the result into pixels — without '
+        + 'first unrolling the whole image into a huge temporary buffer. Same picture, '
+        + 'much faster: Klein 9B’s decode went from 9.3 s to 0.9 s, Krea 2’s from 3.3 s to '
+        + '1.2 s. Turn it off only to '
+        + 'compare.' },
+  { ids: ['setrefsize'],
+    text: 'How big each reference image is drawn. Every reference costs as much work '
+        + 'as an extra picture, so this is the biggest speed knob when references are '
+        + 'used. Measured on a Klein 9B at 1024 with four references: 153 s at full size, '
+        + '54 s at 768, 34 s at 512 (22 s with none). Edit '
+        + 'always keeps the image it changes at full size.' },
   { ids: ['setgpureserve'],
     text: 'How much of the graphics card to keep free while a model draws. 0 lets '
         + 'stable-diffusion.cpp fill it to the brim; the desktop, the browser and the '

@@ -44,9 +44,13 @@ async function loadConvertModels() {
     syncConvert();
     return;
   }
-  $('csource').innerHTML = cfiles
-    .map((f) => `<option value="${esc(f.id)}">${esc(f.file)} — ${gb(f.bytes)} ${esc(f.dtype)}</option>`)
-    .join('');
+  // Under headings, in the order the server sorted them (heading, then name) —
+  // the way the Image tab's model select groups by family.
+  const groups = [...new Set(cfiles.map((f) => f.group))];
+  $('csource').innerHTML = groups.map((g) => `<optgroup label="${esc(g)}">${
+    cfiles.filter((f) => f.group === g)
+      .map((f) => `<option value="${esc(f.id)}">${esc(f.file)} — ${gb(f.bytes)} ${esc(f.dtype)}</option>`)
+      .join('')}</optgroup>`).join('');
   syncConvert();
 }
 
@@ -129,7 +133,15 @@ async function startConvert() {
 export function initConvert() {
   $('cgo').addEventListener('click', startConvert);
   $('cstop').addEventListener('click', () => cancelRun('cstop', 'convert'));
-  $('csource').addEventListener('change', syncConvert);
+  $('csource').addEventListener('change', () => {
+    // A VAE wants f16, never a q-type, so picking one moves the type there;
+    // anything else goes back to q4_K, the tab's default. Changing the type
+    // after that is still free.
+    const f = currentConvertFile();
+    const want = f?.group === 'VAEs' ? 'f16' : 'q4_K';
+    if (ctypes.some((t) => t.name === want)) $('ctype').value = want;
+    syncConvert();
+  });
   $('ctype').addEventListener('change', syncConvert);
 
   loadConvertModels();

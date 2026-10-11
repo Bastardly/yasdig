@@ -150,7 +150,7 @@ pub const MIN_STRENGTH: f32 = 0.05;
 pub const MAX_STRENGTH: f32 = 0.95;
 
 /// Every `--sampling-method` sd-cli takes, in its own order
-/// (`stable-diffusion.cpp src/stable-diffusion.cpp:67`). Checked by
+/// (`stable-diffusion.cpp src/stable-diffusion.cpp:80`). Checked by
 /// [`check_sampling`] so a typo is an error naming the list rather than a
 /// failure inside sd-cli, and by a test against every `<option>` the page
 /// offers, so the markup can't name something this refuses.
@@ -178,7 +178,7 @@ pub const CACHE_OFF: &str = "off";
 /// `auto` sends no flag, so sd.cpp's auto-fit places each part on the GPU, then
 /// in RAM, then on disk, by the free memory it measures (`docs/backend.md`).
 /// The other two are an explicit `--params-backend`, and **any** explicit one
-/// turns auto-fit off (`diffusion_engine.cpp:875`) — which is why `auto` must
+/// turns auto-fit off (`diffusion_engine.cpp:959`) — which is why `auto` must
 /// stay the absence of a flag, and why `--offload-to-cpu` (sd.cpp's alias for
 /// `--params-backend *=cpu`) is never emitted beside it. See [`memory_args`].
 pub const MEMORY_MODES: [&str; 3] = [MEMORY_AUTO, "ram", "disk"];
@@ -233,10 +233,10 @@ pub fn memory_args(mode: &str, extra_args: &[String]) -> Vec<&'static str> {
 pub const MAX_REFERENCES: usize = 4;
 
 /// Every `--scheduler` we pass on, from sd-cli's list
-/// (`src/stable-diffusion.cpp:110`), plus [`AUTO_SCHEDULER`]. Two of its
-/// sixteen are left out: `ltx2` and `logit_normal` are the defaults of LTX-2
-/// and Ideogram, families this build doesn't run, so here they could only be
-/// picked by mistake. `flux` and `flux2` stay — Auto picks them for those
+/// (`src/stable-diffusion.cpp:123`), plus [`AUTO_SCHEDULER`]. Three of its
+/// seventeen are left out: `ltx2`, `logit_normal` and `llada_image` are the
+/// defaults of LTX-2, Ideogram and LLaDA-Image, families this build doesn't
+/// run, so here they could only be picked by mistake. `flux` and `flux2` stay — Auto picks them for those
 /// families, and naming one by hand is a real experiment.
 pub const SCHEDULERS: &[&str] = &[
     AUTO_SCHEDULER, "discrete", "karras", "exponential", "ays", "gits", "sgm_uniform",
@@ -293,7 +293,7 @@ pub struct LoraRef {
     ///
     /// The extension is in it so resolution is one `join` and one `exists`.
     /// sd.cpp will happily take a bare stem and try four extensions
-    /// (`common.cpp:2280`), but then the name in a sidecar no longer identifies
+    /// (`common.cpp:2313`), but then the name in a sidecar no longer identifies
     /// a file, and a `.gguf` quietly standing in for a deleted `.safetensors`
     /// is not something a record of what generated an image should allow.
     pub name: String,
@@ -324,7 +324,7 @@ pub const LORA_STRENGTH_MAX: f32 = 2.0;
 /// So the check is structural instead of alphabetic: every path component must
 /// be `Component::Normal`, which rejects `..`, a leading `/` and a bare `.` in
 /// one test. On top of that, `:` `<` `>` are rejected because sd.cpp's tag regex
-/// is `<lora:([^:>]+):([^>]+)>` (`common.cpp:2248`) — a name containing one
+/// is `<lora:([^:>]+):([^>]+)>` (`common.cpp:2278`) — a name containing one
 /// wouldn't be escaped, it would silently re-cut the tag somewhere else.
 ///
 /// It also guards [`Profile::upscaler`], which is the same kind of thing — a
@@ -2273,7 +2273,7 @@ impl Config {
     ///
     /// This exists because of what sd.cpp does without it: a `<lora:…>` tag
     /// whose file it can't find is a `LOG_WARN` and a *dropped tag*
-    /// (`examples/common/common.cpp:2289`). The render then succeeds, takes the
+    /// (`examples/common/common.cpp:2323`). The render then succeeds, takes the
     /// usual two minutes, and comes back as a picture that simply doesn't have
     /// the LoRA in it — with nothing on the wire saying so. Failing here instead
     /// costs a millisecond and turns a silent wrong answer into a message that

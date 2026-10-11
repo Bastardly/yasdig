@@ -6,7 +6,7 @@
 //! a batch run varies its subject rather than only its seed.
 //!
 //! **Braces, not square brackets.** `[x]` is sd.cpp's ÷1.1 down-weight
-//! (`parse_prompt_attention`, `stable-diffusion.cpp src/core/util.cpp:816` —
+//! (`parse_prompt_attention`, `stable-diffusion.cpp src/core/util.cpp:900` —
 //! the same function `web/js/prompt-weight.js` is built around), so `[animl]`
 //! is a *legitimate* prompt meaning "the word animl, de-emphasised". With that
 //! spelling a typo could never be reported; it would quietly be conditioned as

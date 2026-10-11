@@ -23,7 +23,7 @@
 //! minute ago should appear without a restart.
 //!
 //! The discriminators are sd.cpp's own, from `ModelLoader::get_sd_version`
-//! (`src/model_loader.cpp:495-605`), because the only classification that
+//! (`src/model_loader.cpp:438-710`), because the only classification that
 //! matters is the one the binary we shell out to will agree with. Where this
 //! module uses a different tensor to reach the same answer, the comment says
 //! which and why.

@@ -35,7 +35,7 @@
 //! canonical prefix round-trips unchanged.
 
 use crate::config::Config;
-use crate::discover::{self, DitKind, Role, Tensors, VaeKind};
+use crate::discover::{self, DitKind, ImageVaeKind, Role, Tensors, VaeKind};
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
@@ -192,13 +192,17 @@ impl Slot {
     pub fn for_role(role: &Role) -> Option<Slot> {
         match role {
             Role::Dit(_) => Some(Slot::Diffusion),
-            Role::Vae(_) => Some(Slot::Vae),
+            // An image VAE goes in through `--vae` like a Wan one: the same
+            // `vae.` prefix, and the classifier reads it back by contents (its
+            // width off a one-dimensional bias), so the converted GGUF lands in
+            // the same Models-fold slot as the file it came from.
+            Role::Vae(_) | Role::ImageVae(_) => Some(Slot::Vae),
             Role::Umt5 | Role::T5xxl => Some(Slot::T5xxl),
             Role::ClipL | Role::ClipVision | Role::Lora(_) | Role::Unknown(_) => None,
-            // Image files reach this list through the registry as
-            // `Slot::Checkpoint`, not through the video dir's scan. A bare image
-            // DiT or VAE gets a slot when the image side can assemble one.
-            Role::Image { .. } | Role::ImageVae(_) | Role::Llm(_) | Role::Unsupported(_) => None,
+            // Image models reach this list through the registry (`candidates`).
+            // An `--llm` text encoder can't be converted at all: sd.cpp's
+            // `convert_with_components` takes no such path.
+            Role::Image { .. } | Role::Llm(_) | Role::Unsupported(_) => None,
         }
     }
 }
@@ -302,6 +306,23 @@ pub struct Candidate {
     /// Set when this file is already stored at a type the backend runs natively
     /// and converting it is probably pointless.
     pub note: Option<String>,
+    /// Which heading it is listed under: `Image models`, `Video models`,
+    /// `VAEs` or `Text encoders` — the page's `<optgroup>`s, in that order.
+    pub group: &'static str,
+}
+
+/// The headings, in the order the page lists them.
+pub const GROUPS: [&str; 4] = ["Image models", "Video models", "VAEs", "Text encoders"];
+
+/// The heading a file goes under, from where it came in and what it is.
+fn group_of(slot: Slot, image_side: bool) -> &'static str {
+    match slot {
+        Slot::Vae => GROUPS[2],
+        Slot::T5xxl => GROUPS[3],
+        Slot::Checkpoint => GROUPS[0],
+        Slot::Diffusion if image_side => GROUPS[0],
+        Slot::Diffusion => GROUPS[1],
+    }
 }
 
 /// The type most of a file's *weight* is stored in.
@@ -335,7 +356,7 @@ pub fn candidates(cfg: &Config) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = Vec::new();
     let mut seen: Vec<PathBuf> = Vec::new();
 
-    let mut push = |path: &Path, slot: Slot, role: String, seen: &mut Vec<PathBuf>| {
+    let mut push = |path: &Path, slot: Slot, role: String, image_side: bool, seen: &mut Vec<PathBuf>| {
         let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if seen.contains(&canon) {
             return;
@@ -355,6 +376,16 @@ pub fn candidates(cfg: &Config) -> Vec<Candidate> {
             d if d.starts_with('q') => {
                 Some(format!("already quantized ({d}) — converting again loses more"))
             }
+            // A VAE's right target is half precision, never a q-type. It saves
+            // memory, not decode time: the decode is bound by activations, and
+            // an f16 copy of Klein's measured the same 9.3 s (the speed came from
+            // `Settings::vae_conv_direct`).
+            "f32" if slot == Slot::Vae => Some(
+                "32-bit — f16 halves the size and the memory it holds, with no visible \
+                 difference. Don't quantize a VAE to a q-type; the picture shows it"
+                    .into(),
+            ),
+            "f32" => Some("32-bit — f16 is half the size with no visible difference".into()),
             "f8_e4m3" | "f8_e5m2" => Some(
                 "fp8, which this Vulkan backend cannot multiply — it is cast to BF16 \
                  per layer at run time, so a quantized copy is both smaller and faster"
@@ -374,13 +405,24 @@ pub fn candidates(cfg: &Config) -> Vec<Candidate> {
             dtype,
             estimates,
             note,
+            group: group_of(slot, image_side),
         });
         seen.push(canon);
     };
 
     for f in discover::scan(&cfg.video_dir()) {
         if let Some(slot) = Slot::for_role(&f.role) {
-            push(&f.path, slot, describe(&f.role), &mut seen);
+            push(&f.path, slot, describe(&f.role), false, &mut seen);
+        }
+    }
+    // The image side's parts: its VAEs and Flux's T5, wherever under the models
+    // dir they are. The video dir's own were listed above, and `seen` keeps a
+    // shared one (Krea 2's Wan VAE) from appearing twice.
+    for f in cfg.scan_images() {
+        if matches!(f.role, Role::ImageVae(_) | Role::Vae(_) | Role::T5xxl) {
+            if let Some(slot) = Slot::for_role(&f.role) {
+                push(&f.path, slot, describe(&f.role), true, &mut seen);
+            }
         }
     }
     for p in cfg.registry().values() {
@@ -397,12 +439,21 @@ pub fn candidates(cfg: &Config) -> Vec<Candidate> {
                 &p.model,
                 slot,
                 label,
+                true,
                 &mut seen,
             );
         }
     }
 
-    out.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    // By heading, then by name — the Image tab's model select reads the same
+    // way. Size used to order the whole list, which put a VAE between two
+    // transformers and the same model's quantizations apart.
+    let rank = |g: &str| GROUPS.iter().position(|x| *x == g).unwrap_or(GROUPS.len());
+    out.sort_by(|a, b| {
+        rank(a.group)
+            .cmp(&rank(b.group))
+            .then_with(|| a.file.to_lowercase().cmp(&b.file.to_lowercase()))
+    });
     out
 }
 
@@ -416,6 +467,9 @@ fn describe(role: &Role) -> String {
         Role::Dit(DitKind::MinimaxH3) => "MiniMax H3 transformer".into(),
         Role::Vae(VaeKind::Wan21) => "Wan 2.1 VAE".into(),
         Role::Vae(VaeKind::Wan22) => "Wan 2.2 VAE".into(),
+        Role::ImageVae(ImageVaeKind::Sd) => "SD / SDXL VAE".into(),
+        Role::ImageVae(ImageVaeKind::Flux) => "Flux VAE (Flux.1, Z-Image)".into(),
+        Role::ImageVae(ImageVaeKind::Flux2) => "Flux.2 VAE (Klein)".into(),
         Role::Umt5 => "umt5-xxl text encoder".into(),
         Role::T5xxl => "T5-XXL text encoder".into(),
         other => format!("{other:?}"),
@@ -439,6 +493,11 @@ pub struct Plan {
     pub ty: String,
     pub source_bytes: u64,
     pub estimated_bytes: u64,
+    /// Done by `half::safetensors_to_f16` instead of sd-cli: a safetensors VAE
+    /// to f16. sd.cpp's converter aborts on a VAE carrying an integer tensor
+    /// (the Flux.2 one does), and a VAE needs none of its renaming — `--vae`
+    /// loads its own names — so the result stays safetensors.
+    pub native: bool,
 }
 
 /// Where a converted file lands: beside its source, named for the type.
@@ -476,7 +535,14 @@ pub fn plan(cfg: &Config, source: &str, ty: &str) -> Result<Plan> {
         bail!("'{source}' is not a model file this can convert");
     };
     let path = cfg.resolve(&c.id);
-    let out = output_path(&path, ty);
+    let native = c.slot == Slot::Vae.flag()
+        && ty == "f16"
+        && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("safetensors"));
+    let out = if native {
+        output_path(&path, ty).with_extension("safetensors")
+    } else {
+        output_path(&path, ty)
+    };
     if out.exists() {
         bail!(
             "{} already exists — delete it first, or pick another type",
@@ -493,6 +559,7 @@ pub fn plan(cfg: &Config, source: &str, ty: &str) -> Result<Plan> {
         ty: ty.to_string(),
         source_bytes: c.bytes,
         estimated_bytes: c.estimates.get(ty).copied().unwrap_or(0),
+        native,
     })
 }
 
@@ -500,6 +567,24 @@ pub fn plan(cfg: &Config, source: &str, ty: &str) -> Result<Plan> {
 mod tests {
     use super::*;
     use crate::discover::{Layout, TensorInfo};
+
+    /// Image VAEs convert through `--vae` like a Wan VAE — the same `vae.`
+    /// prefix the classifier reads back — and a `--llm` text encoder has no
+    /// slot at all, since `convert_with_components` takes no such path.
+    #[test]
+    fn an_image_vae_converts_through_vae_and_an_llm_not_at_all() {
+        use crate::discover::LlmKind;
+        for kind in [ImageVaeKind::Sd, ImageVaeKind::Flux, ImageVaeKind::Flux2] {
+            assert_eq!(Slot::for_role(&Role::ImageVae(kind)), Some(Slot::Vae));
+        }
+        assert_eq!(Slot::for_role(&Role::T5xxl), Some(Slot::T5xxl));
+        assert_eq!(Slot::for_role(&Role::Llm(LlmKind::Qwen3 { dim: 4096 })), None);
+        // And each lands under its own heading.
+        assert_eq!(group_of(Slot::Vae, true), "VAEs");
+        assert_eq!(group_of(Slot::Diffusion, true), "Image models");
+        assert_eq!(group_of(Slot::Diffusion, false), "Video models");
+        assert_eq!(group_of(Slot::T5xxl, false), "Text encoders");
+    }
 
     fn t(rows: &[(&str, &[u64], &str)], layout: Layout) -> Tensors {
         Tensors {

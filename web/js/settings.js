@@ -44,8 +44,8 @@ const SECTION = (title, { fold = false, help = null, pane = 'setform' } = {}) =>
 
 export const FIELDS = [
   SECTION('Prompts'),
-  { key: 'prompt', from: 'prompt', kind: 'textarea' },
-  { key: 'negative', from: 'negative', kind: 'text' },
+  { key: 'prompt', page: true, from: 'prompt', kind: 'textarea' },
+  { key: 'negative', page: true, from: 'negative', kind: 'text' },
 
   // Not a default for any control: the word lists behind `{animal}` in a
   // prompt. It is on this tab because it is stored in the same file and saves
@@ -54,7 +54,7 @@ export const FIELDS = [
   // variables pushed the whole form off the screen. The right-hand column is
   // also wide enough to put a name, its words and the × on one row.
   SECTION('Prompt variables', { help: 'setvars', pane: 'setvarbox' }),
-  { key: 'variables', kind: 'vars' },
+  { key: 'variables', page: true, kind: 'vars' },
 
   // The six knobs a family recipe names. Here they are the defaults for the
   // UNet families only, because that is what they are: every other family's
@@ -80,16 +80,22 @@ export const FIELDS = [
   { key: 'upscale_factor', from: 'upscale', kind: 'num', min: 1, max: 4, step: 0.1 },
   { key: 'upscaler', from: 'upscaler', kind: 'upscaler' },
   // A limit, not a default for any control: so its own label and its own help.
-  { key: 'max_image_side', label: 'Largest image side', help: 'setmaxside', kind: 'int', min: 1024, max: 32768, step: 512 },
+  { key: 'max_image_side', page: true, label: 'Largest image side', help: 'setmaxside', kind: 'int', min: 1024, max: 32768, step: 512 },
   // Also a limit of this machine rather than a default for a control.
-  { key: 'gpu_reserve_gb', label: 'Keep free on the GPU (GB)', help: 'setgpureserve', kind: 'num', min: 0, max: 16, step: 0.5 },
+  { key: 'gpu_reserve_gb', page: true, label: 'Keep free on the GPU (GB)', help: 'setgpureserve', kind: 'num', min: 0, max: 16, step: 0.5 },
+  // A speed choice for this machine, not a default for any control: so its own
+  // label and help, and here rather than beside the References button.
+  { key: 'reference_size', page: true, label: 'Reference size', help: 'setrefsize', kind: 'choice',
+    options: [[512, '512 px (default)'], [768, '768 px'], [1024, '1024 px'], [0, 'Full (the output’s size)']] },
+  // A speed setting for this machine too: how sd.cpp computes the VAE.
+  { key: 'vae_conv_direct', page: true, label: 'Fast VAE decode', help: 'setvaedirect', kind: 'check' },
   { key: 'refine_steps', from: 'rsteps', kind: 'int', min: 0, max: 100 },
   { key: 'refine_strength', from: 'rstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
   { key: 'refine_cfg_scale', from: 'rcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
   { key: 'hires_steps', from: 'hsteps', kind: 'int', min: 0, max: 100 },
   { key: 'hires_strength', from: 'hstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
   { key: 'hires_cfg_scale', from: 'hcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
-  { key: 'hires_scale', from: 'hiresscale', kind: 'num', min: 1, max: 4, step: 0.1 },
+  { key: 'hires_scale', page: true, from: 'hiresscale', kind: 'num', min: 1, max: 4, step: 0.1 },
 
   // The pass over a source runs the Steps and CFG scale above; its strength
   // and working size are the two numbers of its own.
@@ -100,9 +106,9 @@ export const FIELDS = [
   // Not a default for any control either: what *Close server* deletes on the
   // way out (`src/shutdown.rs`). Off unless ticked, and favourites never.
   SECTION('When the server is closed'),
-  { key: 'clear_workitems_on_close', label: 'Clear work items', help: 'setclearwi', kind: 'check' },
-  { key: 'clear_outputs_on_close', label: 'Clear outputs', help: 'setclearout', kind: 'check' },
-  { key: 'clear_videos_on_close', label: 'Clear videos', help: 'setclearvid', kind: 'check' },
+  { key: 'clear_workitems_on_close', page: true, label: 'Clear work items', help: 'setclearwi', kind: 'check' },
+  { key: 'clear_outputs_on_close', page: true, label: 'Clear outputs', help: 'setclearout', kind: 'check' },
+  { key: 'clear_videos_on_close', page: true, label: 'Clear videos', help: 'setclearvid', kind: 'check' },
 
   SECTION('Advanced', { fold: true }),
   { key: 'hires_flash_attn', label: 'Flash attention', help: 'setflash', kind: 'check' },
@@ -182,6 +188,10 @@ function control(f) {
     // here is only the option that needs no file.
     case 'upscaler':
       return `<select id="${id}"><option value="">FSR (EASU)</option></select>`;
+    // A fixed list that belongs to no other control, values numeric.
+    case 'choice':
+      return `<select id="${id}">${f.options.map(([v, label]) =>
+        `<option value="${v}">${esc(label)}</option>`).join('')}</select>`;
     default:
       return `<input type="number" id="${id}"${attrs}>`;
   }
@@ -287,6 +297,7 @@ function take(f) {
   }
   // The empty option is FSR, which the file spells as no key at all.
   if (f.kind === 'upscaler') return $(fieldId(f)).value || null;
+  if (f.kind === 'choice') return Number(el.value);
   if (f.kind === 'textarea' || f.kind === 'text' || f.kind === 'mirror') {
     const s = el.value;
     return f.blank ? (s.trim() || null) : s;

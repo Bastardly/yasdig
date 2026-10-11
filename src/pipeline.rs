@@ -568,6 +568,12 @@ pub struct Timings {
     /// encoder in system RAM"), read straight after its sd-cli run like the
     /// cache numbers. It explains a slow pass before it becomes a failed one.
     pub weights: Option<String>,
+    /// Of the pass's time, how much went to loading weights (sd.cpp's own
+    /// "loading tensors completed" lines, summed) — the share a model kept
+    /// loaded between runs would save.
+    pub load_ms: u64,
+    /// Where the pass's time went, stage by stage (`sd::Stages`).
+    pub stages: crate::sd::Stages,
 }
 
 pub struct GenResult {
@@ -943,6 +949,24 @@ impl Engine {
     /// discovery would happily list. So a failure removes it.
     pub fn convert(&mut self, plan: &crate::convert::Plan) -> Result<ConvertResult> {
         let t = Instant::now();
+        if plan.native {
+            // A VAE to f16, which sd.cpp's converter can't do (see `half`). No
+            // scales to fold: nothing in it is fp8.
+            let r = crate::half::safetensors_to_f16(&plan.source, &plan.out)?;
+            eprintln!(
+                "[rustimage] convert: {} of {} tensors to f16, the rest copied as they were",
+                r.halved, r.tensors
+            );
+            return Ok(ConvertResult {
+                out: plan.out.clone(),
+                source_bytes: plan.source_bytes,
+                estimated_bytes: plan.estimated_bytes,
+                bytes: std::fs::metadata(&plan.out)?.len(),
+                ty: plan.ty.clone(),
+                ms: t.elapsed().as_millis(),
+                folded: 0,
+            });
+        }
         if let Err(e) = self.sd().convert(plan) {
             let _ = std::fs::remove_file(&plan.out);
             return Err(e);
@@ -1224,10 +1248,13 @@ impl Engine {
 
         // 1) Distilled generation at base resolution.
         let t = Instant::now();
-        sd.txt2img(tpl, &prompt, neg, seed, &lowres, &refs)?;
+        let ref_side = Some(self.cfg.settings().reference_size);
+        sd.txt2img(tpl, &prompt, neg, seed, &lowres, &refs, ref_side)?;
         let gen_ms = t.elapsed().as_millis();
         // Read now: an ESRGAN enlarge below is another sd-cli run, which resets it.
         let (cache_skipped, cache_steps) = self.monitor.cache_skip().unwrap_or_default();
+        let load_ms = self.monitor.load_ms();
+        let stages = self.monitor.stages();
 
         // 2) Upscale, unsharpened — EASU by default, which is cheap and enough
         //    on its own for a draft, or an ESRGAN model. Quality is escalated
@@ -1322,6 +1349,8 @@ impl Engine {
             cache_skipped,
             cache_steps,
             weights: self.monitor.placement(),
+            load_ms,
+            stages,
             ..Default::default()
         });
         // `pin` is a run holding this image for the hi-res and refine still to
@@ -1493,6 +1522,8 @@ impl Engine {
         )?;
         let gen_ms = t.elapsed().as_millis();
         let (cache_skipped, cache_steps) = self.monitor.cache_skip().unwrap_or_default();
+        let load_ms = self.monitor.load_ms();
+        let stages = self.monitor.stages();
 
         // 3) Sharpen for display. Dimensions come from here, not from `fit_to`:
         //    sd.cpp rounds an init image to the latent grid and only warns.
@@ -1561,6 +1592,8 @@ impl Engine {
             cache_skipped,
             cache_steps,
             weights: self.monitor.placement(),
+            load_ms,
+            stages,
             ..Default::default()
         });
         lock(&self.retained).store(id, Slot::Image, entry, pin);
@@ -1868,7 +1901,7 @@ impl Engine {
             ..p
         };
         let entry = advance(&prev, entry, step_label("Refine", over.refine_prompt.as_deref()));
-        let result = entry.result(id, png, Timings { fsr_ms, refine_ms, weights: self.monitor.placement(), ..Default::default() });
+        let result = entry.result(id, png, Timings { fsr_ms, refine_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }
@@ -1996,7 +2029,7 @@ impl Engine {
         // "Area" is what the page calls a redraw: the dialog's Refine with
         // something painted.
         let entry = advance(&prev, entry, step_label("Area", req.prompt.as_deref()));
-        let result = entry.result(id, png, Timings { fsr_ms, redraw_ms, weights: self.monitor.placement(), ..Default::default() });
+        let result = entry.result(id, png, Timings { fsr_ms, redraw_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }
@@ -2074,7 +2107,9 @@ impl Engine {
         let profile = Profile { width: ew, height: eh, ..p.profile.uncached() };
         let out = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-edit.png")));
         let t = Instant::now();
-        self.sd().txt2img(&profile, &prompt, p.negative.as_deref(), seed, &out, &refs)?;
+        // No reference cap: reference 1 is the image being changed, and drawing
+        // it smaller would blur exactly what the edit has to keep.
+        self.sd().txt2img(&profile, &prompt, p.negative.as_deref(), seed, &out, &refs, None)?;
         let gen_ms = t.elapsed().as_millis();
 
         let t = Instant::now();
@@ -2104,7 +2139,7 @@ impl Engine {
             ..p
         };
         let entry = advance(&prev, entry, step_label("Edit", Some(instruction)));
-        let result = entry.result(id, png, Timings { gen_ms, fsr_ms, weights: self.monitor.placement(), ..Default::default() });
+        let result = entry.result(id, png, Timings { gen_ms, fsr_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }
@@ -2302,7 +2337,7 @@ impl Engine {
             ..p
         };
         let entry = advance(&prev, entry, step_label(&format!("Hi-res {upscale}×"), over.hires_prompt.as_deref()));
-        let result = entry.result(id, png, Timings { fsr_ms, hires_ms, weights: self.monitor.placement(), ..Default::default() });
+        let result = entry.result(id, png, Timings { fsr_ms, hires_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }

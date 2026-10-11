@@ -6,17 +6,17 @@
 //
 // The syntax is `(word:1.2)`: round parens, a dot decimal. That is what the
 // binary we shell out to parses — `parse_prompt_attention`
-// (stable-diffusion.cpp src/core/util.cpp:816), a port of A1111's — and three
+// (stable-diffusion.cpp src/core/util.cpp:900), a port of A1111's — and three
 // facts about it decide the whole design below:
 //
 //   • Nesting *multiplies*, it does not replace: `(((house:1.3)))` conditions at
-//     1.573 (util.cpp:806-815). So when the caret is already inside a group we
+//     1.573 (util.cpp:890-899). So when the caret is already inside a group we
 //     retune that group's number rather than wrapping a second one round it,
 //     which would silently push a 1.2 to 1.32.
-//   • `(x)` is ×1.1 and `[x]` is ×1/1.1 (util.cpp:821-822). A hand-typed `[cat]`
+//   • `(x)` is ×1.1 and `[x]` is ×1/1.1 (util.cpp:905-906). A hand-typed `[cat]`
 //     therefore has to be *recognised*; nesting it into `([cat]:1.1)` would
 //     cancel out to exactly 1.0 and look like the key did nothing.
-//   • `\(` is the one working escape (util.cpp:892), so a literal paren the user
+//   • `\(` is the one working escape (util.cpp:976), so a literal paren the user
 //     escaped must not be read as a group. We never emit an escape ourselves —
 //     `\)` is a parser bug upstream and leaks a backslash into the tokens.
 
@@ -38,7 +38,7 @@ const DELIM = /[\s,.:;!?()[\]{}|/\\"]/;
 // with the parser would be the real bug.
 const WEIGHT_TAIL = /:\s*([-+]?(?:\d+\.?\d*|\.\d+))\s*$/;
 
-// What a bare bracket pair means, per util.cpp:821-822. The square form is
+// What a bare bracket pair means, per util.cpp:905-906. The square form is
 // 1/1.1 = 0.909…, snapped to the step grid: a tenth of one step, in a number the
 // user is in the middle of dragging, and the alternative is a prompt that reads
 // `(cat:0.8090909090909091)` after one keypress.

@@ -134,7 +134,8 @@ export function options(o, opts) {
   }
   if (o.kind === 'gpu' && o.references > 0 && opts.references) {
     out.push(['Fewer reference images',
-      `${o.references} references make the drawing ${o.references + 1} images’ worth of work.`, opts.references]);
+      `${o.references} references make the drawing ${o.references + 1} images’ worth of work. `
+        + 'A smaller Reference size in Settings makes each cheaper.', opts.references]);
   }
   if (o.kind === 'gpu' && opts.smaller) {
     out.push(['Smaller size', 'Memory grows with the picture’s area.', opts.smaller]);

@@ -406,7 +406,7 @@ an adapter is described). `GET /loras` lists it through `discover::scan`, and
 `base_cmd` is where a picked one becomes a command line.
 
 **Everything here is shaped by three facts about `extract_and_remove_lora`**
-(`stable-diffusion.cpp examples/common/common.cpp:2243`), which is sd.cpp's own
+(`stable-diffusion.cpp examples/common/common.cpp:2274`), which is sd.cpp's own
 tag parser:
 
 - **An empty `--lora-model-dir` skips tag extraction entirely** (line 2245). The
@@ -534,7 +534,7 @@ first pending SwinIR's measured speed and the second as minutes per image.
 Three facts about sd.cpp's `-M upscale` shape the ESRGAN route:
 
 - **A model it can't build exits 0.** `new_upscaler_ctx` failing is a
-  `LOG_ERROR`, then sd-cli saves the *input unchanged* (`examples/cli/main.cpp:991`).
+  `LOG_ERROR`, then sd-cli saves the *input unchanged* (`examples/cli/main.cpp:966`).
   So `SdRunner::upscale` greps the stderr tail (which is why `run_tail` exists), and
   `after_model` refuses any result that didn't get bigger. The second guard is the
   structural one and also refuses a 1× restoration model, which is correct.
@@ -764,7 +764,7 @@ diffusion=disk,te=disk`) is for when RAM is what runs out.
 
 Six things break silently:
 
-- **An explicit `--params-backend` turns auto-fit off** (`diffusion_engine.cpp:875`),
+- **An explicit `--params-backend` turns auto-fit off** (`diffusion_engine.cpp:959`),
   and `--offload-to-cpu` *is* one (`*=cpu`, `common.cpp`). So `auto` must stay the
   absence of a flag, and `memory_args` never emits the alias. The Video tab used
   to pass `--offload-to-cpu` on every model, which silently cost it auto-fit and
@@ -799,6 +799,19 @@ Six things break silently:
   clears the monitor before the exit status is known. No step is loading, a step
   short of the last is drawing, the last step done is the decode — where sd.cpp
   has already retried in tiles, so the box offers only a smaller size there.
+- **Loading time is measured, not guessed.** `parse_load_ms` sums sd.cpp's
+  `loading tensors completed, taking X s` lines per run onto the `Monitor`
+  (reset by `begin`, read straight after the pass like `cache_skip`, since an
+  ESRGAN run after it would reset it) into `Timings::load_ms`, shown as *Of which
+  loading weights*. It is what shelved a persistent `sd-server`: 3.5 s of 21 s on
+  a Q8 Klein 9B, 6.3 s of 41 s on Krea 2 — the OS file cache already makes a
+  reload cheap.
+  `parse_stage` does the same for the stages (`sd::Stages`: images in, text
+  encoder, drawing, decode, off `src/pipeline/image.cpp`'s "… completed,
+  taking" lines, seconds or video's milliseconds), shown on one line with the
+  loading total — the stage that dominates is the one worth quantising. Each
+  includes its own lazy loading. "generating N latent images" and "hires fix"
+  are deliberately not read: they would count the drawing twice.
 - **Placement is only set by a run with a prompt** (`-p`). It comes from the
   command's own `--params-backend`, or from auto-fit's `auto-fit: --backend "…"
   --params-backend "…"` line (only the parts it moved off the card are listed); an
@@ -879,8 +892,13 @@ quotes that same file rather than the form, so it never promises a delete the
 server won't do. It deletes only what the app lists, through the existing
 `Store::delete`/`delete_output`/`VideoStore::delete` — never `remove_dir_all` on a
 folder the user can also reach — and favourites are never named there at all. The
-three `clear_*_on_close` fields are page-level (`PAGE_ONLY`, both copies), declared
-before `variables`.
+three `clear_*_on_close` fields are page-level (`PAGE_ONLY`), declared before
+`variables`. **A page-level key is marked `page: true` on its `FIELDS` row** in
+`settings.js`, which is how the *Per model* card leaves it out — it sends every
+row it shows, and the server refuses a page-level key for a model. That used to
+be a second hand-kept list in `modelsettings.js`; it fell behind from
+`max_image_side` on and every per-model save failed.
+`fields_mark_exactly_the_page_only_keys` checks the marks against `PAGE_ONLY`.
 
 It also always empties `work/current/` (`pipeline::clear_scratch`) — scratch, so
 no setting decides it — and the confirm says how many queued jobs are dropped: the
@@ -1142,6 +1160,16 @@ Five things break silently:
   not at all otherwise.** Whole, for `loras`' reason (the dialog is the complete
   answer). Not at all, so picks wait in the dialog across a switch to SDXL rather
   than being refused by it.
+- **The reference size is sd.cpp's cap, not ours.** sd.cpp resizes every
+  reference before encoding it (`resize_before_vae`, `src/pipeline/image.cpp`) to
+  the output's area up to a megapixel — up as well as down — so `stage_reference`
+  shrinking a file is only about phone photos. `Settings::reference_size` (512,
+  page-level) goes to `txt2img_cmd` as `--ref-image-args
+  vae_input_max_pixels=N²`; naming only that key keeps the model's automatic
+  preset (`resolve_ref_image_params`). Measured on Q8 Klein 9B at 1024² with
+  four references: 153 s full-size, 54 s at 768, 33.6 s at 512 — and 22 s with
+  none. **Edit passes `None`**:
+  its reference 1 is the image being changed.
 - **Each slot's own paste is off** (`sourceSlot`'s `paste: false`), and every
   slot ignores a paste while a dialog is open: four slots plus *Start from* would
   otherwise all take one paste. The dialog routes it to the first empty slot.
@@ -1189,6 +1217,19 @@ reads the served `index.html` and fails on an option the server would refuse.
 **Re-transcribe the tables when sd.cpp is bumped** — nothing compares them with
 the clone, which is gitignored and absent from `cargo test`'s view.
 
+**The clone is at `f89d9b1`** (master-951, bumped 2026-10-10 from `59c23bc`).
+Line numbers into sd.cpp in this file and in comments were re-checked at that bump
+for what the app depends on — the LoRA tag parser (`common.cpp:2274`ff), the
+prompt-attention parser (`util.cpp:900`), the upscaler's exit-0 fallback
+(`main.cpp:966`), the auto-fit gate (`diffusion_engine.cpp:959`) and
+`get_sd_version` (`model_loader.cpp:438-710`). The rest (convert, the model
+loader's conversions, name conversion, `ggml_block.hpp`) were written against
+`59c23bc`; if one doesn't match, search for the function it names. The same bump
+changed the log format (`[I] msg - file:line`, #2104) — every parser matches on
+contents, and each has a fixture in both formats — and made an unmeasured memory
+figure the word `unknown`/`unlimited`, which is why `parse_shortfall` reads by
+label.
+
 Three things break silently:
 
 - **Auto is the absence of the flag.** `base_cmd` sends no `--scheduler` for it,
@@ -1198,7 +1239,7 @@ Three things break silently:
   reproduces that, so Auto must stay a no-flag value, not become `discrete`.
 - **`ays` only has tables for SD 1.5 and SDXL** (`denoiser.hpp`); elsewhere sd.cpp
   logs an error mid-run. `check_sampling` takes the family to refuse it first.
-- **`ltx2` and `logit_normal` are left out on purpose** — defaults for families
+- **`ltx2`, `logit_normal` and `llada_image` are left out on purpose** — defaults for families
   this build doesn't run. Add them with the family, not before.
 
 The **Help tab** (`help.js`) is a `TOPICS` table — id, title, an HTML string —
@@ -1583,7 +1624,7 @@ so a batch run varies its subject rather than only its seed.
 
 **Braces, not `[brackets]`, and that is the whole design.** `[x]` is sd.cpp's
 ÷1.1 down-weight (`parse_prompt_attention`, `stable-diffusion.cpp
-src/core/util.cpp:816` — the same function *## The prompt box* below is built
+src/core/util.cpp:900` — the same function *## The prompt box* below is built
 around), so with square brackets `[animl]` is a *legitimate* prompt meaning
 "the word animl, de-emphasised" and a typo could never be reported. `{` and `}`
 fall inside that parser's plain-text run (`[^\\()\[\]:B]{1,1024}`) and mean
@@ -1679,20 +1720,20 @@ npm, no `package.json` and no build step, and it is deliberately *not* in
 skips `*.test.js` for that reason rather than the table listing it.
 
 **Everything here is shaped by `parse_prompt_attention`**
-(`stable-diffusion.cpp src/core/util.cpp:816`), which is a port of A1111's:
+(`stable-diffusion.cpp src/core/util.cpp:900`), which is a port of A1111's:
 
-- **Nesting multiplies, it does not replace** (`util.cpp:806-815`:
+- **Nesting multiplies, it does not replace** (`util.cpp:890-899`:
   `(((house:1.3)))` is 1.573). So when the target *is* an existing group, `adjust`
   retunes that group's number; wrapping a second one round it would silently push a
   1.2 to 1.32. The rule deciding which is one line — the group's inner text, minus
   any `:w` tail, must equal the target exactly — and it is what correctly makes
   Ctrl+↑ on one word of `(a red crab:1.2)` nest, because pointing at one word of
   three is a request to weight that word.
-- **`(x)` is ×1.1 and `[x]` is ×1/1.1** (`util.cpp:821-822`), so a hand-typed
+- **`(x)` is ×1.1 and `[x]` is ×1/1.1** (`util.cpp:905-906`), so a hand-typed
   `[cat]` has to be *recognised*. Nesting it into `([cat]:1.1)` cancels to exactly
   1.0 and reads as the key having done nothing. It is read as 0.9, snapped to the
   step grid — a tenth of one step, in a number being dragged.
-- **`\(` is the only escape that works** (`util.cpp:892`; `\)` and `\]` leak the
+- **`\(` is the only escape that works** (`util.cpp:976`; `\)` and `\]` leak the
   backslash into the tokens, upstream's bug). So `escaped()` must be consulted
   before treating a paren as a bracket, and we never emit an escape ourselves.
 
@@ -2201,7 +2242,7 @@ again.
   One seek and a few hundred KB against an 8-20 GB file.
 
   The discriminators are lifted from sd.cpp's own `ModelLoader::get_sd_version`
-  (`src/model_loader.cpp:495-605`), because the only classification worth having is the
+  (`src/model_loader.cpp:438-710`), because the only classification worth having is the
   one the binary we shell out to will agree with. **Read shapes off square tensors only**
   (`Tensors::square_dim`): safetensors stores a shape in PyTorch order and GGUF stores it
   reversed, so a rectangular tensor means picking an end per format and being wrong in
@@ -2292,7 +2333,29 @@ again.
     the client never picks it. Roles with no slot at all (`QwenVl` needs `--llm`,
     `ClipVision` needs `--clip_vision`, neither being a parameter of that function) are
     left off the list rather than squeezed through a neighbouring flag. Prefixing is
-    idempotent (`model_loader.cpp:292`), so a converted file round-trips.
+    idempotent (`model_loader.cpp:292`), so a converted file round-trips. The
+    image side's parts are listed too (`scan_images`: image VAEs and Flux's T5),
+    an image VAE through `--vae`; an f32 VAE's note says f16, never a q-type.
+    **f16 saves memory, not decode time** — Klein's measured the same 9.3 s either
+    way, because a decode is bound by full-resolution activations and
+    `ggml_conv_2d`'s im2col buffer, not by its 84M weights. What did help is
+    `--vae-conv-direct`, now `Settings::vae_conv_direct` (on by default,
+    page-level): Klein 9B's Flux.2 VAE 9.3 s → 0.9 s (f32 or f16 alike), Krea 2's
+    Wan 2.1 VAE 3.3 s → 1.2 s — the same sums computed without the unrolled
+    buffer.
+    An `--llm` encoder (every Qwen) still can't be: `convert_with_components`
+    takes no such path.
+    **A safetensors VAE to f16 doesn't go through sd-cli at all** (`Plan::native`,
+    `src/half.rs`): the Flux.2 VAE carries one i32 tensor (BatchNorm's
+    `num_batches_tracked`), sd.cpp's converter has no dequantization for it and
+    aborts, and `--tensor-type-rules` only takes float types, so the counter
+    can't be told to stay. `half::safetensors_to_f16` halves every F32 tensor
+    (round-to-nearest-even, `f32_to_f16_rounds_to_nearest_even`) and copies the
+    rest, keeping the names — `--vae` needs no prefix — through a `.part` and a
+    rename. On the real file: 250 of 251 tensors, 336 MB → 168 MB, still read as
+    a Flux.2 VAE. The list is grouped (`Candidate::group`: image models, video
+    models, VAEs, text encoders) and sorted by name within each, and picking a
+    VAE moves the type to f16.
   - **`-t 1` is load-bearing, not caution.** sd.cpp's streaming converter runs a worker
     per core, all calling `ModelLoader::load_tensor` on one shared loader
     (`convert.cpp:244`), which re-enters `load_tensors` → `process_model_files` and

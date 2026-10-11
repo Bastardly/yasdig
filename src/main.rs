@@ -99,6 +99,7 @@ mod convert;
 mod discover;
 mod downloads;
 mod foldscale;
+mod half;
 mod fsr;
 mod home;
 mod http;
@@ -2621,7 +2622,7 @@ fn result_json(res: &GenResult) -> String {
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
          \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\"can_edit\":{},\
          \"filters\":{},\"filters_start\":{},\"prompt\":{},\
-         \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{},\"weights\":{}}}}}",
+         \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{},\"weights\":{},\"load_ms\":{},\"stages\":{}}}}}",
         b64,
         res.width,
         res.height,
@@ -2655,6 +2656,8 @@ fn result_json(res: &GenResult) -> String {
         res.timings.cache_skipped,
         res.timings.cache_steps,
         res.timings.weights.as_deref().map_or("null".to_string(), json_str),
+        res.timings.load_ms,
+        serde_json::to_string(&res.timings.stages).unwrap_or_else(|_| "null".into()),
     )
 }
 

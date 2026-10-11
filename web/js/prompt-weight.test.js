@@ -78,7 +78,7 @@ test('a selection that took the brackets with it retunes the group', () => {
 });
 
 test('a word inside a longer group nests, because nesting is what was asked', () => {
-  // sd.cpp multiplies a nested weight (util.cpp:806-815), so this is 1.32 on
+  // sd.cpp multiplies a nested weight (util.cpp:890-899), so this is 1.32 on
   // `crab` and 1.2 on `red` — which is the point of pointing at one word.
   assert.equal(
     press('(a red crab:1.2)', 'crab', UP),
@@ -134,7 +134,7 @@ test('a caret at either end of a word is still in the word', () => {
 });
 
 test('an escaped paren is text, not a group', () => {
-  // `\(` is the one escape sd.cpp honours (util.cpp:892), so what is inside is
+  // `\(` is the one escape sd.cpp honours (util.cpp:976), so what is inside is
   // literal and must not be mistaken for a weighted group.
   assert.equal(press('a \\(crab\\) here', 'crab', UP), 'a \\((crab:1.1)\\) here');
 });

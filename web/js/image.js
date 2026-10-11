@@ -667,6 +667,24 @@ function takeHiresScale() {
 
 // Info first, image last: on a narrow screen the metadata and the action
 // buttons stay visible without scrolling past a tall image.
+// Where the time went inside sd.cpp, stage by stage — the part that dominates is
+// the part worth quantising (the text encoder, the model) or shrinking (the
+// references). Each stage includes loading its own weights; the last figure is
+// how much of all of them that was.
+function stageLine(t) {
+  const s = t.stages ?? {};
+  const sec = (ms) => `${(ms / 1000).toFixed(1)} s`;
+  // Each stage named with the file that does it, since that file is the lever:
+  // what to quantise, or swap, when its stage dominates.
+  const parts = [
+    ['Prompt (text encoder)', s.text_ms], ['Images in (VAE)', s.encode_ms],
+    ['Drawing (model)', s.draw_ms], ['Decode (VAE)', s.decode_ms],
+  ].filter(([, ms]) => ms > 0).map(([name, ms]) => `${name} ${sec(ms)}`);
+  if (!parts.length && !t.load_ms) return '';
+  const load = t.load_ms ? ` — of which loading weights ${sec(t.load_ms)}` : '';
+  return `<p class="sub">${parts.join(' · ')}${load}</p>`;
+}
+
 export function render(data) {
   // A different picture from the one under the sliders: a re-filter of the
   // old one still in flight must not land on top of it. A run's image can
@@ -686,7 +704,8 @@ export function render(data) {
     ? `<p class="sub">Step cache skipped ${t.cache_skipped} of ${t.cache_steps} steps</p>` : '')
     // Where the weights were when any were off the card — what explains a
     // slow pass before it becomes one that ran out of memory.
-    + (t.weights ? `<p class="sub">Weights: ${esc(t.weights)}</p>` : '');
+    + (t.weights ? `<p class="sub">Weights: ${esc(t.weights)}</p>` : '')
+    + stageLine(t);
 
   S.imageId = data.image_id;
   // The seed box is left exactly as typed. Writing the drawn seed back into it

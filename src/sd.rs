@@ -63,6 +63,7 @@ impl<'a> SdRunner<'a> {
     }
 
     /// text-to-image. Writes a PNG to `out`.
+    #[allow(clippy::too_many_arguments)]
     pub fn txt2img(
         &self,
         p: &Profile,
@@ -71,8 +72,9 @@ impl<'a> SdRunner<'a> {
         seed: i64,
         out: &Path,
         refs: &[PathBuf],
+        ref_side: Option<u32>,
     ) -> Result<()> {
-        let cmd = self.txt2img_cmd(p, prompt, negative, seed, out, refs);
+        let cmd = self.txt2img_cmd(p, prompt, negative, seed, out, refs, ref_side);
         self.run(cmd, "txt2img")
     }
 
@@ -81,6 +83,7 @@ impl<'a> SdRunner<'a> {
     /// names them. `base_cmd` is shared with every img2img pass, and a refine
     /// handed the references would redraw toward them rather than finish the
     /// picture it was given.
+    #[allow(clippy::too_many_arguments)]
     fn txt2img_cmd(
         &self,
         p: &Profile,
@@ -89,6 +92,7 @@ impl<'a> SdRunner<'a> {
         seed: i64,
         out: &Path,
         refs: &[PathBuf],
+        ref_side: Option<u32>,
     ) -> Command {
         let mut cmd = self.base_cmd(p, prompt, negative, seed, out, p.cfg_scale);
         cmd.args(["-W", &p.width.to_string()]);
@@ -96,6 +100,16 @@ impl<'a> SdRunner<'a> {
         cmd.args(["--steps", &p.steps.to_string()]);
         for r in refs {
             cmd.args(["-r", &path_str(r)]);
+        }
+        // sd.cpp resizes every reference itself before encoding it — to the
+        // output's area, up to a megapixel, *up* as well as down — so a
+        // smaller file on our side would be scaled back. Its own cap is the
+        // control (`vae_input_max_pixels`, `docs/edit.md`); naming only that
+        // key keeps the model's automatic preset. A hand-written
+        // `--ref-image-args` in `extra_args` wins.
+        let placed = p.extra_args.iter().any(|a| a == "--ref-image-args");
+        if let Some(side) = ref_side.filter(|s| *s > 0 && !refs.is_empty() && !placed) {
+            cmd.args(["--ref-image-args", &format!("vae_input_max_pixels={}", side * side)]);
         }
         cmd
     }
@@ -397,7 +411,7 @@ impl<'a> SdRunner<'a> {
     /// Enlarge `input` into `output` with an ESRGAN model, at whatever scale the
     /// model was trained for.
     ///
-    /// `-M upscale` never builds a diffusion context (`examples/cli/main.cpp:915`
+    /// `-M upscale` never builds a diffusion context (`examples/cli/main.cpp:889`
     /// hands the init image straight to the upscaler), so there is no checkpoint,
     /// no prompt and no seed. sd.cpp reads `.pth` natively and maps the old
     /// ESRGAN key layout (`src/name_conversion.cpp:1273`), but it only
@@ -407,7 +421,7 @@ impl<'a> SdRunner<'a> {
     ///
     /// **A model it can't build is not a failure exit.** `new_upscaler_ctx`
     /// failing is a `LOG_ERROR`, after which sd-cli saves the *input unchanged*
-    /// and exits 0 (`main.cpp:991`). So the stderr tail is checked here for the
+    /// and exits 0 (`main.cpp:966`). So the stderr tail is checked here for the
     /// two lines that path prints, and the caller still checks the size of what
     /// came back — the structural half of the same guard, which also catches a
     /// 1× model that ran fine and enlarged nothing.
@@ -507,7 +521,7 @@ impl<'a> SdRunner<'a> {
         // LoRAs ride inline in the prompt, which is sd.cpp's own spelling for
         // them — the same shape `video_cmd` uses below. The tags are pulled back
         // out before the text is conditioned (`extract_and_remove_lora`,
-        // `examples/common/common.cpp:2243`), so this does not reach the text
+        // `examples/common/common.cpp:2274`), so this does not reach the text
         // encoder as words. Only the positive prompt is scanned, which is why
         // `-n` below is left alone.
         let mut prompt = prompt.to_string();
@@ -517,7 +531,7 @@ impl<'a> SdRunner<'a> {
         cmd.args(["-p", &prompt]);
         // Unconditional, not just when there are tags to resolve, and both
         // halves of that matter. An *empty* `--lora-model-dir` makes sd.cpp skip
-        // tag extraction entirely (`common.cpp:2245`) — the `<lora:…>` text then
+        // tag extraction entirely (`common.cpp:2275`) — the `<lora:…>` text then
         // stays in the prompt and is conditioned as literal words — and its
         // default is `"."`, the process CWD. Sending it always means a
         // `<lora:name:1>` typed by hand into the prompt box resolves against the
@@ -543,7 +557,13 @@ impl<'a> SdRunner<'a> {
         // Every pass, not just the generate: a refine that doesn't fit is the
         // same failure as a generate that doesn't. `auto` adds nothing.
         cmd.args(crate::config::memory_args(&p.memory, &p.extra_args));
-        cmd.args(crate::config::gpu_reserve_args(self.cfg.settings().gpu_reserve_gb, &p.extra_args));
+        let settings = self.cfg.settings();
+        cmd.args(crate::config::gpu_reserve_args(settings.gpu_reserve_gb, &p.extra_args));
+        // Every pass that decodes — which is all of them. Not twice when the
+        // flag is already in `extra_args`, where it was found by hand.
+        if settings.vae_conv_direct && !p.extra_args.iter().any(|a| a == "--vae-conv-direct") {
+            cmd.arg("--vae-conv-direct");
+        }
         cmd.args(["-s", &seed.to_string()]);
         cmd.args(["-o", &path_str(out)]);
         // The live preview: `proj` is a fixed latent-to-RGB matrix per VAE
@@ -653,6 +673,14 @@ impl<'a> SdRunner<'a> {
                 if let Ok(mut s) = self.monitor.0.cache_skip.lock() {
                     *s = Some(skip);
                 }
+            } else if let Some(ms) = parse_load_ms(line) {
+                if let Ok(mut total) = self.monitor.0.load_ms.lock() {
+                    *total += ms;
+                }
+            } else if let Some((stage, ms)) = parse_stage(line) {
+                if let Ok(mut s) = self.monitor.0.stages.lock() {
+                    s.add(stage, ms);
+                }
             }
         });
         // Taken back out before waiting, since `wait` blocks and the lock it
@@ -704,8 +732,8 @@ impl<'a> SdRunner<'a> {
                         .any(|l| l.contains("Not enough memory for command submission") || l.contains("ErrorDeviceLost")),
                     need_device_mb: shortfall.map(|s| s.0),
                     need_budget_mb: shortfall.map(|s| s.1),
-                    avail_device_mb: shortfall.map(|s| s.2),
-                    avail_budget_mb: shortfall.map(|s| s.3),
+                    avail_device_mb: shortfall.and_then(|s| s.2),
+                    avail_budget_mb: shortfall.and_then(|s| s.3),
                     references: args.iter().filter(|a| *a == "-r").count() as u32,
                     gtt_total: gtt().map(|g| g.0),
                     gtt_free: gtt().map(|g| g.0.saturating_sub(g.1)),
@@ -899,21 +927,26 @@ fn ram_mode_bytes(args: &[String]) -> Option<u64> {
 }
 
 /// sd.cpp's model-manager line, as `(need device, need budget, available
-/// device, available budget)` in MB:
+/// device, available budget)` in MB. Since f89d9b1 an available figure sd.cpp
+/// couldn't measure is the word `unknown` (device) or `unlimited` (budget), and
+/// the source location trails the message — so each figure is read by its
+/// label, never by counting numbers, which would shift one into another's place.
 ///
 /// ```text
-/// model manager cannot make enough memory available on Vulkan0: need 6337.42 MB device / 6151.92 MB budget, available 21786.55 MB device / 5759.43 MB budget
+/// [W] model manager cannot make enough memory available on Vulkan0: need 6337.42 MB device / 6151.92 MB budget, available 21786.55 MB device / 5759.43 MB budget - model_manager.cpp:1914
 /// ```
-fn parse_shortfall(line: &str) -> Option<(f64, f64, f64, f64)> {
+fn parse_shortfall(line: &str) -> Option<(f64, f64, Option<f64>, Option<f64>)> {
     let rest = line.split_once("cannot make enough memory available")?.1;
-    let nums: Vec<f64> = rest
-        .split_whitespace()
-        .filter_map(|w| w.parse::<f64>().ok())
-        .collect();
-    match nums[..] {
-        [a, b, c, d, ..] => Some((a, b, c, d)),
-        _ => None,
-    }
+    let (need, avail) = rest.split_once("need ")?.1.split_once(", available ")?;
+    // "6337.42 MB device / 6151.92 MB budget" → the number before each label.
+    let figures = |half: &str| -> (Option<f64>, Option<f64>) {
+        let (dev, bud) = half.split_once(" / ").unwrap_or((half, ""));
+        let first = |s: &str| s.split_whitespace().next().and_then(|w| w.parse::<f64>().ok());
+        (first(dev), first(bud))
+    };
+    let (need_dev, need_bud) = figures(need);
+    let (avail_dev, avail_bud) = figures(avail);
+    Some((need_dev?, need_bud?, avail_dev, avail_bud))
 }
 
 /// The text encoders' share of the card, off sd.cpp's summary line:
@@ -1111,6 +1144,13 @@ struct MonitorInner {
     /// What step caching skipped in the last run, off sd-cli's own log line.
     /// Reset when a run begins, so it never describes the run before.
     cache_skip: Mutex<Option<(u32, u32)>>,
+    /// Milliseconds the last run spent loading weights: the sum of sd.cpp's
+    /// `loading tensors completed, taking X s` lines, which come once per
+    /// part — and once per segment when a model streams. What a model kept
+    /// loaded between runs would save, measured rather than guessed.
+    load_ms: Mutex<u64>,
+    /// Where the last run's time went, stage by stage — see [`Stages`].
+    stages: Mutex<Stages>,
     /// Where the last diffusion run kept its weights, when anything was off the
     /// card — see [`describe_params`]. Set from the command's own
     /// `--params-backend`, or from auto-fit's plan line once sd-cli prints it.
@@ -1166,6 +1206,16 @@ impl Monitor {
         }
     }
 
+    /// Where the last run's time went, stage by stage.
+    pub fn stages(&self) -> Stages {
+        self.0.stages.lock().map(|s| *s).unwrap_or_default()
+    }
+
+    /// Milliseconds the last run spent loading weights; see `load_ms` above.
+    pub fn load_ms(&self) -> u64 {
+        self.0.load_ms.lock().map(|m| *m).unwrap_or(0)
+    }
+
     /// What to show while a job runs, or `None` when nothing is running.
     pub fn snapshot(&self) -> Option<Progress> {
         self.0.progress.lock().ok()?.clone()
@@ -1196,6 +1246,12 @@ impl Monitor {
         self.0.cancelled.store(false, Ordering::SeqCst);
         if let Ok(mut skip) = self.0.cache_skip.lock() {
             *skip = None;
+        }
+        if let Ok(mut ms) = self.0.load_ms.lock() {
+            *ms = 0;
+        }
+        if let Ok(mut s) = self.0.stages.lock() {
+            *s = Stages::default();
         }
         if let Ok(mut held) = self.0.child.lock() {
             *held = Some(child);
@@ -1246,6 +1302,73 @@ fn cache_flag(p: &Profile) -> Option<&'static str> {
         "adaptive" => Some("easycache"),
         _ => None,
     }
+}
+
+/// Where a run's time went, off sd.cpp's own per-stage lines. Each stage
+/// includes loading its own weights — sd.cpp loads lazily, on first use — so
+/// `Timings::load_ms` beside it is the share of all of them that was reading.
+/// What it is for: the stage that dominates is the part worth quantising, or
+/// caching, or giving a smaller reference size.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
+pub struct Stages {
+    /// Encoding images into latents: references, or a pass's source image.
+    pub encode_ms: u64,
+    /// The text encoder reading the prompt.
+    pub text_ms: u64,
+    /// The diffusion steps — every sampling pass, summed.
+    pub draw_ms: u64,
+    /// The VAE turning the result into pixels.
+    pub decode_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Stage {
+    Encode,
+    Text,
+    Draw,
+    Decode,
+}
+
+impl Stages {
+    fn add(&mut self, stage: Stage, ms: u64) {
+        match stage {
+            Stage::Encode => self.encode_ms += ms,
+            Stage::Text => self.text_ms += ms,
+            Stage::Draw => self.draw_ms += ms,
+            Stage::Decode => self.decode_ms += ms,
+        }
+    }
+}
+
+/// A stage and its milliseconds, off the lines `src/pipeline/image.cpp`
+/// prints — "taking 1.90s" on the image side, "taking 812 ms" on the video
+/// side — in either log format.
+fn parse_stage(line: &str) -> Option<(Stage, u64)> {
+    let stage = [
+        ("encode_first_stage completed, taking ", Stage::Encode),
+        ("get_learned_condition completed, taking ", Stage::Text),
+        ("sampling completed, taking ", Stage::Draw),
+        ("decode_first_stage completed, taking ", Stage::Decode),
+    ];
+    let (rest, stage) = stage
+        .iter()
+        .find_map(|(marker, s)| line.split_once(marker).map(|(_, r)| (r, *s)))?;
+    let rest = rest.trim_start();
+    let num_end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(rest.len());
+    let n: f64 = rest[..num_end].parse().ok()?;
+    let ms = if rest[num_end..].trim_start().starts_with("ms") { n } else { n * 1000.0 };
+    Some((stage, ms.round() as u64))
+}
+
+/// Milliseconds out of sd.cpp's per-load line, in either log format:
+///
+/// ```text
+/// [I] loading tensors completed, taking 1.71s (read: 1.28s, memcpy: 0.00s, …) - model_loader.cpp:1385
+/// ```
+fn parse_load_ms(line: &str) -> Option<u64> {
+    let rest = line.split_once("loading tensors completed, taking ")?.1;
+    let secs: f64 = rest.split_once('s')?.0.trim().parse().ok()?;
+    Some((secs * 1000.0).round() as u64)
 }
 
 /// `(skipped, total)` out of the line every cache mode logs when it engaged:
@@ -1762,6 +1885,37 @@ binary = "/opt/sd-cli"
         assert_eq!(cmd(ZImage, "adaptive").as_deref(), Some("easycache"));
     }
 
+    /// Each stage line in both formats and both units; "hires sampling" and
+    /// "generating … latent images" are not a second count of the drawing.
+    #[test]
+    fn the_stage_lines_are_read_and_summed() {
+        let lines = [
+            "[INFO   ] image.cpp:391  - encode_first_stage completed, taking 2.01s",
+            "[I] get_learned_condition completed, taking 1.90s - image.cpp:529",
+            "[I] sampling completed, taking 12.25s - image.cpp:899",
+            "[I] generating 1 latent images completed, taking 12.30s - image.cpp:911",
+            "[I] decode_first_stage completed, taking 2.10s - image.cpp:624",
+            "[I] encode_first_stage completed, taking 812 ms - video.cpp:821",
+        ];
+        let mut s = Stages::default();
+        for l in lines {
+            if let Some((stage, ms)) = parse_stage(l) {
+                s.add(stage, ms);
+            }
+        }
+        assert_eq!(s, Stages { encode_ms: 2822, text_ms: 1900, draw_ms: 12250, decode_ms: 2100 });
+        assert_eq!(parse_stage("[I] hires fix completed, taking 3.00s"), None);
+    }
+
+    /// The load line in both formats, and nothing that only looks like it.
+    #[test]
+    fn the_load_line_is_read_in_both_formats() {
+        assert_eq!(parse_load_ms("[INFO   ] model_loader.cpp:1302 - loading tensors completed, taking 0.22s (read: 0.03s, memcpy: 0.00s, convert: 0.00s, copy_to_backend: 0.02s)"), Some(220));
+        assert_eq!(parse_load_ms("[I] loading tensors completed, taking 1.71s (read: 1.28s, memcpy: 0.00s) - model_loader.cpp:1385"), Some(1710));
+        assert_eq!(parse_load_ms("  |####| 4/4 - 1.85GB/s"), None);
+        assert_eq!(parse_load_ms("[I] loading tensors from model.gguf"), None);
+    }
+
     /// Every mode logs the same shape when it skipped something; that line is
     /// the only proof it engaged, so nothing else may be read as one.
     #[test]
@@ -1771,6 +1925,9 @@ binary = "/opt/sd-cli"
             "[INFO ] sample-cache.cpp:299 - EasyCache skipped 9/30 steps (1.43x estimated speedup)",
             "[INFO ] sample-cache.cpp:353 - Spectrum skipped 9/30 steps (1.43x estimated speedup)",
             "[INFO ] sample-cache.cpp:323 - UCache skipped 9/30 steps",
+            // f89d9b1's format: short level, location trailing.
+            "[I] UCache skipped 9/30 steps (1.43x estimated speedup) - sample-cache.cpp:338",
+            "[I] EasyCache skipped 9/30 steps - sample-cache.cpp:324",
         ] {
             assert_eq!(parse_cache_skip(line), Some((9, 30)), "{line}");
         }
@@ -1816,6 +1973,11 @@ binary = "/opt/sd-cli"
         let hand = cmd("ram", &["--params-backend", "te=cpu"]);
         assert_eq!((count(&hand), flag(&hand, "--params-backend")), (1, Some("te=cpu")));
         assert_eq!(count(&cmd("disk", &["--offload-to-cpu"])), 0);
+        // Fast VAE decode is on by default, and sent once even when it was
+        // also typed into extra_args by hand.
+        let direct = |a: &[String]| a.iter().filter(|x| *x == "--vae-conv-direct").count();
+        assert_eq!(direct(&auto), 1);
+        assert_eq!(direct(&cmd("auto", &["--vae-conv-direct"])), 1);
     }
 
     /// auto-fit's own line, in `backend_fit.cpp:474`'s format, read into words.
@@ -1826,6 +1988,15 @@ binary = "/opt/sd-cli"
         let fits = "[INFO ] backend_fit.cpp:474 - auto-fit: --backend \"diffusion=vulkan0,te=vulkan0\"";
         assert_eq!(parse_auto_fit(fits), Some(None));
         assert_eq!(parse_auto_fit("[INFO ] auto-fit plan:"), None);
+        // f89d9b1's format, with the location after the message.
+        assert_eq!(
+            parse_auto_fit("[I] auto-fit: --backend \"diffusion=vulkan0,te=vulkan0\" --params-backend \"te=cpu\" - backend_fit.cpp:474"),
+            Some(Some("te=cpu".into()))
+        );
+        assert_eq!(
+            parse_auto_fit("[I] auto-fit: --backend \"diffusion=vulkan0\" - backend_fit.cpp:474"),
+            Some(None)
+        );
         assert_eq!(
             describe_params("te=cpu,vae=disk").as_deref(),
             Some("text encoder in system RAM, VAE streamed from the SSD")
@@ -1927,6 +2098,16 @@ binary = "/opt/sd-cli"
         assert_eq!((oom.need_budget_mb, oom.avail_budget_mb), (Some(6151.92), Some(5759.43)));
         assert_eq!((oom.references, oom.reserve_gb, oom.encoder_on_card_mb), (2, 16.0, Some(7669.77)));
         assert_eq!(parse_encoder_on_card("text_encoders 7669.77MB(RAM), x"), None);
+        // f89d9b1's format: short level, location trailing, and a figure sd.cpp
+        // couldn't measure as a word — read by label, so nothing shifts.
+        assert_eq!(
+            parse_shortfall("[W] model manager cannot make enough memory available on Vulkan0: need 6337.42 MB device / 6151.92 MB budget, available 21786.55 MB device / 5759.43 MB budget - model_manager.cpp:1914"),
+            Some((6337.42, 6151.92, Some(21786.55), Some(5759.43)))
+        );
+        assert_eq!(
+            parse_shortfall("[W] model manager cannot make enough memory available on Vulkan0: need 1254.49 MB device / 6333.66 MB budget, available unknown device / unlimited budget - model_manager.cpp:1914"),
+            Some((1254.49, 6333.66, None, None))
+        );
         // Before any step: loading. And an ordinary crash is not one.
         let (_, oom) = run("echo 'cannot make enough memory available' ; exit 1", &[]);
         assert_eq!(oom.unwrap().phase, "loading");
@@ -1983,11 +2164,23 @@ binary = "/opt/sd-cli"
         };
         let r = SdRunner::new(&cfg);
         let refs = [PathBuf::from("/s/ref1.png"), PathBuf::from("/s/ref2.png")];
-        let a = argv(&r.txt2img_cmd(&p, "x", None, 1, Path::new("o.png"), &refs));
+        let a = argv(&r.txt2img_cmd(&p, "x", None, 1, Path::new("o.png"), &refs, Some(768)));
         let given: Vec<&str> = a.windows(2).filter(|w| w[0] == "-r").map(|w| w[1].as_str()).collect();
         assert_eq!(given, ["/s/ref1.png", "/s/ref2.png"]);
-        let none = argv(&r.txt2img_cmd(&p, "x", None, 1, Path::new("o.png"), &[]));
-        assert!(!none.iter().any(|x| x == "-r"));
+        // The reference size is sd.cpp's own cap, squared — its resize would
+        // scale a smaller file back up — and only with references to cap.
+        assert_eq!(flag(&a, "--ref-image-args"), Some("vae_input_max_pixels=589824"));
+        let none = argv(&r.txt2img_cmd(&p, "x", None, 1, Path::new("o.png"), &[], Some(768)));
+        assert!(!none.iter().any(|x| x == "-r" || x == "--ref-image-args"));
+        // Edit passes none (its first reference is the image being changed),
+        // 0 is sd.cpp's own default, and a hand-written one wins.
+        for side in [None, Some(0)] {
+            let a = argv(&r.txt2img_cmd(&p, "x", None, 1, Path::new("o.png"), &refs, side));
+            assert!(!a.iter().any(|x| x == "--ref-image-args"), "{side:?}");
+        }
+        let hand = Profile { extra_args: vec!["--ref-image-args".into(), "preset=flux2".into()], ..p.clone() };
+        let a = argv(&r.txt2img_cmd(&hand, "x", None, 1, Path::new("o.png"), &refs, Some(768)));
+        assert_eq!(a.iter().filter(|x| *x == "--ref-image-args").count(), 1);
         let pass = argv(&r.img2img_cmd(&p, "x", None, 1, Path::new("i.png"), Path::new("o.png"), 0.3, 10, 1.0, false, "x"));
         assert!(!pass.iter().any(|x| x == "-r"), "the profile's references must not reach a pass");
     }

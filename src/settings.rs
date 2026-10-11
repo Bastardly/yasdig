@@ -132,6 +132,24 @@ pub struct Settings {
     /// command submission"). Page-level, because that slack is this machine's,
     /// not a checkpoint's. 0 is sd.cpp's own behaviour.
     pub gpu_reserve_gb: f32,
+    /// The side, in pixels, each reference image is drawn at: sd.cpp's
+    /// `vae_input_max_pixels` is this squared. 0 is sd.cpp's own default — a
+    /// reference resized to the output's area, up to a megapixel. Each
+    /// reference costs attention like the image itself, and attention grows
+    /// with the square of the tokens: four references made a Q8 Klein 9B at
+    /// 1024² take 153 s against 22 s with none. A likeness, a face or a
+    /// garment survives 512 well. Page-level: a speed choice for this machine,
+    /// not a model's. Not applied to Edit, whose first reference is the image
+    /// being changed.
+    pub reference_size: u32,
+    /// sd-cli's `--vae-conv-direct`: the VAE's convolutions computed directly
+    /// instead of through `ggml_conv_2d`'s im2col, which unrolls the
+    /// full-resolution activations into a buffer gigabytes long per layer. The
+    /// decode is bound by that traffic, not by the weights — an f16 copy of
+    /// Klein's VAE changed nothing, this took its decode from 9.3 s to 0.9 s
+    /// (and Krea 2's Wan VAE from 3.3 s to 1.2 s).
+    /// Page-level: how this machine computes, not a checkpoint's choice.
+    pub vae_conv_direct: bool,
 
     /// The `[variables]` table: `{animal}` in a prompt and the words it can
     /// stand for. See [`crate::variables`].
@@ -280,6 +298,13 @@ impl Default for Settings {
             // sd.cpp's own packing until someone needs more slack: the
             // out-of-memory box offers it when a run dies of exactly that.
             gpu_reserve_gb: 0.0,
+            // A quarter of sd.cpp's megapixel per reference. Chosen by eye on
+            // Klein 9B: the likeness held at 512, and 1024² with four
+            // references took 33.6 s against 54 s at 768.
+            reference_size: 512,
+            // Measured 10× on Klein 9B's VAE (9.3 s → 0.9 s) with the same
+            // picture; direct convolution computes the same sums.
+            vae_conv_direct: true,
             variables: Variables::new(),
         }
     }
@@ -335,6 +360,8 @@ impl Settings {
             clear_videos_on_close: self.clear_videos_on_close,
             max_image_side: self.max_image_side,
             gpu_reserve_gb: self.gpu_reserve_gb,
+            reference_size: self.reference_size,
+            vae_conv_direct: self.vae_conv_direct,
             variables: self.variables.clone(),
         }
     }
@@ -445,6 +472,12 @@ impl Settings {
             bail!(
                 "max_image_side is {}, must be between 1024 and {MAX_IMAGE_SIDE_CEILING}",
                 self.max_image_side
+            );
+        }
+        if self.reference_size != 0 && !(256..=2048).contains(&self.reference_size) {
+            bail!(
+                "reference_size is {}, must be 0 (sd.cpp's own) or between 256 and 2048",
+                self.reference_size
             );
         }
         if !(0.0..=MAX_GPU_RESERVE_GB).contains(&self.gpu_reserve_gb) {
@@ -802,6 +835,8 @@ const PAGE_ONLY: &[&str] = &[
     "clear_videos_on_close",
     "max_image_side",
     "gpu_reserve_gb",
+    "reference_size",
+    "vae_conv_direct",
 ];
 
 /// The most of the card [`Settings::gpu_reserve_gb`] may keep free. Past this
@@ -849,6 +884,28 @@ pub fn models_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Settings page marks a row `page: true` exactly when the server
+    /// refuses that key for a model. The per-model card hides marked rows and
+    /// sends every other one, so a missing mark makes every per-model save
+    /// fail — which a hand-kept second list did, from `max_image_side` on.
+    #[test]
+    fn fields_mark_exactly_the_page_only_keys() {
+        let page = crate::web::lookup("/js/settings.js").expect("settings.js is served");
+        let js = std::str::from_utf8(page.bytes).unwrap();
+        let mut seen = 0;
+        for line in js.lines() {
+            let Some(rest) = line.split_once("{ key: '").map(|(_, r)| r) else { continue };
+            let key = rest.split('\'').next().unwrap();
+            let marked = line.contains("page: true");
+            assert_eq!(marked, PAGE_ONLY.contains(&key), "settings.js row {key}: page mark disagrees with PAGE_ONLY");
+            seen += 1;
+        }
+        assert!(seen > 20, "read the FIELDS rows ({seen})");
+        for key in PAGE_ONLY {
+            assert!(js.contains(&format!("{{ key: '{key}', page: true")), "{key} has no row marked page: true");
+        }
+    }
 
     fn tmpdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -937,6 +994,12 @@ mod tests {
         assert_eq!(toml::from_str::<Settings>(&toml::to_string_pretty(&r).unwrap()).unwrap().gpu_reserve_gb, 3.0);
         assert!(Settings { gpu_reserve_gb: -1.0, ..Settings::default() }.validate().is_err());
         assert!(Settings { gpu_reserve_gb: 20.0, ..Settings::default() }.validate().is_err());
+        // The reference size: page-level, 512 by default, 0 or a sane side.
+        assert!(PAGE_ONLY.contains(&"reference_size"));
+        assert_eq!(Settings::default().reference_size, 512);
+        assert!(Settings { reference_size: 0, ..Settings::default() }.validate().is_ok());
+        assert!(Settings { reference_size: 100, ..Settings::default() }.validate().is_err());
+        assert!(PAGE_ONLY.contains(&"vae_conv_direct") && Settings::default().vae_conv_direct);
     }
 
     #[test]
