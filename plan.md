@@ -134,6 +134,11 @@ Refine dialog). Parked: #2 on `outpaintingV1`. Next candidates: Qwen-Image-Edit 
 FLUX.1 Kontext as families (they reuse the reference plumbing), or #5 comparison
 grids.
 
+--- Cleanup ---
+
+# New Tab order (Small change)
+Image, Video, Outputs ... rest is the same
+
 # Powered by Stable-diffusion.cpp and Vulkan
 Remove the text "Vulkan · stable-diffusion.cpp + native FSR upscale — no Python." and create a
 footer with the text Powered by Stable-diffusion.cpp and Vulkan with a link to each product.
@@ -150,7 +155,11 @@ So I think the summery text should have:     color: var(--accent-hi); and the
 
 Give prompt textareas a default height of 220px
 
-# Hide video and convert tab
+# Implement same look and field from image menu to video, convert and settings tab.
+Here I'm thinking about styling and the use of <details> and <summery> to collapse categories.
+When on the setting page, perhaps we could align the settings with their segment placement on the image tab 
+
+# Hide video (Maybe)
 Currently, since I'm planning on releasing the app soon, I decided to focus on the image generation workflow.
-In this regard, the video and convert tab feels like an odd side note, so I think we should hide the tabs for now.
+In this regard, the video feels like an odd side note, so I think we should hide the tabs for now.
 We should make them a setting under "Nightly features" at the bottom, with default off. This will allow us to work with them more easily. The if people decides to try them anyway, the were warned in the setting that these features are WIP.

@@ -288,9 +288,12 @@ sidecar records paths, the wire carries names.
 ## The Image tab's folds
 
 Below the run panel, the controls column is all `<details class="fold">`: Prompts,
-Generation, After each generation, Image to image, Models (LoRAs included — they only
-fit the family they were trained on, so they sit with the model), Hi-res pass, Refine
-pass. *Save as defaults* and the seed stay outside them: the seed is reached for between
+Models (LoRAs included — they only fit the family they were trained on, so they sit
+with the model; above Generation, since what runs is decided before how it runs),
+Generation, After each generation, Image to image, Hi-res pass, Refine pass. The
+Video, Convert and Settings tabs use the same folds, so every tab reads alike; the
+Settings form's sections are folds in the Image tab's order (`SECTION` rows, with
+`SUB` headings inside one). *Save as defaults* and the seed stay outside them: the seed is reached for between
 renders (pinned from a result, reset to vary it), so it stays beside the button. Images
 and *Keep going* are the last rows of Generation. There is no line
 summing up the run any more: the summaries say the same thing fold by fold.
@@ -308,8 +311,8 @@ listener of its own. A redraw that fires no event has to call it itself, which i
 
 Four things break silently:
 
-- **Open state is per fold and per browser** (`initFolds`, key `rustimage.fold.<id>`,
-  every access in a try/catch). Without a stored value a fold starts as the markup has
+- **Open state is per fold and per browser** (`dom.js`'s `rememberFolds(root)`, called
+  by every tab with folds; key `rustimage.fold.<id>`, every access in a try/catch). Without a stored value a fold starts as the markup has
   it, so `open` in `index.html` is the default and not decoration.
 - **Picking a hi-res or refine model refills that fold** (`fillPass`, from
   `passModel`). `swap_model` replaces the profile wholesale and the boxes land on top,
@@ -1339,6 +1342,11 @@ active tab, active thumbnail, every `accent-color`, the progress fill and the fo
 ring are bone rather than a hue, because every one of those marks lands on or beside
 an image. A photo tool's selection border is light grey for this reason.
 
+**Fold titles have tokens of their own** (`--fold-title`, a sky blue at amber's
+saturation and lightness, and `--fold-on`, green, for a summary marking a departure
+from the plain path), so section headings stand out of the white text without
+borrowing the action colour. Change them there, not per rule.
+
 **The action colour marks the one thing a controls panel is for: amber is the
 button at the head of the column, and nothing else.** Neutral is every other
 click; red stops or destroys something. On four of the five panels that button
@@ -1375,7 +1383,7 @@ resolves the imports itself. `index.html` loads exactly one of them:
 
 | file | holds |
 |------|-------|
-| `dom.js` | `$`, `esc`, `post`, `numOr`, `bar`. No state, no imports |
+| `dom.js` | `$`, `esc`, `post`, `numOr`, `bar`, `rememberFolds`. No state, no imports |
 | `state.js` | `S`, `PANES`, `P`, `clearPane`, `escErr` |
 | `busy.js` | `IDLE_LABELS`, `setBusy`/`setIdle` (one button waiting on its own request), `onIdle`, `cancelRun` |
 | `jobs.js` | the `/jobs` poll: the Jobs button and dialog, every tab's progress line, a run's images (`onResult`) and failures (`onNotice`) |
@@ -1449,6 +1457,29 @@ broadcast plus a registry, and `style.css` would need re-plumbing into each root
 root a custom element is an `init()` with ceremony. `showTab` clearing the pane it
 leaves is the same argument from the other end: these tabs are one app with five
 faces, not five independent things.
+
+## Nightly features
+
+Unfinished workflows ship hidden, behind Settings → *Nightly features*: today one
+row, `Settings::nightly_video` (page-level, off by default). `applyNightly` in
+`settings.js` reads it from what the server stored — on load and after every save —
+and hides the Video tab button, the *Clear videos* row, and the clips line in *Close
+server*'s confirm; leaving the Video tab while it hides goes to Image. **Hidden is not
+removed**: the routes, `/video-models`, the clips on disk, the Convert tab's *Video
+models* group and every server-side rule stay exactly as they are, which is what lets
+the feature be worked on in place and turned back on with a tick.
+
+## Licences
+
+rustimage is Apache-2.0 (`LICENSE`, `Cargo.toml`). A release embeds sd-cli, so the
+MIT and BSD notices of stable-diffusion.cpp, ggml and what they bundle (libwebp,
+libwebm, Oniguruma, utf8proc, darts-clone, nlohmann/json, stb, miniz, zip) must
+travel inside the one file: `THIRD_PARTY_LICENSES.md` holds them verbatim, built
+from the clone's own licence files plus the crate table (`cargo tree -e normal` ×
+`cargo metadata`), and the server compiles it in and serves it at `GET /licences`
+for Help → *About & licences* — one copy. **Regenerate it when sd.cpp is bumped or a
+crate is added** (a new bundled library is a notice that has to appear); the footer's
+*Licences* link opens that topic.
 
 ## Settings
 

@@ -14,8 +14,10 @@
   <div class="tabs">
     <h1>rustimage</h1>
     <button type="button" class="btn btn-choice tab active" data-tab="image">Image</button>
+    <!-- Hidden unless Settings → Nightly features turns it on (settings.js,
+         `nightly_video`): the video workflow is unfinished. -->
+    <button type="button" class="btn btn-choice tab" data-tab="video" hidden>Video</button>
     <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
-    <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
     <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
     <button type="button" class="btn btn-choice tab" data-tab="getmodels">Get models</button>
     <button type="button" class="btn btn-choice tab" data-tab="help">Help</button>
@@ -96,6 +98,38 @@
         <input id="negative" placeholder="blurry, low quality">
       </prompt-box>
       <p class="sub" id="negnote" hidden>No negative prompt at CFG 1 — the model ignores it. Raise CFG to use one.</p>
+    </details>
+
+    <!-- What does the work: the diffusion model, then one select per separate
+         file its family runs with (a VAE, a text encoder), drawn by
+         `syncParts` from the slots `/models` serves, then the LoRAs that patch
+         it — adapters from models/loras/, which only fit the family they were
+         trained on, so they sit with the model they are for. Once picked they
+         rarely change, and the summary says what is in it. Refine and Hi-res
+         pick their own model with their own pass. Above Generation: what runs
+         is decided before how it runs. -->
+    <details id="modelsbox" class="fold" open>
+      <summary>Models <span class="foldstate" id="modelsum"></span></summary>
+      <label for="template">Diffusion model</label>
+      <select id="template"></select>
+      <!-- Filled by loadModels when a model is listed greyed out: the Get
+           models tab knows which files it is waiting for and can fetch them.
+           Right under the select, because a greyed-out model can't be picked —
+           so this line, not anything about the selected model, is the way in. -->
+      <p class="sub" id="getparts" hidden></p>
+      <div id="partrows"></div>
+      <!-- Where the weights live while a pass runs (config::MEMORY_MODES). With
+           the parts because it is about this model's files, and per model:
+           *Save as defaults for this model* is how "Klein 9B needs RAM" sticks. -->
+      <label for="memory">Memory</label>
+      <select id="memory">
+        <option value="auto">Auto</option>
+        <option value="ram">System RAM</option>
+        <option value="disk">Stream from SSD (slower)</option>
+      </select>
+      <label data-help="loras">LoRAs</label>
+      <div id="loras"></div>
+      <button type="button" id="loraadd" class="btn spaced">+ Add LoRA</button>
     </details>
 
     <details id="fold-gen" class="fold" open>
@@ -250,7 +284,6 @@
       </div>
     </details>
 
-
     <!-- Where the picture begins: noise, or an image. The one thing that used to
          be a whole second tab — a source image plus the same prompt, model, LoRAs
          and ladder — so it is a slot here rather than a tab of its own. Nothing
@@ -296,36 +329,6 @@
       <p class="sub" id="srcnote" data-when="source" hidden></p>
     </details>
 
-    <!-- What does the work: the diffusion model, then one select per separate
-         file its family runs with (a VAE, a text encoder), drawn by
-         `syncParts` from the slots `/models` serves, then the LoRAs that patch
-         it — adapters from models/loras/, which only fit the family they were
-         trained on, so they sit with the model they are for. Once picked they
-         rarely change, and the summary says what is in it. Refine and Hi-res
-         pick their own model with their own pass. -->
-    <details id="modelsbox" class="fold" open>
-      <summary>Models <span class="foldstate" id="modelsum"></span></summary>
-      <label for="template">Diffusion model</label>
-      <select id="template"></select>
-      <!-- Filled by loadModels when a model is listed greyed out: the Get
-           models tab knows which files it is waiting for and can fetch them.
-           Right under the select, because a greyed-out model can't be picked —
-           so this line, not anything about the selected model, is the way in. -->
-      <p class="sub" id="getparts" hidden></p>
-      <div id="partrows"></div>
-      <!-- Where the weights live while a pass runs (config::MEMORY_MODES). With
-           the parts because it is about this model's files, and per model:
-           *Save as defaults for this model* is how "Klein 9B needs RAM" sticks. -->
-      <label for="memory">Memory</label>
-      <select id="memory">
-        <option value="auto">Auto</option>
-        <option value="ram">System RAM</option>
-        <option value="disk">Stream from SSD (slower)</option>
-      </select>
-      <label data-help="loras">LoRAs</label>
-      <div id="loras"></div>
-      <button type="button" id="loraadd" class="btn spaced">+ Add LoRA</button>
-    </details>
 
     <!-- Two passes, two of everything. Hi-res first: it is the pass that
          enlarges and refine is the finishing touch you run at whatever size you
@@ -500,117 +503,130 @@
       <div id="verr" class="err"></div>
     </div>
 
-    <label for="vprompt">Prompt</label>
-    <prompt-box>
-      <textarea id="vprompt" placeholder="the crab lifts a claw, slow camera push in"></textarea>
-    </prompt-box>
+    <!-- The Image tab's folds, the same pattern: each summary says what is
+         inside (`syncVideoSummaries`), so a folded section still reads, and each
+         remembers being open per browser (`rememberFolds`). -->
+    <details id="vfold-prompt" class="fold" open>
+      <summary>Prompts <span class="foldstate" id="vsum-prompt"></span></summary>
+      <label for="vprompt">Prompt</label>
+      <prompt-box>
+        <textarea id="vprompt" placeholder="the crab lifts a claw, slow camera push in"></textarea>
+      </prompt-box>
 
-    <label for="vnegative">Negative prompt</label>
-    <!-- Pre-filled from the model, which for Wan means Wan's own published
-         negative prompt — 400 characters of Chinese nobody should have to
-         retype. Emptying it deliberately means "no negative". -->
-    <prompt-box>
-      <textarea id="vnegative" class="short"></textarea>
-    </prompt-box>
+      <label for="vnegative">Negative prompt</label>
+      <!-- Pre-filled from the model, which for Wan means Wan's own published
+           negative prompt — 400 characters of Chinese nobody should have to
+           retype. Emptying it deliberately means "no negative". -->
+      <prompt-box>
+        <textarea id="vnegative" class="short"></textarea>
+      </prompt-box>
+    </details>
 
-    <div class="row">
-      <div>
-        <label for="vmodel">Model</label>
-        <select id="vmodel"></select>
-      </div>
-      <div>
-        <label for="vseed">Seed (-1 = random)</label>
-        <input id="vseed" type="number" value="-1">
-      </div>
-    </div>
-    <p class="sub" id="vmodelnote"></p>
-
-    <!-- The first frame comes from work/output/ — the images that were worth
-         keeping are the ones worth animating. Clearing it makes the same model
-         run as plain text-to-video. -->
-    <label class="grouphead" data-help="vfirstframe">First frame</label>
-    <!-- The Image tab's source slot (Image to image), from the same factory
-         (source-slot.js), so an uploaded photo can be animated too. -->
-    <div id="vsrcdrop" class="drop">
-      <div class="picked">
-        <img id="vsrcthumb" alt="" hidden>
-        <span id="vsrcname" class="sub"></span>
-        <div class="btnrow">
-          <button type="button" id="vsrcpick" class="btn">Choose…</button>
-          <button type="button" id="vsrcupload" class="btn">Upload…</button>
-          <button type="button" id="vsrcclear" class="btn" hidden>Clear</button>
+    <details id="vfold-gen" class="fold" open>
+      <summary>Generation <span class="foldstate" id="vsum-gen"></span></summary>
+      <div class="row">
+        <div>
+          <label for="vmodel">Model</label>
+          <select id="vmodel"></select>
+        </div>
+        <div>
+          <label for="vseed">Seed (-1 = random)</label>
+          <input id="vseed" type="number" value="-1">
         </div>
       </div>
-      <input type="file" id="vsrcfile" accept="image/*" hidden>
-    </div>
+      <p class="sub" id="vmodelnote"></p>
 
-    <div class="row">
-      <div>
-        <label for="vw">Width</label>
-        <input id="vw" type="number" min="64">
+      <!-- The first frame comes from work/output/ — the images that were worth
+           keeping are the ones worth animating. Clearing it makes the same model
+           run as plain text-to-video. -->
+      <label class="grouphead" data-help="vfirstframe">First frame</label>
+      <!-- The Image tab's source slot (Image to image), from the same factory
+           (source-slot.js), so an uploaded photo can be animated too. -->
+      <div id="vsrcdrop" class="drop">
+        <div class="picked">
+          <img id="vsrcthumb" alt="" hidden>
+          <span id="vsrcname" class="sub"></span>
+          <div class="btnrow">
+            <button type="button" id="vsrcpick" class="btn">Choose…</button>
+            <button type="button" id="vsrcupload" class="btn">Upload…</button>
+            <button type="button" id="vsrcclear" class="btn" hidden>Clear</button>
+          </div>
+        </div>
+        <input type="file" id="vsrcfile" accept="image/*" hidden>
       </div>
-      <div>
-        <label for="vh">Height</label>
-        <input id="vh" type="number" min="64">
-      </div>
-    </div>
-    <div class="row">
-      <div>
-        <label for="vframes">Frames</label>
-        <input id="vframes" type="number" min="1">
-      </div>
-      <div>
-        <label for="vfps">fps</label>
-        <input id="vfps" type="number" min="1" max="60">
-      </div>
-    </div>
-    <p class="sub" id="vgridnote"></p>
 
-    <div class="row">
-      <div>
-        <label for="vsteps">Steps</label>
-        <input id="vsteps" type="number" min="1" max="100">
+      <div class="row">
+        <div>
+          <label for="vw">Width</label>
+          <input id="vw" type="number" min="64">
+        </div>
+        <div>
+          <label for="vh">Height</label>
+          <input id="vh" type="number" min="64">
+        </div>
       </div>
-      <div>
-        <label for="vcfg">CFG scale</label>
-        <input id="vcfg" type="number" step="0.1" min="0">
+      <div class="row">
+        <div>
+          <label for="vframes">Frames</label>
+          <input id="vframes" type="number" min="1">
+        </div>
+        <div>
+          <label for="vfps">fps</label>
+          <input id="vfps" type="number" min="1" max="60">
+        </div>
       </div>
-      <div>
-        <label for="vsampler">Sampler</label>
-        <!-- Filled from #sampler by initVideo: one list, not two. -->
-        <select id="vsampler"></select>
+      <p class="sub" id="vgridnote"></p>
+
+      <div class="row">
+        <div>
+          <label for="vsteps">Steps</label>
+          <input id="vsteps" type="number" min="1" max="100">
+        </div>
+        <div>
+          <label for="vcfg">CFG scale</label>
+          <input id="vcfg" type="number" step="0.1" min="0">
+        </div>
+        <div>
+          <label for="vsampler">Sampler</label>
+          <!-- Filled from #sampler by initVideo: one list, not two. -->
+          <select id="vsampler"></select>
+        </div>
       </div>
-    </div>
-    <!-- Shown only for the mixture-of-experts pair, which is the only family
-         with a second expert for these to describe. -->
-    <div class="row" id="vmoe" hidden>
-      <div>
-        <label for="vhsteps">High-noise steps</label>
-        <input id="vhsteps" type="number" min="0" max="100">
+    </details>
+
+    <details id="vfold-adv" class="fold">
+      <summary>Advanced <span class="foldstate" id="vsum-adv"></span></summary>
+      <!-- Shown only for the mixture-of-experts pair, which is the only family
+           with a second expert for these to describe. -->
+      <div class="row" id="vmoe" hidden>
+        <div>
+          <label for="vhsteps">High-noise steps</label>
+          <input id="vhsteps" type="number" min="0" max="100">
+        </div>
+        <div>
+          <label for="vhcfg">High-noise CFG</label>
+          <input id="vhcfg" type="number" step="0.1" min="0">
+        </div>
       </div>
-      <div>
-        <label for="vhcfg">High-noise CFG</label>
-        <input id="vhcfg" type="number" step="0.1" min="0">
+      <div class="row">
+        <div>
+          <label for="vshift">Flow shift</label>
+          <input id="vshift" type="number" step="0.5" min="0">
+        </div>
       </div>
-    </div>
-    <div class="row">
-      <div>
-        <label for="vshift">Flow shift</label>
-        <input id="vshift" type="number" step="0.5" min="0">
+      <div class="checks">
+        <!-- The first OOM escalation, and the one worth reaching for before the
+             others: Wan's VAE is the memory-hungry end of the pipeline, and
+             tiling it costs time rather than quality. -->
+        <label><input type="checkbox" id="vtiling"> VAE tiling (if the decode runs out of VRAM)</label>
       </div>
-    </div>
-    <div class="checks">
-      <!-- The first OOM escalation, and the one worth reaching for before the
-           others: Wan's VAE is the memory-hungry end of the pipeline, and
-           tiling it costs time rather than quality. -->
-      <label><input type="checkbox" id="vtiling"> VAE tiling (if the decode runs out of VRAM)</label>
       <label for="vmemory">Memory</label>
       <select id="vmemory">
         <option value="auto">Auto</option>
         <option value="ram">System RAM</option>
         <option value="disk">Stream from SSD (slower)</option>
       </select>
-    </div>
+    </details>
   </div>
 
   <div class="col-result">
@@ -648,17 +664,24 @@
       <div id="cerr" class="err"></div>
     </div>
 
-    <label for="csource">Model file</label>
-    <select id="csource"></select>
-    <p class="sub" id="crole"></p>
-    <p class="sub" id="cnote"></p>
+    <!-- Folds for the look the other tabs share; both open, since the form is
+         short and both halves are needed for every conversion. -->
+    <details id="cfold-file" class="fold" open>
+      <summary>Model file</summary>
+      <label for="csource">File</label>
+      <select id="csource"></select>
+      <p class="sub" id="crole"></p>
+      <p class="sub" id="cnote"></p>
+    </details>
 
-    <label for="ctype" class="grouphead">Convert to</label>
-    <select id="ctype"></select>
-    <p class="sub" id="ctypenote"></p>
-
-    <p class="sub" id="csize"></p>
-    <p class="sub" id="cdest"></p>
+    <details id="cfold-type" class="fold" open>
+      <summary>Convert to</summary>
+      <label for="ctype">Weight type</label>
+      <select id="ctype"></select>
+      <p class="sub" id="ctypenote"></p>
+      <p class="sub" id="csize"></p>
+      <p class="sub" id="cdest"></p>
+    </details>
   </div>
 
   <div class="col-result">
@@ -779,7 +802,14 @@
   </div>
 </div>
 
-  <p class="sub">Vulkan · stable-diffusion.cpp + native FSR upscale — no Python.</p>
+  <!-- Credits, and the way to the licence notices a one-file release has to
+       carry inside itself (Help → About & licences). -->
+  <footer class="powered">
+    Powered by
+    <a href="https://github.com/leejet/stable-diffusion.cpp" target="_blank" rel="noopener noreferrer">stable-diffusion.cpp</a>
+    and <a href="https://www.vulkan.org/" target="_blank" rel="noopener noreferrer">Vulkan</a>
+    · <a href="#" id="licenceslink">Licences</a>
+  </footer>
 
 <!-- The viewer, and the only place the display filters can be judged: a
      sharpness setting read off a 400 px preview is a guess. Panel on the left,

@@ -1,4 +1,4 @@
-import { $, esc, post } from './dom.js';
+import { $, esc, post, rememberFolds } from './dom.js';
 import { setBusy, setIdle, cancelRun } from './busy.js';
 import { soonJobs } from './jobs.js';
 
@@ -131,6 +131,7 @@ async function startConvert() {
 }
 
 export function initConvert() {
+  rememberFolds($('tab-convert'));
   $('cgo').addEventListener('click', startConvert);
   $('cstop').addEventListener('click', () => cancelRun('cstop', 'convert'));
   $('csource').addEventListener('change', () => {

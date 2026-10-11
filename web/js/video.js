@@ -1,4 +1,4 @@
-import { $, esc, post, numOr } from './dom.js';
+import { $, esc, post, numOr, rememberFolds } from './dom.js';
 import { showError } from './memory.js';
 import { S } from './state.js';
 import { setBusy, setIdle, cancelRun } from './busy.js';
@@ -30,6 +30,20 @@ let vrunning = false;
 
 function currentVideoModel() {
   return videoModels.find((m) => m.name === $('vmodel').value);
+}
+
+// Each fold's summary says what is inside, the Image tab's rule, so a folded
+// section still reads. Run from a delegated listener on the tab, and after
+// anything that sets the boxes without an event (`syncVideo`, `applyClip`).
+const MEMORY_WORDS = { auto: 'Auto', ram: 'System RAM', disk: 'Stream from SSD' };
+function syncVideoSummaries() {
+  const p = $('vprompt').value.trim();
+  $('vsum-prompt').textContent = p ? `— ${p.length > 60 ? p.slice(0, 60) + '…' : p}` : '';
+  const m = $('vmodel').value;
+  $('vsum-gen').textContent = m
+    ? `— ${m} · ${$('vw').value}×${$('vh').value} · ${$('vframes').value} frames` : '';
+  $('vsum-adv').textContent = `— Memory: ${MEMORY_WORDS[$('vmemory').value] ?? $('vmemory').value}`
+    + ($('vtiling').checked ? ' · VAE tiling' : '');
 }
 
 // Round the way the server will. Both rules come from /video-models rather than
@@ -97,6 +111,7 @@ function syncVideo() {
     : (m.description || '');
   $('vgo').disabled = !!m.missing.length || vrunning;
   syncVideoNote();
+  syncVideoSummaries();
 }
 
 async function loadVideoModels() {
@@ -305,6 +320,7 @@ function applyClip(c) {
   $('vhcfg').value = v.high_noise_cfg_scale ?? '';
   vSource.set(c.source);
   syncVideoNote();
+  syncVideoSummaries();
 }
 
 async function deleteClips() {
@@ -337,6 +353,8 @@ export function initVideo() {
   // The Image tab's sampler list, groups and all: one list in the markup, and
   // `config::SAMPLERS` checks it. First, before anything sets a value on it.
   $('vsampler').innerHTML = $('sampler').innerHTML;
+  rememberFolds($('tab-video'));
+  for (const ev of ['input', 'change']) $('tab-video').addEventListener(ev, syncVideoSummaries);
   $('vgo').addEventListener('click', startClip);
   $('vstop').addEventListener('click', cancelClip);
   vSource.init();

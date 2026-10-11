@@ -1,4 +1,4 @@
-import { $, bar, esc, post, numOr } from './dom.js';
+import { $, bar, esc, post, numOr, rememberFolds } from './dom.js';
 import { S, P, escErr } from './state.js';
 import { setBusy, setIdle, onIdle, redrawBusy } from './busy.js';
 import { cancelPost, setPost, setPostStart, setViewerImage, showFullSize } from './viewer.js';
@@ -266,16 +266,7 @@ function syncSummaries() {
 // slot and the two passes folded, since those are reached for rather than used
 // every time.
 function initFolds() {
-  for (const d of $('tab-image').querySelectorAll('details.fold[id]')) {
-    const key = `rustimage.fold.${d.id}`;
-    try {
-      const v = localStorage.getItem(key);
-      if (v !== null) d.open = v === '1';
-    } catch { /* as the markup has it */ }
-    d.addEventListener('toggle', () => {
-      try { localStorage.setItem(key, d.open ? '1' : '0'); } catch { /* ignore */ }
-    });
-  }
+  rememberFolds($('tab-image'));
 }
 
 // Pre-fill the Advanced controls from the selected model's defaults.

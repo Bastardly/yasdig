@@ -1,4 +1,4 @@
-import { $, esc, post } from './dom.js';
+import { $, esc, post, rememberFolds } from './dom.js';
 import { setUpFactor, loadModels, upscalersReady, upscalerOptions } from './image.js';
 import { wireHints } from './hints.js';
 import { loadModelSettings } from './modelsettings.js';
@@ -31,16 +31,22 @@ import { loadModelSettings } from './modelsettings.js';
 // nothing.
 const BLANK = true;
 
-// Where a section starts. Named after the tab whose controls it holds the
-// defaults for, which is what makes "why is Strength in here twice" answer
-// itself. `fold` opens a <details> that runs to the end of the form.
+// Where a section starts. Every section is a fold (`<details class="fold">`),
+// like the Image tab's, and they come in the Image tab's order — Prompts,
+// Models, Generation, Image to image, Hi-res, Refine — so a default is found
+// where its control is. `open: false` starts one folded; what each fold was
+// last left at is remembered per browser (`rememberFolds`).
 //
 // `pane` is the id of the container the rows under it are rendered into, and it
 // is why this table is still one table: `markup` is called once per pane and
 // skips what isn't in the one it is building, so a section changing column is
 // this one word rather than a second list and a second loop.
-const SECTION = (title, { fold = false, help = null, pane = 'setform' } = {}) =>
-  ({ title, fold, help, pane });
+const SECTION = (title, { open = true, help = null, pane = 'setform' } = {}) =>
+  ({ title, open, help, pane });
+
+// A heading inside a section, for rows that belong together but not to a fold
+// of their own — the six UNet defaults inside Generation.
+const SUB = (sub, help = null) => ({ sub, help });
 
 export const FIELDS = [
   SECTION('Prompts'),
@@ -56,52 +62,58 @@ export const FIELDS = [
   SECTION('Prompt variables', { help: 'setvars', pane: 'setvarbox' }),
   { key: 'variables', page: true, kind: 'vars' },
 
+  // The Image tab's Models fold holds the Memory select, so its default is here.
+  // Global like the cache mode; a model that needs RAM says so in its own
+  // defaults.
+  SECTION('Models'),
+  { key: 'memory', from: 'memory', kind: 'mirror' },
+
+  SECTION('Generation'),
   // The six knobs a family recipe names. Here they are the defaults for the
   // UNet families only, because that is what they are: every other family's
   // recipe is laid over them (`ImageFamily::recipe`), so a Steps box that
   // claimed to reach a Z-Image would be a setting that appears not to take.
   // Kept rather than removed because they are the one place to change every
   // SDXL at once; a single model is Per model's business.
-  SECTION('SD 1.x, SD 2.x and SDXL', { help: 'setunet' }),
+  SUB('SD 1.x, SD 2.x and SDXL', 'setunet'),
   { key: 'steps', from: 'steps', kind: 'int', min: 1, max: 100 },
   { key: 'cfg_scale', from: 'cfg', kind: 'num', min: 0, step: 0.1 },
   { key: 'sampler', from: 'sampler', kind: 'mirror' },
   { key: 'scheduler', from: 'scheduler', kind: 'mirror' },
   { key: 'width', from: 'w', kind: 'int', min: 64, step: 64 },
   { key: 'height', from: 'h', kind: 'int', min: 64, step: 64 },
-
-  SECTION('Image'),
-  // Here and not with the UNet rows above: every value is right for every
-  // family (`config::CACHE_MODES`) and no recipe pins it, so it reaches them all.
+  SUB('Every model'),
+  // Every value is right for every family (`config::CACHE_MODES`) and no recipe
+  // pins it, so it reaches them all — which is why it is out of the UNet rows.
   { key: 'cache_mode', from: 'cachemode', kind: 'mirror' },
-  // Where the weights live (`config::MEMORY_MODES`). Global like the cache
-  // mode; a model that needs RAM says so in its own defaults.
-  { key: 'memory', from: 'memory', kind: 'mirror' },
   { key: 'upscale_factor', from: 'upscale', kind: 'num', min: 1, max: 4, step: 0.1 },
   { key: 'upscaler', from: 'upscaler', kind: 'upscaler' },
-  // A limit, not a default for any control: so its own label and its own help.
-  { key: 'max_image_side', page: true, label: 'Largest image side', help: 'setmaxside', kind: 'int', min: 1024, max: 32768, step: 512 },
-  // Also a limit of this machine rather than a default for a control.
-  { key: 'gpu_reserve_gb', page: true, label: 'Keep free on the GPU (GB)', help: 'setgpureserve', kind: 'num', min: 0, max: 16, step: 0.5 },
-  // A speed choice for this machine, not a default for any control: so its own
-  // label and help, and here rather than beside the References button.
-  { key: 'reference_size', page: true, label: 'Reference size', help: 'setrefsize', kind: 'choice',
-    options: [[512, '512 px (default)'], [768, '768 px'], [1024, '1024 px'], [0, 'Full (the output’s size)']] },
-  // A speed setting for this machine too: how sd.cpp computes the VAE.
-  { key: 'vae_conv_direct', page: true, label: 'Fast VAE decode', help: 'setvaedirect', kind: 'check' },
-  { key: 'refine_steps', from: 'rsteps', kind: 'int', min: 0, max: 100 },
-  { key: 'refine_strength', from: 'rstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
-  { key: 'refine_cfg_scale', from: 'rcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
+
+  // The pass over a source runs Steps and CFG scale above; its strength and
+  // working size are the two numbers of its own.
+  SECTION('Image to image'),
+  { key: 'source_strength', from: 'srcstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
+  { key: 'hires_max_side', from: 'srcmaxside', kind: 'int', min: 64, step: 64 },
+
+  SECTION('Hi-res pass'),
   { key: 'hires_steps', from: 'hsteps', kind: 'int', min: 0, max: 100 },
   { key: 'hires_strength', from: 'hstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
   { key: 'hires_cfg_scale', from: 'hcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
   { key: 'hires_scale', page: true, from: 'hiresscale', kind: 'num', min: 1, max: 4, step: 0.1 },
 
-  // The pass over a source runs the Steps and CFG scale above; its strength
-  // and working size are the two numbers of its own.
-  SECTION('Starting from an image'),
-  { key: 'source_strength', from: 'srcstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
-  { key: 'hires_max_side', from: 'srcmaxside', kind: 'int', min: 64, step: 64 },
+  SECTION('Refine pass'),
+  { key: 'refine_steps', from: 'rsteps', kind: 'int', min: 0, max: 100 },
+  { key: 'refine_strength', from: 'rstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
+  { key: 'refine_cfg_scale', from: 'rcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
+
+  // Not defaults for any control: how this machine runs, so their own labels
+  // and help, and here rather than beside a button on the Image tab.
+  SECTION('Speed and limits'),
+  { key: 'reference_size', page: true, label: 'Reference size', help: 'setrefsize', kind: 'choice',
+    options: [[512, '512 px (default)'], [768, '768 px'], [1024, '1024 px'], [0, 'Full (the output’s size)']] },
+  { key: 'vae_conv_direct', page: true, label: 'Fast VAE decode', help: 'setvaedirect', kind: 'check' },
+  { key: 'gpu_reserve_gb', page: true, label: 'Keep free on the GPU (GB)', help: 'setgpureserve', kind: 'num', min: 0, max: 16, step: 0.5 },
+  { key: 'max_image_side', page: true, label: 'Largest image side', help: 'setmaxside', kind: 'int', min: 1024, max: 32768, step: 512 },
 
   // Not a default for any control either: what *Close server* deletes on the
   // way out (`src/shutdown.rs`). Off unless ticked, and favourites never.
@@ -110,10 +122,15 @@ export const FIELDS = [
   { key: 'clear_outputs_on_close', page: true, label: 'Clear outputs', help: 'setclearout', kind: 'check' },
   { key: 'clear_videos_on_close', page: true, label: 'Clear videos', help: 'setclearvid', kind: 'check' },
 
-  SECTION('Advanced', { fold: true }),
+  SECTION('Advanced', { open: false }),
   { key: 'hires_flash_attn', label: 'Flash attention', help: 'setflash', kind: 'check' },
   { key: 'weight_type', label: 'Weight type', help: 'setwtype', kind: 'text', blank: BLANK },
   { key: 'extra_args', label: 'Extra sd-cli arguments', help: 'setargs', kind: 'lines' },
+
+  // Features a release ships hidden because they are unfinished. Off by
+  // default; ticking one shows it at once (`applyNightly`).
+  SECTION('Nightly features', { open: false }),
+  { key: 'nightly_video', page: true, label: 'Video tab (work in progress)', help: 'setnightlyvideo', kind: 'check' },
 ];
 
 // The label of the control this is the default for, without the (i) `wireHints`
@@ -203,22 +220,25 @@ function control(f) {
 // the other.
 function markup(pane) {
   const out = [];
-  let folded = false;
+  let inFold = false;
   let active = 'setform';   // anything declared before the first section
   for (const f of FIELDS) {
     if (f.title) {
+      if (inFold && active === pane) out.push('</details>');
+      inFold = false;
       active = f.pane;
       if (active !== pane) continue;
-      if (f.fold) {
-        folded = true;
-        out.push(`<details class="spaced"><summary>${f.title}</summary>`);
-      } else {
-        out.push(`<label class="grouphead"${
-          f.help ? ` data-help="${f.help}"` : ''}>${f.title}</label>`);
-      }
+      const id = `setfold-${f.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+      out.push(`<details class="fold" id="${id}"${f.open ? ' open' : ''}><summary>${
+        f.help ? `<label data-help="${f.help}">${f.title}</label>` : f.title}</summary>`);
+      inFold = true;
       continue;
     }
     if (active !== pane) continue;
+    if (f.sub) {
+      out.push(`<label class="grouphead"${f.help ? ` data-help="${f.help}"` : ''}>${f.sub}</label>`);
+      continue;
+    }
     // The only field with no label of its own: the section heading above it is
     // the label, there being exactly one field under it, and "Prompt variables"
     // followed by "Variables" says it twice.
@@ -238,7 +258,7 @@ function markup(pane) {
       out.push(control(f));
     }
   }
-  if (folded) out.push('</details>');
+  if (inFold) out.push('</details>');
   return out.join('\n');
 }
 
@@ -311,7 +331,7 @@ function take(f) {
   return Number.isFinite(n) ? n : undefined;
 }
 
-const rows = () => FIELDS.filter((f) => !f.title);
+const rows = () => FIELDS.filter((f) => !f.title && !f.sub);
 
 function fill(s) {
   for (const f of rows()) put(f, s[f.key]);
@@ -350,6 +370,24 @@ function applyPageDefaults(s) {
   // Only the box's starting point, so it is safe to reapply after a save: the
   // factor the user picked for the image in hand is the same control.
   if (s.hires_scale) setUpFactor(s.hires_scale);
+}
+
+// What a nightly feature's setting shows or hides, applied from what the server
+// stored — on load and after every save, so ticking it is enough. The Video tab
+// and the *Clear videos* row go together: a setting for clips you can't make
+// would be a question nobody can answer. Leaving the tab while it hides is the
+// one move it makes for you.
+function applyNightly(s) {
+  const on = !!s.nightly_video;
+  const tab = document.querySelector('.tab[data-tab="video"]');
+  if (tab) {
+    if (!on && tab.classList.contains('active')) {
+      document.querySelector('.tab[data-tab="image"]')?.click();
+    }
+    tab.hidden = !on;
+  }
+  const clear = $(fieldId(FIELDS.find((f) => f.key === 'clear_videos_on_close')));
+  if (clear) clear.closest('.checks').hidden = !on;
 }
 
 // ---- Unsaved changes --------------------------------------------------------
@@ -391,6 +429,7 @@ export function adoptSaved(key, value) {
 function settle(s) {
   fill(s);
   applyPageDefaults(s);
+  applyNightly(s);
   saved = JSON.stringify(body());
   markDirty();
 }
@@ -468,6 +507,7 @@ export function initSettings() {
   // rather than to a pane.
   $('setform').innerHTML = markup('setform');
   $('setvarbox').innerHTML = markup('setvarbox');
+  rememberFolds($('tab-settings'));
   wireHints($('tab-settings'));
   $('setsave').addEventListener('click', save);
   // Delegated to the *tab*, not to the form, because the panes are two elements

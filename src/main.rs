@@ -821,6 +821,14 @@ fn handle_conn(
         // The Get models tab. Its own lane (`downloads`), so all four answer
         // here: a download is network, not GPU, and must neither wait behind a
         // render nor hold one up. The body names a catalog id and nothing else.
+        // The third-party notices a release has to carry inside itself — the
+        // repo's THIRD_PARTY_LICENSES.md, compiled in, read by Help → About &
+        // licences. One copy: the file is the source, this serves it.
+        ("GET", "/licences") => conn.respond(
+            200,
+            "text/plain; charset=utf-8",
+            include_str!("../THIRD_PARTY_LICENSES.md").as_bytes(),
+        ),
         ("GET", "/catalog") => match serde_json::to_vec(&lanes.downloads.status(cfg)) {
             Ok(body) => conn.respond(200, "application/json", &body),
             Err(e) => conn.respond(500, "application/json", error_json(&format!("{e}")).as_bytes()),

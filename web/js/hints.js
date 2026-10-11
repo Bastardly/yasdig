@@ -338,6 +338,10 @@ const HELP = [
   { ids: ['setclearvid'],
     text: 'When you press Close server, delete every clip on the Video tab, and '
         + 'the enlarged frames made from them. Only Close server does this.' },
+  { ids: ['setnightlyvideo'],
+    text: 'Shows the Video tab. Video generation works but is unfinished: models, '
+        + 'settings and results may change or break between versions. Your clips stay '
+        + 'on disk whether the tab is shown or not.' },
   { ids: ['setvaedirect'],
     text: 'Computes the VAE — the step that turns the result into pixels — without '
         + 'first unrolling the whole image into a huge temporary buffer. Same picture, '

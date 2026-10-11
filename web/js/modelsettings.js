@@ -30,7 +30,7 @@ import { wireHints } from './hints.js';
 // module has declared it — a ReferenceError that takes the whole module graph,
 // and every tab, down with it. The CLAUDE.md rule "a module's top level
 // declares and nothing else" is exactly this.
-const rows = () => FIELDS.filter((f) => !f.title && !f.page);
+const rows = () => FIELDS.filter((f) => !f.title && !f.sub && !f.page);
 
 const idOf = (f) => `pm-${f.key}`;
 

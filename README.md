@@ -437,6 +437,7 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `gpu_reserve_gb` | GB of the graphics card kept free while a model draws: `--max-vram -N` on every run, in every Memory mode. Default `0`, sd.cpp's own packing (free memory minus 512 MiB). When the desktop, browser and driver need more slack, RADV stops a run with *"Not enough memory for command submission"* and a lost device; the out-of-memory box offers 3 GB then, and saves it here. Page-level: it describes the machine, not a model |
 | `reference_size` | The side, in pixels, each reference image is drawn at: `--ref-image-args vae_input_max_pixels=N²` on a generate with references. Default `512` (the likeness held there on Klein 9B); `0` is sd.cpp's own (each reference resized to the output's area, up to a megapixel — *up* as well as down, so shrinking the files ourselves would be undone). The biggest speed knob with references: on a Q8 Klein 9B at 1024² with four references, 153 s full-size, 54 s at 768 and 33.6 s at 512 (22 s with none). Not applied to Edit, whose first reference is the image being changed. Page-level |
 | `vae_conv_direct` | sd-cli's `--vae-conv-direct`, default **on**: the VAE's convolutions computed directly instead of through an im2col buffer gigabytes long. Klein 9B's decode went from 9.3 s to 0.9 s and Krea 2's from 3.3 s to 1.2 s, the same picture. Page-level |
+| `nightly_video` | Show the Video tab, default **off** — the video workflow is unfinished. Hidden is not removed: clips on disk and every route stay. Page-level |
 | `cache_mode` | Step caching for the generate pass: `off` (default), `spectrum` or `adaptive` — UCache on SD 1.x, SD 2.x and SDXL, EasyCache on the DiT families, chosen by the server since each only works on its own kind. Refine and Hi-res always run uncached. The result says how many steps it skipped |
 | `upscale_factor` | the enlarge every base render goes through, default `2.0` (768 → 1536) — not a diffusion pass. Also a box in the Image tab's *After each generation* fold, where `1` means no enlarge at all |
 | `upscaler` *(opt)* | what does that enlarge: unset (the default) is FSR's EASU; a file name under the upscaler dir, extension included, is an ESRGAN model. See [Upscalers](#upscalers) |
@@ -1286,6 +1287,10 @@ image you want to keep is one **Save to output** away (or tick it in *After each
 
 ### Video
 
+> **Nightly feature.** The video workflow is unfinished, so its tab is hidden by
+> default: turn it on under Settings → *Nightly features* → *Video tab (work in
+> progress)*. Models, settings and results may change between versions.
+
 The **Video** tab is a second workflow over the same GPU — and it really is the same
 GPU: starting a clip greys out the Image tab's buttons too, because the worker is
 serialized and there is one queue.
@@ -1996,3 +2001,13 @@ escalation in it. Malformed JSON is `400`, and `503` means the GPU worker is gon
 - **Ken Burns from a still.** EASU samples with sub-pixel accuracy, so a pan and zoom
   across any `work/output/` image is a scale and an offset in a shader that is already
   written and already tested — motion at zero diffusion cost and with no model at all.
+
+## Licence
+
+rustimage is licensed under the [Apache License 2.0](LICENSE). It is powered by
+[stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) (MIT), which every
+release carries inside it; that and the other bundled components' notices are in
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and in the app under Help → About &
+licences. Models are not part of rustimage: every model has its own licence, set by its
+authors — check it before using what you make.
+

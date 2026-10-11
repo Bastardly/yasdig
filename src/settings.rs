@@ -150,6 +150,11 @@ pub struct Settings {
     /// (and Krea 2's Wan VAE from 3.3 s to 1.2 s).
     /// Page-level: how this machine computes, not a checkpoint's choice.
     pub vae_conv_direct: bool,
+    /// Show the Video tab. The video workflow is unfinished, so a release
+    /// hides it unless asked for — Settings → Nightly features. Hidden is not
+    /// removed: the routes, the models and the clips on disk are all still
+    /// there. Page-level.
+    pub nightly_video: bool,
 
     /// The `[variables]` table: `{animal}` in a prompt and the words it can
     /// stand for. See [`crate::variables`].
@@ -305,6 +310,7 @@ impl Default for Settings {
             // Measured 10× on Klein 9B's VAE (9.3 s → 0.9 s) with the same
             // picture; direct convolution computes the same sums.
             vae_conv_direct: true,
+            nightly_video: false,
             variables: Variables::new(),
         }
     }
@@ -362,6 +368,7 @@ impl Settings {
             gpu_reserve_gb: self.gpu_reserve_gb,
             reference_size: self.reference_size,
             vae_conv_direct: self.vae_conv_direct,
+            nightly_video: self.nightly_video,
             variables: self.variables.clone(),
         }
     }
@@ -837,6 +844,7 @@ const PAGE_ONLY: &[&str] = &[
     "gpu_reserve_gb",
     "reference_size",
     "vae_conv_direct",
+    "nightly_video",
 ];
 
 /// The most of the card [`Settings::gpu_reserve_gb`] may keep free. Past this
@@ -1000,6 +1008,10 @@ mod tests {
         assert!(Settings { reference_size: 0, ..Settings::default() }.validate().is_ok());
         assert!(Settings { reference_size: 100, ..Settings::default() }.validate().is_err());
         assert!(PAGE_ONLY.contains(&"vae_conv_direct") && Settings::default().vae_conv_direct);
+        // Video is a nightly feature: off unless asked for, page-level.
+        assert!(PAGE_ONLY.contains(&"nightly_video") && !Settings::default().nightly_video);
+        let on = Settings { nightly_video: true, ..Settings::default() };
+        assert!(toml::from_str::<Settings>(&toml::to_string_pretty(&on).unwrap()).unwrap().nightly_video);
     }
 
     #[test]

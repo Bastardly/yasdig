@@ -20,7 +20,7 @@ import { initOutputs, loadOutputs } from './outputs.js';
 import { initVideo } from './video.js';
 import { initConvert } from './convert.js';
 import { initSettings } from './settings.js';
-import { initHelp } from './help.js';
+import { initHelp, openHelp } from './help.js';
 import { initGetModels } from './getmodels.js';
 import { initModelSettings } from './modelsettings.js';
 import { stopPlayback } from './player.js';
@@ -78,6 +78,10 @@ function initTabs() {
     b.addEventListener('click', () => showTab(b.dataset.tab));
   }
   $('closeserver').addEventListener('click', closeServer);
+  $('licenceslink').addEventListener('click', (e) => {
+    e.preventDefault();
+    openHelp('about');
+  });
 }
 
 // ---- Close server -----------------------------------------------------------
@@ -93,7 +97,8 @@ async function closeServer() {
   const doomed = [
     s.clear_workitems_on_close && 'work items (Current, not Favorites)',
     s.clear_outputs_on_close && 'outputs in work/output/ (not Favorites)',
-    s.clear_videos_on_close && 'video clips',
+    // Only while the Video tab is on: a hidden feature isn't mentioned.
+    s.nightly_video && s.clear_videos_on_close && 'video clips',
   ].filter(Boolean);
   const queued = jobCount();
   const msg = 'Close the rustimage server?\n\n'

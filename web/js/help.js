@@ -143,6 +143,37 @@ export const TOPICS = [
     },
   },
   {
+    id: 'about',
+    title: 'About & licences',
+    html: `
+      <h2>About & licences</h2>
+      <p><b>rustimage</b> is free software under the
+      <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank" rel="noopener noreferrer">Apache License 2.0</a>.</p>
+      <p>It is powered by
+      <a href="https://github.com/leejet/stable-diffusion.cpp" target="_blank" rel="noopener noreferrer">stable-diffusion.cpp</a>
+      (MIT licence), which this program carries inside itself and runs to draw every
+      picture, and by <a href="https://www.vulkan.org/" target="_blank" rel="noopener noreferrer">Vulkan</a>,
+      which your graphics driver provides.</p>
+      <h3>Models</h3>
+      <p>Models are not part of rustimage. <b>Every model has its own licence</b>, set by
+      the people who made it: some allow anything, some forbid commercial use of what
+      you make. Check a model’s page before using its pictures — each card on the
+      <i>Get models</i> tab links the pages its files come from.</p>
+      <h3>Third-party notices</h3>
+      <p>The components built into this program, and the licence notices they ask to
+      travel with every copy:</p>
+      <pre class="licences" id="licencetext">Loading…</pre>`,
+    async fill(el) {
+      const box = el.querySelector('#licencetext');
+      try {
+        const text = await (await fetch('/licences')).text();
+        if (box.isConnected) box.textContent = text;
+      } catch (e) {
+        box.textContent = `Could not load the notices (${e}). They are also in THIRD_PARTY_LICENSES.md beside the source.`;
+      }
+    },
+  },
+  {
     id: 'samplers',
     title: 'Samplers',
     html: `
@@ -441,19 +472,36 @@ export const TOPICS = [
 
 const KEY = 'rustimage.help.topic';
 
+// The menu's order: these first, in this order, then every other topic by
+// title — so a topic added later lands in its alphabetical place with no edit
+// here, and `TOPICS` can stay in whatever order reads best in the source.
+const PINNED = ['about', 'models'];
+export function menuOrder() {
+  const pinned = PINNED.map((id) => TOPICS.find((t) => t.id === id)).filter(Boolean);
+  const rest = TOPICS.filter((t) => !PINNED.includes(t.id))
+    .sort((a, b) => a.title.localeCompare(b.title));
+  return [...pinned, ...rest];
+}
+
 function show(id) {
-  const topic = TOPICS.find((t) => t.id === id) ?? TOPICS[0];
+  const topic = TOPICS.find((t) => t.id === id) ?? menuOrder()[0];
   for (const b of document.querySelectorAll('#helpnav [data-topic]')) {
     b.classList.toggle('active', b.dataset.topic === topic.id);
   }
   $('helpdoc').innerHTML = topic.html;
   topic.fill?.($('helpdoc'));
-  // Per browser, every access in a try/catch — the rule `initFolds` follows.
+  // Per browser, every access in a try/catch — the rule `rememberFolds` follows.
   try { localStorage.setItem(KEY, topic.id); } catch { /* ignore */ }
 }
 
+// Open the Help tab on one topic — for the footer's Licences link.
+export function openHelp(id) {
+  document.querySelector('.tab[data-tab="help"]')?.click();
+  show(id);
+}
+
 export function initHelp() {
-  $('helpnav').innerHTML = TOPICS.map((t) =>
+  $('helpnav').innerHTML = menuOrder().map((t) =>
     `<button type="button" class="btn btn-choice" data-topic="${t.id}">${esc(t.title)}</button>`).join('');
   $('helpnav').addEventListener('click', (e) => {
     const b = e.target.closest('[data-topic]');
