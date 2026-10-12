@@ -23,7 +23,7 @@ import { loadModelSettings } from './modelsettings.js';
 // control everywhere else on the page — and the Outputs tab starts them at zero
 // whatever they say, because a saved output has its grade already in the pixels
 // (invariant 1). A default for them reads as a setting that doesn't take, so
-// they stay hand-editable and documented in the README instead.
+// they stay hand-editable and documented in docs/configuration.md instead.
 
 // Blank means "not set", which is a different thing from zero for these — an
 // empty CFG follows the knob below it and an empty weight type means no `--type`

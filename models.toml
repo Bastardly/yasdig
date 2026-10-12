@@ -49,7 +49,7 @@ models_dir = "models"
 #
 # Every field `user/settings.toml` takes is accepted here except the three that
 # are not properties of a checkpoint (`prompt`, `negative`, `hires_scale`).
-# README.md has the table.
+# docs/configuration.md has the table.
 # ---------------------------------------------------------------------------
 # [templates.sdxl-turbo]
 # description = "SDXL-Turbo — fast draft (512 → 1024)"

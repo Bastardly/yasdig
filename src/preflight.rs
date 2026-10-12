@@ -102,7 +102,7 @@ pub fn check(cfg: &Config) -> Report {
         errors.push(format!(
             "this build of yasdig has no stable-diffusion.cpp inside it, and\n\
              models.toml names none. Either build one with YASDIG_SD_CLI set\n\
-             (see README.md), or build sd.cpp and set [sd].binary:\n  {}",
+             (see docs/building.md), or build sd.cpp and set [sd].binary:\n  {}",
             bin.display()
         ));
     } else if !bin.exists() {
@@ -519,7 +519,7 @@ pub fn check(cfg: &Config) -> Report {
         warnings.push(
             "curl was not found on the PATH, so the Get models tab can't download.\n\
              Install it (it ships with Windows 10 and later and with most Linux\n\
-             distributions), or fetch the files by hand — README.md, Get a model."
+             distributions), or fetch the files by hand — docs/configuration.md, Get a model."
                 .into(),
         );
     }

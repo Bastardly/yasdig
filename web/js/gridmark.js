@@ -41,7 +41,7 @@ export function gridMarks({ grid, mode, ids, reload, err, onMode, actions }) {
   const marked = new Set();
 
   // The radios are a *mode* rather than a modifier key for the reason the
-  // README gives: culling twenty images from a batch is twenty clicks and one
+  // user guide gives: culling twenty images from a batch is twenty clicks and one
   // press at the end, with the marks visible the whole time — not twenty
   // confirmations, and not one misclick that can't be taken back.
   const live = () => {

@@ -34,7 +34,7 @@ const MODEL_DIRS: &[(&str, &str)] = &[
     ("text_encoders", "Text encoders (CLIP, T5, Qwen) for models that come as separate parts."),
     ("loras", "LoRAs. Subfolders are fine. Each one only works with the model family it was trained on."),
     ("upscalers", "Upscaler models (ESRGAN, SPAN, Compact, SwinIR) for the Output upscale step."),
-    ("video", "Video models (Wan 2.x): transformer, VAE and text encoder. See README.md."),
+    ("video", "Video models (Wan 2.x, a nightly feature): transformer, VAE and text encoder."),
 ];
 
 /// The `models.toml` to start from.

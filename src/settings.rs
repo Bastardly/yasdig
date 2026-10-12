@@ -41,7 +41,7 @@ const HEADER: &str = "\
 # These apply to every model. width, height, steps, cfg_scale, sampler and scheduler reach
 # only SD 1.x, 2.x and SDXL: every other family starts from its own defaults for
 # those. A [templates.<name>] block in models.toml, then user/model-settings.toml,
-# override whichever of these they name. See README.md for what each field does.
+# override whichever of these they name. See docs/configuration.md for what each field does.
 
 ";
 

@@ -99,7 +99,7 @@ impl Downloads {
             bail!("no catalog entry named {id:?}");
         };
         if !curl_available() {
-            bail!("curl was not found on the PATH; install it, or download the files by hand (README.md, Get a model)");
+            bail!("curl was not found on the PATH; install it, or download the files by hand (docs/configuration.md, Get a model)");
         }
         let found = cfg.scan_images();
         let mut st = self.lock();

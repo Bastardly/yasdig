@@ -1378,7 +1378,7 @@ pub fn build(dir: &Path, found: &[Found]) -> Discovery {
     let clip_vision = pick(&|r: &Role| matches!(r, Role::ClipVision));
 
     // Where a component we don't have would go. The role subdirectories are the
-    // layout `README.md` documents, so naming a missing file inside one is also
+    // layout `docs/configuration.md` documents, so naming a missing file inside one is also
     // telling the reader where to put it.
     let expect = |sub: &str, file: &str| dir.join(sub).join(file);
     let umt5_path = umt5

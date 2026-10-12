@@ -1,7 +1,7 @@
 //! Builds stable-diffusion.cpp's `sd-cli`, and bakes it into a release build.
 //!
 //! The point is that `cargo build --release` is the whole recipe. With a
-//! `stable-diffusion.cpp/` checkout in the repo (gitignored — see README.md),
+//! `stable-diffusion.cpp/` checkout in the repo (gitignored — see docs/building.md),
 //! this script configures and builds its `sd-cli` target into
 //! `stable-diffusion.cpp/build-yasdig/`, and a **release** build then carries
 //! the bytes (`cfg(bundled_sd)`, read by `src/bundle.rs`).
@@ -52,7 +52,7 @@ fn main() {
             if release {
                 println!(
                     "cargo::warning=no {SD_DIR}/ in the repo, so this release has no sd-cli inside \
-                     it and will need [sd].binary. README.md, \"Building from source\", has the clone."
+                     it and will need [sd].binary. docs/building.md has the clone."
                 );
             }
             return;
@@ -131,12 +131,12 @@ fn run(mut cmd: Command, what: &str) -> Result<(), String> {
         Ok(s) if s.success() => Ok(()),
         Ok(_) => Err(format!(
             "{what} stable-diffusion.cpp failed — the cmake output is above. It needs cmake, \
-             a C++ compiler, glslc and the Vulkan headers; README.md, \"Building from \
-             source\", lists the packages"
+             a C++ compiler, glslc and the Vulkan headers; docs/building.md \
+             lists the packages"
         )),
         Err(e) => Err(format!(
             "{what} stable-diffusion.cpp: can't run cmake ({e}). Install cmake, glslc and the \
-             Vulkan headers — README.md, \"Building from source\", lists the packages"
+             Vulkan headers — docs/building.md lists the packages"
         )),
     }
 }

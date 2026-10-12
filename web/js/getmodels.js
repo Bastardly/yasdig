@@ -95,7 +95,7 @@ function draw() {
   $('gmdir').innerHTML = `Saved under <code>${esc(view.models_dir)}</code>, in the folder for each kind of file.`;
   $('gmerr').textContent = view.curl ? ''
     : 'curl was not found, so nothing can be downloaded from here. Install curl, or fetch the files '
-      + 'by hand (README.md, Get a model) into the folders each card names.';
+      + 'by hand (docs/configuration.md, Get a model) into the folders each card names.';
   $('gmnav').innerHTML = view.entries.map((e) =>
     `<button type="button" class="btn btn-choice" data-family="${e.family}">${esc(e.family_label)}</button>`).join('');
   $('gmlist').innerHTML = view.entries.map(card).join('');

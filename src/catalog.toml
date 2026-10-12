@@ -16,13 +16,13 @@
 # `slot` is "model", or a key of that family's `ImageFamily::slots()` ("vae",
 # "llm", "clip_l", "t5xxl"). A part that some file on disk already fits counts as
 # had, whatever its name, so a shared encoder is downloaded once. The picks are
-# the README's: what fits a 24 GB card with the model and its encoders resident.
+# docs/configuration.md's: what fits a 24 GB card with the model and its encoders resident.
 
 [[entry]]
 id = "sdxl-base"
 family = "sdxl"
 label = "SDXL base 1.0"
-note = "The original SDXL, one 6.9 GB file, plus the fp16-fix VAE the README recommends for it."
+note = "The original SDXL, one 6.9 GB file, plus the fp16-fix VAE, which runs at half precision without overflowing."
 
 [[entry.file]]
 slot = "model"

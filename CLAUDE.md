@@ -9,9 +9,12 @@ run goes through one job queue and one diffusion worker, so nothing thrashes VRA
 the viewer's re-filters run on a second, display worker that shares the one FSR
 device behind a lock (see *## The job queue*).
 
-**`README.md` is thorough and user-facing: setup, the `models.toml` field table, the
-API shapes, the design rationale. Read it for any of those.** This file is only the
-part it doesn't cover.
+**`README.md` is short and for users**: why the escalation workflow, how to install,
+what is supported — keep it that way, and keep video out of it while it is nightly.
+**`docs/` holds the reference**: `configuration.md` (folders, model files, the
+`models.toml` and `user/settings.toml` field tables), `guide.md` (every feature),
+`api.md` (command line and HTTP routes), `building.md` and `architecture.md`. Read
+those for any of that. This file is only the part they don't cover.
 
 ## Commands
 
@@ -40,7 +43,7 @@ fast loop when touching `src/fsr/`.
 
 **`fsr-selftest` is what to run after changing a filter constant.** It asserts the
 dimensions and that scale 1.0 with every filter at 0 is byte-exact (claimed by three
-shader headers and by `README.md`, and unchecked until it wasn't), checks the grade
+shader headers and by `docs/api.md`, and unchecked until it wasn't), checks the grade
 pass knob by knob (`check_grade`), then plants four
 gratings at wavelengths proportional to the image and prints how much each filter moved
 each band, at 1536² and 3072². Those two sizes are invariant 6 below with a number on
@@ -277,7 +280,7 @@ writing the classifier arm, read the released files' headers — an HTTP range r
 of a safetensors' first 8 bytes and its JSON, or the first few MB of a GGUF — rather
 than trusting a doc: the Flux.2 VAE ships in diffusers' layout (`mid_block`, not
 `mid`) and was read as a 512-channel Wan VAE until a real header said otherwise. Its LoRAs are already
-identified (*## LoRAs*). `README.md` gets its download list. The escalation ladder
+identified (*## LoRAs*). `docs/configuration.md` gets its download list, and the README's family table a row. The escalation ladder
 needs nothing — every rung is pixels in, pixels out, so refining a Z-Image on an SDXL
 is ordinary, and `swap_model` already carries family and components with the rest of
 the profile.
@@ -1738,8 +1741,8 @@ They are where the viewer's two sliders *start*, and that is a live per-image
 control everywhere else on the page — the Outputs tab starts them at zero
 whatever the settings say, because a saved output has its grade already in the
 pixels (invariant 1). So a default for them is a setting that appears not to
-take, which is worse than not offering it. Hand-editable, and in the README
-table. The eight grading knobs were never per-model at all.
+take, which is worse than not offering it. Hand-editable, and in the
+`docs/configuration.md` table. The eight grading knobs were never per-model at all.
 
 **Unsaved edits are marked on the tab, not just under the button.** This is the
 one form on the page you can walk away from mid-edit — every other panel either
@@ -2177,7 +2180,7 @@ the note below the table.
 | 4 | `src/pipeline.rs` | `Option<T>` on `GenRequest`, applied onto the profile in `Engine::run()` **before** `profile.validate()` — and, for an *escalation* knob, on `EscalateRequest` + its `apply()` as well |
 | 5 | `src/main.rs` | field on the `/generate` `Dto`, plus `build_models_json` so the UI can pre-fill it — and, for a *display* knob, the `/adjust` `Dto` and `result_json` too; for an escalation knob, `EscalateDto` and `overrides()` |
 | 6 | `web/index.html` + `web/js/image.js` (or `video.js`) | input in its fold on the Image tab; `syncAdvanced()` and `applyWorkItem()` pre-fill it, `generate()` reads it — an escalation knob goes in `escalateSettings()`, which `generate()` spreads, so it is read once and sent by all three routes |
-| 7 | `src/settings.rs` + `web/js/settings.js` + `README.md` | default in `Settings::default()`, a row in `FIELDS` so it is editable, and a row in the `user/settings.toml` field table |
+| 7 | `src/settings.rs` + `web/js/settings.js` + `docs/configuration.md` | default in `Settings::default()`, a row in `FIELDS` so it is editable, and a row in the `user/settings.toml` field table |
 | 7b | `src/config.rs` + `web/js/image.js` | if its right value depends on the architecture, a value in each DiT family's `ImageFamily::recipe()` (the UNet ones stay empty); and if it has a box on the Image tab, a row in `MODEL_KNOBS` so *Save as defaults for this model* writes it — `PartialSettings` already carries it, so `user/model-settings.toml` and the *Per model* card (built from `FIELDS`) need nothing |
 
 The trap this used to have — two structs with one field list, built in two arms of
@@ -2192,7 +2195,7 @@ not two (`Config::entry`): a discovered checkpoint is a template that states onl
 where the file is.
 
 Step 7 is also different now: a new knob's default goes in `Settings::default()`
-and its documentation in the `user/settings.toml` table, **not** in `models.toml`
+and its documentation in the `user/settings.toml` table (`docs/configuration.md`), **not** in `models.toml`
 — that file no longer carries defaults at all. A knob that should be editable
 rather than only hand-typed needs a row in `web/js/settings.js`'s `FIELDS`, which
 is one line if a control for it already exists on another tab.

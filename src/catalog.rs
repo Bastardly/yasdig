@@ -174,7 +174,7 @@ mod tests {
         // newcomer starts, and a family missing from it reads as unsupported.
         for fam in ImageFamily::ALL.iter().filter(|f| f.runnable()) {
             if matches!(fam, ImageFamily::Sd1 | ImageFamily::Sd2) {
-                continue; // superseded; the README's manual list still covers them
+                continue; // superseded; docs/configuration.md's manual list still covers them
             }
             assert!(c.entry.iter().any(|e| e.family == *fam), "{} has no catalog entry", fam.label());
         }

@@ -38,5 +38,5 @@
 # ---------------------------------------------------------------------------
 # [[video]] — optional video model entries. Video models in models/video/ are
 # found by reading their headers, so this is only for naming files you haven't
-# downloaded yet, or for pinning settings. See README.md for the fields.
+# downloaded yet, or for pinning settings. See docs/configuration.md for the fields.
 # ---------------------------------------------------------------------------

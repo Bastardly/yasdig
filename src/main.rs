@@ -3118,8 +3118,8 @@ fn run_fsr_cli(args: &[String]) -> Result<()> {
 /// 1. **Dimensions** — a 2× pass on a 128² pattern comes back 256².
 /// 2. **Identity** — at scale 1.0 with every filter at 0 the output is
 ///    byte-identical to the input. `sharpen.wgsl`, `contrast.wgsl` and
-///    `grade.wgsl` all claim this in their headers and `README.md` promises it
-///    to users; until now nothing checked it.
+///    `grade.wgsl` all claim this in their headers and `docs/api.md` promises
+///    it to users; until now nothing checked it.
 /// 3. **The grade** — that each of the eight knobs is wired at all, and that
 ///    the four with an unambiguous direction move that way. See [`check_grade`].
 /// 4. **Band response** — printed, then asserted. See [`report_bands`].
@@ -3340,7 +3340,7 @@ fn check_identity(src: &image::RgbaImage, out_png: &std::path::Path) -> Result<(
             "identity: {differing} of {} pixels differ, by up to {max_diff}/255. At scale \
              1.0 with both filters at 0, EASU and the clarity passes are supposed to be \
              skipped outright and RCAS to collapse to e / 1.0 — see the headers in \
-             sharpen.wgsl and contrast.wgsl, and the promise in README.md",
+             sharpen.wgsl and contrast.wgsl, and the promise in docs/api.md",
             src.width() as usize * src.height() as usize
         );
     }
