@@ -44,13 +44,13 @@ export const numOr = (id) => {
 };
 
 // Every <details class="fold" id="…"> under `root` remembers whether it was open,
-// per fold and per browser (`rustimage.fold.<id>`). Without a stored value a fold
+// per fold and per browser (`yasdig.fold.<id>`). Without a stored value a fold
 // starts as the markup has it, so `open` there is the default. Every access in a
 // try/catch: storage can be missing or throw, and a fold then simply starts as
 // written. Shared by every tab with folds, so they all behave alike.
 export function rememberFolds(root) {
   for (const d of root.querySelectorAll('details.fold[id]')) {
-    const key = `rustimage.fold.${d.id}`;
+    const key = `yasdig.fold.${d.id}`;
     try {
       const v = localStorage.getItem(key);
       if (v !== null) d.open = v === '1';

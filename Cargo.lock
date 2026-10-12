@@ -799,22 +799,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
-name = "rustimage"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "bytemuck",
- "image",
- "naga",
- "pollster",
- "serde",
- "serde_json",
- "toml",
- "wgpu",
-]
-
-[[package]]
 name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1433,6 +1417,22 @@ name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
+
+[[package]]
+name = "yasdig"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bytemuck",
+ "image",
+ "naga",
+ "pollster",
+ "serde",
+ "serde_json",
+ "toml",
+ "wgpu",
+]
 
 [[package]]
 name = "zerocopy"

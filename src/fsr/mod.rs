@@ -169,7 +169,7 @@ impl Fsr {
         };
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("rustimage-fsr"),
+            label: Some("yasdig-fsr"),
             required_features: wgpu::Features::empty(),
             required_limits: limits,
             memory_hints: wgpu::MemoryHints::Performance,

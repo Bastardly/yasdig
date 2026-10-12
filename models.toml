@@ -1,4 +1,4 @@
-# rustimage configuration — what the program needs in order to start.
+# yasdig configuration — what the program needs in order to start.
 #
 # Your *defaults* are not in here. Steps, CFG, size, the refine and hi-res
 # settings and the default prompt live in `user/settings.toml`, which the
@@ -12,7 +12,7 @@
 # Path to the compiled stable-diffusion.cpp CLI (absolute, or relative to this
 # file). This is where `cargo build` builds the checkout in stable-diffusion.cpp/
 # (see build.rs); a release executable has its own inside and needs no line.
-binary = "stable-diffusion.cpp/build-rustimage/bin/sd-cli"
+binary = "stable-diffusion.cpp/build-yasdig/bin/sd-cli"
 # Mode flag value. Newer sd.cpp uses "img_gen" for both txt2img and img2img
 # (img2img is triggered by an init image). Older builds used "txt2img".
 mode = "img_gen"

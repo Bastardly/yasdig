@@ -1,4 +1,4 @@
-//! rustimage — Python-free Vulkan image generator.
+//! yasdig — Python-free Vulkan image generator.
 //!
 //! A minimal std-only HTTP server fronts two worker threads. The diffusion
 //! worker owns the sd.cpp runner and takes its work from the job queue
@@ -309,7 +309,7 @@ fn main() -> Result<()> {
     // stays on screen by itself.
     if let Err(e) = &result {
         if double_clicked && cfg!(windows) {
-            eprintln!("[rustimage] {e:#}");
+            eprintln!("[yasdig] {e:#}");
             eprintln!("\nPress Enter to close.");
             let _ = std::io::stdin().read_line(&mut String::new());
             std::process::exit(1);
@@ -352,30 +352,30 @@ fn run(args: &[String]) -> Result<()> {
             let removed = settings::ModelSettings::parked_path(&cfg.user_dir());
             for name in parked {
                 println!(
-                    "[rustimage] warning: model '{name}' no longer exists, so its saved settings \
+                    "[yasdig] warning: model '{name}' no longer exists, so its saved settings \
                      were removed (kept in {} — they come back if the model does)",
                     removed.display()
                 );
             }
             for name in restored {
-                println!("[rustimage] model '{name}' is back — its saved settings are restored");
+                println!("[yasdig] model '{name}' is back — its saved settings are restored");
             }
         }
-        Err(e) => eprintln!("[rustimage] warning: couldn't tidy per-model settings: {e:#}"),
+        Err(e) => eprintln!("[yasdig] warning: couldn't tidy per-model settings: {e:#}"),
     }
 
     // Validate the environment before touching the GPU, so missing prerequisites
     // produce clear, actionable instructions instead of a mid-request failure.
     let report = preflight::check(&cfg);
     if !report.print() {
-        anyhow::bail!("fix the above and start rustimage again (`rustimage doctor` re-checks)");
+        anyhow::bail!("fix the above and start yasdig again (`yasdig doctor` re-checks)");
     }
 
     // Before the GPU worker, not after it: `Engine::new` sweeps `work/`, and a
     // second copy of *this folder* started by a second double-click would do
     // that under the feet of the first one's render. `startup::bind` is the
     // rule for a taken port: hand over to this same folder and build, close any
-    // other rustimage and take its port, and step past anything else.
+    // other yasdig and take its port, and step past anything else.
     let startup = startup::load(&cfg.base_dir, cfg.legacy_server.as_ref())?;
     let me = startup::Instance {
         home: cfg.base_dir.display().to_string(),
@@ -385,7 +385,7 @@ fn run(args: &[String]) -> Result<()> {
         startup::Bound::Listening(l, bind) => (l, bind),
         startup::Bound::HandedOver(bind) => {
             let url = format!("http://{bind}/");
-            println!("[rustimage] already running at {url} — opening it");
+            println!("[yasdig] already running at {url} — opening it");
             open_browser(&url);
             return Ok(());
         }
@@ -435,7 +435,7 @@ fn run(args: &[String]) -> Result<()> {
                             .cloned()
                             .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                             .unwrap_or_else(|| "unknown cause".into());
-                        eprintln!("[rustimage] GPU worker caught a panic in job {id}: {why}");
+                        eprintln!("[yasdig] GPU worker caught a panic in job {id}: {why}");
                         worker_queue.abort(id, format!("the GPU worker failed on this job: {why}"));
                     }
                 }
@@ -448,9 +448,9 @@ fn run(args: &[String]) -> Result<()> {
 
     let (display, retained) = match ready_rx.recv().context("gpu worker died during startup")? {
         Ok((name, display, retained)) => {
-            println!("[rustimage] GPU worker ready on adapter: {name}");
+            println!("[yasdig] GPU worker ready on adapter: {name}");
             println!(
-                "[rustimage] GPU post-process: upscale=easu, grade=oklab, contrast=clarity, \
+                "[yasdig] GPU post-process: upscale=easu, grade=oklab, contrast=clarity, \
                  sharpen=rcas"
             );
             (display, retained)
@@ -495,11 +495,11 @@ fn run(args: &[String]) -> Result<()> {
         downloads: downloads::Downloads::start(&cfg).context("spawning the download worker")?,
     };
 
-    println!("[rustimage] listening on {url}");
-    if std::env::var_os("RUSTIMAGE_NO_BROWSER").is_none() {
+    println!("[yasdig] listening on {url}");
+    if std::env::var_os("YASDIG_NO_BROWSER").is_none() {
         open_browser(&url);
     }
-    println!("[rustimage] to stop: Close server on the page, Ctrl+C, or close this window");
+    println!("[yasdig] to stop: Close server on the page, Ctrl+C, or close this window");
 
     for stream in listener.incoming() {
         let stream = match stream {
@@ -512,7 +512,7 @@ fn run(args: &[String]) -> Result<()> {
         let monitor = monitor.clone();
         std::thread::spawn(move || {
             if let Err(e) = handle_conn(stream, &lanes, &cfg, web_dir.as_deref(), &monitor) {
-                eprintln!("[rustimage] connection error: {e:#}");
+                eprintln!("[yasdig] connection error: {e:#}");
             }
         });
     }
@@ -664,7 +664,7 @@ fn open_browser(url: &str) {
         std::process::Command::new("xdg-open").arg(url).spawn()
     };
     if spawned.is_err() {
-        println!("[rustimage] open {url} in your browser");
+        println!("[yasdig] open {url} in your browser");
     }
 }
 
@@ -744,7 +744,7 @@ fn handle_conn(
             200,
             "application/json",
             format!(
-                "{{\"app\":\"rustimage\",\"home\":{},\"build\":{}}}",
+                "{{\"app\":\"yasdig\",\"home\":{},\"build\":{}}}",
                 json_str(&cfg.base_dir.display().to_string()),
                 json_str(startup::build_id())
             )
@@ -941,12 +941,12 @@ fn handle_shutdown(
     let cleared = if clear {
         let c = shutdown::clear(cfg);
         println!(
-            "[rustimage] closed from the page (cleared {} work items, {} outputs, {} clips)",
+            "[yasdig] closed from the page (cleared {} work items, {} outputs, {} clips)",
             c.workitems, c.outputs, c.videos
         );
         c
     } else {
-        println!("[rustimage] a newer start took over this port — closing");
+        println!("[yasdig] a newer start took over this port — closing");
         shutdown::Cleared::default()
     };
     let body = serde_json::json!({ "closed": true, "cleared": cleared });
@@ -1609,7 +1609,7 @@ fn handle_delete_workitems(
     for id in &dto.ids {
         match store.delete(shelf, id) {
             Ok(()) => deleted += 1,
-            Err(e) => eprintln!("[rustimage] {e:#}"),
+            Err(e) => eprintln!("[yasdig] {e:#}"),
         }
     }
     conn.respond(
@@ -1647,7 +1647,7 @@ fn handle_favorite(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Re
     for id in &dto.ids {
         match store.favorite(id) {
             Ok(()) => favorited += 1,
-            Err(e) => eprintln!("[rustimage] {e:#}"),
+            Err(e) => eprintln!("[yasdig] {e:#}"),
         }
     }
     conn.respond(
@@ -1685,7 +1685,7 @@ fn handle_delete_outputs(
     for stem in &dto.stems {
         match store.delete_output(gallery, stem) {
             Ok(()) => deleted += 1,
-            Err(e) => eprintln!("[rustimage] {e:#}"),
+            Err(e) => eprintln!("[yasdig] {e:#}"),
         }
     }
     conn.respond(
@@ -1712,7 +1712,7 @@ fn handle_favorite_outputs(conn: &mut http::Connection, cfg: &Config, body: &[u8
     for stem in &dto.stems {
         match store.favorite_output(stem) {
             Ok(()) => favorited += 1,
-            Err(e) => eprintln!("[rustimage] {e:#}"),
+            Err(e) => eprintln!("[yasdig] {e:#}"),
         }
     }
     conn.respond(
@@ -2934,7 +2934,7 @@ fn error_json(msg: &str) -> String {
     format!("{{\"error\":{}}}", json_str(msg))
 }
 
-/// `rustimage doctor [models.toml]`
+/// `yasdig doctor [models.toml]`
 /// Run the same startup checks and report, without starting the server.
 fn run_doctor(args: &[String]) -> Result<()> {
     let config_path = home::config_path(args.get(0).map(String::as_str))?;
@@ -2944,14 +2944,14 @@ fn run_doctor(args: &[String]) -> Result<()> {
     let report = preflight::check(&cfg);
     let ok = report.print();
     if ok {
-        println!("[rustimage] all checks passed — ready to run.");
+        println!("[yasdig] all checks passed — ready to run.");
         Ok(())
     } else {
         std::process::exit(1);
     }
 }
 
-/// `rustimage fold-scales <file.gguf>...`
+/// `yasdig fold-scales <file.gguf>...`
 ///
 /// The repair for a GGUF converted from a scaled-fp8 checkpoint before
 /// `Engine::convert` folded the scales itself — see `foldscale`. In place and
@@ -2959,7 +2959,7 @@ fn run_doctor(args: &[String]) -> Result<()> {
 /// config, no sd-cli, no GPU.
 fn run_fold_scales(args: &[String]) -> Result<()> {
     if args.is_empty() {
-        eprintln!("usage: rustimage fold-scales <file.gguf>...");
+        eprintln!("usage: yasdig fold-scales <file.gguf>...");
         std::process::exit(2);
     }
     for a in args {
@@ -2984,7 +2984,7 @@ fn run_fold_scales(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `rustimage upscale <in.png> <out.png> <model> [factor] [models.toml]`
+/// `yasdig upscale <in.png> <out.png> <model> [factor] [models.toml]`
 ///
 /// The initial enlarge on its own, exactly as a generate runs it: an ESRGAN
 /// model through `sd-cli -M upscale`, then the Lanczos reduce or EASU remainder
@@ -2997,7 +2997,7 @@ fn run_fold_scales(args: &[String]) -> Result<()> {
 fn run_upscale_cli(args: &[String]) -> Result<()> {
     if args.len() < 3 {
         eprintln!(
-            "usage: rustimage upscale <in.png> <out.png> <model> [factor=2.0] [models.toml]"
+            "usage: yasdig upscale <in.png> <out.png> <model> [factor=2.0] [models.toml]"
         );
         std::process::exit(2);
     }
@@ -3063,7 +3063,7 @@ fn run_upscale_cli(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `rustimage sr-selftest`: every `sr` shader op against a CPU transcription of
+/// `yasdig sr-selftest`: every `sr` shader op against a CPU transcription of
 /// the PyTorch op, plus a matmul throughput. No model file needed.
 fn run_sr_selftest() -> Result<()> {
     let fsr = fsr::Fsr::new()?;
@@ -3077,12 +3077,12 @@ fn run_sr_selftest() -> Result<()> {
     Ok(())
 }
 
-/// `rustimage fsr <in.png> <out.png> [upscale_factor] [sharpness] [clarity]`
+/// `yasdig fsr <in.png> <out.png> [upscale_factor] [sharpness] [clarity]`
 /// Runs only the GPU post-process passes on an existing image.
 fn run_fsr_cli(args: &[String]) -> Result<()> {
     if args.len() < 2 {
         eprintln!(
-            "usage: rustimage fsr <in.png> <out.png> [upscale_factor=2.0] \
+            "usage: yasdig fsr <in.png> <out.png> [upscale_factor=2.0] \
              [sharpness=0.35] [clarity=0.0]"
         );
         std::process::exit(2);
@@ -3110,7 +3110,7 @@ fn run_fsr_cli(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `rustimage fsr-selftest [out.png]`
+/// `yasdig fsr-selftest [out.png]`
 /// Exercises the full wgpu path (device init, every compute pass, readback)
 /// without sd.cpp or a checkpoint, and checks what the shaders promise. This is
 /// what to run after touching a filter constant.
@@ -3947,7 +3947,7 @@ mod tests {
     /// Parsed here, with a model of each shape.
     #[test]
     fn the_models_listing_is_json_with_every_field_where_it_belongs() {
-        let root = std::env::temp_dir().join(format!("rustimage-models-json-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("yasdig-models-json-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         let models = root.join("models");
         std::fs::create_dir_all(&models).unwrap();

@@ -37,13 +37,13 @@ impl Report {
     /// Print the report. Returns true if it's safe to continue (no fatal errors).
     pub fn print(&self) -> bool {
         for i in &self.info {
-            println!("[rustimage] {i}");
+            println!("[yasdig] {i}");
         }
         for w in &self.warnings {
-            eprintln!("[rustimage] warning:\n{}\n", indent(w));
+            eprintln!("[yasdig] warning:\n{}\n", indent(w));
         }
         if !self.errors.is_empty() {
-            eprintln!("[rustimage] cannot start — the following must be fixed:\n");
+            eprintln!("[yasdig] cannot start — the following must be fixed:\n");
             for e in &self.errors {
                 eprintln!("{}\n", indent(e));
             }
@@ -100,8 +100,8 @@ pub fn check(cfg: &Config) -> Report {
         // Only reachable from a source build: a release carries its own and
         // `Config::load` has already written it out.
         errors.push(format!(
-            "this build of rustimage has no stable-diffusion.cpp inside it, and\n\
-             models.toml names none. Either build one with RUSTIMAGE_SD_CLI set\n\
+            "this build of yasdig has no stable-diffusion.cpp inside it, and\n\
+             models.toml names none. Either build one with YASDIG_SD_CLI set\n\
              (see README.md), or build sd.cpp and set [sd].binary:\n  {}",
             bin.display()
         ));
@@ -479,7 +479,7 @@ pub fn check(cfg: &Config) -> Report {
             warnings.push(format!(
                 "{n} fp8 scale(s) in this GGUF were never folded into its weights, which\n\
                  overflows on Vulkan and renders as a mesh or mosaic:\n  {}\n\
-                 repair it in place with:\n  rustimage fold-scales \"{}\"",
+                 repair it in place with:\n  yasdig fold-scales \"{}\"",
                 p.display(),
                 p.display()
             ));

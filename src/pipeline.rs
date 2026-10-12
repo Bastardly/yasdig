@@ -1045,7 +1045,7 @@ impl Engine {
             // scales to fold: nothing in it is fp8.
             let r = crate::half::safetensors_to_f16(&plan.source, &plan.out)?;
             eprintln!(
-                "[rustimage] convert: {} of {} tensors to f16, the rest copied as they were",
+                "[yasdig] convert: {} of {} tensors to f16, the rest copied as they were",
                 r.halved, r.tensors
             );
             return Ok(ConvertResult {
@@ -1139,7 +1139,7 @@ impl Engine {
         let next = self.model(name)?;
         next.require_files()?;
         eprintln!(
-            "[rustimage] escalating with '{}' instead of '{}'",
+            "[yasdig] escalating with '{}' instead of '{}'",
             next.name, p.profile.name
         );
         // The two escalation checkpoints survive the replace, and that is not the
@@ -1415,7 +1415,7 @@ impl Engine {
         let work_id = match self.items.save(&raw, &mut item) {
             Ok(()) => Some(item.id),
             Err(e) => {
-                eprintln!("[rustimage] could not archive work item: {e:#}");
+                eprintln!("[yasdig] could not archive work item: {e:#}");
                 None
             }
         };
@@ -1661,7 +1661,7 @@ impl Engine {
         let work_id = match self.items.save(&raw, &mut item) {
             Ok(()) => Some(item.id),
             Err(e) => {
-                eprintln!("[rustimage] could not archive work item: {e:#}");
+                eprintln!("[yasdig] could not archive work item: {e:#}");
                 None
             }
         };
@@ -3124,7 +3124,7 @@ pub fn enlarge(
         // One line per run: the tile is chosen from the device's buffer limit,
         // so it is worth being able to see what it came out as.
         eprintln!(
-            "[rustimage] {} {}× in {} tile(s) of {} px, {} ms",
+            "[yasdig] {} {}× in {} tile(s) of {} px, {} ms",
             r.arch, r.scale, r.tiles, r.tile, r.ms
         );
     }
@@ -3366,7 +3366,7 @@ mod tests {
     }
 
     fn scratch(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("rustimage-slot-{tag}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("yasdig-slot-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

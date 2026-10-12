@@ -1,4 +1,4 @@
-//! Where rustimage keeps its files, and making that place on a first run.
+//! Where yasdig keeps its files, and making that place on a first run.
 //!
 //! A release is one file someone downloads and double-clicks, so the folders it
 //! needs cannot be a step in a README: they are created here, next to the
@@ -77,13 +77,13 @@ pub fn ensure(root: &Path) -> Result<()> {
     if !config.exists() {
         std::fs::write(&config, TEMPLATE).with_context(|| {
             format!(
-                "can't create {} — rustimage keeps its models and images in the folder it is in, \
+                "can't create {} — yasdig keeps its models and images in the folder it is in, \
                  so it needs to be somewhere you can write to (not Program Files). Move it to a \
                  folder of its own, such as your Documents or home folder, and start it again",
                 config.display()
             )
         })?;
-        println!("[rustimage] first run: set up in {}", root.display());
+        println!("[yasdig] first run: set up in {}", root.display());
     }
     for (dir, about) in MODEL_DIRS {
         let d = root.join("models").join(dir);
@@ -110,7 +110,7 @@ mod tests {
     /// the old executable, changes nothing the person has touched.
     #[test]
     fn a_second_run_leaves_everything_alone() {
-        let root = std::env::temp_dir().join(format!("rustimage-home-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("yasdig-home-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         ensure(&root).unwrap();

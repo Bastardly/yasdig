@@ -102,7 +102,7 @@ async function closeServer() {
     s.nightly_video && s.clear_videos_on_close && 'video clips',
   ].filter(Boolean);
   const queued = jobCount();
-  const msg = 'Close the rustimage server?\n\n'
+  const msg = 'Close the yasdig server?\n\n'
     + 'If an image or video is being made, it is stopped. '
     + (queued ? `The ${queued} job${queued > 1 ? 's' : ''} in the queue ${queued > 1 ? 'are' : 'is'} dropped. ` : '')
     + (doomed.length
@@ -120,8 +120,8 @@ async function closeServer() {
   // prompt down (it checks the form is still there), since with no server
   // there is nothing left to save to.
   document.querySelector('.app').innerHTML =
-    '<div class="card stopped"><h1>rustimage has stopped</h1>'
-    + '<p class="sub">You can close this tab. Start rustimage again to come back.</p></div>';
+    '<div class="card stopped"><h1>yasdig has stopped</h1>'
+    + '<p class="sub">You can close this tab. Start yasdig again to come back.</p></div>';
   // Browsers only let a script close a tab a script opened; this one was
   // opened by the OS. So try; when it is ignored, the message above stays.
   window.close();

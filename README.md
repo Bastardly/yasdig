@@ -1,4 +1,10 @@
-# rustimage
+# yasdig
+
+**Yet Another Stable Diffusion Image Generator.** The name is a tip of the hat to the
+open-source habit of calling a thing "yet another" one (yacc, YAML) — and an honest
+one: there are many of these, and this one stands on
+[stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), which does all
+the drawing. 
 
 A Python-free image generator for AMD GPUs on Linux. It generates **small and cheap**
 with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) on the
@@ -116,21 +122,21 @@ maths — has its own test, run by Node's built-in runner with
 Node installed.
 
 Each stage is skipped when it would be a no-op — EASU at scale 1.0, the grade with all
-eight knobs at 0, contrast at clarity 0.0 — so `rustimage fsr in.png out.png 1.0 0.5`
-is an exact sharpen-only pass, and `rustimage fsr in.png out.png 1.0 0.0 0.0` is a
+eight knobs at 0, contrast at clarity 0.0 — so `yasdig fsr in.png out.png 1.0 0.5`
+is an exact sharpen-only pass, and `yasdig fsr in.png out.png 1.0 0.0 0.0` is a
 byte-exact copy. That is also what **Output upscale** in the *After each generation* fold means by
 `1`: not a small enlarge, but no EASU pass at all, which is how you see the pixels the
 checkpoint actually drew.
 
 ## Quick start
 
-rustimage is **one file** with stable-diffusion.cpp built into it. Nothing to install
+yasdig is **one file** with stable-diffusion.cpp built into it. Nothing to install
 besides a GPU driver with Vulkan, which every current AMD, NVIDIA and Intel driver
 includes.
 
-1. Download `rustimage-linux-x86_64` or `rustimage-windows-x86_64.exe` from the
-   [releases](https://github.com/Bastardly/rustimage/releases).
-2. Put it in **a folder of its own**, somewhere you can write to — `Documents/rustimage`,
+1. Download `yasdig-linux-x86_64` or `yasdig-windows-x86_64.exe` from the
+   [releases](https://github.com/Bastardly/yasdig/releases).
+2. Put it in **a folder of its own**, somewhere you can write to — `Documents/yasdig`,
    say, not Program Files. It keeps everything it makes beside itself.
 3. Start it. On Windows, double-click it. On Linux, `chmod +x` it once and run it
    (from a terminal, or a file manager that runs executables).
@@ -140,7 +146,7 @@ includes.
 The first start creates what it needs, and later starts never overwrite any of it:
 
 ```
-rustimage(.exe)
+yasdig(.exe)
 startup.toml       the port and address the page is on
 models.toml        settings the program needs to start; edit freely
 models/            checkpoints/  diffusion_models/  vae/  text_encoders/
@@ -151,7 +157,7 @@ bin/               stable-diffusion.cpp, unpacked from the executable
 ```
 
 The console window (Windows) or terminal (Linux) shows what it is doing, and closing it
-stops rustimage. So does the red **Close server** button at the end of the tab row —
+stops yasdig. So does the red **Close server** button at the end of the tab row —
 the way out when you started it from a file manager and there is no window to close.
 It asks first, stops a render in progress, frees the port, and replaces the page with
 a note saying it has stopped (browsers don't let a page close a tab it didn't open, so
@@ -179,18 +185,18 @@ git clone --recursive https://github.com/leejet/stable-diffusion.cpp
 After that it is only:
 
 ```sh
-cargo build --release      # target/release/rustimage, sd-cli inside — the file to hand out
+cargo build --release      # target/release/yasdig, sd-cli inside — the file to hand out
 cargo run --release        # or run it straight from the checkout
 ```
 
-`build.rs` builds sd.cpp's `sd-cli` into `stable-diffusion.cpp/build-rustimage/` and a
+`build.rs` builds sd.cpp's `sd-cli` into `stable-diffusion.cpp/build-yasdig/` and a
 release build carries it. The first build takes a few minutes, most of it ggml's Vulkan
 shaders; after that an unchanged sd.cpp costs nothing. A debug build (`cargo build`,
 `cargo test`) builds sd-cli too but doesn't embed it, so tests stay quick.
 
 To update sd.cpp, `git -C stable-diffusion.cpp pull && git -C stable-diffusion.cpp
 submodule update --recursive`, then build as usual — the next build notices the new
-commit. `RUSTIMAGE_SD_CLI=/path/to/sd-cli` embeds a binary built elsewhere instead.
+commit. `YASDIG_SD_CLI=/path/to/sd-cli` embeds a binary built elsewhere instead.
 
 A checkout runs the sd-cli named by `[sd].binary` in the repo's `models.toml` — the one
 above — and serves the page straight from `web/`, so an edit shows on reload.
@@ -202,7 +208,7 @@ libstdc++ or newer. `.github/workflows/release.yml` makes the files to publish: 
 
 > If configure fails with *"Could not find a package configuration file provided by
 > SPIRV-Headers"*, install `spirv-headers-devel` / `spirv-tools-devel` and build again —
-> a failed configure is retried. `rustimage` itself does **not** need `glslc`; its own
+> a failed configure is retried. `yasdig` itself does **not** need `glslc`; its own
 > shaders are WGSL, compiled in-process by `wgpu`/naga.
 
 ## Models
@@ -317,10 +323,10 @@ choice for that model only. Help → Memory explains the three.
 
 ### Smoke-test sd.cpp on its own
 
-If a generation fails and you want to rule rustimage out, run sd-cli by hand:
+If a generation fails and you want to rule yasdig out, run sd-cli by hand:
 
 ```sh
-stable-diffusion.cpp/build-rustimage/bin/sd-cli -M img_gen -m models/checkpoints/sdxl-turbo.safetensors \
+stable-diffusion.cpp/build-yasdig/bin/sd-cli -M img_gen -m models/checkpoints/sdxl-turbo.safetensors \
   -p "a lovely cat" --steps 4 --cfg-scale 1 --sampling-method euler -o test.png
 ```
 
@@ -473,7 +479,7 @@ with, which is what lets reopening a work item restore it faithfully.
 
 **Drop the files in `models/video/` and they are identified by what is inside them.** A
 video model is three to five files — transformer, VAE, text encoder, sometimes a *second*
-transformer — whose roles are not in their names, so rustimage doesn't read the names. It
+transformer — whose roles are not in their names, so yasdig doesn't read the names. It
 reads the header: both safetensors and GGUF carry a tensor index at the front of the
 file, and the tensor names in it identify the architecture outright. That is one seek and
 a few hundred KB against files of 8 to 20 GB — identifying 37 GB across three files takes
@@ -582,7 +588,7 @@ flow_shift = 3.0
 | `minimax_h3` | present so it's a config edit later, not runnable on 24 GB / 30 GB | 32 | `17k+5`, rounds **up**, floor 5 | forced 24 |
 
 The rounding is sd.cpp's, not ours, and it *warns and carries on* rather than failing —
-so rustimage rounds first and shows you the result, and the line under the boxes says
+so yasdig rounds first and shows you the result, and the line under the boxes says
 what will actually run and how long it will be. Sizes are `vae_scale_factor × 2`. Frame
 counts go through the latent frame count and back, and because that division truncates,
 **34 Wan frames run as 33**: asking for more can give you fewer.
@@ -599,16 +605,16 @@ experts and a smaller encoder, in that order.
 
 ```sh
 cargo run --release
-# [rustimage] settings: /home/you/rustimage/user/settings.toml
-# [rustimage] 3 model(s) available in /home/you/rustimage/models:
-# [rustimage]   • samExtTURBO_v10   [sdxl, discovered, tuned, 6.5 GB]  768x768 → 1536x1536  · 6 steps, cfg 1
-# [rustimage]   • sd_xl_base_1.0    [sdxl, discovered, 6.5 GB]  768x768 → 1536x1536  · 30 steps, cfg 6
-# [rustimage]   • z_image_turbo     [z_image, discovered, 11.5 GB]  1024x1024 → 2048x2048  · 8 steps, cfg 1
-# [rustimage]       --vae   vae/ae.safetensors
-# [rustimage]       --llm   text_encoders/qwen_3_4b.safetensors
-# [rustimage] GPU worker ready on adapter: AMD Radeon RX 7900 XTX (RADV NAVI31)
-# [rustimage] GPU post-process: upscale=easu, grade=oklab, contrast=clarity, sharpen=rcas
-# [rustimage] listening on http://127.0.0.1:8080
+# [yasdig] settings: /home/you/yasdig/user/settings.toml
+# [yasdig] 3 model(s) available in /home/you/yasdig/models:
+# [yasdig]   • samExtTURBO_v10   [sdxl, discovered, tuned, 6.5 GB]  768x768 → 1536x1536  · 6 steps, cfg 1
+# [yasdig]   • sd_xl_base_1.0    [sdxl, discovered, 6.5 GB]  768x768 → 1536x1536  · 30 steps, cfg 6
+# [yasdig]   • z_image_turbo     [z_image, discovered, 11.5 GB]  1024x1024 → 2048x2048  · 8 steps, cfg 1
+# [yasdig]       --vae   vae/ae.safetensors
+# [yasdig]       --llm   text_encoders/qwen_3_4b.safetensors
+# [yasdig] GPU worker ready on adapter: AMD Radeon RX 7900 XTX (RADV NAVI31)
+# [yasdig] GPU post-process: upscale=easu, grade=oklab, contrast=clarity, sharpen=rcas
+# [yasdig] listening on http://127.0.0.1:8080
 ```
 
 Startup runs a preflight first: it checks the sd.cpp binary, creates
@@ -620,7 +626,7 @@ mid-request — `doctor` below runs the same checks without starting the server.
 models at all is a warning rather than a stop: a fresh folder has none, and one
 dropped in while the server runs shows up on the next reload.
 
-The browser opens on the page by itself (set `RUSTIMAGE_NO_BROWSER=1` to stop that).
+The browser opens on the page by itself (set `YASDIG_NO_BROWSER=1` to stop that).
 
 The port is in `startup.toml`, beside `models.toml` — created on the first start with
 `port = 8080`; edit it and restart to move. That port is kept, not just tried first:
@@ -629,11 +635,11 @@ The port is in `startup.toml`, beside `models.toml` — created on the first sta
 |---|---|
 | nothing | listens there |
 | this same folder and build | opens the browser on it and ends — a second double-click |
-| any other rustimage — another folder, or an older build of this one | asks it to close (without its clear-on-close), then takes the port |
+| any other yasdig — another folder, or an older build of this one | asks it to close (without its clear-on-close), then takes the port |
 | any other program | leaves it alone, and uses the next free port, saying which |
 
-Closing another rustimage goes through its own `/shutdown`, so it works the same on
-Linux and Windows, and nothing that isn't rustimage is ever closed. A rustimage built
+Closing another yasdig goes through its own `/shutdown`, so it works the same on
+Linux and Windows, and nothing that isn't yasdig is ever closed. A yasdig built
 before this existed has no such route and is stepped past like any other program. With no
 `models.toml` argument it uses the one in the current directory, then the checkout a
 `target/` build belongs to, and otherwise the one beside the executable, creating that folder's layout on the way.
@@ -798,7 +804,7 @@ A model is remembered by its name, which for a discovered one is its file name
 without the extension. When a model is gone, the next start moves its settings to
 `user/model-settings.removed.toml` and says so, and moves them back if the file returns
 — so taking a model out for a while costs nothing. Renamed a file? Rename its entry in
-`user/model-settings.toml` to match (before starting rustimage) and it keeps them.
+`user/model-settings.toml` to match (before starting yasdig) and it keeps them.
 
 ### Prompt variables
 
@@ -1060,9 +1066,9 @@ how it runs:
 | architecture | runs on | examples | speed |
 |---|---|---|---|
 | **ESRGAN** (RRDBNet) | sd-cli (`-M upscale`) | `4x-UltraSharp`, `RealESRGAN_x4plus`, `x4plus_anime_6B`, `4x_NMKD-Siax_200k`, `4x_foolhardy_Remacri`, `4xNomos8kSC`, most `4x_*.pth` | seconds |
-| **Compact** (SRVGG) | rustimage's own shaders | `realesr-general-x4v3`, `realesr-animevideov3`, most "compact" releases | fast |
-| **SPAN** | rustimage's own shaders | `4xNomos8k_span_otf_*`, most `*_span*` files on OpenModelDB | fast |
-| **SwinIR** | rustimage's own shaders | `003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-L_x4_GAN`, the classical and lightweight releases | slowest — measure it |
+| **Compact** (SRVGG) | yasdig's own shaders | `realesr-general-x4v3`, `realesr-animevideov3`, most "compact" releases | fast |
+| **SPAN** | yasdig's own shaders | `4xNomos8k_span_otf_*`, most `*_span*` files on OpenModelDB | fast |
+| **SwinIR** | yasdig's own shaders | `003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-L_x4_GAN`, the classical and lightweight releases | slowest — measure it |
 | DAT, HAT, others | — | listed greyed out, *not supported* | |
 
 **If you want the best result for the least fuss, pick an ESRGAN.** It is the most
@@ -1087,11 +1093,11 @@ The choice is saved with the image, so reopening a work item restores it, and th
 Settings tab has a default for it. It applies to the first enlarge only; the hi-res
 pass and *Enlarge frames* still use EASU.
 
-**Checking a new model file**: `rustimage upscale in.png out.png <file> 4`, at the
+**Checking a new model file**: `yasdig upscale in.png out.png <file> 4`, at the
 model's own scale. Besides the time, it prints a **consistency** figure — the result
 shrunk back by 4 and compared with the input, in dB. An upscaler that works lands above
 30 dB, because shrinking its output gives back what went in; one that is broken, or a
-file that isn't what its tensor names claim, lands far below. `rustimage sr-selftest`
+file that isn't what its tensor names claim, lands far below. `yasdig sr-selftest`
 checks the shader operations themselves against reference implementations, and prints
 how fast the GPU runs them.
 
@@ -1311,7 +1317,7 @@ would kill image 4 as well. Everything generated up to that point is still in th
 
 Two things worth knowing before leaving one unattended. **The queue lives in the
 server's memory**: closing the tab doesn't stop it, but *Close server* (or quitting
-rustimage) drops whatever is still queued. And every generation is archived, so an
+yasdig) drops whatever is still queued. And every generation is archived, so an
 overnight loop writes a few MB per image into `work/workitems/` — delete what you
 don't want from the grid. Only the newest image per place it is shown is kept warm, in
 `work/current/`, which is emptied on start and on *Close server*: a refined or hi-res
@@ -1349,7 +1355,7 @@ A finished clip plays in a canvas with a scrubber, frame by frame. That is becau
 clip **is** a PNG sequence on disk — `work/videos/{id}/frame_000.png` and friends — not a
 video file. sd-cli's `-o` can write either a frame sequence or one muxed container, and
 frames win: both of the things you'd want to do to a clip afterwards consume frames, and
-rustimage has no video decoder to get them back out of a container. Frames are also
+yasdig has no video decoder to get them back out of a container. Frames are also
 lossless, and they're what an editor wants. The cost is disk — about 700 KB a frame at
 832×480, so ~23 MB for a 33-frame clip. Delete what you don't want from the Clips grid.
 
@@ -1364,7 +1370,7 @@ upscaling" doesn't:
 - The filters **size their band from the image**, so a sharpness setting means the same
   thing after the enlargement as before it.
 
-What rustimage deliberately does *not* do is re-diffuse frames. Running the refine pass
+What yasdig deliberately does *not* do is re-diffuse frames. Running the refine pass
 per frame would work on any single frame and boil in motion: each frame draws its own
 noise and invents its own detail with no knowledge of its neighbours. Refining a clip
 properly is video-native — a second pass with a VACE checkpoint and `--control-video`,
@@ -1415,7 +1421,7 @@ unchanged. Each multiply then adds up values hundreds to thousands of times thei
 size, which overflows on Vulkan and comes out as a mesh over the picture that gets worse
 every step. So once sd-cli finishes, the converter rewrites the per-block multipliers in
 place and sets each scale to 1 (`src/foldscale.rs`). The result says how many it folded.
-A file converted before this existed is repaired with `rustimage fold-scales <file.gguf>`,
+A file converted before this existed is repaired with `yasdig fold-scales <file.gguf>`,
 in seconds to minutes rather than another conversion; `doctor` names any file that needs it.
 
 **It runs single-threaded on purpose.** sd.cpp's streaming converter starts one worker
@@ -1521,12 +1527,12 @@ checkpoint, no model weights — which makes them the quick way to check the Vul
 in isolation.
 
 ```sh
-rustimage doctor [models.toml]      # run the startup checks and report, without starting
-rustimage upscale in.png out.png <model> [factor=2.0] [models.toml]  # the model enlarge alone
-rustimage fold-scales <file.gguf>...  # fold a scaled-fp8 GGUF's scales into its weights
-rustimage fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]  # no colour knobs: UI only
-rustimage fsr-selftest [out.png]    # synthesize patterns and check the filters
-rustimage sr-selftest               # the upscaler shaders against CPU references, plus speed
+yasdig doctor [models.toml]      # run the startup checks and report, without starting
+yasdig upscale in.png out.png <model> [factor=2.0] [models.toml]  # the model enlarge alone
+yasdig fold-scales <file.gguf>...  # fold a scaled-fp8 GGUF's scales into its weights
+yasdig fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]  # no colour knobs: UI only
+yasdig fsr-selftest [out.png]    # synthesize patterns and check the filters
+yasdig sr-selftest               # the upscaler shaders against CPU references, plus speed
 ```
 
 From a source checkout, put them after `--`: `cargo run --release -- doctor`.
@@ -2051,10 +2057,9 @@ escalation in it. Malformed JSON is `400`, and `503` means the GPU worker is gon
 
 ## Licence
 
-rustimage is licensed under the [Apache License 2.0](LICENSE). It is powered by
+yasdig is licensed under the [Apache License 2.0](LICENSE). It is powered by
 [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) (MIT), which every
 release carries inside it; that and the other bundled components' notices are in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and in the app under Help → About &
-licences. Models are not part of rustimage: every model has its own licence, set by its
+licences. Models are not part of yasdig: every model has its own licence, set by its
 authors — check it before using what you make.
-

@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-Python-free Vulkan image generator for AMD/Linux. Generate small and cheap with
+**yasdig** — *Yet Another Stable Diffusion Image Generator*; called rustimage until
+2026-10-12, renamed to stay clear of the Rust trademark. Python-free Vulkan image
+generator for AMD/Linux. Generate small and cheap with
 stable-diffusion.cpp (shelled out as a subprocess, never FFI), then escalate quality
 on demand with img2img passes and a native FSR post-process in `wgpu`. Every sd.cpp
 run goes through one job queue and one diffusion worker, so nothing thrashes VRAM;
@@ -59,21 +61,21 @@ WebKitGTK, which would have to be installed — the one dependency a one-file bu
 exists to avoid — and it would render this page in an engine nobody tests it in.
 **`cargo build --release` is the whole recipe**, and CI runs exactly that. sd.cpp is
 a gitignored clone at `./stable-diffusion.cpp/`; `build.rs` configures and builds its
-`sd-cli` target into `build-rustimage/` there (a separate dir, so a hand-made native
+`sd-cli` target into `build-yasdig/` there (a separate dir, so a hand-made native
 `build/` is left alone) and a *release* build embeds it. A debug build builds it but
 never embeds it — 93 MB in every test binary is link time on every `cargo test`. A
 failed sd.cpp build is a warning in debug, so the Rust half still tests, and an error in
-release. `RUSTIMAGE_SD_CLI=<path>` overrides it with a binary from elsewhere.
+release. `YASDIG_SD_CLI=<path>` overrides it with a binary from elsewhere.
 
 **sd.cpp is still a subprocess, never FFI.** The bytes travel inside us
 (`build.rs` → `src/bundle.rs`) and are written to `bin/sd-cli` on start, then run
 exactly as `[sd].binary` would be. The repo's `models.toml` names
-`build-rustimage/bin/sd-cli`, so a checkout runs the binary `cargo build` just made.
+`build-yasdig/bin/sd-cli`, so a checkout runs the binary `cargo build` just made.
 
 Two things about `build.rs` break silently: it **reruns on `.git/logs/HEAD`, not on
 the source tree** (walking 1 GB per build is what it avoids) — so a pull is noticed, a
 hand edit to sd.cpp needs `touch build.rs`. And **configure is stamped on success**
-(`.rustimage-configured`), not judged by `CMakeCache.txt`, which a failed configure
+(`.yasdig-configured`), not judged by `CMakeCache.txt`, which a failed configure
 leaves behind and which then made every later build fail on "no Makefile".
 
 Five things break silently:
@@ -101,9 +103,11 @@ Five things break silently:
   `[server]`), and it is kept rather than merely tried first. A taken one is asked
   `GET /instance` — the folder *and* the build that server is — and `startup::bind`
   decides: the same folder and build is handed over to (browser, start ends: a second
-  double-click must not kill a render); **any other rustimage is closed** through
+  double-click must not kill a render); **any other yasdig is closed** through
   `POST /shutdown {"clear":false}` and the port taken back; anything that isn't a
-  rustimage is never touched and the next of 20 ports is used. Two things here break
+  yasdig is never touched and the next of 20 ports is used. (`startup::instance`
+  also accepts `"app":"rustimage"`, the pre-rename build, so the first start after
+  the rename takes its port back — transitional.) Two things here break
   silently. **`build_id` is read once, first thing in `run`**: re-read later, a server
   whose file `cargo` has since rebuilt reports the *new* build and is handed over to —
   which is the stale-`cargo run` bug this rule exists for, back. And **the takeover
@@ -313,7 +317,7 @@ listener of its own. A redraw that fires no event has to call it itself, which i
 Four things break silently:
 
 - **Open state is per fold and per browser** (`dom.js`'s `rememberFolds(root)`, called
-  by every tab with folds; key `rustimage.fold.<id>`, every access in a try/catch). Without a stored value a fold starts as the markup has
+  by every tab with folds; key `yasdig.fold.<id>`, every access in a try/catch). Without a stored value a fold starts as the markup has
   it, so `open` in `index.html` is the default and not decoration.
 - **Picking a hi-res or refine model refills that fold** (`fillPass`, from
   `passModel`). `swap_model` replaces the profile wholesale and the boxes land on top,
@@ -561,7 +565,7 @@ takes `&Fsr` and `&SdRunner`, so the `upscale` subcommand can run it without an
 `enlarge_clip` are its obvious next callers and don't use it yet.
 
 **Two routes, chosen by what the file is** (`sr::identify`, tensor names only):
-an ESRGAN goes to sd-cli, everything else to `src/sr/`, rustimage's own
+an ESRGAN goes to sd-cli, everything else to `src/sr/`, yasdig's own
 super-resolution runner on the FSR device. The split exists because sd.cpp's
 upscaler is hard-wired to one class (`src/upscaler.cpp` builds an `ESRGAN` and
 nothing else) and the repo is public, so a patched sd.cpp was not an option;
@@ -1593,7 +1597,7 @@ the feature be worked on in place and turned back on with a tick.
 
 ## Licences
 
-rustimage is Apache-2.0 (`LICENSE`, `Cargo.toml`). A release embeds sd-cli, so the
+yasdig is Apache-2.0 (`LICENSE`, `Cargo.toml`). A release embeds sd-cli, so the
 MIT and BSD notices of stable-diffusion.cpp, ggml and what they bundle (libwebp,
 libwebm, Oniguruma, utf8proc, darts-clone, nlohmann/json, stb, miniz, zip) must
 travel inside the one file: `THIRD_PARTY_LICENSES.md` holds them verbatim, built

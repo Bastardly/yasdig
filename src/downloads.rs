@@ -195,7 +195,7 @@ impl Downloads {
                 Ok(()) => st.finished += 1,
                 Err(_) if st.cancelled => {}
                 Err(e) => {
-                    eprintln!("[rustimage] download {} failed: {e:#}", task.dest);
+                    eprintln!("[yasdig] download {} failed: {e:#}", task.dest);
                     st.failed.insert(task.dest.clone(), format!("{e:#}"));
                 }
             }
@@ -214,7 +214,7 @@ impl Downloads {
             std::fs::remove_file(&part)?;
         }
         if have != t.bytes {
-            println!("[rustimage] downloading {} ({})", t.dest, t.url);
+            println!("[yasdig] downloading {} ({})", t.dest, t.url);
             let mut child = curl_command(&t.url, &part).spawn()?;
             let mut stderr = child.stderr.take().expect("stderr was piped");
             {
@@ -247,7 +247,7 @@ impl Downloads {
             bail!("got {got} bytes, expected {}; press Download to resume", t.bytes);
         }
         std::fs::rename(&part, &dest)?;
-        println!("[rustimage] downloaded {}", t.dest);
+        println!("[yasdig] downloaded {}", t.dest);
         // What it *is*, read off its header like every other file: a catalog
         // entry pointing at the wrong file is reported here, on the card, not
         // minutes into a render. The file is kept — it is a whole download, and
@@ -420,7 +420,7 @@ mod tests {
     use crate::discover::{ImageVaeKind, LlmKind, Role};
 
     fn tmpdir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("rustimage-dl-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("yasdig-dl-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

@@ -391,7 +391,7 @@ const HELP = [
         + 'permanently, instead of on every load.' },
   { ids: ['setargs'],
     text: 'Flags passed straight to sd-cli, one per line, after everything '
-        + 'rustimage sets. The escape hatch for a model that needs something '
+        + 'yasdig sets. The escape hatch for a model that needs something '
         + 'this page has no box for — and the place a wrong flag shows up as a '
         + 'failed render rather than as a message, since nothing here checks '
         + 'them.' },

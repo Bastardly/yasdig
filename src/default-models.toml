@@ -1,6 +1,6 @@
-# rustimage configuration — what the program needs in order to start.
+# yasdig configuration — what the program needs in order to start.
 #
-# rustimage wrote this file on its first run, and never rewrites it: edit away.
+# yasdig wrote this file on its first run, and never rewrites it: edit away.
 # Everything in it is optional; delete a line and its default comes back.
 #
 # You usually don't need to touch it at all. Drop model files into the folders
@@ -10,7 +10,7 @@
 
 [sd]
 # The stable-diffusion.cpp binary. Leave this unset to use the one built into
-# rustimage (unpacked to bin/ on start). Set it to run your own build:
+# yasdig (unpacked to bin/ on start). Set it to run your own build:
 # binary = "/path/to/your/sd-cli"
 #
 # Where models are looked for. Relative paths are relative to this file.

@@ -250,7 +250,7 @@ impl Drop for ClipDir {
         if !self.keep {
             if let Err(e) = std::fs::remove_dir_all(&self.dir) {
                 if e.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!("[rustimage] leaving {} behind: {e}", self.dir.display());
+                    eprintln!("[yasdig] leaving {} behind: {e}", self.dir.display());
                 }
             }
         }
@@ -311,7 +311,7 @@ t5xxl = "t.gguf"
 
     #[test]
     fn a_clip_is_measured_from_its_frames() {
-        let dir = std::env::temp_dir().join(format!("rustimage-vid-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("yasdig-vid-{}", std::process::id()));
         let store = VideoStore::new(&dir);
 
         let (pattern, mut guard) = store.prepare("100-7").unwrap();
@@ -349,7 +349,7 @@ t5xxl = "t.gguf"
 
     #[test]
     fn listing_skips_runs_that_never_finished() {
-        let dir = std::env::temp_dir().join(format!("rustimage-vid2-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("yasdig-vid2-{}", std::process::id()));
         let store = VideoStore::new(&dir);
 
         for (id, ms) in [("100-7", 100u128), ("200-7", 200)] {
@@ -393,7 +393,7 @@ t5xxl = "t.gguf"
     /// common path, not a rare one.
     #[test]
     fn an_unfinished_clip_directory_removes_itself() {
-        let dir = std::env::temp_dir().join(format!("rustimage-vid3-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("yasdig-vid3-{}", std::process::id()));
         let store = VideoStore::new(&dir);
         {
             let (_, _guard) = store.prepare("100-7").unwrap();
@@ -413,7 +413,7 @@ t5xxl = "t.gguf"
     /// produced no frames has to be an error the user sees.
     #[test]
     fn finishing_an_empty_clip_is_an_error() {
-        let dir = std::env::temp_dir().join(format!("rustimage-vid4-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("yasdig-vid4-{}", std::process::id()));
         let store = VideoStore::new(&dir);
         let (_, _guard) = store.prepare("100-7").unwrap();
         let err = store

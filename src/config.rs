@@ -2868,7 +2868,7 @@ t5xxl = "v/umt5.gguf"
         // Distinct from the other temp dirs in this file: `cargo test` runs the
         // suite in one process, so a pid alone is not a unique name.
         let root =
-            std::env::temp_dir().join(format!("rustimage-cfg-discover-{}", std::process::id()));
+            std::env::temp_dir().join(format!("yasdig-cfg-discover-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         let video = root.join("models").join("video");
         let dit = video.join("diffusion_models").join("wan5b.safetensors");
@@ -2936,7 +2936,7 @@ t5xxl = "v/umt5.gguf"
     #[test]
     fn the_image_registry_lists_checkpoints_by_header_not_by_extension() {
         let root =
-            std::env::temp_dir().join(format!("rustimage-cfg-images-{}", std::process::id()));
+            std::env::temp_dir().join(format!("yasdig-cfg-images-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         let models = root.join("models");
         let sdxl = [
@@ -2982,7 +2982,7 @@ t5xxl = "v/umt5.gguf"
     /// stay the Video tab's.
     #[test]
     fn an_image_family_takes_its_vae_from_the_video_dir() {
-        let root = std::env::temp_dir().join(format!("rustimage-cfg-krea-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("yasdig-cfg-krea-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         let models = root.join("models");
         fake_model(
@@ -3029,7 +3029,7 @@ t5xxl = "v/umt5.gguf"
     #[test]
     fn a_z_image_is_assembled_and_arrives_on_its_recipe() {
         let root =
-            std::env::temp_dir().join(format!("rustimage-cfg-zimage-{}", std::process::id()));
+            std::env::temp_dir().join(format!("yasdig-cfg-zimage-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         let models = root.join("models");
         fake_model(
@@ -3187,7 +3187,7 @@ lora_dir = "adapters"
     /// subfolders included, and a name resolves or says what is there.
     #[test]
     fn an_upscaler_resolves_in_its_folder_or_names_what_is() {
-        let base = std::env::temp_dir().join(format!("rustimage-cfg-up-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("yasdig-cfg-up-{}", std::process::id()));
         let dir = base.join("models").join("upscalers");
         std::fs::create_dir_all(dir.join("anime")).unwrap();
         // A header naming an RRDB block is all identification reads. The
@@ -3377,7 +3377,7 @@ lora_dir = "adapters"
     #[test]
     fn two_entries_cannot_share_a_name() {
         // Through `load`, since that's where the uniqueness check lives.
-        let dir = std::env::temp_dir().join(format!("rustimage-cfg-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("yasdig-cfg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("models.toml");
         let second = &MINIMAL[MINIMAL.find("[[video]]").unwrap()..];

@@ -55,7 +55,7 @@ impl<'a> SdRunner<'a> {
         let bin = self.binary();
         if !bin.exists() {
             bail!(
-                "sd binary not found at {} — `rustimage doctor` says why and what to do",
+                "sd binary not found at {} — `yasdig doctor` says why and what to do",
                 bin.display()
             );
         }
@@ -175,7 +175,7 @@ impl<'a> SdRunner<'a> {
         let sched = ((steps as f32) / strength.max(MIN_STRENGTH)).ceil() as u32;
         cmd.args(["--steps", &sched.max(1).to_string()]);
         eprintln!(
-            "[rustimage] {label}: {steps} effective steps at strength {strength} \
+            "[yasdig] {label}: {steps} effective steps at strength {strength} \
              (schedule {sched}{}){}",
             // Only when it isn't the obvious thing — same rule as the step note
             // below. A silent line means the pass ran at the base CFG.
@@ -2161,7 +2161,7 @@ binary = "/opt/sd-cli"
     /// encoders it releases; MemAvailable is read in bytes.
     #[test]
     fn ram_needed_counts_held_weights_but_not_the_text_encoder() {
-        let dir = std::env::temp_dir().join(format!("rustimage-ramneed-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("yasdig-ramneed-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = |name: &str, len: usize| {
             let p = dir.join(name);
@@ -2397,7 +2397,7 @@ lora_dir = "loras""#,
     /// alone and never read as a frame.
     #[test]
     fn the_newest_complete_preview_wins_and_older_ones_go() {
-        let dir = std::env::temp_dir().join(format!("rustimage-preview-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("yasdig-preview-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(newest_complete(&dir), None, "a missing dir is no preview");
         std::fs::create_dir_all(&dir).unwrap();

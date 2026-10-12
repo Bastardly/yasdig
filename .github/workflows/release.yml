@@ -1,5 +1,5 @@
 # The one-file release: stable-diffusion.cpp's sd-cli built static, then baked
-# into rustimage (see build.rs and src/bundle.rs), for Linux and Windows.
+# into yasdig (see build.rs and src/bundle.rs), for Linux and Windows.
 #
 # Push a tag `v*` to publish a release with both executables attached, or run it
 # by hand from the Actions tab to get them as workflow artifacts only.
@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
 
 env:
-  # The sd.cpp commit rustimage is tested against. Bump deliberately: rustimage
+  # The sd.cpp commit yasdig is tested against. Bump deliberately: yasdig
   # parses sd-cli's progress output and reads its source for several behaviours
   # (see CLAUDE.md), so a newer commit is a change to test, not a free upgrade.
   SD_CPP_REF: 59c23bce0d82be3a922023ab811194f05b3e2faa
@@ -67,8 +67,8 @@ jobs:
           LDFLAGS: -static-libstdc++ -static-libgcc
         run: |
           cargo build --release
-          cp target/release/rustimage rustimage-linux-x86_64
-          echo "SD_CLI=stable-diffusion.cpp/build-rustimage/bin/sd-cli" >> "$GITHUB_ENV"
+          cp target/release/yasdig yasdig-linux-x86_64
+          echo "SD_CLI=stable-diffusion.cpp/build-yasdig/bin/sd-cli" >> "$GITHUB_ENV"
 
       - name: Dependencies
         # Anything beyond the Vulkan loader and glibc's own libraries is a
@@ -84,8 +84,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rustimage-linux-x86_64
-          path: rustimage-linux-x86_64
+          name: yasdig-linux-x86_64
+          path: yasdig-linux-x86_64
 
   windows:
     runs-on: windows-2022
@@ -111,13 +111,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build
-        # The static CRT for rustimage itself too; build.rs gives sd-cli /MT.
+        # The static CRT for yasdig itself too; build.rs gives sd-cli /MT.
         env:
           RUSTFLAGS: -C target-feature=+crt-static
         run: |
           cargo build --release
-          Copy-Item target\release\rustimage.exe rustimage-windows-x86_64.exe
-          $exe = Get-ChildItem -Recurse stable-diffusion.cpp\build-rustimage\bin -Filter sd-cli.exe | Select-Object -First 1
+          Copy-Item target\release\yasdig.exe yasdig-windows-x86_64.exe
+          $exe = Get-ChildItem -Recurse stable-diffusion.cpp\build-yasdig\bin -Filter sd-cli.exe | Select-Object -First 1
           Add-Content $env:GITHUB_ENV "SD_CLI=$($exe.FullName)"
 
       - name: Dependencies
@@ -135,8 +135,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rustimage-windows-x86_64
-          path: rustimage-windows-x86_64.exe
+          name: yasdig-windows-x86_64
+          path: yasdig-windows-x86_64.exe
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -153,4 +153,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes \
-            rustimage-linux-x86_64 rustimage-windows-x86_64.exe
+            yasdig-linux-x86_64 yasdig-windows-x86_64.exe

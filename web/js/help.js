@@ -48,7 +48,7 @@ export const TOPICS = [
         ['VAE', 'Turns the model’s compressed result into pixels at the end. Small, but it has to be the right one: the wrong VAE gives coloured noise.'],
       ], false)}
       <p>The parts must match the model <b>exactly</b>. A text encoder of the
-      wrong size loads without complaint and quietly ignores your prompt. rustimage
+      wrong size loads without complaint and quietly ignores your prompt. yasdig
       reads every file to find out what it is, so file names and folders don’t
       matter — but it can only pick from what you have. Each model’s parts are in
       the <i>Models</i> fold on the Image tab.</p>
@@ -106,7 +106,7 @@ export const TOPICS = [
         ['models/upscalers', 'Upscaler models (ESRGAN, SPAN, SwinIR…)'],
       ])}
       <p>These are the folders ComfyUI uses, so its download instructions work
-      here. They are for you: rustimage reads every file under
+      here. They are for you: yasdig reads every file under
       <code>models/</code>, so a model is found wherever it is — except that
       LoRAs and upscalers must be in their own folders.</p>`,
     async fill(el) {
@@ -147,7 +147,11 @@ export const TOPICS = [
     title: 'About & licences',
     html: `
       <h2>About & licences</h2>
-      <p><b>rustimage</b> is free software under the
+      <p><b>yasdig</b> is <i>Yet Another Stable Diffusion Image Generator</i> — a
+      tip of the hat to the open-source habit of calling a thing "yet another" one,
+      and to the many generators before it. It was called rustimage until October
+      2026.</p>
+      <p>It is free software under the
       <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank" rel="noopener noreferrer">Apache License 2.0</a>.</p>
       <p>It is powered by
       <a href="https://github.com/leejet/stable-diffusion.cpp" target="_blank" rel="noopener noreferrer">stable-diffusion.cpp</a>
@@ -155,7 +159,7 @@ export const TOPICS = [
       picture, and by <a href="https://www.vulkan.org/" target="_blank" rel="noopener noreferrer">Vulkan</a>,
       which your graphics driver provides.</p>
       <h3>Models</h3>
-      <p>Models are not part of rustimage. <b>Every model has its own licence</b>, set by
+      <p>Models are not part of yasdig. <b>Every model has its own licence</b>, set by
       the people who made it: some allow anything, some forbid commercial use of what
       you make. Check a model’s page before using its pictures — each card on the
       <i>Get models</i> tab links the pages its files come from.</p>
@@ -426,7 +430,7 @@ export const TOPICS = [
 
       <h3>Can the text encoder’s result be kept?</h3>
       <p>Not between runs. stable-diffusion.cpp can only remember a prompt’s
-      encoding inside one running process, and rustimage starts a fresh one for
+      encoding inside one running process, and yasdig starts a fresh one for
       every pass. What it does instead, in System RAM and Stream from SSD, is
       let go of the encoder as soon as it has read the prompt — the encoder is
       the second-largest file in most sets, and it is only needed for the first
@@ -454,7 +458,7 @@ export const TOPICS = [
       stable-diffusion.cpp already retries that in tiles by itself, so what is
       left is a smaller size.</p>
       <p>Running out of <b>system memory</b> looks different: the system stops the
-      run with no message, and rustimage says so. Close what you don’t need, or
+      run with no message, and yasdig says so. Close what you don’t need, or
       use Stream from SSD.</p>
 
       <h3>The lasting fix: a smaller file</h3>
@@ -495,7 +499,7 @@ export const TOPICS = [
   },
 ];
 
-const KEY = 'rustimage.help.topic';
+const KEY = 'yasdig.help.topic';
 
 // The menu's order: these first, in this order, then every other topic by
 // title — so a topic added later lands in its alphabetical place with no edit

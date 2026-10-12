@@ -193,7 +193,7 @@ mod tests {
     /// the weights halved, the counter untouched, and offsets that add up.
     #[test]
     fn f32_tensors_halve_and_the_rest_copies_through() {
-        let dir = std::env::temp_dir().join(format!("rustimage-half-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("yasdig-half-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("vae.safetensors");
         let w: Vec<f32> = vec![1.0, -0.5, 3.25, 65504.0];

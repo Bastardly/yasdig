@@ -3,7 +3,7 @@
 //! The point is that `cargo build --release` is the whole recipe. With a
 //! `stable-diffusion.cpp/` checkout in the repo (gitignored — see README.md),
 //! this script configures and builds its `sd-cli` target into
-//! `stable-diffusion.cpp/build-rustimage/`, and a **release** build then carries
+//! `stable-diffusion.cpp/build-yasdig/`, and a **release** build then carries
 //! the bytes (`cfg(bundled_sd)`, read by `src/bundle.rs`).
 //!
 //! A debug build builds sd-cli too, so a fresh clone's `cargo run` has one to
@@ -13,7 +13,7 @@
 //! the Rust half still builds and tests — and an error in release, where an
 //! executable without sd-cli inside is not the thing that was asked for.
 //!
-//! `RUSTIMAGE_SD_CLI=<path>` still overrides all of this with a binary built
+//! `YASDIG_SD_CLI=<path>` still overrides all of this with a binary built
 //! elsewhere, and is then embedded whatever the profile.
 //!
 //! The cmake flags are the release's, on purpose, so a local release build is
@@ -22,23 +22,23 @@
 //! every system), and on Windows a static C++ runtime (no VC++ redistributable).
 //! Linux's static libstdc++ is CI's business, through `LDFLAGS`: Fedora doesn't
 //! ship the static library, and a binary built on a new distro needs that
-//! distro's glibc anyway, so portability comes from CI's older Ubuntu. Its own `build-rustimage/` directory
+//! distro's glibc anyway, so portability comes from CI's older Ubuntu. Its own `build-yasdig/` directory
 //! rather than `build/`, so a native build made by hand next to it is left alone.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const SD_DIR: &str = "stable-diffusion.cpp";
-const BUILD_DIR: &str = "build-rustimage";
+const BUILD_DIR: &str = "build-yasdig";
 
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(bundled_sd)");
-    println!("cargo::rerun-if-env-changed=RUSTIMAGE_SD_CLI");
+    println!("cargo::rerun-if-env-changed=YASDIG_SD_CLI");
 
     let release = std::env::var("PROFILE").as_deref() == Ok("release");
     let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
 
-    let (cli, embed) = if let Some(p) = std::env::var_os("RUSTIMAGE_SD_CLI") {
+    let (cli, embed) = if let Some(p) = std::env::var_os("YASDIG_SD_CLI") {
         (PathBuf::from(p), true)
     } else {
         let src = manifest.join(SD_DIR);
@@ -90,7 +90,7 @@ fn build_sd_cli(src: &Path) -> Result<PathBuf, String> {
     // A stamp written after a configure *succeeds*, not the cache: a failed
     // configure leaves a CMakeCache.txt behind, and trusting it turned one
     // missing package into a build that failed with "no Makefile" forever.
-    let configured = build.join(".rustimage-configured");
+    let configured = build.join(".yasdig-configured");
     if !configured.is_file() {
         let mut cfg = Command::new("cmake");
         cfg.arg("-S").arg(src).arg("-B").arg(&build).args([

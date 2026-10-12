@@ -598,7 +598,7 @@ export async function loadModels() {
     // server rescans per request, so a reload is all it takes after the copy.
     if (!models.some((m) => !m.fill)) {
       $('err').textContent = 'No image models yet. The Get models tab downloads one, or put a '
-        + '.safetensors or .gguf model into models/checkpoints (in the folder rustimage is in) '
+        + '.safetensors or .gguf model into models/checkpoints (in the folder yasdig is in) '
         + 'and reload this page.';
     } else if ($('err').textContent.startsWith('No image models yet')) {
       $('err').textContent = '';

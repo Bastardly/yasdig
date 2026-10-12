@@ -1,11 +1,11 @@
 # Third-party licences
 
-rustimage is licensed under the Apache License 2.0 (see `LICENSE`). A release
+yasdig is licensed under the Apache License 2.0 (see `LICENSE`). A release
 executable carries the components below inside it, and their licences ask
 that these notices travel with every copy. The same notices are in the app,
 under Help → About & licences.
 
-Models are not part of rustimage. Every model you download has its own licence,
+Models are not part of yasdig. Every model you download has its own licence,
 set by its authors; check it on the model's own page before using what you make.
 
 ## stable-diffusion.cpp
@@ -354,7 +354,7 @@ SOFTWARE.
 
 ## Rust crates
 
-Compiled into the `rustimage` executable (normal dependencies only, from `Cargo.lock`).
+Compiled into the `yasdig` executable (normal dependencies only, from `Cargo.lock`).
 Each is used under the licence named — where a choice is offered, any of them.
 
 | Crate | Version | Licence |
@@ -449,7 +449,7 @@ Each is used under the licence named — where a choice is offered, any of them.
 | zerocopy-derive | 0.8.57 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | zmij | 1.0.23 | MIT |
 
-## Not distributed with rustimage
+## Not distributed with yasdig
 
 The Vulkan loader and the GPU driver are part of your system and are linked at run
 time, not shipped. Vulkan is a trademark of the Khronos Group Inc.

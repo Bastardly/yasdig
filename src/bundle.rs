@@ -2,7 +2,7 @@
 //! disk where it can be run.
 //!
 //! sd.cpp is still a subprocess and never FFI — the bytes only travel inside
-//! us. A release is built with `RUSTIMAGE_SD_CLI` set (see `build.rs`), and on
+//! us. A release is built with `YASDIG_SD_CLI` set (see `build.rs`), and on
 //! start [`ensure`] writes them to `bin/sd-cli` beside `models.toml`, where
 //! [`crate::config::Config::sd_binary`] finds them.
 //!
@@ -47,7 +47,7 @@ pub fn ensure(base: &Path) -> Result<()> {
     }
     let dir = bin.parent().unwrap();
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    println!("[rustimage] unpacking stable-diffusion.cpp to {}", bin.display());
+    println!("[yasdig] unpacking stable-diffusion.cpp to {}", bin.display());
 
     // Through a temp name and a rename, so a start that dies halfway (a full
     // disk, a closed console) leaves the old binary or none, never a truncated
@@ -62,7 +62,7 @@ pub fn ensure(base: &Path) -> Result<()> {
     }
     std::fs::rename(&tmp, &bin).with_context(|| {
         format!(
-            "replacing {} — is another copy of rustimage, or a render, still running?",
+            "replacing {} — is another copy of yasdig, or a render, still running?",
             bin.display()
         )
     })?;

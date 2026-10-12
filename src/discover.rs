@@ -2311,7 +2311,7 @@ mod tests {
 
     #[test]
     fn a_safetensors_header_round_trips() {
-        let dir = std::env::temp_dir().join(format!("rustimage-disc-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("yasdig-disc-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("tiny.safetensors");
         let json = br#"{"__metadata__":{"x":"y"},"encoder.block.0.layer.0.SelfAttention.q.weight":{"dtype":"F16","shape":[8,8],"data_offsets":[0,128]}}"#;
@@ -2329,7 +2329,7 @@ mod tests {
 
     #[test]
     fn a_truncated_file_is_unreadable_rather_than_misread() {
-        let dir = std::env::temp_dir().join(format!("rustimage-disc-t-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("yasdig-disc-t-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("partial.safetensors");
         // A header length that promises far more than the file holds — what an

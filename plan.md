@@ -35,7 +35,7 @@ so.
 ## 1. Find faces automatically, with no Python 
 
 sd.cpp's ADetailer needs a Python script to convert its YOLOv8 detector.
-rustimage already reads PyTorch weights itself (`src/sr/weights.rs`) and runs
+yasdig already reads PyTorch weights itself (`src/sr/weights.rs`) and runs
 whole networks on the GPU through wgpu (`src/sr/`). A native face/hand detector
 would give Redraw a **Find faces** button that paints the mask for you. It's a big
 build, and the one that plays most to what makes this project different: nothing

@@ -455,7 +455,7 @@ impl Store {
         // fixes on the first request for it anyway. Failing the save over the
         // grid's convenience would be the wrong trade.
         if let Err(e) = self.ensure_output_thumb(&stem) {
-            eprintln!("[rustimage] thumbnail for {stem} deferred: {e:#}");
+            eprintln!("[yasdig] thumbnail for {stem} deferred: {e:#}");
         }
         Ok(png)
     }
@@ -535,7 +535,7 @@ impl Store {
         };
         write_sidecar(&self.output.join(format!("{stem}.json")), &item)?;
         if let Err(e) = self.ensure_output_thumb(&stem) {
-            eprintln!("[rustimage] thumbnail for {stem} deferred: {e:#}");
+            eprintln!("[yasdig] thumbnail for {stem} deferred: {e:#}");
         }
         Ok(stem)
     }
@@ -797,7 +797,7 @@ mod tests {
     /// resurrects the item as a broken tile on the next refresh.
     #[test]
     fn save_list_reopen_delete() {
-        let dir = std::env::temp_dir().join(format!("rustimage-wi-{}", new_id(0)));
+        let dir = std::env::temp_dir().join(format!("yasdig-wi-{}", new_id(0)));
         let store = Store::new(&dir, &dir.join("user"));
 
         // A 320x160 source, so a wrong-way-round thumbnail is obvious.
@@ -850,7 +850,7 @@ mod tests {
     /// ordinary sequence, not a corner case.
     #[test]
     fn save_output_never_overwrites() {
-        let dir = std::env::temp_dir().join(format!("rustimage-out-{}", new_id(1)));
+        let dir = std::env::temp_dir().join(format!("yasdig-out-{}", new_id(1)));
         let store = Store::new(&dir, &dir.join("user"));
         let src = dir.join("src.png");
         image::RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255]))
@@ -879,7 +879,7 @@ mod tests {
     /// that appear for images saved long before thumbnails existed.
     #[test]
     fn outputs_list_by_stem_and_grow_thumbnails() {
-        let dir = std::env::temp_dir().join(format!("rustimage-pick-{}", new_id(2)));
+        let dir = std::env::temp_dir().join(format!("yasdig-pick-{}", new_id(2)));
         let store = Store::new(&dir, &dir.join("user"));
         let src = dir.join("src.png");
         image::RgbaImage::from_pixel(300, 100, image::Rgba([9, 9, 9, 255]))
@@ -949,7 +949,7 @@ mod tests {
     /// image that mints the same stem.
     #[test]
     fn deleting_an_output_takes_its_companions() {
-        let dir = std::env::temp_dir().join(format!("rustimage-del-{}", new_id(6)));
+        let dir = std::env::temp_dir().join(format!("yasdig-del-{}", new_id(6)));
         let store = Store::new(&dir, &dir.join("user"));
         let src = dir.join("src.png");
         image::RgbaImage::from_pixel(64, 32, image::Rgba([4, 5, 6, 255]))
@@ -987,7 +987,7 @@ mod tests {
     /// rather than an error.
     #[test]
     fn an_output_sidecar_comes_back_whole() {
-        let dir = std::env::temp_dir().join(format!("rustimage-side-{}", new_id(5)));
+        let dir = std::env::temp_dir().join(format!("yasdig-side-{}", new_id(5)));
         let store = Store::new(&dir, &dir.join("user"));
         let src = dir.join("src.png");
         image::RgbaImage::from_pixel(64, 64, image::Rgba([1, 2, 3, 255]))
@@ -1053,7 +1053,7 @@ mod tests {
     /// reached both shelves would destroy them a moment later.
     #[test]
     fn a_favourite_survives_deleting_the_original() {
-        let dir = std::env::temp_dir().join(format!("rustimage-fav-{}", new_id(7)));
+        let dir = std::env::temp_dir().join(format!("yasdig-fav-{}", new_id(7)));
         let store = Store::new(&dir, &dir.join("user"));
         let src = dir.join("src.png");
         image::RgbaImage::from_pixel(64, 32, image::Rgba([7, 7, 7, 255]))
@@ -1109,7 +1109,7 @@ mod tests {
     /// be read by stem alone: no new save may take a stem a favourite holds.
     #[test]
     fn a_favourite_output_survives_its_gallery_and_keeps_its_name() {
-        let dir = std::env::temp_dir().join(format!("rustimage-favout-{}", new_id(4)));
+        let dir = std::env::temp_dir().join(format!("yasdig-favout-{}", new_id(4)));
         let store = Store::new(&dir, &dir.join("user"));
         let src = dir.join("src.png");
         image::RgbaImage::from_pixel(64, 32, image::Rgba([7, 7, 7, 255]))
@@ -1163,7 +1163,7 @@ mod tests {
     /// reachable by dropping a folder of images onto the page at once.
     #[test]
     fn an_import_mints_its_own_name_and_never_overwrites() {
-        let dir = std::env::temp_dir().join(format!("rustimage-imp-{}", new_id(3)));
+        let dir = std::env::temp_dir().join(format!("yasdig-imp-{}", new_id(3)));
         let store = Store::new(&dir, &dir.join("user"));
         let mut png = Vec::new();
         image::RgbaImage::from_pixel(120, 60, image::Rgba([3, 4, 5, 255]))

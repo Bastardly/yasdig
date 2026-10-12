@@ -49,7 +49,7 @@ pub fn default_port() -> u16 {
 
 fn template(s: &Server) -> String {
     format!(
-        "# How rustimage starts. Read once, when it starts: edit, then restart it.\n\
+        "# How yasdig starts. Read once, when it starts: edit, then restart it.\n\
          \n\
          [server]\n\
          # 127.0.0.1 keeps the page to this computer. \"0.0.0.0\" opens it to\n\
@@ -57,9 +57,9 @@ fn template(s: &Server) -> String {
          host = {host:?}\n\
          \n\
          # The port the page is on: http://127.0.0.1:<port>/\n\
-         # If another rustimage is using it (an older build, or another folder),\n\
+         # If another yasdig is using it (an older build, or another folder),\n\
          # that one is closed and this one takes over. If some other program\n\
-         # has it, rustimage leaves it alone and uses the next free port.\n\
+         # has it, yasdig leaves it alone and uses the next free port.\n\
          port = {port}\n",
         host = s.host,
         port = s.port,
@@ -79,7 +79,7 @@ pub fn load(root: &Path, legacy: Option<&Server>) -> Result<Startup> {
         let seed = legacy.cloned().unwrap_or_default();
         std::fs::write(&p, template(&seed)).with_context(|| format!("creating {}", p.display()))?;
         if legacy.is_some() {
-            println!("[rustimage] moved [server] from models.toml into {}", p.display());
+            println!("[yasdig] moved [server] from models.toml into {}", p.display());
         }
     }
     let text = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
@@ -118,7 +118,7 @@ fn read_build_id() -> String {
         .unwrap_or_default()
 }
 
-/// A rustimage answering on a port.
+/// A yasdig answering on a port.
 #[derive(Debug, PartialEq)]
 pub struct Instance {
     pub home: String,
@@ -133,18 +133,18 @@ pub enum Bound {
     HandedOver(String),
 }
 
-/// Bind the configured port, taking it back from another rustimage if one has
+/// Bind the configured port, taking it back from another yasdig if one has
 /// it.
 ///
 /// - **Free**: listen.
 /// - **This folder and this build**: hand over. That is a second double-click,
 ///   and closing the first would kill whatever it is rendering.
-/// - **Any other rustimage** — another folder, or this one's older build: ask
+/// - **Any other yasdig** — another folder, or this one's older build: ask
 ///   it to close (`POST /shutdown` with `clear: false`, so its clear-on-close
 ///   settings don't fire on a takeover nobody pressed a button for), wait for
 ///   the port, listen. Through the app's own route, not by finding and killing a
 ///   process, so it is the same on Linux and Windows and can only ever reach a
-///   rustimage. A build too old to have that route is stepped past.
+///   yasdig. A build too old to have that route is stepped past.
 /// - **Anything else**: never touched — it is somebody's — and the next free
 ///   port of 20 is used instead, as before.
 pub fn bind(server: &Server, me: &Instance) -> Result<Bound> {
@@ -164,21 +164,21 @@ pub fn bind(server: &Server, me: &Instance) -> Result<Bound> {
             Some(other) if other == *me => return Ok(Bound::HandedOver(addr)),
             Some(other) => {
                 let what = if other.home == me.home {
-                    "an older build of this rustimage".to_string()
+                    "an older build of this yasdig".to_string()
                 } else {
-                    format!("the rustimage in {}", other.home)
+                    format!("the yasdig in {}", other.home)
                 };
-                println!("[rustimage] port {port} is held by {what} — closing it");
+                println!("[yasdig] port {port} is held by {what} — closing it");
                 if close(&addr) {
                     if let Some(l) = rebind(&addr) {
                         return Ok(Bound::Listening(l, addr));
                     }
                 }
-                println!("[rustimage] it didn't let go of port {port}; trying the next one");
+                println!("[yasdig] it didn't let go of port {port}; trying the next one");
             }
             None => {
                 println!(
-                    "[rustimage] port {port} is used by another program; leaving it be and \
+                    "[yasdig] port {port} is used by another program; leaving it be and \
                      trying {}",
                     port.saturating_add(1)
                 );
@@ -210,11 +210,14 @@ fn request(addr: &str, req: &str) -> Option<String> {
     head.starts_with("HTTP/1.1 200").then(|| body.to_string())
 }
 
-/// The rustimage holding `addr`, or `None` when what holds it isn't one.
+/// The yasdig holding `addr`, or `None` when what holds it isn't one.
 pub fn instance(addr: &str) -> Option<Instance> {
     let body = request(addr, "GET /instance HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
     let v: serde_json::Value = serde_json::from_str(&body).ok()?;
-    if v["app"] != "rustimage" {
+    // "rustimage" is this program before its rename (2026-10-12): a server of
+    // that build still holding the port is ours to take over, not a stranger to
+    // step past. Transitional — drop it once no such build can be running.
+    if v["app"] != "yasdig" && v["app"] != "rustimage" {
         return None;
     }
     Some(Instance {
@@ -253,7 +256,7 @@ mod tests {
 
     #[test]
     fn the_file_is_made_once_and_seeded_from_models_toml() {
-        let root = std::env::temp_dir().join(format!("rustimage-startup-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("yasdig-startup-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
 

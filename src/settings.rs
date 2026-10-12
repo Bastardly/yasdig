@@ -34,7 +34,7 @@ const FILE: &str = "settings.toml";
 /// file is rewritten wholesale — anything else put here would be deleted by the
 /// next press of Save, which is a worse outcome than not writing it.
 const HEADER: &str = "\
-# rustimage — your defaults. Written by the Settings tab; edit it by hand if you
+# yasdig — your defaults. Written by the Settings tab; edit it by hand if you
 # like, but note that pressing Save rewrites the whole file and any comments you
 # add here go with it.
 #
@@ -617,7 +617,7 @@ const MODELS_FILE: &str = "model-settings.toml";
 const PARKED_FILE: &str = "model-settings.removed.toml";
 
 const PARKED_HEADER: &str = "\
-# rustimage — per-model defaults for models that weren't there at the last start.
+# yasdig — per-model defaults for models that weren't there at the last start.
 # Kept rather than deleted: a model moved out for a while gets its settings back
 # on the first start that finds it again. Delete an entry, or the file, to drop
 # them for good. Rewritten whole on every start that moves something.
@@ -625,7 +625,7 @@ const PARKED_HEADER: &str = "\
 ";
 
 const MODELS_HEADER: &str = "\
-# rustimage — per-model defaults. Written by the Image tab's \"Save as defaults
+# yasdig — per-model defaults. Written by the Image tab's \"Save as defaults
 # for this model\" and the Settings tab's Per model section; pressing either
 # rewrites the whole file.
 #
@@ -917,7 +917,7 @@ mod tests {
 
     fn tmpdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "rustimage-settings-{tag}-{}-{:?}",
+            "yasdig-settings-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -1112,7 +1112,7 @@ mod tests {
         let dir = tmpdir("header");
         Settings::default().save(&dir).unwrap();
         let text = std::fs::read_to_string(Settings::path(&dir)).unwrap();
-        assert!(text.starts_with("# rustimage"));
+        assert!(text.starts_with("# yasdig"));
         assert_eq!(Settings::load(&dir).unwrap(), Settings::default());
         std::fs::remove_dir_all(&dir).ok();
     }

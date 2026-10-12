@@ -38,7 +38,7 @@ pub fn clear(cfg: &Config) -> Cleared {
 
 fn clear_in(store: &Store, videos: &VideoStore, s: &Settings) -> Cleared {
     let mut out = Cleared::default();
-    let log = |e: anyhow::Error| eprintln!("[rustimage] clearing on close: {e:#}");
+    let log = |e: anyhow::Error| eprintln!("[yasdig] clearing on close: {e:#}");
     if s.clear_workitems_on_close {
         for it in store.list(Shelf::Work) {
             match store.delete(Shelf::Work, &it.id) {
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn only_the_ticked_galleries_go_and_favourites_never_do() {
         let dir = std::env::temp_dir().join(format!(
-            "rustimage-close-{}",
+            "yasdig-close-{}",
             crate::workitems::new_id(5)
         ));
         let work = dir.join("work");
