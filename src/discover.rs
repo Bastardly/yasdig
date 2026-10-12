@@ -1102,7 +1102,9 @@ fn image_model(t: &Tensors) -> Option<Role> {
             return Some(Role::Unsupported("a LongCat-Image transformer".into()));
         }
         return match tensor(t, "img_in.weight").map(|x| x.inner_dim(t.layout)) {
-            Some(384) => Some(Role::Unsupported("a Flux Fill transformer".into())),
+            // FLUX.1 Fill: the masked image and the mask go in beside the
+            // noise. Runnable — but only for Extend (`ImageFamily::fill_only`).
+            Some(384) => image(ImageFamily::FluxFill),
             Some(128) => Some(Role::Unsupported("a Flux Controls transformer".into())),
             Some(196) => Some(Role::Unsupported("a Flex.2 transformer".into())),
             // Dev and every finetune of it (Krea dev, Kontext) embed the
@@ -1988,10 +1990,14 @@ mod tests {
             classify(&krea),
             Role::Image { family: ImageFamily::Krea2, bundled: false }
         );
-        // Flux's layout with a different input width is a variant that needs
-        // inputs this build doesn't send.
+        // FLUX.1 Fill: Flux's layout with a 384-wide `img_in` — runnable, for
+        // Extend only. The other width variants still need inputs this build
+        // doesn't send.
         let fill = t(&[("double_blocks.0.img_attn.qkv.weight", &[9216, 3072]), ("img_in.weight", &[3072, 384])]);
-        assert!(matches!(classify(&fill), Role::Unsupported(_)));
+        assert_eq!(classify(&fill), Role::Image { family: ImageFamily::FluxFill, bundled: false });
+        assert!(ImageFamily::FluxFill.fill_only() && !ImageFamily::Flux.fill_only());
+        let controls = t(&[("double_blocks.0.img_attn.qkv.weight", &[9216, 3072]), ("img_in.weight", &[3072, 128])]);
+        assert!(matches!(classify(&controls), Role::Unsupported(_)));
     }
 
     /// The file that started this: an LTX checkpoint in the image root.

@@ -134,32 +134,13 @@ Refine dialog). Parked: #2 on `outpaintingV1`. Next candidates: Qwen-Image-Edit 
 FLUX.1 Kontext as families (they reuse the reference plumbing), or #5 comparison
 grids.
 
---- Cleanup ---
+--- Cleanup 2 ---
 
-# New Tab order (Small change)
-Image, Video, Outputs ... rest is the same
+# General UI Change regarding main actions (THis is a WIP) - Here are the issue with the current layout.
+Currently, when having multiple jobs running, the preview image, cancelbutton and status text makes the prompt section jump up and down, which makes experimentation and prompt refinement harder.
 
-# Powered by Stable-diffusion.cpp and Vulkan
-Remove the text "Vulkan · stable-diffusion.cpp + native FSR upscale — no Python." and create a
-footer with the text Powered by Stable-diffusion.cpp and Vulkan with a link to each product.
+In the Refine dialog, the main action "Refine" is not places as the other main action like "Generate", "Save settings", "Convert" and "Generate clip". Also the preview image and OOM options are not placed the same place as it is in the Image tab menu.
 
-# Handling licence
-This project will be released under Apache 2.0. stable-diffusion.cpp  is MIT and we should mention that all downloaded models have different licences.
+Refine dialog does not use <details> and <summery>
 
-# Small image menu restyle
-Move models segment above generation. It feels unnatural that it's all the way down there. I was wrong in suggesting that in the first place.
-
-Currently the summery text is white, which makes it blend into the rest of the UI
-So I think the summery text should have:     color: var(--accent-hi); and the 
-.foldstate.on should use the color var(--go); instead.
-
-Give prompt textareas a default height of 220px
-
-# Implement same look and field from image menu to video, convert and settings tab.
-Here I'm thinking about styling and the use of <details> and <summery> to collapse categories.
-When on the setting page, perhaps we could align the settings with their segment placement on the image tab 
-
-# Hide video (Maybe)
-Currently, since I'm planning on releasing the app soon, I decided to focus on the image generation workflow.
-In this regard, the video feels like an odd side note, so I think we should hide the tabs for now.
-We should make them a setting under "Nightly features" at the bottom, with default off. This will allow us to work with them more easily. The if people decides to try them anyway, the were warned in the setting that these features are WIP.
+After generating an image, the "View and adjust" should be placed after "Refine" since it is a post processing state. One may even argue, that it should be removed entirely from the iamge tab, and only used in outputs. And let clicking the generated image open the refine dialog instead.

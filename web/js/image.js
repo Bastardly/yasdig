@@ -16,6 +16,10 @@ import { showError, MEMORY_LABELS } from './memory.js';
 // grid looks a name up in it; only this module refills it.
 export let models = [];
 
+// Whether Extend can run: a fill-only model with every file present. The Refine
+// dialog reads it to enable its Extend group or point at Get models instead.
+export const fillReady = () => models.some((m) => m.fill && m.exists);
+
 // This tab's attached LoRAs. Exported because `applyWorkItem` has to put a
 // reopened generation's back: the grid restores what made an image, and the
 // adapters are as much a part of that as the steps and the seed.
@@ -554,14 +558,17 @@ export async function loadModels() {
       // Grouped by family once there is more than one, because the family is
       // what decides whether a model's numbers mean anything next to another's:
       // 8 steps is a Z-Image's whole render and a third of an SDXL's.
-      const families = [...new Set(models.map((m) => m.family_label))].sort();
+      // A fill-only model (FLUX.1 Fill) is never something to generate, refine or
+      // hi-res with; it is what Extend draws with, found by the server itself.
+      const pickable = models.filter((m) => !m.fill);
+      const families = [...new Set(pickable.map((m) => m.family_label))].sort();
       for (const family of families) {
         const group = families.length > 1 ? document.createElement('optgroup') : sel;
         if (group !== sel) {
           group.label = family;
           sel.appendChild(group);
         }
-        for (const m of models.filter((x) => x.family_label === family)) {
+        for (const m of pickable.filter((x) => x.family_label === family)) {
           const opt = document.createElement('option');
           opt.value = m.name;
           // "tuned": it opens with saved defaults of its own, which is the
@@ -589,7 +596,7 @@ export async function loadModels() {
     }
     // What a first run looks like: the folders exist, nothing is in them. The
     // server rescans per request, so a reload is all it takes after the copy.
-    if (!models.length) {
+    if (!models.some((m) => !m.fill)) {
       $('err').textContent = 'No image models yet. The Get models tab downloads one, or put a '
         + '.safetensors or .gguf model into models/checkpoints (in the folder rustimage is in) '
         + 'and reload this page.';
@@ -598,7 +605,7 @@ export async function loadModels() {
     }
     // A greyed-out model is a family whose parts the Get models tab can fetch.
     // The link goes to the first such family; the tab lists the rest.
-    const waiting = models.filter((m) => !m.exists);
+    const waiting = models.filter((m) => !m.exists && !m.fill);
     $('getparts').hidden = !waiting.length;
     if (waiting.length) {
       $('getparts').innerHTML = `${waiting.length === 1 ? 'One model is' : `${waiting.length} models are`} `

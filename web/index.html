@@ -840,6 +840,11 @@
          in their action row, and the gallery has no action row to put one in.
          Neutral rather than amber — this spends no GPU time to speak of. -->
     <button type="button" id="lbsave" class="btn" hidden>Save as new output</button>
+    <!-- The Outputs tab's way into the Refine dialog: the saved file becomes
+         the Image tab's result (`/outputs/to-image`), to refine, extend or edit.
+         Neutral: opening it spends nothing; the dialog's buttons do. -->
+    <button type="button" id="lbrefine" class="btn" hidden
+      title="Open this picture on the Image tab, in the Refine dialog. It opens the saved file — save slider changes first to keep them.">Refine &amp; extend…</button>
     <div id="lbsaved" class="meta"></div>
     <div id="lbsliders"></div>
     <!-- In the panel rather than in the result block, because while this dialog
@@ -869,6 +874,13 @@
     </div>
     <p class="sub">With nothing painted, Refine works on the whole image. Paint
       over an area to refine just that. Right-drag erases; Space+drag pans at 1:1.</p>
+    <!-- Only for a picture opened from Outputs (Refine & extend…), whose
+         maker is unknown — an upload — or may not be the one to finish with.
+         Sets the model every pass below runs on (`/image/model`). -->
+    <div class="rdrow" id="rdmodelrow" hidden>
+      <label for="rdmodel">Refine with</label>
+      <select id="rdmodel"></select>
+    </div>
     <label for="rpprompt">Prompt for this pass</label>
     <prompt-box>
       <textarea id="rpprompt" rows="3" placeholder="blank uses this image's own prompt"></textarea>
@@ -896,6 +908,27 @@
          itself goes to the model as reference 1, the prompt says what to change.
          Only for a model that takes references (`can_edit`). -->
     <button type="button" id="rdedit" class="btn btn-run btn-block" hidden>Edit</button>
+    <!-- Edit's own sides, apart from Extend's below: the model redraws the
+         whole picture in the grown shape, nothing pasted back. Picking one
+         turns the button above into "Edit and rescale". The same markup and
+         code as Extend's set (`sideSet` in redraw.js), so the two can't drift. -->
+    <div id="rdeditrescale" hidden>
+      <p class="sub rdsideshead"><label data-help="rescale">Rescale with Edit</label> — redraws the
+        whole picture in the new shape</p>
+      <div class="rdsides" id="rdeditsides">
+      <button type="button" class="btn btn-choice" data-side="left" title="Rescale left">←</button>
+      <button type="button" class="btn btn-choice" data-side="top" title="Rescale up">↑</button>
+      <button type="button" class="btn btn-choice" data-side="bottom" title="Rescale down">↓</button>
+      <button type="button" class="btn btn-choice" data-side="right" title="Rescale right">→</button>
+      <select data-amount title="How far each chosen side grows">
+        <option value="128">128 px</option>
+        <option value="256" selected>256 px</option>
+        <option value="384">384 px</option>
+        <option value="512">512 px</option>
+      </select>
+      </div>
+      <p class="sub" id="rdeditnote"></p>
+    </div>
     <button type="button" id="rdcancel" class="btn btn-danger btn-block" hidden>Cancel generation</button>
     <!-- Upscale: bigger with no diffusion — FSR or an upscaler model. Unlike
          Hi-res it re-draws nothing, so it can't undo a refine: last for a bigger
@@ -913,6 +946,28 @@
     </div>
     <button type="button" id="rdupscale" class="btn btn-block">Upscale</button>
     <p class="sub" id="rdupnote"></p>
+    <!-- Extend: grow the canvas on the chosen sides and draw what's beyond them
+         with FLUX.1 Fill, on any image — it turns on by itself once a Fill
+         model is installed. Uses this dialog's prompt (blank continues the
+         background) and edge softness. Whole-image, like Upscale. -->
+    <div class="lbgroup"><label data-help="extend">Extend</label></div>
+    <p class="sub" id="rdneedsfill" hidden>Needs FLUX.1 Fill, a model trained to
+      continue a picture past its edges.
+      <button type="button" id="rdgetfill" class="btn">Get models…</button></p>
+    <div class="rdsides" id="rdextendsides">
+      <button type="button" class="btn btn-choice" data-side="left" title="Extend left">←</button>
+      <button type="button" class="btn btn-choice" data-side="top" title="Extend up">↑</button>
+      <button type="button" class="btn btn-choice" data-side="bottom" title="Extend down">↓</button>
+      <button type="button" class="btn btn-choice" data-side="right" title="Extend right">→</button>
+      <select data-amount title="How far each chosen side grows">
+        <option value="128">128 px</option>
+        <option value="256" selected>256 px</option>
+        <option value="384">384 px</option>
+        <option value="512">512 px</option>
+      </select>
+    </div>
+    <button type="button" id="rdextendgo" class="btn btn-block">Extend</button>
+    <p class="sub" id="rdextendnote"></p>
     <p class="sub" id="rdprog"></p>
     <img class="livepreview" alt="Live preview" hidden>
     <div id="rperr" class="err"></div>

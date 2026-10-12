@@ -26,8 +26,11 @@
 //!   POST /refine      -> {image_id, ...overrides}   img2img in place, no rescale
 //!   POST /redraw     -> {image_id, mask, prompt?, strength?}  redraw the
 //!                        painted part; `mask` is a base64 PNG, white = redraw
-//!   POST /edit        -> {image_id, prompt, references?}  change the image by
-//!                        instruction, the image itself as reference 1
+//!   POST /edit        -> {image_id, prompt, references?, expand?}  change the
+//!                        image by instruction, the image itself as reference 1;
+//!                        `expand: {left, top, right, bottom}` redraws it bigger
+//!   POST /extend      -> {image_id, expand, prompt?, feather?}  grow the canvas
+//!                        and draw past its edges with FLUX.1 Fill
 //!   POST /upscale     -> {image_id, factor, upscaler?}  enlarge with FSR or an
 //!                        upscaler model, no diffusion; a history step
 //!   POST /history/goto -> {image_id, index}  step back (or forward) to an
@@ -64,6 +67,9 @@
 //!   GET  /outputs     -> every image in work/output/, newest first
 //!   POST /outputs/open -> {stem}     open a saved image as a live image_id,
 //!                        so the viewer's sliders can work on it
+//!   POST /outputs/to-image -> {stem, model?} open it as the Image tab's
+//!                        result instead, for the Refine dialog
+//!   POST /image/model -> {image_id, model}  the model an image's passes run on
 //!   POST /outputs/delete -> {stems:[..]} remove them from work/output/
 //!   POST /favorite-outputs/add -> {stems:[..]} copy them to user/favorite_outputs/
 //!   GET  /favorite-outputs     -> the same listing, read from there
@@ -157,16 +163,21 @@ enum JobKind {
         id: String,
         shelf: Shelf,
     },
-    /// Reopen a finished image from `work/output/` as a live result — the
-    /// Outputs tab. Through a worker for the same two reasons as `Open`, and
-    /// unlike every other `/outputs` route, which only reads the filesystem.
-    OpenOutput(String),
+    /// Reopen a finished image from `work/output/` as a live result: in the
+    /// Outputs viewer (`Slot::Output`), or as the Image tab's result
+    /// (`Slot::Image`, `fallback` the model to refine it with when its sidecar
+    /// names none installed). Through a worker for the same two reasons as
+    /// `Open`, and unlike every other `/outputs` route, which only reads the
+    /// filesystem.
+    OpenOutput { stem: String, slot: pipeline::Slot, fallback: Option<String> },
     /// Copy the image on screen into `work/output/`. No GPU, but the only copy
     /// of which file that is lives in the retained images.
     SaveOutput(u64),
     /// Step to another state in an image's history (`Display::goto`). A
     /// `publish`, so the display lane's — it answers mid-render.
     Goto { id: u64, index: usize },
+    /// Choose the model an image's passes run on (`Display::set_model`).
+    SetModel { id: u64, model: String },
     /// A step as the page would show it, for the before/after compare
     /// (`Display::view_step`). Reads only.
     ViewStep { id: u64, index: usize },
@@ -196,6 +207,9 @@ enum Work {
     /// Change a retained image by instruction (`Engine::edit`). Pinned while
     /// it waits, like the passes above.
     Edit { id: u64, req: pipeline::EditRequest },
+    /// Grow a retained image's canvas with FLUX.1 Fill (`Engine::extend`).
+    /// Pinned while it waits, like the passes above.
+    Extend { id: u64, req: pipeline::ExtendRequest },
     /// Enlarge a retained image with no diffusion (`Engine::upscale`). Pinned
     /// while it waits, like the passes above.
     Upscale {
@@ -457,11 +471,12 @@ fn run(args: &[String]) -> Result<()> {
                     JobKind::Open { id, shelf } => {
                         display.open(&id, shelf).map(|r| result_json(&r))
                     }
-                    JobKind::OpenOutput(stem) => {
-                        display.open_output(&stem).map(|r| result_json(&r))
+                    JobKind::OpenOutput { stem, slot, fallback } => {
+                        display.open_output(&stem, slot, fallback.as_deref()).map(|r| result_json(&r))
                     }
                     JobKind::SaveOutput(id) => display.save_output(id).map(|p| saved_json(&p)),
                     JobKind::Goto { id, index } => display.goto(id, index).map(|r| result_json(&r)),
+                    JobKind::SetModel { id, model } => display.set_model(id, &model).map(|r| result_json(&r)),
                     JobKind::ViewStep { id, index } => display.view_step(id, index).map(|(png, w, h)| {
                         format!(
                             "{{\"image_base64\":\"{}\",\"width\":{w},\"height\":{h}}}",
@@ -542,6 +557,11 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
         }
         Work::Redraw { id, req } => {
             let r = engine.redraw(id, &req).map(|r| latest(queue, &r));
+            lock(&engine.retained()).unpin(id);
+            queue.finish(t.id, r);
+        }
+        Work::Extend { id, req } => {
+            let r = engine.extend(id, &req).map(|r| latest(queue, &r));
             lock(&engine.retained()).unpin(id);
             queue.finish(t.id, r);
         }
@@ -696,6 +716,7 @@ fn handle_conn(
         ("POST", "/redraw") => handle_redraw(&mut conn, lanes, &req.body),
         ("POST", "/upscale") => handle_upscale(&mut conn, lanes, &req.body),
         ("POST", "/edit") => handle_edit(&mut conn, lanes, &req.body),
+        ("POST", "/extend") => handle_extend(&mut conn, lanes, &req.body),
         ("POST", "/history/goto") => handle_goto(&mut conn, lanes, &req.body),
         ("POST", "/history/view") => handle_view_step(&mut conn, lanes, &req.body),
         // A history step's thumbnail. Off the queue like every thumbnail; both
@@ -855,6 +876,8 @@ fn handle_conn(
         ("POST", "/videos/delete") => handle_delete_clips(&mut conn, cfg, &req.body),
         ("GET", "/outputs") => handle_list_outputs(&mut conn, cfg, Gallery::Output),
         ("POST", "/outputs/open") => handle_open_output(&mut conn, lanes, &req.body),
+        ("POST", "/outputs/to-image") => handle_output_to_image(&mut conn, lanes, &req.body),
+        ("POST", "/image/model") => handle_set_model(&mut conn, lanes, &req.body),
         ("POST", "/outputs/delete") => {
             handle_delete_outputs(&mut conn, cfg, Gallery::Output, &req.body)
         }
@@ -1532,7 +1555,34 @@ fn handle_open_output(
     }
 
     match parse_json::<Dto>(conn, body)? {
-        Some(dto) => submit(conn, &lanes.display, JobKind::OpenOutput(dto.stem), 400),
+        Some(dto) => submit(
+            conn,
+            &lanes.display,
+            JobKind::OpenOutput { stem: dto.stem, slot: pipeline::Slot::Output, fallback: None },
+            400,
+        ),
+        None => Ok(()),
+    }
+}
+
+/// `POST /outputs/to-image {stem, model?}`: open a saved output as the Image
+/// tab's result, so the Refine dialog can refine, extend or edit it. `model`
+/// is the Image tab's selected one, used when the output's sidecar names no
+/// installed model (an upload has none). The display lane's, like an open.
+fn handle_output_to_image(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        stem: String,
+        #[serde(default)]
+        model: Option<String>,
+    }
+    match parse_json::<Dto>(conn, body)? {
+        Some(dto) => submit(
+            conn,
+            &lanes.display,
+            JobKind::OpenOutput { stem: dto.stem, slot: pipeline::Slot::Image, fallback: dto.model },
+            400,
+        ),
         None => Ok(()),
     }
 }
@@ -2240,8 +2290,9 @@ impl RedrawDto {
     }
 }
 
-/// `POST /edit {image_id, prompt, references?}`: change the image by
-/// instruction, the image itself as reference 1. Queued and waited on like
+/// `POST /edit {image_id, prompt, references?, expand?}`: change the image by
+/// instruction, the image itself as reference 1 — and with `expand`
+/// (`{left, top, right, bottom}` px), redraw it in that grown shape. Queued and waited on like
 /// `/refine`.
 fn handle_edit(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
     #[derive(serde::Deserialize)]
@@ -2253,13 +2304,55 @@ fn handle_edit(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resul
         references: Vec<String>,
         #[serde(default)]
         memory: Option<String>,
+        #[serde(default)]
+        expand: pipeline::Expand,
     }
     let Some(dto) = parse_json::<Dto>(conn, body)? else {
         return Ok(());
     };
     let id = dto.image_id;
-    let req = pipeline::EditRequest { prompt: dto.prompt, references: dto.references, memory: dto.memory };
+    let req = pipeline::EditRequest {
+        prompt: dto.prompt,
+        references: dto.references,
+        memory: dto.memory,
+        expand: dto.expand,
+    };
     escalate(conn, lanes, jobs::Kind::Edit, id, None, Work::Edit { id, req })
+}
+
+/// `POST /extend {image_id, expand: {left?, top?, right?, bottom?}, prompt?,
+/// feather?, memory?}`: grow the image in hand on the sides given, in pixels, and draw
+/// past the old edges with FLUX.1 Fill. Queued and waited on like `/refine`.
+fn handle_extend(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    let Some(dto) = parse_json::<ExtendDto>(conn, body)? else {
+        return Ok(());
+    };
+    let id = dto.image_id;
+    escalate(conn, lanes, jobs::Kind::Extend, id, None, Work::Extend { id, req: dto.request() })
+}
+
+#[derive(serde::Deserialize)]
+struct ExtendDto {
+    image_id: u64,
+    #[serde(default)]
+    expand: pipeline::Expand,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    feather: Option<u32>,
+    #[serde(default)]
+    memory: Option<String>,
+}
+
+impl ExtendDto {
+    fn request(self) -> pipeline::ExtendRequest {
+        pipeline::ExtendRequest {
+            expand: self.expand,
+            prompt: self.prompt,
+            feather: self.feather,
+            memory: self.memory,
+        }
+    }
 }
 
 /// `POST /upscale {image_id, factor, upscaler?}`: enlarge the image in hand
@@ -2308,6 +2401,21 @@ fn handle_goto(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resul
             },
             400,
         ),
+        None => Ok(()),
+    }
+}
+
+/// `POST /image/model {image_id, model}`: make `model` the one the image's
+/// passes run on — the Refine dialog's picker for a picture opened from
+/// Outputs. The display lane's: it changes no pixels.
+fn handle_set_model(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+        model: String,
+    }
+    match parse_json::<Dto>(conn, body)? {
+        Some(dto) => submit(conn, &lanes.display, JobKind::SetModel { id: dto.image_id, model: dto.model }, 400),
         None => Ok(()),
     }
 }
@@ -2509,7 +2617,8 @@ fn handle_stop_job(
             | Work::Hires { id, .. }
             | Work::Redraw { id, .. }
             | Work::Upscale { id, .. }
-            | Work::Edit { id, .. } = work
+            | Work::Edit { id, .. }
+            | Work::Extend { id, .. } = work
             {
                 lock(&lanes.retained).unpin(id);
             }
@@ -2628,7 +2737,7 @@ fn result_json(res: &GenResult) -> String {
     let start = serde_json::to_string(&res.start).unwrap_or_else(|_| "{}".to_string());
     format!(
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
-         \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\"can_edit\":{},\
+         \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\"model\":{},\"can_edit\":{},\
          \"filters\":{},\"filters_start\":{},\"prompt\":{},\
          \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{},\"weights\":{},\"load_ms\":{},\"stages\":{}}}}}",
         b64,
@@ -2649,6 +2758,7 @@ fn result_json(res: &GenResult) -> String {
             .unwrap_or_else(|| "null".to_string()),
         res.can_refine,
         res.can_hires,
+        json_str(&res.model),
         res.can_edit,
         filters,
         start,
@@ -2746,7 +2856,7 @@ fn build_models_json(cfg: &Config) -> String {
                 .unwrap_or_else(|_| "[]".into());
             format!(
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
-                 \"family\":{},\"family_label\":{},\"references\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
+                 \"family\":{},\"family_label\":{},\"references\":{},\"fill\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
                  \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\"scheduler\":{},\"cache_mode\":{},\"memory\":{},\
                  \"upscale_factor\":{},\"upscaler\":{},\
@@ -2763,6 +2873,7 @@ fn build_models_json(cfg: &Config) -> String {
                 // Whether the References button shows: the server's rule,
                 // served, so the page holds no copy of it.
                 p.family.takes_references(),
+                p.family.fill_only(),
                 tuned.model.contains_key(&p.name) || tuned.parts.contains_key(&p.name),
                 missing.join(","),
                 parts,
@@ -3498,7 +3609,7 @@ fn json_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{band_amplitudes, check_bands, grating, BandRow, DEPTH, DETAIL, GRIT};
-    use super::{clip_frame, history_path, workitems, EscalateDto, HiresDto, RedrawDto};
+    use super::{clip_frame, history_path, workitems, EscalateDto, ExtendDto, HiresDto, RedrawDto};
 
     /// A failed job's body carries `oom` exactly when the failure was the typed
     /// out-of-memory, wrapped in context or not — and nothing for any other.
@@ -3566,6 +3677,19 @@ mod tests {
 
         let bad: RedrawDto = serde_json::from_str("{\"image_id\":3,\"mask\":\"!!\"}").unwrap();
         assert!(bad.mask_png().is_err());
+    }
+
+    /// An Extend names its sides under `expand`, each optional; a side left
+    /// out doesn't grow, and the rest of the body is the area pass's.
+    #[test]
+    fn an_extend_body_names_its_sides() {
+        let dto: ExtendDto =
+            serde_json::from_str(r#"{"image_id":3,"expand":{"left":256,"right":256},"feather":40}"#).unwrap();
+        let req = dto.request();
+        assert_eq!(req.expand, crate::pipeline::Expand { left: 256, top: 0, right: 256, bottom: 0 });
+        assert_eq!((req.prompt, req.feather, req.memory), (None, Some(40), None));
+        let bare: ExtendDto = serde_json::from_str(r#"{"image_id":3}"#).unwrap();
+        assert!(bare.request().expand.is_empty());
     }
 
     /// The page tells "no preview yet" from "preview 0" by `null`, so the

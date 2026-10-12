@@ -47,6 +47,9 @@ pub enum Kind {
     /// Change the whole image by instruction, the image itself the first
     /// reference. One pass.
     Edit,
+    /// Grow the canvas and draw past the old edges with FLUX.1 Fill. One job
+    /// however many sides, so a Stop kills it like a Refine.
+    Extend,
     Video,
     Enlarge,
     Convert,
@@ -559,6 +562,8 @@ mod tests {
         assert!(!Kind::Redraw.is_run());
         assert!(!Kind::Upscale.is_run());
         assert!(!Kind::Edit.is_run());
+        assert!(!Kind::Extend.is_run());
+        assert_eq!(serde_json::to_string(&Kind::Extend).unwrap(), "\"extend\"");
         assert_eq!(serde_json::to_string(&Kind::Edit).unwrap(), "\"edit\"");
         assert_eq!(serde_json::to_string(&Kind::Upscale).unwrap(), "\"upscale\"");
         assert_eq!(serde_json::to_string(&Kind::Redraw).unwrap(), "\"redraw\"");

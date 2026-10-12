@@ -349,13 +349,30 @@ export const TOPICS = [
       Ctrl+Z takes it back. It draws at the model\u2019s own size (1024 for Klein)
       and scales up to fit, so on a large image a <b>Refine image</b> afterwards
       brings the fine detail back.</p>
+      <p><b>Rescale with Edit</b> does the same with a new shape: pick sides (← ↑ ↓ →)
+      and an amount, and the button becomes <b>Edit and rescale</b>. The model
+      redraws the whole picture to fill the bigger frame — "the same room, wider",
+      "show the rest of the table". It is a re-imagining: nothing is pasted back,
+      so for a picture that must stay exactly as it is, use Extend.</p>
+      <h3>Extending</h3>
+      <p><b>Extend</b> makes the canvas bigger on the sides you pick and draws what
+      lies beyond them. It works on any image, whatever made it, and keeps every
+      pixel you already have — only the new strips are drawn, and Edge softness
+      blends the join. Each side is its own pass at the drawing model’s full size,
+      left and right first, so picking all four draws the corners too.</p>
+      <p>It uses <b>FLUX.1 Fill</b>, a model trained for exactly this, and turns on
+      by itself once one is installed (Get models → FLUX.1 Fill). With a blank
+      prompt it continues the background; the image’s own prompt would name
+      the subject, and Fill would draw it again in the strip. Type a prompt to put
+      something particular there — "a window", "more of the beach".</p>
       <h3>Comparing</h3>
       <p><b>Compare</b> (or <b>C</b>) shows an earlier step on the left and the
       image now on the right, split by a line you drag — or click to move it. Pick
       the earlier step under <i>Compare with</i>; it starts on the one just before.
       Both halves carry the same grade and sharpening, so what differs is what the
-      pass did. A smaller earlier step is stretched to the same size, which is how to
-      judge an upscale. Painting waits while comparing.</p>
+      pass did. A smaller earlier step of the same shape is stretched to the same
+      size, which is how to judge an upscale; one of another shape (before an
+      Extend) is shown whole inside the frame. Painting waits while comparing.</p>
       <h3>Going back</h3>
       <p>Every pass is a step in the <b>History</b>. Click a step to go back to it
       (Ctrl+Z and Ctrl+Shift+Z step through). A new pass from an earlier step
@@ -365,8 +382,14 @@ export const TOPICS = [
       <p><i>After each generation</i> runs Hi-res and Refine on every image, with the
       prompts from the Hi-res pass and Refine pass panels. A <code>{variable}</code>
       in them rolls per image.</p>
-      <p>The Outputs tab has no Refine, because a saved output already has its
-      sharpening in its pixels; pick it under <i>Image to image</i> to work on it.</p>`,
+      <h3>Saved pictures and uploads</h3>
+      <p>In the Outputs viewer, <b>Refine &amp; extend…</b> opens the picture here
+      as the current image, with this dialog open: refine, extend, edit or
+      upscale it like a fresh one. It opens the saved file, which already has its
+      sharpening and grade in it, so the sliders start at zero; save slider changes
+      first if you want them kept. <b>Refine with</b>, at the top of the dialog,
+      picks the model its passes run on: it starts at the model that made the
+      picture, or for an upload the one picked on the Image tab.</p>`,
   },
   {
     id: 'memory',

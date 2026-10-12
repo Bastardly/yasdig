@@ -481,6 +481,9 @@ pub struct EditRequest {
     pub references: Vec<String>,
     /// Where the weights live for this pass; `None` keeps the image's.
     pub memory: Option<String>,
+    /// Grow the canvas too — "Edit and rescale". The model redraws the whole
+    /// picture in the new shape; nothing of the original is pasted back.
+    pub expand: Expand,
 }
 
 /// What a Redraw asks for: which pixels, and optionally what to put there.
@@ -508,6 +511,90 @@ pub const REDRAW_STRENGTH: f32 = 0.5;
 /// Edge softness when a request names none: enough that a strong redraw
 /// doesn't leave a seam at 1024², little enough to stay where it was painted.
 pub const REDRAW_SOFTNESS: u32 = 16;
+
+/// How far to grow each side of a canvas, in pixels — Extend's, and Edit's
+/// when it rescales. One type, so the two can't disagree about what a side or
+/// its limit is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default)]
+pub struct Expand {
+    pub left: u32,
+    pub top: u32,
+    pub right: u32,
+    pub bottom: u32,
+}
+
+impl Expand {
+    pub fn amount(&self, side: redraw::Side) -> u32 {
+        match side {
+            redraw::Side::Left => self.left,
+            redraw::Side::Top => self.top,
+            redraw::Side::Right => self.right,
+            redraw::Side::Bottom => self.bottom,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.left + self.top + self.right + self.bottom == 0
+    }
+
+    /// The canvas size after growing a `w`×`h` one.
+    pub fn grown(&self, w: u32, h: u32) -> (u32, u32) {
+        (w + self.left + self.right, h + self.top + self.bottom)
+    }
+
+    /// The sides that grow, in the order they are drawn, each at most
+    /// [`redraw::MAX_EXTEND`].
+    pub fn sides(&self) -> Result<Vec<(redraw::Side, u32)>> {
+        let sides: Vec<_> =
+            redraw::Side::ORDER.iter().map(|&s| (s, self.amount(s))).filter(|&(_, px)| px > 0).collect();
+        if let Some(&(s, px)) = sides.iter().find(|&&(_, px)| px > redraw::MAX_EXTEND) {
+            bail!("{} {px} px is more than the {} px a side may grow by", s.arrow(), redraw::MAX_EXTEND);
+        }
+        Ok(sides)
+    }
+
+    /// "← → 256 px" when the sides grow alike, else "←128 →256".
+    pub fn describe(&self) -> String {
+        let sides: Vec<_> =
+            redraw::Side::ORDER.iter().map(|&s| (s, self.amount(s))).filter(|&(_, px)| px > 0).collect();
+        let Some(&(_, first)) = sides.first() else { return String::new() };
+        if sides.iter().all(|&(_, px)| px == first) {
+            let arrows: Vec<&str> = sides.iter().map(|&(s, _)| s.arrow()).collect();
+            format!("{} {first} px", arrows.join(" "))
+        } else {
+            let each: Vec<String> = sides.iter().map(|&(s, px)| format!("{}{px}", s.arrow())).collect();
+            each.join(" ")
+        }
+    }
+}
+
+/// What an Extend asks for: how far to grow each side, and what to draw there.
+#[derive(Debug, Clone, Default)]
+pub struct ExtendRequest {
+    pub expand: Expand,
+    /// `None` or blank is [`EXTEND_BACKGROUND_PROMPT`], never the image's own.
+    pub prompt: Option<String>,
+    /// Edge softness where a strip meets the original; `None` is
+    /// [`REDRAW_SOFTNESS`], floored at [`EXTEND_MIN_SOFTNESS`].
+    pub feather: Option<u32>,
+    /// Where the Fill model's weights live for these passes; `None` keeps its own.
+    pub memory: Option<String>,
+}
+
+/// What an Extend draws when its prompt box is blank: more of the scene around
+/// the picture, in its manner, with no subject named. The image's own prompt
+/// names one, and `outpaintingV1` found an ordinary model would draw it again in
+/// the strip; FLUX.1 Fill is far less prone to that, but a prompt that asks for
+/// no subject can't ask for a second one. A typed prompt is the user's.
+pub const EXTEND_BACKGROUND_PROMPT: &str =
+    "background scenery continuing the surrounding scene, same art style, same lighting and colours";
+
+/// The least edge softness an Extend's join gets, whatever the slider says.
+/// Small on purpose: the model redraws `3·soft + 8` px of the *original* past
+/// the strip (`redraw::diffusion_mask`), and a share of a wide strip redrew
+/// hundreds of pixels of picture in v1 — a ghost of the subject at the join.
+pub const EXTEND_MIN_SOFTNESS: u32 = 24;
 
 /// A pass's memory choice onto the profile it runs with, checked. Blank keeps it.
 fn set_memory(profile: &mut Profile, memory: Option<&str>) -> Result<()> {
@@ -601,6 +688,9 @@ pub struct GenResult {
     pub work_id: Option<String>,
     pub can_refine: bool,
     pub can_hires: bool,
+    /// The model this step's passes run on — the registry name. The Refine
+    /// dialog's model picker shows it for a picture opened from Outputs.
+    pub model: String,
     /// Whether the Refine dialog's Edit applies: the model that made this step
     /// takes reference images, so the image itself can be one.
     pub can_edit: bool,
@@ -920,6 +1010,7 @@ impl Engine {
     /// The display lane, sharing this engine's FSR device and retained images.
     pub fn display(&self) -> Display {
         Display {
+            cfg: self.cfg.clone(),
             fsr: self.fsr.clone(),
             scratch: self.scratch.clone(),
             items: workitems::Store::new(&self.cfg.base_dir.join("work"), &self.cfg.user_dir()),
@@ -1077,6 +1168,15 @@ impl Engine {
     fn model(&self, name: &str) -> Result<Profile> {
         let mut reg = self.cfg.registry();
         match reg.remove(name) {
+            // The one door generate, Hi-res and Refine resolve a model through,
+            // so a fill-only model is refused here once: from noise, or over a
+            // whole picture, it has nothing to fill. Extend finds it itself
+            // (`Config::fill_model`).
+            Some(p) if p.family.fill_only() => bail!(
+                "'{name}' is a {} model — it extends pictures (Refine… → Extend) rather than \
+                 generating them",
+                p.family.label()
+            ),
             Some(p) => Ok(p),
             None => bail!(
                 "unknown model '{name}' — available: {}",
@@ -2046,6 +2146,106 @@ impl Engine {
     /// and the result resized back to the image's exact size. The whole
     /// picture is the result — nothing is composited — so it is a history step
     /// like any pass, and Compare shows what changed.
+    /// Grow the canvas on the asked-for sides and draw beyond them with FLUX.1
+    /// Fill (`Config::fill_model`) — on any image, whatever model made it, since
+    /// Fill only needs the picture and a mask. One side at a time (left and
+    /// right, then top and bottom, `redraw::Side::ORDER`): a later strip spans
+    /// the earlier ones' new edges, which is what draws the corners, and each
+    /// strip gets the model's full size. Every original pixel the fade never
+    /// reaches stays the original's bytes (`redraw::composite`), and the image
+    /// keeps its own profile, so a Refine afterwards runs on the model that made
+    /// it. A history step like every pass.
+    pub fn extend(&mut self, id: u64, req: &ExtendRequest) -> Result<GenResult> {
+        let mut fill = self.cfg.fill_model().context(
+            "Extend needs a FLUX.1 Fill model — download one on the Get models tab",
+        )?;
+        set_memory(&mut fill, req.memory.as_deref())?;
+        fill.validate()?;
+        let p = lock(&self.retained).get(id, "extend")?;
+        let soft = req.feather.unwrap_or(REDRAW_SOFTNESS);
+        if soft > redraw::MAX_SOFTNESS {
+            bail!("edge softness must be at most {} pixels", redraw::MAX_SOFTNESS);
+        }
+        let sides = req.expand.sides()?;
+        if sides.is_empty() {
+            bail!("pick at least one side to extend");
+        }
+        let (grown_w, grown_h) = req.expand.grown(p.raw_w, p.raw_h);
+        self.check_side(grown_w, grown_h)?;
+
+        let mut base = image::open(&p.raw)
+            .with_context(|| format!("reading {}", p.raw.display()))?
+            .to_rgb8();
+        let step = p.step + 1;
+        let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let seed = p.seed.wrapping_add(step as i64);
+        let vars = self.cfg.settings().variables;
+        let prompt = pass_prompt(req.prompt.as_deref(), EXTEND_BACKGROUND_PROMPT, &vars, seed)?;
+        let soft = soft.max(EXTEND_MIN_SOFTNESS);
+        // The Fill model's own size — what it was trained at, and what each
+        // strip's crop is taken to.
+        let target = fill.width.max(fill.height);
+
+        use image::imageops::{crop_imm, resize, FilterType};
+        let mut scratch = Scratch::default();
+        let t = Instant::now();
+        for (k, &(side, px)) in sides.iter().enumerate() {
+            let (grown, mask) = redraw::grow(&base, side, px);
+            base = grown;
+            let crop = redraw::extend_crop(base.dimensions(), side, px, target);
+            let (ww, wh) = redraw::work_size(crop.w, crop.h, target);
+            let init = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-{k}-ext-init.png")));
+            let sd_mask = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-{k}-ext-mask.png")));
+            let out = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-{k}-ext-out.png")));
+            let crop_mask = crop_imm(&mask, crop.x, crop.y, crop.w, crop.h).to_image();
+            resize(&crop_imm(&base, crop.x, crop.y, crop.w, crop.h).to_image(), ww, wh, FilterType::Lanczos3)
+                .save(&init)
+                .with_context(|| format!("writing {}", init.display()))?;
+            // Past the whole fade, as the area pass does, so the blend only ever
+            // mixes the original with pixels the model really drew.
+            let grown_mask = redraw::diffusion_mask(&crop_mask, soft);
+            redraw::binarize(&resize(&grown_mask, ww, wh, FilterType::Triangle))
+                .save(&sd_mask)
+                .with_context(|| format!("writing {}", sd_mask.display()))?;
+            // Each strip its own noise, still reproducible from the step. No
+            // negative: Fill runs at CFG 1, where sd.cpp never evaluates one.
+            self.sd().fill(&fill, &prompt, None, seed.wrapping_add(k as i64), &init, &sd_mask, &out)?;
+            let patch = image::open(&out)
+                .with_context(|| format!("reading {}", out.display()))?
+                .to_rgb8();
+            let patch = resize(&patch, crop.w, crop.h, FilterType::Lanczos3);
+            let alpha = redraw::feather(&crop_mask, soft);
+            redraw::composite(&mut base, &patch, &alpha, (crop.x, crop.y));
+        }
+        let redraw_ms = t.elapsed().as_millis();
+
+        let t = Instant::now();
+        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
+        base.save(&raw).with_context(|| format!("writing {}", raw.display()))?;
+        // A new size, so the detail filters restart for it; the grade carries.
+        let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let fsr_ms = t.elapsed().as_millis();
+        scratch.keep(&raw);
+        scratch.keep(&display);
+
+        let what = format!("Extend {}", req.expand.describe());
+        let prev = p.clone();
+        let entry = Pending { raw, raw_w: w, raw_h: h, display, filters, step, ..p };
+        let entry = advance(&prev, entry, step_label(&what, req.prompt.as_deref()));
+        let result = entry.result(id, png, Timings {
+            fsr_ms,
+            redraw_ms,
+            weights: self.monitor.placement(),
+            load_ms: self.monitor.load_ms(),
+            stages: self.monitor.stages(),
+            ..Default::default()
+        });
+        self.keep(id, entry);
+        Ok(result)
+    }
+
     pub fn edit(&mut self, id: u64, req: &EditRequest) -> Result<GenResult> {
         let mut p = lock(&self.retained).get(id, "edit")?;
         set_memory(&mut p.profile, req.memory.as_deref())?;
@@ -2072,6 +2272,10 @@ impl Engine {
             bail!("'{bad}' is not an output image");
         }
         self.cfg.check_loras(&p.profile.loras, p.profile.family)?;
+        req.expand.sides()?;
+        // The shape the result comes back at: the image's own, or grown.
+        let (tw, th) = req.expand.grown(p.raw_w, p.raw_h);
+        self.check_side(tw, th)?;
 
         let step = p.step + 1;
         let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -2099,11 +2303,10 @@ impl Engine {
         // of memory on a 24 GB card one segment short, at 19 s/it. At the model's
         // size it is a quarter of that and what the model was trained at; the
         // result is scaled back to the image's size, and a Refine afterwards
-        // brings a large image's detail back.
-        let long = p.raw_w.max(p.raw_h);
-        let k = long.min(base) as f32 / long as f32;
-        let ew = snap64(((p.raw_w as f32) * k).round() as u32);
-        let eh = snap64(((p.raw_h as f32) * k).round() as u32);
+        // brings a large image's detail back. Rescaling only changes the shape
+        // drawn at: the reference is still the image as it is, and the model
+        // re-imagines it to fill the new frame.
+        let (ew, eh) = edit_size(tw, th, base);
         let profile = Profile { width: ew, height: eh, ..p.profile.uncached() };
         let out = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-edit.png")));
         let t = Instant::now();
@@ -2114,10 +2317,10 @@ impl Engine {
 
         let t = Instant::now();
         let img = image::open(&out).with_context(|| format!("reading {}", out.display()))?;
-        let img = if (img.width(), img.height()) == (p.raw_w, p.raw_h) {
+        let img = if (img.width(), img.height()) == (tw, th) {
             img
         } else {
-            img.resize_exact(p.raw_w, p.raw_h, image::imageops::FilterType::Lanczos3)
+            img.resize_exact(tw, th, image::imageops::FilterType::Lanczos3)
         };
         let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
         let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
@@ -2138,7 +2341,12 @@ impl Engine {
             step,
             ..p
         };
-        let entry = advance(&prev, entry, step_label("Edit", Some(instruction)));
+        let what = if req.expand.is_empty() {
+            "Edit".to_string()
+        } else {
+            format!("Edit and rescale {}", req.expand.describe())
+        };
+        let entry = advance(&prev, entry, step_label(&what, Some(instruction)));
         let result = entry.result(id, png, Timings { gen_ms, fsr_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
@@ -2387,6 +2595,7 @@ impl Engine {
 /// the image a run just produced — and owns no sd-cli at all, which is what
 /// makes it safe to run beside one.
 pub struct Display {
+    cfg: Config,
     fsr: SharedFsr,
     scratch: PathBuf,
     items: workitems::Store,
@@ -2467,6 +2676,39 @@ impl Display {
         let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
         if !lock(&self.retained).replace(id, &was, entry) {
             bail!("that image changed while stepping through its history — try again");
+        }
+        Ok(result)
+    }
+
+    /// Make `name` the model the image's passes run on — the Refine dialog's
+    /// picker for a picture opened from Outputs, whose maker is unknown (an
+    /// upload) or only a guess. Replaces the profile wholesale, as
+    /// `Engine::swap_model` does, so Refine, Refine area, Hi-res and Edit all
+    /// follow it with nothing of their own; a fill-only model is refused here
+    /// as `Engine::model` refuses it. The slider start points are kept: for an
+    /// output they are zero, its look already being in the pixels, and a new
+    /// model's house sharpness must not turn that into a sharpen. No pixels
+    /// change, so the published file is answered as it is.
+    pub fn set_model(&mut self, id: u64, name: &str) -> Result<GenResult> {
+        let p = lock(&self.retained).get(id, "change the model of")?;
+        let mut reg = self.cfg.registry();
+        let mut next = match reg.remove(name) {
+            Some(m) if m.family.fill_only() => {
+                bail!("'{name}' is a {} model — it extends pictures rather than refining them", m.family.label())
+            }
+            Some(m) => m,
+            None => bail!("unknown model '{name}'"),
+        };
+        next.require_files()?;
+        next.sharpness = p.profile.sharpness;
+        next.clarity = p.profile.clarity;
+        next.refine_model = p.profile.refine_model.clone();
+        next.hires_model = p.profile.hires_model.clone();
+        let png = std::fs::read(&p.display).with_context(|| format!("reading {}", p.display.display()))?;
+        let entry = Pending { profile: next, ..p };
+        let result = entry.result(id, png, Timings::default());
+        if !lock(&self.retained).update(id, entry) {
+            bail!("that image changed while picking its model — try again");
         }
         Ok(result)
     }
@@ -2580,7 +2822,16 @@ impl Display {
     /// A missing sidecar is not an error: `list_outputs` lists a PNG dropped in
     /// by hand, so this has to be able to open one. It gets `Profile::default()`
     /// and no prompt, which is all the sliders need.
-    pub fn open_output(&mut self, stem: &str) -> Result<GenResult> {
+    ///
+    /// `Slot::Image` is the Outputs viewer's *Refine & extend…*: the same
+    /// picture made the Image tab's result, so the Refine dialog can work on
+    /// it. That is a diffusion over finished pixels, chosen — the same choice
+    /// as picking it as *Image to image*'s source — and (1) still holds: the
+    /// filters start at none, so nothing already in it is applied twice. There
+    /// the profile has to name a model a Refine can run, which an upload's
+    /// default doesn't and a sidecar's may no longer; `fallback` (the Image
+    /// tab's selected model) stands in then.
+    pub fn open_output(&mut self, stem: &str, slot: Slot, fallback: Option<&str>) -> Result<GenResult> {
         let stored = output_source(&self.items, stem)?;
         let item = self.items.load_output(stem);
 
@@ -2600,6 +2851,18 @@ impl Display {
         scratch.keep(&display);
 
         let mut profile = item.as_ref().map(|i| i.profile.clone()).unwrap_or_default();
+        if slot == Slot::Image {
+            let mut reg = self.cfg.registry();
+            if !reg.contains_key(&profile.name) {
+                let name = fallback.filter(|n| !n.is_empty()).context(
+                    "pick a model on the Image tab first — this picture names none that is installed",
+                )?;
+                profile = reg
+                    .remove(name)
+                    .filter(|p| !p.family.fill_only())
+                    .with_context(|| format!("unknown model '{name}'"))?;
+            }
+        }
         // See (2) above: these two are where the sliders start, and for this one
         // image "where they start" is off.
         profile.sharpness = 0.0;
@@ -2630,7 +2893,7 @@ impl Display {
             step: item.as_ref().map(|i| i.step).unwrap_or(0),
         };
         let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
-        lock(&self.retained).store(id, Slot::Output, entry, false);
+        lock(&self.retained).store(id, slot, entry, false);
         Ok(result)
     }
 
@@ -2722,6 +2985,7 @@ impl Pending {
             work_id: self.work_id.clone(),
             can_refine: self.can_refine(),
             can_hires: self.can_hires(),
+            model: self.profile.name.clone(),
             can_edit: self.profile.family.takes_references(),
             filters: self.filters,
             start: Filters::starting_at(self.profile.sharpness, self.profile.clarity),
@@ -2945,6 +3209,15 @@ fn reduce(src: &Path, dst: &Path, w: u32, h: u32) -> Result<()> {
         .with_context(|| format!("writing {}", dst.display()))
 }
 
+/// The size an edit draws a `w`×`h` result at: that shape with its long side
+/// at most the model's `base`, each axis snapped to 64. Never bigger — see
+/// `Engine::edit`.
+fn edit_size(w: u32, h: u32, base: u32) -> (u32, u32) {
+    let long = w.max(h);
+    let k = long.min(base) as f32 / long as f32;
+    (snap64(((w as f32) * k).round() as u32), snap64(((h as f32) * k).round() as u32))
+}
+
 /// A reference image, copied into scratch for sd-cli's `-r` — never handed
 /// over in place (invariant 8) — and shrunk to `max_side` when bigger. Each
 /// reference costs attention tokens like the image itself, so an unshrunk
@@ -3020,10 +3293,42 @@ fn random_seed() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{advance, after_model, fit_to, pass_prompt, step_label, AfterModel, Pending, Retained, Slot, MAX_HISTORY};
+    use super::{
+        advance, after_model, edit_size, fit_to, pass_prompt, step_label, AfterModel, Expand, Pending, Retained,
+        Slot, MAX_HISTORY,
+    };
     use crate::config::{Filters, Profile};
     use crate::fsr::out_size;
     use std::path::Path;
+
+    /// The sides are drawn left and right first, so a later strip spans their
+    /// new edges and draws the corners; past the limit is refused, and the
+    /// step's name says what grew.
+    #[test]
+    fn an_expansion_grows_in_side_order_and_names_itself() {
+        use crate::redraw::{Side, MAX_EXTEND};
+        let e = Expand { left: 256, top: 0, right: 256, bottom: 128 };
+        assert_eq!(e.grown(1024, 1024), (1536, 1152));
+        let order: Vec<Side> = e.sides().unwrap().iter().map(|&(s, _)| s).collect();
+        assert_eq!(order, [Side::Left, Side::Right, Side::Bottom]);
+        assert_eq!(e.describe(), "←256 →256 ↓128");
+        assert_eq!(Expand { left: 256, right: 256, ..Default::default() }.describe(), "← → 256 px");
+        assert!(Expand::default().is_empty() && Expand::default().sides().unwrap().is_empty());
+        assert!(Expand { top: MAX_EXTEND + 1, ..Default::default() }.sides().is_err());
+    }
+
+    /// An edit draws the target's shape at the model's size, never bigger —
+    /// rescaling changes the shape, not the cost.
+    #[test]
+    fn an_edit_draws_its_target_shape_at_the_models_size() {
+        assert_eq!(edit_size(1024, 1024, 1024), (1024, 1024));
+        // 1024² grown 256 each side: 1536×1024 drawn at 1024 long.
+        assert_eq!(edit_size(1536, 1024, 1024), (1024, 640));
+        // A small image is drawn at its own size, snapped.
+        assert_eq!(edit_size(800, 600, 1024), (768, 576));
+        // A 2× upscale of 1024² is drawn at 1024², as before rescaling existed.
+        assert_eq!(edit_size(2048, 2048, 1024), (1024, 1024));
+    }
 
     /// A retained image whose two files exist, so eviction has something to
     /// delete and the tests something to look for.

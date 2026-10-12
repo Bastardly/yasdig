@@ -3,7 +3,8 @@ import { S } from './state.js';
 import { isBusy, onIdle, setBusy, setIdle } from './busy.js';
 import { onJobs, runningJob, soonJobs } from './jobs.js';
 import { zoomPane } from './viewer.js';
-import { oomOptions, refine, takeResult, upscalerOptions, upscalersReady } from './image.js';
+import { fillReady, oomOptions, refine, render, takeResult, upscalerOptions, upscalersReady } from './image.js';
+import { openGetModels } from './getmodels.js';
 import { showError } from './memory.js';
 import { references } from './refs.js';
 
@@ -49,6 +50,52 @@ let beforeEpoch = 0;
 let beforeKey = null;
 
 const open = () => $('redraw').open;
+
+// A set of ← ↑ ↓ → toggles and an amount: Extend's, and Edit's rescale. One
+// factory for both, so the two can't come to disagree about what a side is or
+// what it sends. `expand()` is the body's `expand` — the server's `Expand`.
+function sideSet(root, onChange) {
+  const sides = new Set();
+  const amount = root.querySelector('[data-amount]');
+  const set = {
+    any: () => sides.size > 0,
+    expand() {
+      const px = Number(amount.value);
+      return Object.fromEntries([...sides].map((s) => [s, px]));
+    },
+    // "1024×1024 → 1280×1024", or '' with nothing picked.
+    note(w, h) {
+      if (!sides.size) return '';
+      const px = Number(amount.value);
+      const gw = w + px * (sides.has('left') + sides.has('right'));
+      const gh = h + px * (sides.has('top') + sides.has('bottom'));
+      return `${w}×${h} → ${gw}×${gh}`;
+    },
+    clear() { sides.clear(); set.sync(); },
+    sync() {
+      for (const b of root.querySelectorAll('[data-side]')) b.classList.toggle('active', sides.has(b.dataset.side));
+    },
+    disable(off) {
+      for (const el of root.querySelectorAll('button, select')) el.disabled = off;
+    },
+  };
+  root.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-side]');
+    if (!b) return;
+    const s = b.dataset.side;
+    if (sides.has(s)) sides.delete(s); else sides.add(s);
+    set.sync();
+    onChange();
+  });
+  amount.addEventListener('change', onChange);
+  return set;
+}
+let extendSides = null;
+let editSides = null;
+// The image was opened from Outputs, so the dialog offers its model: an upload
+// names none, and a saved picture's maker may not be the one to finish with.
+// Cleared with the mask when a different image arrives.
+let pickModel = false;
 
 function ensureMaster(w, h) {
   if (master && master.width === w && master.height === h) return;
@@ -268,7 +315,7 @@ function drawCompare() {
 // Whether a pass on some image is running. The history is locked meanwhile: a
 // step back and a pass that lands afterwards would disagree about which state
 // is current, and the pass would win without saying so.
-const PASSES = ['refine', 'hires', 'redraw', 'upscale', 'edit'];
+const PASSES = ['refine', 'hires', 'redraw', 'upscale', 'edit', 'extend'];
 const passRunning = () => PASSES.includes(runningJob()?.kind);
 
 // What the dialog's buttons say and allow, from the mask and the result on
@@ -288,12 +335,28 @@ function syncButtons() {
   // Edit: only for a model that takes references (the image itself is the
   // first), whole-image like Upscale, and it needs an instruction to follow.
   $('rdedit').hidden = !(live && shown.can_edit);
+  $('rdeditrescale').hidden = $('rdedit').hidden;
   if (!isBusy('rdedit')) {
     const said = $('rpprompt').value.trim();
+    $('rdedit').textContent = editSides.any() ? 'Edit and rescale' : 'Edit';
     $('rdedit').disabled = !live || painted || !said;
     $('rdedit').title = painted ? 'Clear the mask to edit the whole image'
       : !said ? 'Type what to change in the prompt box' : '';
   }
+  $('rdeditnote').textContent = live ? editSides.note(shown.width, shown.height) : '';
+  // Extend: FLUX.1 Fill when one is installed, nothing to pick. Without one the
+  // group is greyed out and says where to get it. Whole-image and a new size,
+  // so it waits while something is painted, like Upscale.
+  const fill = fillReady();
+  $('rdneedsfill').hidden = fill;
+  extendSides.disable(!fill);
+  if (!isBusy('rdextendgo')) {
+    $('rdextendgo').disabled = !live || !fill || painted || !extendSides.any();
+    $('rdextendgo').title = !fill ? 'Needs a FLUX.1 Fill model (Get models)'
+      : painted ? 'Clear the mask to extend the canvas'
+        : !extendSides.any() ? 'Pick a side to extend' : '';
+  }
+  $('rdextendnote').textContent = live ? extendSides.note(shown.width, shown.height) : '';
   // Upscale is whole-image and changes the size the mask was painted at, so it
   // waits while something is painted, as a refine of the whole image would.
   if (!isBusy('rdupscale')) {
@@ -308,10 +371,15 @@ function syncButtons() {
   }
   // Blank uses: the area its image's own prompt; the whole image the Refine
   // pass fold's prompt when there is one.
+  // Extend shares the box but not the rule: its blank continues the background,
+  // since the image's own prompt names a subject it would draw again.
   const fold = $('rprompt').value.trim();
-  $('rpprompt').placeholder = painted || !fold
+  $('rpprompt').placeholder = painted
     ? "blank uses this image's own prompt"
-    : `blank uses the Refine pass prompt: ${fold}`;
+    : !fold
+      ? "blank: Refine uses this image's own prompt; Extend continues the background"
+      : `blank: Refine uses the Refine pass prompt (${fold}); Extend continues the background`;
+  $('rdmodel').disabled = passRunning();
   $('rdcancel').hidden = !passRunning();
   for (const b of $('rdhistory').querySelectorAll('button')) b.disabled = passRunning();
 }
@@ -383,16 +451,40 @@ async function edit() {
   const said = $('rpprompt').value.trim();
   if (S.imageId === null || painted || !said) return;
   $('rperr').textContent = '';
-  setBusy('rdedit', 'Editing…', 'edit');
+  setBusy('rdedit', editSides.any() ? 'Editing and rescaling…' : 'Editing…', 'edit');
   soonJobs();
   try {
     takeResult(await post('/edit', {
       image_id: S.imageId, prompt: said, references: references(), memory: $('memory').value || null,
+      expand: editSides.expand(),
     }));
   } catch (e) {
     passErr(e, edit);
   } finally {
     setIdle('rdedit');
+    syncButtons();
+  }
+}
+
+// Grow the canvas on the chosen sides and draw beyond them with FLUX.1 Fill,
+// with this dialog's prompt (blank continues the background) and softness.
+async function extend() {
+  if (S.imageId === null || painted || !extendSides.any() || !fillReady()) return;
+  $('rperr').textContent = '';
+  setBusy('rdextendgo', 'Extending…', 'extend');
+  soonJobs();
+  try {
+    takeResult(await post('/extend', {
+      image_id: S.imageId,
+      expand: extendSides.expand(),
+      prompt: $('rpprompt').value.trim() || null,
+      feather: Number($('rpsoft').value),
+      memory: $('memory').value || null,
+    }));
+  } catch (e) {
+    passErr(e, extend);
+  } finally {
+    setIdle('rdextendgo');
     syncButtons();
   }
 }
@@ -449,8 +541,33 @@ async function goto(index) {
   }
 }
 
+// The *Refine with* row: the Image tab's own model list (the generating
+// select's options, so the two can't disagree about what is pickable), set to
+// the model the image's passes run on now.
+function drawModel() {
+  $('rdmodelrow').hidden = !pickModel;
+  if (!pickModel || !shown) return;
+  const sel = $('rdmodel');
+  sel.innerHTML = $('template').innerHTML;
+  sel.value = shown.model;
+}
+
+// Picking one changes no pixels; the server swaps the image's profile and
+// answers with what the passes can now do (Refine, Hi-res, Edit).
+async function setModel() {
+  if (!shown) return;
+  $('rperr').textContent = '';
+  try {
+    render(await post('/image/model', { image_id: shown.image_id, model: $('rdmodel').value }));
+  } catch (e) {
+    $('rperr').textContent = String(e.message || e);
+    $('rdmodel').value = shown.model;
+  }
+}
+
 function drawHistory() {
   if (!shown) return;
+  drawModel();
   const steps = shown.history ?? [];
   $('rdhistory').innerHTML = steps.map((label, i) => `
     <li><button type="button" data-step="${i}" class="${i === shown.at ? 'active' : ''}">
@@ -468,6 +585,11 @@ export function syncRedraw(data) {
   if (data.image_id !== maskFor) {
     maskFor = data.image_id;
     $('rpprompt').value = '';
+    // The sides too: a rescale picked for the last picture would turn this
+    // one's Edit into "Edit and rescale" unasked.
+    extendSides?.clear();
+    editSides?.clear();
+    pickModel = false;
     if (master) clearMask();
   }
   const fresh = !shown || shown.image_id !== data.image_id;
@@ -481,7 +603,8 @@ export function syncRedraw(data) {
   drawHistory();
 }
 
-export function openRedraw(data) {
+export function openRedraw(data, { fromOutput = false } = {}) {
+  if (fromOutput) pickModel = true;
   shown = null;
   // The viewer's sliders may have moved since: the left side is fetched again.
   beforeKey = null;
@@ -514,6 +637,11 @@ function syncVals() {
 }
 
 export function initRedraw() {
+  extendSides = sideSet($('rdextendsides'), syncButtons);
+  editSides = sideSet($('rdeditsides'), syncButtons);
+  $('rdextendgo').addEventListener('click', extend);
+  $('rdmodel').addEventListener('change', setModel);
+  $('rdgetfill').addEventListener('click', () => { $('redraw').close(); openGetModels('flux_fill'); });
   pane = zoomPane({
     view: $('rdview'), img: $('rdimg'), fit: $('rdfit'), full: $('rdfull'),
     pans: (e) => e.button === 1 || (e.button === 0 && space),

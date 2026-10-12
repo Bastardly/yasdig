@@ -222,3 +222,34 @@ url = "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_fi
 dest = "vae/qwen_image_vae.safetensors"
 bytes = 253806246
 sha256 = "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
+
+[[entry]]
+id = "flux1-fill-q8"
+family = "flux_fill"
+label = "FLUX.1 Fill (Q8_0 GGUF)"
+note = "Powers Extend in the Refine dialog: it continues a picture past its edges, on any image. Not a model to generate with. About 18.5 GB on the card; shares Flux.1's text encoders and VAE."
+
+[[entry.file]]
+slot = "model"
+url = "https://huggingface.co/SporkySporkness/FLUX.1-Fill-dev-GGUF/resolve/main/flux1-fill-dev-fp16-Q8_0-GGUF.gguf"
+dest = "diffusion_models/flux1-fill-dev-Q8_0.gguf"
+bytes = 12716418336
+
+[[entry.file]]
+slot = "clip_l"
+url = "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors"
+dest = "text_encoders/clip_l.safetensors"
+bytes = 246144152
+
+[[entry.file]]
+slot = "t5xxl"
+url = "https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf/resolve/main/t5-v1_1-xxl-encoder-Q8_0.gguf"
+dest = "text_encoders/t5-v1_1-xxl-encoder-Q8_0.gguf"
+bytes = 5061584064
+
+[[entry.file]]
+slot = "vae"
+url = "https://huggingface.co/second-state/FLUX.1-dev-GGUF/resolve/main/ae.safetensors"
+dest = "vae/ae.safetensors"
+bytes = 335304388
+sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"

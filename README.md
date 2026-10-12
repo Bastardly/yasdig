@@ -56,9 +56,10 @@ A tiny std-only HTTP server glues it together and serves a single static HTML pa
 | **Z-Image** (Turbo) | runs | model + Qwen3-4B + Flux `ae` VAE | 1024², 8 steps, CFG 1 |
 | **Krea 2** (Turbo) | runs | model + Qwen3-VL-4B + Wan 2.1 VAE | 1024², 8 steps, CFG 1 |
 | **Qwen-Image** | runs | model + Qwen2.5-VL-7B + Wan 2.1 VAE | 1024², 20 steps, CFG 2.5 |
+| **FLUX.1 Fill** | runs, as [Extend](#refine) — never offered for generating | model + CLIP-L + T5-XXL + Flux `ae` VAE | 1024², 28 steps, CFG 1, guidance 30 |
 | **Wan 2.2** (video) | runs, on the Video tab | see [Video models](#video-models) | |
 | Flux.2 dev | recognised, not offered | its 24B Mistral encoder doesn't fit beside it on a consumer card | |
-| Flux Fill / Controls, Flex.2, SD3, Chroma, LongCat, Ovis, ERNIE, Mage-Flow, Anima, LTX-2, Hunyuan Video | recognised, not offered | `doctor` names them | |
+| Flux Controls, Flex.2, SD3, Chroma, LongCat, Ovis, ERNIE, Mage-Flow, Anima, LTX-2, Hunyuan Video | recognised, not offered | `doctor` names them | |
 | Flux 3 | not yet | no open weights, and no support in stable-diffusion.cpp | |
 
 ¹ Kontext and Qwen-Image-Edit are *editing* models. Until the edit feature exists they
@@ -1122,12 +1123,19 @@ and can be picked as an *Image to image* source or a video's first frame — the
 behind **Choose…** has the same Current / Favorites toggle. A new save never takes
 the name of a favourite, so one name always means one picture.
 
-There is no Refine and no Hi-res here, on purpose. A saved image already has its grade
-and its sharpening in the pixels, and everything else in this program is built so that
-nothing ever diffuses over filtered pixels. If you want to take a saved image further,
-pick it in the Image tab's **Image to image** fold — that starts a real pass from it, at a
-strength you choose. Grading it further is exactly what this tab is for; re-rendering it is a
-different question, asked in a different place.
+There is no Refine and no Hi-res in this tab, on purpose. A saved image already has its
+grade and its sharpening in the pixels, and everything else in this program is built so
+that nothing diffuses over filtered pixels *by accident*. Taking one further is a choice
+made in the Image tab, two ways: **Refine & extend…** in the viewer's panel opens the
+saved file there as the current image with the Refine dialog up — refine, extend, edit
+or upscale it like a fresh one, the sliders starting at zero because the file already
+carries its look (it opens the file, so save slider changes first). There the dialog
+has a **Refine with** select: the model its Refine, Refine area, Hi-res and Edit run on,
+starting at the one that made it (or, for an upload, the one picked on the Image tab) —
+or pick it in the
+**Image to image** fold to start a real pass from it at a strength you choose. A picture
+that names no installed model, such as an upload, is refined with the model picked on
+the Image tab.
 
 ### Refine
 
@@ -1171,12 +1179,31 @@ own size (1024 for Klein) and is scaled back up — an edit costs the render's t
 plus the reference's, and at 2048 that ran Klein 9B out of memory — so a Refine image
 afterwards brings a large image's detail back. A History step like the rest.
 
-Every pass — Refine, Refine area, Hi-res — is a step in the History, with a thumbnail
+**Rescale with Edit**, under the Edit button, gives it a new shape: pick sides
+(← ↑ ↓ →) and an amount and the button becomes **Edit and rescale**. The model redraws
+the whole picture to fill the bigger frame — "the same room, wider". It is a
+re-imagining, nothing pasted back, so faces and small detail can change; when the
+picture must stay exactly as it is, Extend.
+
+**Extend** grows the canvas on the sides you pick (128-512 px each) and draws what lies
+beyond them, on any image — SDXL, Klein, an upload. It uses **FLUX.1 Fill**, a model
+trained to continue a picture from a mask, and turns on by itself once one is installed
+(Get models → FLUX.1 Fill, about 12.7 GB at Q8 plus Flux.1's three shared parts);
+without one the group is greyed out with a link to it. Each side is its own Fill pass
+at the Fill model's full size — left and right first, then top and bottom across the
+new width, which draws the corners — and only the strips are drawn: every pixel you had
+keeps its exact value beyond the Edge softness blend. A blank prompt continues the
+background; the image's own prompt names the subject and would draw it again in the
+strip, so type one only to put something particular there. The image keeps its own
+model for any Refine afterwards. FLUX.1 Fill dev is under the FLUX.1 [dev] non-commercial
+licence; check the card's link.
+
+Every pass — Refine, Refine area, Hi-res, Edit, Extend, Upscale — is a step in the History, with a thumbnail
 each. Click one to go back (or Ctrl+Z / Ctrl+Shift+Z): fixed the fingers, ruined the
 hat, step back to the fingers and try the hat again. A new pass from an earlier step
 replaces the ones after it. An image keeps its last twelve steps and always its
-original; history is scratch, gone with the image or the server. Outputs have no
-Refine — pick one under *Image to image* instead.
+original; history is scratch, gone with the image or the server. Compare shows an
+earlier step of another shape (before an Extend) whole inside the frame.
 
 For a batch, the *After each generation* fold runs Hi-res and Refine on every image
 with the prompts from the Hi-res pass and Refine pass panels; a `{variable}` in them
@@ -1687,7 +1714,15 @@ needs a Vulkan device and nothing else.
 - `POST /edit` — `{ "image_id": 3, "prompt": "make it night", "references": ["…"] }`.
   Changes the image by instruction on a model that takes references: the image itself
   is reference 1, `references` (output stems, at most 3) follow it. `prompt` is
-  required. A history step, queued and answered like `/refine`.
+  required. `"expand": {"left": 256, "right": 256}` (any of `left`/`top`/`right`/
+  `bottom`, each at most 512) redraws it in that grown shape — *Edit and rescale*. A
+  history step, queued and answered like `/refine`.
+- `POST /extend` — `{ "image_id": 3, "expand": {"left": 256, "right": 256},
+  "prompt": null, "feather": 16 }`. Grows the canvas on those sides (each at most 512)
+  and draws past the old edges with the installed FLUX.1 Fill model; 400 naming Get
+  models when there is none. Blank prompt = continue the background, `feather` as
+  `/redraw`'s (floored at 24 here). A history step, queued and answered like
+  `/refine`, with `timings.redraw_ms`.
 - `POST /upscale` — `{ "image_id": 3, "factor": 2, "upscaler": "4x-UltraSharp.pth" }`.
   Enlarges the retained image with no diffusion: FSR when `upscaler` is absent, `null`
   or empty, otherwise that model from the upscalers dir. `factor` is more than 1 and
@@ -1834,6 +1869,12 @@ needs a Vulkan device and nothing else.
   ends in a filter pass. `filters` and `filters_start` both come back neutral: the file
   already carries whatever was applied when it was saved, so 0 means "as saved". A PNG
   with no sidecar opens too, with default settings.
+- `POST /outputs/to-image` — `{ "stem": "…", "model": "sdxl-base" }`. The same open,
+  but as the Image tab's result, so `/refine`, `/extend`, `/edit` and the rest work on
+  it. `model` stands in when the sidecar names no installed model (an upload).
+- `POST /image/model` — `{ "image_id": 3, "model": "sdxl-base" }`. Makes that the model
+  the image's passes run on (the profile is replaced, the pixels untouched) and answers
+  in the `/generate` shape, `model` included. Not a fill-only model.
 - `GET /video-models` — every video model: the ones found by scanning `models/video/`
   plus the `[[video]]` table, built fresh per call so a finished download shows up
   without a restart. Each entry is the config verbatim plus what the

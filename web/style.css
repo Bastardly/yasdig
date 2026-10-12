@@ -585,6 +585,13 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .rdupscale #rdfactor { flex: 0 0 auto; width: auto; }
 .rdupscale #rdupscaler { flex: 1; }
 #rdupscale { margin-top: var(--sp-2); }
+/* The ← ↑ ↓ → toggles and their amount, for Extend and for Edit's rescale. */
+.rdsides { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
+.rdsides .btn { flex: 1; padding-left: 0; padding-right: 0; }
+.rdsides select { flex: 0 0 auto; width: auto; }
+.rdsideshead { margin-top: var(--sp-2); }
+#rdextendgo { margin-top: var(--sp-2); }
+#rdgetfill { margin-top: var(--sp-2); }
 /* Compare: the earlier step over the image, clipped at the split (redraw.js
    sets the clip and the line's position); the labels sit in the image's top
    corners. The line is the state colour, like every selection mark here. */
@@ -592,7 +599,10 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* The mask waits while comparing: the pointer drives the split, not a brush. */
 .rdview.comparing .maskview { display: none; }
 .rdtag-now { transform: translateX(-100%); }
-.rdbefore { position: absolute; pointer-events: none; user-select: none; }
+/* `contain`: after an Extend or a rescale the earlier step has another shape,
+   and it is shown whole and centred rather than stretched into a box it
+   doesn't fit. A same-shape step fills the box exactly, as before. */
+.rdbefore { position: absolute; pointer-events: none; user-select: none; object-fit: contain; }
 .rdsplit {
   position: absolute; width: 2px; margin-left: -1px; pointer-events: none;
   background: var(--state);

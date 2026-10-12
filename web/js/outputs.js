@@ -3,6 +3,8 @@ import { S, escErr } from './state.js';
 import { setBusy, setIdle, onIdle } from './busy.js';
 import { setPost, setPostStart, showFullSize, setViewerImage, cancelPost } from './viewer.js';
 import { gridMarks } from './gridmark.js';
+import { render } from './image.js';
+import { openRedraw } from './redraw.js';
 
 // ---- Outputs ----------------------------------------------------------------
 //
@@ -259,6 +261,29 @@ async function saveEdit() {
   }
 }
 
+// Into the Refine dialog: the saved file becomes the Image tab's result, so
+// refining, extending and editing work on it as on any generation. The Image
+// tab's model stands in for one the sidecar doesn't name (an upload). The tab
+// switch comes first — `showTab` empties the pane it leaves and restores the
+// Image tab's last picture, which `render` then replaces.
+async function toImage() {
+  const stem = outputs[index]?.stem;
+  if (!stem) return;
+  setBusy('lbrefine', 'Opening…');
+  $('lberr').textContent = '';
+  try {
+    const data = await post('/outputs/to-image', { stem, model: $('template').value || null });
+    $('lightbox').close();
+    document.querySelector('.tab[data-tab="image"]')?.click();
+    render(data);
+    openRedraw(data, { fromOutput: true });
+  } catch (e) {
+    $('lberr').textContent = String(e.message || e);
+  } finally {
+    setIdle('lbrefine');
+  }
+}
+
 // Declarations only above this line; everything that touches the DOM is here.
 export function initOutputs() {
   del.init();
@@ -266,6 +291,7 @@ export function initOutputs() {
   $('ocurrent').addEventListener('click', () => setGallery('outputs'));
   $('ofavorites').addEventListener('click', () => setGallery('favorite-outputs'));
   $('lbsave').addEventListener('click', saveEdit);
+  $('lbrefine').addEventListener('click', toImage);
 
   // On `document`, because a modal <dialog>'s keydown still bubbles out of it —
   // and because the same listener then covers the grid behind it.
@@ -284,7 +310,10 @@ export function initOutputs() {
   });
 
   // Save is only pressable once something is open, which IDLE_LABELS can't know.
-  onIdle(() => { $('lbsave').disabled = S.imageId === null; });
+  onIdle(() => {
+    $('lbsave').disabled = S.imageId === null;
+    $('lbrefine').disabled = S.imageId === null;
+  });
 
   loadOutputs();
 }

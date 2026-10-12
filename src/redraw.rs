@@ -137,6 +137,107 @@ pub fn diffusion_mask(mask: &GrayImage, soft: u32) -> GrayImage {
 /// The largest edge softness a request may ask for, in image pixels.
 pub const MAX_SOFTNESS: u32 = 128;
 
+/// A side of the image to extend (outpainting).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Top,
+    Right,
+    Bottom,
+}
+
+impl Side {
+    /// The order a multi-side extend runs in: left and right first, then top
+    /// and bottom, so a top or bottom strip already spans the new width and
+    /// draws the corners with both neighbours in view.
+    pub const ORDER: [Side; 4] = [Side::Left, Side::Right, Side::Top, Side::Bottom];
+
+    pub fn arrow(self) -> &'static str {
+        match self {
+            Side::Left => "←",
+            Side::Top => "↑",
+            Side::Right => "→",
+            Side::Bottom => "↓",
+        }
+    }
+}
+
+/// The largest strip one side may grow by, in pixels. Past about half the
+/// model's own size the new strip is mostly invention with little to continue.
+pub const MAX_EXTEND: u32 = 512;
+
+/// `base` grown by `px` on `side`, and the mask of the new strip.
+///
+/// The original is copied in untouched. The strip is not left empty: it is the
+/// edge's own pixels stretched outward, then blurred hard (sigma a quarter of
+/// the strip). FLUX.1 Fill is handed the image with the masked strip blanked
+/// out, so what is in it matters less than it did for v1's ordinary model —
+/// but the canvas is also the init sd.cpp encodes, and a blurred continuation
+/// of the edge's colours is the one fill that can't print a streak or tint
+/// the strip.
+pub fn grow(base: &RgbImage, side: Side, px: u32) -> (RgbImage, GrayImage) {
+    let (w, h) = base.dimensions();
+    if px == 0 {
+        return (base.clone(), GrayImage::new(w, h));
+    }
+    let (nw, nh, ox, oy) = match side {
+        Side::Left => (w + px, h, px, 0),
+        Side::Right => (w + px, h, 0, 0),
+        Side::Top => (w, h + px, 0, px),
+        Side::Bottom => (w, h + px, 0, 0),
+    };
+    let inside = |x: u32, y: u32| x >= ox && x < ox + w && y >= oy && y < oy + h;
+    // Every pixel takes the nearest original pixel: the original itself inside,
+    // its edge stretched outside.
+    let stretched = RgbImage::from_fn(nw, nh, |x, y| {
+        let sx = (x as i64 - ox as i64).clamp(0, w as i64 - 1) as u32;
+        let sy = (y as i64 - oy as i64).clamp(0, h as i64 - 1) as u32;
+        *base.get_pixel(sx, sy)
+    });
+    let blurred = image::imageops::blur(&stretched, (px as f32 / 4.0).max(2.0));
+    let canvas = RgbImage::from_fn(nw, nh, |x, y| {
+        if inside(x, y) {
+            *stretched.get_pixel(x, y)
+        } else {
+            *blurred.get_pixel(x, y)
+        }
+    });
+    let mask = GrayImage::from_fn(nw, nh, |x, y| image::Luma([if inside(x, y) { 0 } else { 255 }]));
+    (canvas, mask)
+}
+
+/// The crop an Extend redraws its new strip in, on the grown canvas
+/// (`canvas` is its size): the whole strip, and beside it **as much of the
+/// original as makes the crop roughly square at the model's size** — at least
+/// as wide as the strip itself, at most what the original has.
+///
+/// The area pass's own margin (`context_rect`) is right for a patch inside a
+/// picture and wrong here: around a 384 px strip it gives ~200 px of picture,
+/// too little scene to continue. With the crop at least half real picture the
+/// Fill model has the scene to carry on — and the strip still gets the
+/// model's full size, which a whole-image pass would squeeze.
+pub fn extend_crop(canvas: (u32, u32), side: Side, px: u32, target: u32) -> Rect {
+    let (w, h) = canvas;
+    // Along the axis the strip grew: the strip plus the context.
+    let along = match side {
+        Side::Left | Side::Right => w,
+        Side::Top | Side::Bottom => h,
+    };
+    let across = match side {
+        Side::Left | Side::Right => h,
+        Side::Top | Side::Bottom => w,
+    };
+    let want = across.min(target).saturating_sub(px).max(px);
+    let ctx = want.min(along - px);
+    let span = px + ctx;
+    match side {
+        Side::Left => Rect { x: 0, y: 0, w: span, h },
+        Side::Right => Rect { x: w - span, y: 0, w: span, h },
+        Side::Top => Rect { x: 0, y: 0, w, h: span },
+        Side::Bottom => Rect { x: 0, y: h - span, w, h: span },
+    }
+}
+
 /// Lay `patch` over `base` at `at`, weighted by `alpha` (both the patch's size).
 /// Weight 0 leaves the original's bytes, 255 takes the patch's exactly.
 pub fn composite(base: &mut RgbImage, patch: &RgbImage, alpha: &GrayImage, at: (u32, u32)) {
@@ -268,6 +369,60 @@ mod tests {
                     assert_eq!(sd.get_pixel(x, y).0[0], 255, "soft {soft}: ({x},{y})");
                 }
             }
+        }
+    }
+
+    /// Growing keeps the original exactly, where it belongs, and masks
+    /// exactly the new strip — whose pixels continue the edge's colour.
+    #[test]
+    fn growing_keeps_the_original_and_masks_the_strip() {
+        let base = RgbImage::from_fn(40, 30, |x, y| Rgb([x as u8 * 5, y as u8 * 7, 90]));
+        for (side, size, at) in [
+            (Side::Left, (56, 30), (16, 0)),
+            (Side::Right, (56, 30), (0, 0)),
+            (Side::Top, (40, 46), (0, 16)),
+            (Side::Bottom, (40, 46), (0, 0)),
+        ] {
+            let (canvas, mask) = grow(&base, side, 16);
+            assert_eq!(canvas.dimensions(), size, "{side:?}");
+            assert_eq!(mask.dimensions(), size, "{side:?}");
+            for (x, y, p) in base.enumerate_pixels() {
+                assert_eq!(canvas.get_pixel(x + at.0, y + at.1), p, "{side:?} ({x},{y})");
+                assert_eq!(mask.get_pixel(x + at.0, y + at.1).0[0], 0, "{side:?}");
+            }
+            let painted = mask.pixels().filter(|p| p.0[0] == 255).count() as u32;
+            assert_eq!(painted, size.0 * size.1 - 40 * 30, "{side:?}: the strip and only it");
+        }
+        // Beside the seam the strip carries the edge's colour, blurred but close.
+        let flat = RgbImage::from_pixel(40, 30, Rgb([200, 100, 50]));
+        let (canvas, _) = grow(&flat, Side::Right, 32);
+        assert_eq!(canvas.get_pixel(41, 15), &Rgb([200, 100, 50]));
+        assert_eq!(canvas.get_pixel(71, 15), &Rgb([200, 100, 50]));
+        // Nothing to grow is no change.
+        let (same, none) = grow(&base, Side::Top, 0);
+        assert_eq!(same, base);
+        assert_eq!(mask_bbox(&none), None);
+    }
+
+    /// An extend's crop holds the whole strip and at least as much real
+    /// picture beside it — squarish at the model's size, never past the canvas.
+    #[test]
+    fn an_extend_crop_is_mostly_real_picture() {
+        // 1024² grown 384 px right: strip plus 640 px of picture, square.
+        let r = extend_crop((1408, 1024), Side::Right, 384, 1024);
+        assert_eq!(r, Rect { x: 1408 - 1024, y: 0, w: 1024, h: 1024 });
+        // Grown up: the strip is the top rows.
+        let t = extend_crop((1024, 1280), Side::Top, 256, 1024);
+        assert_eq!(t, Rect { x: 0, y: 0, w: 1024, h: 1024 });
+        // A wide strip still gets as much picture as strip.
+        let wide = extend_crop((1536, 1024), Side::Left, 512, 1024);
+        assert_eq!(wide, Rect { x: 0, y: 0, w: 1024, h: 1024 });
+        // A narrow original gives what it has.
+        let thin = extend_crop((300, 1024), Side::Right, 256, 1024);
+        assert_eq!(thin, Rect { x: 0, y: 0, w: 300, h: 1024 });
+        for (canvas, side, px) in [((1408, 1024), Side::Right, 384), ((1024, 1280), Side::Bottom, 256)] {
+            let c = extend_crop(canvas, side, px, 1024);
+            assert!(c.x + c.w <= canvas.0 && c.y + c.h <= canvas.1);
         }
     }
 

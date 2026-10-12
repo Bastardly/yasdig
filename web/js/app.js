@@ -49,6 +49,7 @@ function showTab(name) {
   // in their action row, and two ids doing one job is two things to keep in
   // step.
   $('lbsave').hidden = name !== 'outputs';
+  $('lbrefine').hidden = name !== 'outputs';
 
   // The two image panes share one `imageId`, so leaving one has to empty it.
   // Otherwise the picture stays on screen beside Refine and Hi-res buttons that

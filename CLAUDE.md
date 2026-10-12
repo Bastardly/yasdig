@@ -1088,8 +1088,84 @@ Seven things break silently:
   natural-sized, so a 3072² image isn't a second 36 MB canvas. Its pointer handler
   runs *after* the pane's and skips whatever the pane took as a pan
   (`defaultPrevented`) or would have if it weren't fitted (Space, middle button).
-- **Outputs never offer it.** A saved output is `display` (invariant 1). The
-  dialog is reached only from the Image tab's action row.
+- **Outputs reach it only through the Image tab.** A saved output is `display`
+  (invariant 1), so the Outputs viewer never diffuses one in place. Its *Refine &
+  extend…* is `POST /outputs/to-image`: `Display::open_output` with
+  `Slot::Image`, the file made the Image tab's result with filters at `NONE` —
+  the same deliberate choice as picking it as a source, and nothing applied
+  twice. That slot needs a profile a Refine can run, which an upload's
+  `Profile::default()` isn't, so the page's selected model is the `fallback` when
+  the sidecar names none installed. The dialog then shows *Refine with*
+  (`pickModel` in `redraw.js`, cleared with the mask on a different image):
+  `POST /image/model` → `Display::set_model` swaps the retained profile
+  wholesale, as `swap_model` does, keeping the slider start points (zero for an
+  output — a new model's house sharpness would sharpen baked-in pixels) — so
+  every pass follows with no per-pass field. `GenResult.model` is what it shows.
+
+### Extend
+
+Grow the canvas and draw beyond it: `Engine::extend`, `POST /extend`,
+`Kind::Extend`, the Refine dialog's Extend group. Tried first on the
+`outpaintingV1` branch with the image's own model, and parked: an ordinary model at
+high strength treats a blank strip as a fresh canvas and paints the subject again.
+This round draws with **FLUX.1 Fill** (`ImageFamily::FluxFill`, `img_in` 384 wide —
+sd.cpp's `VERSION_FLUX_FILL`), a model trained to fill a masked region from the rest
+of the picture, and keeps the branch's geometry. `Config::fill_model()` is the first
+installed Fill model with its parts, so Extend turns on by itself; the image's own
+model never draws.
+
+**A fill-only family is never a generating model.** `ImageFamily::fill_only`; the
+page leaves `fill: true` models out of all three selects and the `#getparts` line, and
+`Engine::model` — the one door generate, Hi-res and Refine resolve through — refuses
+one by name. From noise or over a whole picture it has nothing to fill.
+
+Seven things break silently:
+
+- **The Fill pass is `SdRunner::fill`, never `img2img`.** `--strength 1` and
+  `--steps p.steps`: `img2img_cmd`'s `steps / strength` and step floor exist for
+  partial strength (invariants 2-4) and mean nothing here. sd.cpp feeds the masked
+  image and the mask to the model as extra channels (`pipeline/image.cpp`), so
+  `-i` plus `--mask` is the whole interface. `--guidance 30` is in the family's
+  `flags()` (`a_fill_pass_is_full_strength_on_the_fill_models_own_settings`).
+- **It is the area pass's compositing**, so everything under *## Redraw* holds for
+  the original pixels: `redraw::composite` through `feather`, byte-exact beyond
+  the fade, the mask sent to sd-cli dilated past it (`diffusion_mask`).
+- **One side at a time, never one ring** (`Side::ORDER`: left and right, then top
+  and bottom). A ring's bounding box is the whole image, which `work_size` would
+  squeeze into one model-sized crop. Per side, each strip gets the full size, and a
+  later strip spans the earlier ones' new edges, which draws the corners.
+- **The crop is `redraw::extend_crop`, not the area pass's margin**: the strip plus
+  enough of the picture to make it roughly square at the Fill model's size. The
+  area margin gave a 384 px strip ~200 px of picture to continue from.
+- **The blend gets a small floor** (`EXTEND_MIN_SOFTNESS`, 24 px), never a share of
+  the strip: the model redraws `3·soft + 8` px of the original beyond it, and a
+  quarter of a wide strip redrew hundreds of pixels — a ghost at the join.
+- **A blank prompt is `EXTEND_BACKGROUND_PROMPT`, never the image's own** — the
+  one pass where blank doesn't mean the image's prompt, since that names the
+  subject. Fill is far less prone to redrawing it, but a prompt that names no
+  subject can't ask for a second one.
+- **The image keeps its own profile.** The Fill profile is local to the pass, so
+  the step after it — a Refine, a Hi-res — runs on the model that made the
+  picture, and a sidecar never claims Fill made it.
+
+The branch's seam pass (a low-strength redraw across each join) was **not**
+ported: Fill sees both sides of the join, which is what the seam pass made up for.
+If verification shows a seam, it comes back as a Fill pass at low strength. The
+strip is still pre-filled with the edge stretched and blurred (`redraw::grow`),
+since the grown canvas is also the init sd.cpp encodes.
+
+**Edit and rescale is the other way to a new shape**, and deliberately apart:
+`EditRequest.expand` (the same `pipeline::Expand` as Extend's, one type for both)
+makes `Engine::edit` draw the *grown* shape at the model's base size (`edit_size`)
+and resize to it. The image is still reference 1 at its own shape, and nothing is
+pasted back — a re-imagining, which is what the label on its side set says. On the
+page both sets are `sideSet` in `redraw.js`, one factory, two instances, both
+cleared when a different image arrives so a rescale picked for the last picture
+can't turn this one's Edit into "Edit and rescale" unasked.
+
+On the page, Compare shows an earlier step with `object-fit: contain`, because after
+an Extend it has another shape; a step records no offset, so it is shown whole rather
+than lined up.
 
 `zoomPane` (`viewer.js`) is the viewer's Fit/1:1/pan, made a factory when the
 dialog became its second user: the centring rules (`expectNew` before a different
@@ -1261,8 +1337,9 @@ through the gallery with the dialog left up.
 saved output is `display`, not `raw` — its grade and its RCAS are already in the
 pixels — so diffusing over one is precisely what invariant 1 exists to prevent.
 Grading it *further* is fine and is what the tab is for; escalating it is not, and
-the way to escalate a saved image is to pick it as the Image tab's *Start from*,
-which starts a real pass from it.
+the way to escalate a saved image is through the Image tab: pick it as *Start from*,
+or *Refine & extend…* in the viewer (`/outputs/to-image`, see *## Redraw*), which
+makes it the Image tab's result with the filters at none.
 
 That also makes this the one place the sliders are **not** the lossless re-filter
 they are everywhere else. `/adjust` elsewhere re-runs the passes over a retained

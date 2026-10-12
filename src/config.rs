@@ -1075,12 +1075,20 @@ pub enum ImageFamily {
     /// one lists here and runs as a text-to-image Qwen-Image.
     #[serde(rename = "qwen_image")]
     QwenImage,
+    /// FLUX.1 Fill: Flux.1 dev's layout with `img_in` 384 wide, trained to fill
+    /// a masked region from the rest of the picture. sd.cpp feeds it the masked
+    /// image and the mask beside the noise (`VERSION_FLUX_FILL`,
+    /// `pipeline/image.cpp`). **Fill-only** ([`ImageFamily::fill_only`]): it is
+    /// what Extend draws with, found by itself when installed, and never offered
+    /// for generating — from noise it has nothing to fill. Flux.1's own parts.
+    #[serde(rename = "flux_fill")]
+    FluxFill,
 }
 
 impl ImageFamily {
     /// Every variant. Tests hold across it, and [`Config::scan_images`] asks it
     /// which roles some family has a slot for.
-    pub const ALL: [ImageFamily; 10] = [
+    pub const ALL: [ImageFamily; 11] = [
         ImageFamily::Sd1,
         ImageFamily::Sd2,
         ImageFamily::Sdxl,
@@ -1091,6 +1099,7 @@ impl ImageFamily {
         ImageFamily::ZImage,
         ImageFamily::Krea2,
         ImageFamily::QwenImage,
+        ImageFamily::FluxFill,
     ];
 
     /// Can the Image tab run this family yet?
@@ -1123,8 +1132,16 @@ impl ImageFamily {
             | ImageFamily::Flux2Klein9b
             | ImageFamily::ZImage
             | ImageFamily::Krea2
-            | ImageFamily::QwenImage => true,
+            | ImageFamily::QwenImage
+            | ImageFamily::FluxFill => true,
         }
+    }
+
+    /// A model that only fills a masked region — what Extend draws with — and
+    /// is never offered for generating, refining or hi-res: from noise or over a
+    /// whole picture it has nothing to fill. `Config::fill_model` finds one.
+    pub fn fill_only(self) -> bool {
+        matches!(self, ImageFamily::FluxFill)
     }
 
     /// The UNet families — the ones every setting in `user/settings.toml` was
@@ -1188,6 +1205,9 @@ impl ImageFamily {
             ImageFamily::Flux2Klein4b | ImageFamily::Flux2Klein9b => dit(4, 1.0),
             ImageFamily::Krea2 => dit(8, 1.0),
             ImageFamily::QwenImage => dit(20, 2.5),
+            // Black Forest Labs' reference for Fill: 28–50 steps at a distilled
+            // guidance of 30 (`flags`), CFG 1.
+            ImageFamily::FluxFill => dit(28, 1.0),
         }
     }
 
@@ -1204,6 +1224,10 @@ impl ImageFamily {
     pub fn flags(self) -> &'static [&'static str] {
         if self.is_unet() {
             &[]
+        } else if self == ImageFamily::FluxFill {
+            // Fill was distilled at a guidance of 30 — sd.cpp's default of 3.5
+            // is dev's, and on Fill it gives a washed-out, under-committed strip.
+            &["--diffusion-fa", "--guidance", "30"]
         } else {
             &["--diffusion-fa"]
         }
@@ -1299,7 +1323,10 @@ impl ImageFamily {
         };
         match self {
             ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl => &[SD_VAE],
-            ImageFamily::Flux | ImageFamily::FluxSchnell => &[FLUX_VAE, CLIP_L, T5XXL],
+            // Fill runs with Flux.1's own parts: its VAE and both encoders.
+            ImageFamily::Flux | ImageFamily::FluxSchnell | ImageFamily::FluxFill => {
+                &[FLUX_VAE, CLIP_L, T5XXL]
+            }
             ImageFamily::Flux2Klein4b => &[FLUX2_VAE, QWEN3_4B],
             ImageFamily::Flux2Klein9b => &[FLUX2_VAE, QWEN3_8B],
             ImageFamily::ZImage => &[FLUX_VAE, QWEN3_4B],
@@ -1321,6 +1348,7 @@ impl ImageFamily {
             ImageFamily::ZImage => "Z-Image",
             ImageFamily::Krea2 => "Krea 2",
             ImageFamily::QwenImage => "Qwen-Image",
+            ImageFamily::FluxFill => "FLUX.1 Fill",
         }
     }
 
@@ -1337,6 +1365,7 @@ impl ImageFamily {
             ImageFamily::ZImage => "z_image",
             ImageFamily::Krea2 => "krea2",
             ImageFamily::QwenImage => "qwen_image",
+            ImageFamily::FluxFill => "flux_fill",
         }
     }
 }
@@ -2414,6 +2443,13 @@ impl Config {
     /// Build the name→Profile registry: explicit templates first, then any
     /// discovered checkpoint not already referenced by a template, each with
     /// the user's per-model overrides laid on last.
+    /// The model Extend draws with: the first fill-only model whose files are
+    /// all present — FLUX.1 Fill today. Found, never picked: installing one is
+    /// what turns Extend on. `None` greys the feature out with a way to get one.
+    pub fn fill_model(&self) -> Option<Profile> {
+        self.registry().into_values().find(|p| p.family.fill_only() && p.exists)
+    }
+
     pub fn registry(&self) -> BTreeMap<String, Profile> {
         let tuned = crate::settings::ModelSettings::load_or_default(&self.user_dir());
         // Scanned again after `entries` did, which costs a directory walk: the

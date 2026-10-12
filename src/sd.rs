@@ -249,6 +249,48 @@ impl<'a> SdRunner<'a> {
         self.run(cmd, label)
     }
 
+    /// One Extend strip: a FLUX.1 Fill pass over `init` with `mask` white where
+    /// to draw. `p` is the Fill model's own profile (`Config::fill_model`), so
+    /// `base_cmd` brings its parts, its `--guidance 30` and the memory settings.
+    ///
+    /// Strength 1 and the profile's steps as they are — **not** `img2img_cmd`.
+    /// That function scales the schedule by 1/strength and floors the steps for
+    /// a *partial* redraw, and keeps strength under 1 because an ordinary model
+    /// at 1 throws the init away (invariant 3). A Fill model doesn't: the masked
+    /// image and the mask are its input beside the noise, so at 1 it draws the
+    /// strip from scratch *knowing* the rest — which is the whole point of it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fill(
+        &self,
+        p: &Profile,
+        prompt: &str,
+        negative: Option<&str>,
+        seed: i64,
+        init: &Path,
+        mask: &Path,
+        out: &Path,
+    ) -> Result<()> {
+        let cmd = self.fill_cmd(p, prompt, negative, seed, init, mask, out);
+        self.run(cmd, "extend")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fill_cmd(
+        &self,
+        p: &Profile,
+        prompt: &str,
+        negative: Option<&str>,
+        seed: i64,
+        init: &Path,
+        mask: &Path,
+        out: &Path,
+    ) -> Command {
+        let mut cmd = self.base_cmd(p, prompt, negative, seed, out, p.cfg_scale);
+        cmd.args(["-i", &path_str(init), "--mask", &path_str(mask)]);
+        cmd.args(["--strength", "1", "--steps", &p.steps.max(1).to_string()]);
+        cmd
+    }
+
     /// Video generation, which sd.cpp calls `vid_gen`.
     ///
     /// Writes a **PNG sequence** to `out_pattern`, which must carry a `%0Nd`
@@ -2183,6 +2225,32 @@ binary = "/opt/sd-cli"
         assert_eq!(a.iter().filter(|x| *x == "--ref-image-args").count(), 1);
         let pass = argv(&r.img2img_cmd(&p, "x", None, 1, Path::new("i.png"), Path::new("o.png"), 0.3, 10, 1.0, false, "x"));
         assert!(!pass.iter().any(|x| x == "-r"), "the profile's references must not reach a pass");
+    }
+
+    /// An Extend strip is a Fill pass at strength 1 on the Fill model's own
+    /// steps and guidance: no schedule scaling, no step floor, the mask and the
+    /// grown canvas, and never the references an ordinary txt2img would carry.
+    #[test]
+    fn a_fill_pass_is_full_strength_on_the_fill_models_own_settings() {
+        let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
+        let p = Profile {
+            model: PathBuf::from("/models/flux1-fill-dev-Q8_0.gguf"),
+            family: crate::config::ImageFamily::FluxFill,
+            bundled: Some(false),
+            steps: 28,
+            cfg_scale: 1.0,
+            references: vec!["a".into()],
+            ..Default::default()
+        };
+        let a = argv(&SdRunner::new(&cfg).fill_cmd(&p, "a meadow", None, 7, Path::new("c.png"), Path::new("m.png"), Path::new("o.png")));
+        assert_eq!(flag(&a, "--diffusion-model"), Some("/models/flux1-fill-dev-Q8_0.gguf"));
+        assert_eq!(flag(&a, "--strength"), Some("1"));
+        assert_eq!(flag(&a, "--steps"), Some("28"));
+        assert_eq!(flag(&a, "--guidance"), Some("30"));
+        assert_eq!(flag(&a, "--cfg-scale"), Some("1"));
+        assert_eq!(flag(&a, "-i"), Some("c.png"));
+        assert_eq!(flag(&a, "--mask"), Some("m.png"));
+        assert!(!a.iter().any(|x| x == "-r"), "a fill pass never carries references");
     }
 
     /// Redraw is img2img plus `--mask` and nothing else — the step floor and

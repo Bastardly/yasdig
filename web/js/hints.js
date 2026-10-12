@@ -118,6 +118,21 @@ const HELP = [
         + 'What you painted is always replaced in full; this is the blend around '
         + 'it. Raise it when a strong redraw leaves a visible edge, lower it to '
         + 'keep the change tight. 0 is a hard edge.' },
+  { ids: ['rdmodel'],
+    text: 'The model this picture\u2019s Refine, Refine area, Hi-res and Edit run '
+        + 'on. A saved picture starts at the model that made it; an upload at the '
+        + 'one picked on the Image tab. Extend always uses FLUX.1 Fill.' },
+  { ids: ['extend'],
+    text: 'Makes the canvas bigger on the sides you pick and draws what lies '
+        + 'beyond them, on any image. The picture you have stays exactly as it is; '
+        + 'only the new strips are drawn, blended in over Edge softness. Blank '
+        + 'prompt continues the background — type one to put something there. '
+        + 'Uses FLUX.1 Fill, from the Get models tab.' },
+  { ids: ['rescale'],
+    text: 'Edit with a new shape: pick sides and the model redraws the whole '
+        + 'picture to fill the bigger frame, following your instruction. Unlike '
+        + 'Extend nothing is kept pixel for pixel — it is a re-imagining, so faces '
+        + 'and small detail can change. Leave it unpicked for an ordinary Edit.' },
   { ids: ['rdcmp'],
     text: 'Which step Compare puts on the left. It starts on the step before the '
         + 'one on screen; pick the first to see how far the image has come.' },
