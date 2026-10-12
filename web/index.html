@@ -35,46 +35,6 @@
 
   <div class="layout" id="tab-image">
   <div class="card col-controls">
-    <!-- The action block is the *first* thing in a controls column, not the
-         last, and that is worth stating because it reads backwards: a form's
-         submit button belongs at its end. This is not a form that is filled in
-         and sent — the button is pressed once per image while everything under
-         it is set once a session, so ending the panel with it means scrolling
-         back up the column after every render. The stylesheet's `.gohead` rule
-         is the other half. -->
-    <div class="gohead">
-      <button id="go" class="btn btn-run btn-block">Generate</button>
-      <!-- Two halves of stopping, side by side when both show. *Cancel
-           generation* throws away the image in flight (a run goes on to its
-           next); *Stop job* finishes it and ends the run, so it only shows for
-           a run of more than one. Deliberately not in IDLE_LABELS, so setBusy
-           never touches either: a stop button that greys out for the length of
-           the thing it stops is furniture. The Jobs poll shows and hides them. -->
-      <div class="runstop">
-        <button id="cancelgen" class="btn btn-danger btn-block" hidden>Cancel generation</button>
-        <button id="stop" class="btn btn-danger btn-block" hidden>Stop job</button>
-      </div>
-      <p class="sub" id="prog"></p>
-      <!-- The run in flight, step by step. Driven by the Jobs poll (jobs.js). -->
-      <img id="livepreview" class="livepreview" alt="Live preview" hidden>
-      <div id="err" class="err"></div>
-
-
-
-    <!-- The seed, outside the folds: it is the one setting reached for between
-         renders — pinned from a result to keep a picture, reset to vary it — so
-         it stays beside the button. A pinned seed walks across a batch. -->
-    <div>
-      <label for="seed">Seed</label>
-      <!-- The button puts -1 back: a pinned seed is one click from the
-           result's seed, so getting back to random should be one too. -->
-      <div class="withbtn">
-        <input id="seed" type="number" value="-1">
-        <button type="button" id="seedrandom" class="btn" title="Back to -1: a new seed every image"
-                aria-label="Reset seed to -1">Reset</button>
-      </div>
-    </div>
-       </div>
 
     <!-- The panel is folds from here down, so the column is as long as what
          you are working on and no longer. Every summary carries a line saying
@@ -406,11 +366,54 @@
     <button type="button" id="savemodel" class="btn btn-block spaced">Save as defaults for this model</button>
     <p class="sub" id="savemodelmsg"></p>
 
+    <!-- The dock: what starts and stops the work, at the *foot* of the column
+         and sticky to the bottom of the window (`.dock`). It used to head the
+         column, and everything that comes and goes while a job runs — the
+         progress line, the preview, Cancel and Stop, an error — pushed the
+         Prompts fold up and down mid-edit. Here it grows upward over the folds
+         and nothing above it moves, while the button stays in reach however far
+         down the column you are. Top to bottom: what went wrong, the preview,
+         progress, the seed, stopping, starting. -->
+    <div class="dock">
+      <div id="err" class="err"></div>
+      <!-- The run in flight, step by step. Driven by the Jobs poll (jobs.js);
+           the fold shows only while there is a frame (`.previewfold`). -->
+      <details class="fold previewfold" id="fold-preview" open>
+        <summary>Preview</summary>
+        <img id="livepreview" class="livepreview" alt="Live preview" hidden>
+      </details>
+      <p class="sub" id="prog"></p>
+      <!-- The seed, outside the folds: it is the one setting reached for
+           between renders — pinned from a result to keep a picture, reset to
+           vary it — so it stays beside the button. A pinned seed walks across
+           a batch. -->
+      <div class="dockseed">
+        <label for="seed">Seed</label>
+        <!-- The button puts -1 back: a pinned seed is one click from the
+             result's seed, so getting back to random should be one too. -->
+        <div class="withbtn">
+          <input id="seed" type="number" value="-1">
+          <button type="button" id="seedrandom" class="btn" title="Back to -1: a new seed every image"
+                  aria-label="Reset seed to -1">Reset</button>
+        </div>
+      </div>
+      <!-- Two halves of stopping, side by side when both show. *Cancel
+           generation* throws away the image in flight (a run goes on to its
+           next); *Stop job* finishes it and ends the run, so it only shows for
+           a run of more than one. Deliberately not in IDLE_LABELS, so setBusy
+           never touches either: a stop button that greys out for the length of
+           the thing it stops is furniture. The Jobs poll shows and hides them. -->
+      <div class="runstop">
+        <button id="cancelgen" class="btn btn-danger btn-block" hidden>Cancel generation</button>
+        <button id="stop" class="btn btn-danger btn-block" hidden>Stop job</button>
+      </div>
+      <button id="go" class="btn btn-run btn-block">Generate</button>
+    </div>
   </div>
 
   <!-- The sliders that act on this image are in the viewer, not here: see the
        lightbox dialog at the bottom of the page. "View & adjust" in the action
-       row and clicking the image both open it. -->
+       row opens it; clicking the image opens the Refine dialog. -->
   <div class="col-result">
     <div id="result" class="result"></div>
   </div>
@@ -493,16 +496,6 @@
   <!-- ==================== Video ==================== -->
   <div class="layout" id="tab-video" hidden>
   <div class="card col-controls">
-    <div class="gohead">
-      <button id="vgo" class="btn btn-run btn-block">Generate clip</button>
-      <!-- Not the image tab's Stop, which finishes the image in flight and then
-           ends the run. There is only ever one clip in flight, so stopping it
-           means killing it — POST /cancel. -->
-      <button id="vstop" class="btn btn-danger btn-block" hidden>Stop</button>
-      <p class="sub" id="vprog"></p>
-      <div id="verr" class="err"></div>
-    </div>
-
     <!-- The Image tab's folds, the same pattern: each summary says what is
          inside (`syncVideoSummaries`), so a folded section still reads, and each
          remembers being open per browser (`rememberFolds`). -->
@@ -627,6 +620,19 @@
         <option value="disk">Stream from SSD (slower)</option>
       </select>
     </details>
+    <!-- The Image tab's dock, the same order: what went wrong, progress,
+         stopping, starting. -->
+    <div class="dock">
+      <div id="verr" class="err"></div>
+      <p class="sub" id="vprog"></p>
+      <!-- Not the image tab's Stop, which finishes the image in flight and then
+           ends the run. There is only ever one clip in flight, so stopping it
+           means killing it — POST /cancel. -->
+      <div class="runstop">
+        <button id="vstop" class="btn btn-danger btn-block" hidden>Stop</button>
+      </div>
+      <button id="vgo" class="btn btn-run btn-block">Generate clip</button>
+    </div>
   </div>
 
   <div class="col-result">
@@ -654,16 +660,6 @@
        chooses from what /convert-models offered. -->
   <div class="layout" id="tab-convert" hidden>
   <div class="card col-controls">
-    <div class="gohead">
-      <button id="cgo" class="btn btn-run btn-block">Convert</button>
-      <!-- Same Stop as the video tab and for the same reason: there is one child
-           process, so stopping it means killing it. A half-written GGUF is
-           removed by Engine::convert rather than left for discovery to find. -->
-      <button id="cstop" class="btn btn-danger btn-block" hidden>Stop</button>
-      <p class="sub" id="cprog"></p>
-      <div id="cerr" class="err"></div>
-    </div>
-
     <!-- Folds for the look the other tabs share; both open, since the form is
          short and both halves are needed for every conversion. -->
     <details id="cfold-file" class="fold" open>
@@ -682,6 +678,17 @@
       <p class="sub" id="csize"></p>
       <p class="sub" id="cdest"></p>
     </details>
+    <div class="dock">
+      <div id="cerr" class="err"></div>
+      <p class="sub" id="cprog"></p>
+      <!-- Same Stop as the video tab and for the same reason: there is one child
+           process, so stopping it means killing it. A half-written GGUF is
+           removed by Engine::convert rather than left for discovery to find. -->
+      <div class="runstop">
+        <button id="cstop" class="btn btn-danger btn-block" hidden>Stop</button>
+      </div>
+      <button id="cgo" class="btn btn-run btn-block">Convert</button>
+    </div>
   </div>
 
   <div class="col-result">
@@ -748,12 +755,12 @@
        entry, which has no defaults layer under it. -->
   <div class="layout" id="tab-settings" hidden>
   <div class="card col-controls">
-    <div class="gohead">
-      <button id="setsave" class="btn btn-run btn-block">Save settings</button>
-      <p class="sub" id="setmsg"></p>
-      <div id="seterr" class="err"></div>
-    </div>
     <div id="setform"></div>
+    <div class="dock">
+      <div id="seterr" class="err"></div>
+      <p class="sub" id="setmsg"></p>
+      <button id="setsave" class="btn btn-run btn-block">Save settings</button>
+    </div>
   </div>
 
   <div class="col-result">
@@ -836,21 +843,25 @@
     <!-- The sliders are built from the FILTERS table below rather than written
          out here: adding one is meant to be a row in a list, not a block of
          markup plus a matching entry in five functions. -->
-    <!-- The Outputs tab's Save, hidden on the other two: those have `#saveout`
-         in their action row, and the gallery has no action row to put one in.
-         Neutral rather than amber — this spends no GPU time to speak of. -->
-    <button type="button" id="lbsave" class="btn" hidden>Save as new output</button>
-    <!-- The Outputs tab's way into the Refine dialog: the saved file becomes
-         the Image tab's result (`/outputs/to-image`), to refine, extend or edit.
-         Neutral: opening it spends nothing; the dialog's buttons do. -->
-    <button type="button" id="lbrefine" class="btn" hidden
-      title="Open this picture on the Image tab, in the Refine dialog. It opens the saved file — save slider changes first to keep them.">Refine &amp; extend…</button>
     <div id="lbsaved" class="meta"></div>
     <div id="lbsliders"></div>
-    <!-- In the panel rather than in the result block, because while this dialog
-         is modal the result block is behind it and an error written there is an
-         error nobody reads. -->
-    <div id="lberr" class="err"></div>
+    <!-- The dock, as on every panel with a main action — here only the
+         Outputs tab's, since the Image tab's Save is in its action row (both
+         buttons are hidden there, and an empty dock hides itself). -->
+    <div class="dock">
+      <!-- In the panel rather than in the result block, because while this
+           dialog is modal the result block is behind it and an error written
+           there is an error nobody reads. -->
+      <div id="lberr" class="err"></div>
+      <!-- The Outputs tab's way into the Refine dialog: the saved file becomes
+           the Image tab's result (`/outputs/to-image`), to refine, extend or
+           edit. Neutral: opening it spends nothing; the dialog's buttons do. -->
+      <button type="button" id="lbrefine" class="btn btn-block" hidden
+        title="Open this picture on the Image tab, in the Refine dialog. It opens the saved file — save slider changes first to keep them.">Refine &amp; extend…</button>
+      <!-- The Outputs tab's Save, and this panel's one amber button: keeping
+           the edit is what the viewer is for there. -->
+      <button type="button" id="lbsave" class="btn btn-run btn-block" hidden>Save as new output</button>
+    </div>
   </div>
   <div class="lbview fit" id="lbview">
     <img id="lbimg" alt="full size result" draggable="false">
@@ -866,14 +877,16 @@
      form is how you know to cancel. Opened from Refine… in the result's action
      row. -->
 <dialog id="redraw">
+  <!-- The Image tab's shape: what every pass shares at the top, a fold per
+       tool, and the dock — the main button, Cancel, progress, the preview and
+       errors — at the foot. Each summary says what is inside
+       (`syncDialogSummaries`), so a folded tool still reads. -->
   <div class="lbside">
     <div class="posthead"><b>Refine</b></div>
     <div class="lbzoom">
       <button type="button" id="rdfit" class="btn btn-choice">Fit</button>
       <button type="button" id="rdfull" class="btn btn-choice">1:1</button>
     </div>
-    <p class="sub">With nothing painted, Refine works on the whole image. Paint
-      over an area to refine just that. Right-drag erases; Space+drag pans at 1:1.</p>
     <!-- Only for a picture opened from Outputs (Refine & extend…), whose
          maker is unknown — an upload — or may not be the one to finish with.
          Sets the model every pass below runs on (`/image/model`). -->
@@ -881,110 +894,139 @@
       <label for="rdmodel">Refine with</label>
       <select id="rdmodel"></select>
     </div>
+    <!-- Outside the folds: Refine, Edit and Extend all read it. -->
     <label for="rpprompt">Prompt for this pass</label>
     <prompt-box>
       <textarea id="rpprompt" rows="3" placeholder="blank uses this image's own prompt"></textarea>
     </prompt-box>
-    <!-- One box, two numbers: the label says which. Whole image mirrors the
-         Refine pass fold's strength; area keeps its own (redraw.js). -->
-    <div class="rdrow">
-      <label for="rpstrength" id="rpstrengthlabel">Strength (whole image)</label>
-      <input id="rpstrength" type="number" step="0.05" min="0.05" max="0.95" value="0.5">
-    </div>
-    <div class="slider">
-      <div class="head"><label for="rpsoft">Edge softness</label><span class="val" id="rpsoftval"></span></div>
-      <input id="rpsoft" type="range" min="0" max="64" step="1" value="16">
-    </div>
-    <div class="slider">
-      <div class="head"><label for="rpbrush">Brush</label><span class="val" id="rpbrushval"></span></div>
-      <input id="rpbrush" type="range" min="4" max="200" step="1" value="40">
-    </div>
-    <div class="redrawtools">
-      <button type="button" id="rperase" class="btn btn-choice">Eraser</button>
-      <button type="button" id="rpclear" class="btn">Clear</button>
-    </div>
-    <button type="button" id="redrawgo" class="btn btn-run btn-block" disabled>Refine image</button>
+
+    <details id="rdfold-refine" class="fold" open>
+      <summary>Refine <span class="foldstate" id="rdsum-refine"></span></summary>
+      <p class="sub">With nothing painted, Refine works on the whole image. Paint
+        over an area to refine just that. Right-drag erases; Space+drag pans at 1:1.</p>
+      <!-- One box, two numbers: the label says which. Whole image mirrors the
+           Refine pass fold's strength; area keeps its own (redraw.js). -->
+      <div class="rdrow">
+        <label for="rpstrength" id="rpstrengthlabel">Strength (whole image)</label>
+        <input id="rpstrength" type="number" step="0.05" min="0.05" max="0.95" value="0.5">
+      </div>
+      <div class="slider">
+        <div class="head"><label for="rpsoft">Edge softness</label><span class="val" id="rpsoftval"></span></div>
+        <input id="rpsoft" type="range" min="0" max="64" step="1" value="16">
+      </div>
+      <div class="slider">
+        <div class="head"><label for="rpbrush">Brush</label><span class="val" id="rpbrushval"></span></div>
+        <input id="rpbrush" type="range" min="4" max="200" step="1" value="40">
+      </div>
+      <div class="redrawtools">
+        <button type="button" id="rperase" class="btn btn-choice">Eraser</button>
+        <button type="button" id="rpclear" class="btn">Clear</button>
+      </div>
+    </details>
+
     <!-- Change the whole picture by instruction, with no painting: the image
          itself goes to the model as reference 1, the prompt says what to change.
-         Only for a model that takes references (`can_edit`). -->
-    <button type="button" id="rdedit" class="btn btn-run btn-block" hidden>Edit</button>
-    <!-- Edit's own sides, apart from Extend's below: the model redraws the
-         whole picture in the grown shape, nothing pasted back. Picking one
-         turns the button above into "Edit and rescale". The same markup and
-         code as Extend's set (`sideSet` in redraw.js), so the two can't drift. -->
-    <div id="rdeditrescale" hidden>
+         The whole fold shows only for a model that takes references
+         (`can_edit`). Neutral, not amber: the amber is the docked Refine. -->
+    <details id="rdfold-edit" class="fold" hidden>
+      <summary>Edit <span class="foldstate" id="rdsum-edit"></span></summary>
+      <button type="button" id="rdedit" class="btn btn-block">Edit</button>
+      <!-- Edit's own sides, apart from Extend's: the model redraws the whole
+           picture in the grown shape, nothing pasted back. Picking one turns
+           the button into "Edit and rescale". The same markup and code as
+           Extend's set (`sideSet` in redraw.js), so the two can't drift. -->
       <p class="sub rdsideshead"><label data-help="rescale">Rescale with Edit</label> — redraws the
         whole picture in the new shape</p>
       <div class="rdsides" id="rdeditsides">
-      <button type="button" class="btn btn-choice" data-side="left" title="Rescale left">←</button>
-      <button type="button" class="btn btn-choice" data-side="top" title="Rescale up">↑</button>
-      <button type="button" class="btn btn-choice" data-side="bottom" title="Rescale down">↓</button>
-      <button type="button" class="btn btn-choice" data-side="right" title="Rescale right">→</button>
-      <select data-amount title="How far each chosen side grows">
-        <option value="128">128 px</option>
-        <option value="256" selected>256 px</option>
-        <option value="384">384 px</option>
-        <option value="512">512 px</option>
-      </select>
+        <button type="button" class="btn btn-choice" data-side="left" title="Rescale left">←</button>
+        <button type="button" class="btn btn-choice" data-side="top" title="Rescale up">↑</button>
+        <button type="button" class="btn btn-choice" data-side="bottom" title="Rescale down">↓</button>
+        <button type="button" class="btn btn-choice" data-side="right" title="Rescale right">→</button>
+        <select data-amount title="How far each chosen side grows">
+          <option value="128">128 px</option>
+          <option value="256" selected>256 px</option>
+          <option value="384">384 px</option>
+          <option value="512">512 px</option>
+        </select>
       </div>
       <p class="sub" id="rdeditnote"></p>
-    </div>
-    <button type="button" id="rdcancel" class="btn btn-danger btn-block" hidden>Cancel generation</button>
+    </details>
+
     <!-- Upscale: bigger with no diffusion — FSR or an upscaler model. Unlike
          Hi-res it re-draws nothing, so it can't undo a refine: last for a bigger
          file, or first for a refine at the new size. Whole-image, so it waits
-         while something is painted. Neutral: the amber is the Refine button's. -->
-    <div class="lbgroup">Upscale</div>
-    <div class="rdupscale">
-      <select id="rdfactor" title="How much bigger">
-        <option value="1.5">1.5×</option>
-        <option value="2" selected>2×</option>
-        <option value="3">3×</option>
-        <option value="4">4×</option>
-      </select>
-      <select id="rdupscaler" title="FSR is instant; a model is slower and sharper"></select>
-    </div>
-    <button type="button" id="rdupscale" class="btn btn-block">Upscale</button>
-    <p class="sub" id="rdupnote"></p>
+         while something is painted. -->
+    <details id="rdfold-upscale" class="fold">
+      <summary>Upscale <span class="foldstate" id="rdsum-upscale"></span></summary>
+      <div class="rdupscale">
+        <select id="rdfactor" title="How much bigger">
+          <option value="1.5">1.5×</option>
+          <option value="2" selected>2×</option>
+          <option value="3">3×</option>
+          <option value="4">4×</option>
+        </select>
+        <select id="rdupscaler" title="FSR is instant; a model is slower and sharper"></select>
+      </div>
+      <button type="button" id="rdupscale" class="btn btn-block">Upscale</button>
+      <p class="sub" id="rdupnote"></p>
+    </details>
+
     <!-- Extend: grow the canvas on the chosen sides and draw what's beyond them
          with FLUX.1 Fill, on any image — it turns on by itself once a Fill
          model is installed. Uses this dialog's prompt (blank continues the
-         background) and edge softness. Whole-image, like Upscale. -->
-    <div class="lbgroup"><label data-help="extend">Extend</label></div>
-    <p class="sub" id="rdneedsfill" hidden>Needs FLUX.1 Fill, a model trained to
-      continue a picture past its edges.
-      <button type="button" id="rdgetfill" class="btn">Get models…</button></p>
-    <div class="rdsides" id="rdextendsides">
-      <button type="button" class="btn btn-choice" data-side="left" title="Extend left">←</button>
-      <button type="button" class="btn btn-choice" data-side="top" title="Extend up">↑</button>
-      <button type="button" class="btn btn-choice" data-side="bottom" title="Extend down">↓</button>
-      <button type="button" class="btn btn-choice" data-side="right" title="Extend right">→</button>
-      <select data-amount title="How far each chosen side grows">
-        <option value="128">128 px</option>
-        <option value="256" selected>256 px</option>
-        <option value="384">384 px</option>
-        <option value="512">512 px</option>
-      </select>
-    </div>
-    <button type="button" id="rdextendgo" class="btn btn-block">Extend</button>
-    <p class="sub" id="rdextendnote"></p>
-    <p class="sub" id="rdprog"></p>
-    <img class="livepreview" alt="Live preview" hidden>
-    <div id="rperr" class="err"></div>
-    <div class="lbgroup">History</div>
-    <p class="sub">Every pass is a step. Click one to go back to it; Ctrl+Z and
-      Ctrl+Shift+Z step through. A new pass from an earlier step replaces the
-      ones after it.</p>
-    <!-- Compare, beside the step it puts on the left. The whole row is hidden
-         with only one step, since there is nothing to compare with. -->
-    <div id="rdcmprow" hidden>
-      <label for="rdcmp">Compare with</label>
-      <div class="rdcmp">
-        <select id="rdcmp"></select>
-        <button type="button" id="rdcompare" class="btn btn-choice" title="Before and after, split by a line you drag (C)">Compare</button>
+         background) and the Refine fold's edge softness. Whole-image. -->
+    <details id="rdfold-extend" class="fold">
+      <summary><label data-help="extend">Extend</label> <span class="foldstate" id="rdsum-extend"></span></summary>
+      <p class="sub" id="rdneedsfill" hidden>Needs FLUX.1 Fill, a model trained to
+        continue a picture past its edges.
+        <button type="button" id="rdgetfill" class="btn">Get models…</button></p>
+      <div class="rdsides" id="rdextendsides">
+        <button type="button" class="btn btn-choice" data-side="left" title="Extend left">←</button>
+        <button type="button" class="btn btn-choice" data-side="top" title="Extend up">↑</button>
+        <button type="button" class="btn btn-choice" data-side="bottom" title="Extend down">↓</button>
+        <button type="button" class="btn btn-choice" data-side="right" title="Extend right">→</button>
+        <select data-amount title="How far each chosen side grows">
+          <option value="128">128 px</option>
+          <option value="256" selected>256 px</option>
+          <option value="384">384 px</option>
+          <option value="512">512 px</option>
+        </select>
       </div>
+      <button type="button" id="rdextendgo" class="btn btn-block">Extend</button>
+      <p class="sub" id="rdextendnote"></p>
+    </details>
+
+    <details id="rdfold-history" class="fold" open>
+      <summary>History <span class="foldstate" id="rdsum-history"></span></summary>
+      <p class="sub">Every pass is a step. Click one to go back to it; Ctrl+Z and
+        Ctrl+Shift+Z step through. A new pass from an earlier step replaces the
+        ones after it.</p>
+      <!-- Compare, beside the step it puts on the left. The whole row is hidden
+           with only one step, since there is nothing to compare with. -->
+      <div id="rdcmprow" hidden>
+        <label for="rdcmp">Compare with</label>
+        <div class="rdcmp">
+          <select id="rdcmp"></select>
+          <button type="button" id="rdcompare" class="btn btn-choice" title="Before and after, split by a line you drag (C)">Compare</button>
+        </div>
+      </div>
+      <ol id="rdhistory" class="rdhistory"></ol>
+    </details>
+
+    <!-- The Image tab's dock, in its order. The main button is the mask's:
+         nothing painted is "Refine image", painted is "Refine area". -->
+    <div class="dock">
+      <div id="rperr" class="err"></div>
+      <details class="fold previewfold" id="rdfold-preview" open>
+        <summary>Preview</summary>
+        <img class="livepreview" alt="Live preview" hidden>
+      </details>
+      <p class="sub" id="rdprog"></p>
+      <div class="runstop">
+        <button type="button" id="rdcancel" class="btn btn-danger btn-block" hidden>Cancel generation</button>
+      </div>
+      <button type="button" id="redrawgo" class="btn btn-run btn-block" disabled>Refine image</button>
     </div>
-    <ol id="rdhistory" class="rdhistory"></ol>
   </div>
   <div class="lbview fit rdview" id="rdview">
     <img id="rdimg" alt="image being redrawn" draggable="false">

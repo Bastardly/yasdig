@@ -723,16 +723,18 @@ export function render(data) {
     actions += `<select id="upfactor" title="Upscale before the hi-res pass">${upOptions()}</select>
       <button id="hires" class="btn btn-run">Hi-res pass</button>`;
   }
+  // The order the work is done in: enlarge (Hi-res, above), finish (Refine…),
+  // grade (View & adjust), keep (Save). Neutral: opening the dialog spends
+  // nothing; its own buttons do. Clicking the image opens it too.
+  actions += '<button id="redrawopen" class="btn">Refine…</button>';
+  // The sliders are behind this button, and it is the only *lossless* grade:
+  // it re-filters the retained raw, where the Outputs viewer's sliders stack on
+  // pixels that already carry one.
+  actions += '<button id="viewadjust" class="btn">View &amp; adjust</button>';
   // Always offered, including for a plain generate — a base render can be worth
   // keeping too. Only generations are archived automatically; this is how a
   // refined or hi-res image gets kept.
   actions += '<button id="saveout" class="btn">Save to output</button>';
-  // The sliders are behind this button, so it has to be a button. Clicking the
-  // image opens the same viewer, but an affordance nobody can see is a feature
-  // nobody finds — and the sliders used to be visible furniture.
-  actions += '<button id="viewadjust" class="btn">View &amp; adjust</button>';
-  // Neutral: opening the dialog spends nothing; its own buttons do.
-  actions += '<button id="redrawopen" class="btn">Refine…</button>';
 
   // The prompt as it was actually conditioned. Shown only when it differs from
   // the box, which happens for exactly three reasons: a `{variable}` was drawn —
@@ -755,7 +757,7 @@ export function render(data) {
     ${actions ? `<div class="actions">${actions}</div>` : ''}
     <div id="saved" class="meta"></div>
     <div id="rerr" class="err"></div>
-    <img src="${S.currentSrc}" alt="result" title="Click to open the viewer and post-process">
+    <img src="${S.currentSrc}" alt="result" title="Click to refine, edit, extend or upscale">
     <div class="meta"><b>${data.width}×${data.height}</b> · seed
       <b id="seedval" class="pin" title="Put this seed in the box, to generate it again">${data.seed}</b>
       · total <b>${total} ms</b>${tags}</div>
@@ -763,7 +765,9 @@ export function render(data) {
     <div class="bars">${bars}</div>${cached}
     `;
 
-  P('result').querySelector('img').addEventListener('click', () => showFullSize(S.currentSrc));
+  // The picture opens the Refine dialog: finishing it is what a click on it is
+  // for. Grading is View & adjust's.
+  P('result').querySelector('img').addEventListener('click', () => openRedraw(data));
   $('redrawopen').addEventListener('click', () => openRedraw(data));
   if ($('hires')) $('hires').addEventListener('click', hires);
   if ($('upfactor')) {

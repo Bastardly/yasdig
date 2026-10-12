@@ -1104,7 +1104,7 @@ sliders live, and **←** / **→** step to the previous and next image with the
 left up. A focused slider keeps its own arrow keys, so click the picture to hand them
 back to the gallery.
 
-**Save as new output**, in the viewer's panel, keeps the edit as a new file beside the
+**Save as new output**, at the bottom of the viewer's panel, keeps the edit as a new file beside the
 original. It never overwrites: an output can descend from a refine, and those aren't
 archived, so the pixels you started from exist nowhere else.
 
@@ -1141,9 +1141,12 @@ the Image tab.
 
 **Hi-res pass** above the result enlarges it and adds detail at the new size — do that
 first, since it re-draws the whole picture lightly and would partly undo a refine made
-before it. **Refine…** beside it opens the one place an image is finished: a dialog laid
-out like the viewer, with Fit and **1:1** (Space+drag pans), a prompt box, the live
-preview and the image's **History**. What its main button does depends on the mask:
+before it. **Refine…** beside it — or a click on the picture — opens the one place an
+image is finished: a dialog laid out like a tab, with Fit and **1:1** (Space+drag pans)
+and a prompt box at the top, a fold per tool (Refine, Edit, Upscale, Extend, History),
+and the live preview and the main button at the bottom. The action row reads Hi-res ·
+Refine… · View & adjust · Save, the order you'd use them. What the main button does
+depends on the mask:
 
 - **Nothing painted — Refine image.** A light img2img pass over the whole picture, at
   the Refine pass's steps and strength: detail and texture rather than new content.
@@ -1244,9 +1247,11 @@ smaller `hires_max_side` may say the image is already past its budget.
 
 ### Batch and loop
 
-The panel at the foot of the controls column is about the *run* rather than the
-image — the Generate button itself is at the top of that column, where it is in
-reach however far you have scrolled the settings. Set **Images** to a number and
+The Generation fold is about the *run* rather than the image. The Generate button is
+in the bar pinned to the bottom of the window — with the seed, Cancel and Stop, the
+progress line and the live preview above it — so it is in reach however far you have
+scrolled the settings, and a job starting or finishing never moves the prompt you are
+typing in. Set **Images** to a number and
 the button says `Generate 4`; the images are produced one at a time and each
 appears as it lands, so you can watch the batch fill the work items strip rather
 than waiting for the lot. Tick **Keep going until stopped** and the button
@@ -1269,7 +1274,7 @@ The run belongs to the server, not the page: switch tabs, edit outputs in the vi
 (which never waits on the queue) or reload, and it carries on — the Image tab shows its
 newest image when you come back.
 
-While anything is rendering, the line under the buttons counts the steps as sd-cli
+While anything is rendering, the line in that bar counts the steps as sd-cli
 reports them — `Image 2/4 · Step 7/20 · 1.23s/it`, or `Loading weights 18/50 ·
 412.00MB/s` before the denoising starts. It is polled from `GET /jobs`, which is
 answered off the job queue, so it keeps moving during a render rather than arriving
@@ -1425,7 +1430,8 @@ is measured: 254 MB of VAE takes 2.07 s serialized against 0.53 s at four thread
 
 ### Postprocessing
 
-Ten sliders live in the **viewer** — press **View & adjust**, or click the picture.
+Ten sliders live in the **viewer** — press **View & adjust** (clicking the picture
+opens the Refine dialog instead).
 They work like a photo editor rather than a generation setting: drag one and the image
 re-filters under the cursor. There is no diffusion involved — the server re-runs the GPU
 filters on the unfiltered image it already retained — so a re-tune costs milliseconds

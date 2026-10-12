@@ -92,6 +92,7 @@
   --r-md: 8px;                     /* controls: buttons, fields */
   --r-lg: 12px;                    /* containers: cards, dialogs, the image */
   --line: 1px solid var(--ink-500);
+  --line-strong: 1px solid var(--ink-400); /* an edge that must read over moving content: the dock's top */
   --shadow-pop: 0 6px 20px rgba(0, 0, 0, .8);
   --scrim: rgba(0, 0, 0, .85);     /* the viewer's backdrop */
   --scrim-soft: rgba(0, 0, 0, .7); /* the picker's, and the close button's bed */
@@ -132,6 +133,14 @@ body {
   display: flex; padding: var(--sp-4);
   flex-direction: column;
 }
+/* A modal dialog — the viewer, Refine, References, Jobs, the picker — freezes
+   the page behind it: a modal makes that page inert to clicks, not to the
+   wheel, so scrolling past the end of a dialog's panel scrolled the page
+   underneath. Keyed on `:modal`, so every dialog opened with showModal gets it
+   with no code. The gutter is kept so the page doesn't shift sideways by a
+   scrollbar's width when it disappears. */
+html { scrollbar-gutter: stable; }
+html:has(dialog:modal) { overflow: hidden; }
 
 /* `hidden` is only `display: none` from the UA stylesheet, and *any* author
    rule that sets `display` beats it — author styles win over UA styles whatever
@@ -213,9 +222,8 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .btn-choice { background: var(--ink-700); color: var(--text-dim); padding: var(--sp-2) var(--sp-5); }
 .btn-choice:hover { color: var(--text); }
 .btn-choice.active { background: var(--state); color: var(--on-state); border-color: var(--state); }
-/* The one button per panel that starts the work. It sits at the *head* of its
-   controls column — see `.gohead` — so the top margin is what parts it from the
-   Stop under it rather than from the controls above it. */
+/* The one button per panel that starts the work, at the foot of its controls
+   column — see `.dock`, which spaces it from what is above. */
 .btn-block { display: flex; width: 100%; margin: 0; padding: var(--sp-3); font-size: var(--fs-body); }
 /* Last, and deliberately: :disabled and :hover are the same specificity, so
    source order is what decides which a greyed-out button under the pointer
@@ -262,23 +270,51 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 /* Its own class, not `.layout > .card`: the work items panel is a `.card` and
    a direct child too, and would take the controls' cap. */
 .col-controls { flex: 1 1 var(--col-controls); max-width: var(--col-controls-max); }
-/* The first child of every controls column: the button that starts the work,
-   its Stop, the progress line and that panel's errors. Four ids per tab, one
-   rule, because the four panels differ in everything except this.
+/* The last child of every controls column with a main action, and of the
+   Refine dialog's panel: the button that starts the work, its Stop, the
+   progress line, the live preview and that panel's errors. One rule, because
+   the panels differ in everything except this.
 
-   At the head rather than at the foot, which reads backwards for anything
-   shaped like a form — a submit button belongs at the end of one. This is not a
-   form: it is filled in once and then pressed over and over, so the button is
-   the most-clicked thing in a column that is two screens tall, and ending the
-   column with it meant scrolling back up after every render. The prompt is the
-   other thing edited per image, which is why it stays directly under this and
-   the run settings did not come up with it.
+   At the foot and sticky, not at the head. At the head it was in reach, but
+   everything in it comes and goes while a job runs, and each change pushed the
+   Prompts fold below it up or down mid-edit. Sticky to the bottom of the
+   window it is still in reach however far down the column you are, and it
+   grows *upward*, over the folds, so nothing above it moves. An opaque
+   background a step darker than the card and a stronger line on top are what
+   hide the folds sliding under it — and set the bar apart from them.
+   The page scrolls, not the column, so the bar sticks to the window while the
+   column runs past it and rests at the column's end otherwise; the Refine
+   dialog's panel scrolls itself, and the same rule sticks to its bottom.
 
-   The rules are only the seams that move with it: no top margin on the button
-   that is now first (`.btn-block`'s exists to part it from the controls that
-   used to be above), and a hairline under the block so it reads as the panel's
-   head rather than as the first of the settings. */
-.gohead { border-bottom: var(--line); padding-bottom: var(--sp-3); margin-bottom: var(--sp-1); }
+   The negative side margins and padding carry the background out to the
+   card's edges, so a fold's text can't show past the bar's sides. */
+.dock {
+  position: sticky; bottom: 0; z-index: 1;
+  background: var(--ink-900); border-top: var(--line-strong);
+  margin: var(--sp-3) calc(-1 * var(--sp-4)) calc(-1 * var(--sp-4));
+  padding: var(--sp-2) var(--sp-4) var(--sp-4);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+/* An error, or the out-of-memory box with its log, can be long: it scrolls
+   inside the bar rather than pushing the button off the window. */
+.dock > .err { max-height: 40vh; overflow-y: auto; margin-top: var(--sp-2); }
+.dock > .err:empty { display: none; }
+.dock > .sub:empty { display: none; }
+.dock > .btn-block { margin-top: var(--sp-2); }
+/* A dock with nothing showing — the viewer on the Image tab, whose two buttons
+   are the Outputs tab's — is no bar at all, not an empty strip. */
+.dock:not(:has(> :not([hidden]):not(:empty))) { display: none; }
+/* The preview's fold shows only while there is a frame: jobs.js toggles every
+   `img.livepreview`, and an empty "Preview" heading would be a fold of
+   nothing. No border here — the bar's hairline is the edge. In the bar it is
+   capped by the window as well, since everything above it is still in view. */
+.previewfold { border-bottom: 0; padding: 0; }
+.previewfold:not(:has(img:not([hidden]))) { display: none; }
+.dock .livepreview { max-height: min(var(--preview-h), 35vh); }
+/* The seed, a row of its own beside the button it is reached for between. */
+.dockseed { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-2); }
+.dockseed label { margin: 0; }
+.dockseed .withbtn { flex: 1; }
 /* The live preview. sd.cpp's `proj` is 1/8 of the render, so it is scaled up
    smoothly — nearest-neighbour at 8× reads as a glitch, not as a preview. */
 .livepreview {
@@ -534,9 +570,8 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 }
 .lbzoom { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); }
 .lbzoom .btn { flex: 1; padding-left: 0; padding-right: 0; }
-/* Save, on the Outputs tab only. Full width, because it is the one action in a
-   panel that is otherwise all sliders. */
-#lbsave { width: 100%; margin-top: var(--sp-3); }
+/* The viewer's panel is square-cornered, so its dock is too. */
+#lightbox .dock { border-radius: 0; }
 #lbsaved:not(:empty) { margin-top: var(--sp-2); word-break: break-all; }
 /* min-width:0 because a flex item's default min-width is its content: a 3072 px
    image would otherwise refuse to let its pane shrink and shove the panel off
@@ -559,7 +594,6 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   padding: 2px var(--sp-3); font-size: var(--fs-display); line-height: 1.1;
   border-radius: var(--r-md); background: var(--scrim-soft); color: var(--text);
 }
-#lberr { margin-top: var(--sp-4); }
 
 /* ============================ Redraw ============================ */
 
@@ -574,6 +608,14 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .maskview { position: absolute; pointer-events: none; opacity: 0; transition: opacity .12s; }
 .rdview:hover .maskview, .maskview.stroking { opacity: 1; }
 #redraw .lbside > label, #redraw .rdrow { margin-top: var(--sp-3); }
+/* The panel is square-cornered, so its dock is too. */
+#redraw .dock { border-radius: 0; }
+/* Inside a panel that scrolls itself, sticky stops at the panel's *padding*
+   edge, which left a strip of scrolled content showing under the bar. Offset
+   by that padding, the bar meets the panel's real bottom. The tabs don't need
+   it: there the page scrolls, and the window has no padding. */
+.lbside > .dock { bottom: calc(-1 * var(--sp-4)); }
+#rdedit { margin-top: var(--sp-1); }
 .rdrow { display: flex; align-items: center; gap: var(--sp-3); }
 .rdrow label { margin: 0; flex: 1; }
 .rdrow input { width: 90px; }
@@ -747,13 +789,22 @@ a:hover { color: var(--accent-hi); }
 /* The out-of-memory box (`memory.js`): what a run that ran out of memory shows
    in place of its error text. The options are a two-column list — the button,
    and in a line why — so the cost of each is read before it is pressed. */
-.oombox { color: var(--text); white-space: normal; }
+/* A container, so the options follow the box's own width rather than the
+   window's: in a 300 px dialog panel (or a 420 px controls column) two columns
+   left the reason a few pixels wide, one word per line, and a wide window never
+   tripped the media query that used to decide it. */
+.oombox { color: var(--text); white-space: normal; container-type: inline-size; }
 .oomopts { display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-2) var(--sp-3);
            align-items: center; margin-top: var(--sp-3); }
 .oomopts .sub { margin: 0; }
 .oomlog { max-height: 240px; overflow: auto; font-family: var(--font-num); font-size: var(--fs-micro);
           color: var(--text-dim); white-space: pre-wrap; }
-@media (max-width: 899px) { .oomopts { grid-template-columns: 1fr; } }
+/* One column when narrow: each button, then in a line why — stacked, so the
+   reason is read before the next option. */
+@container (max-width: 520px) {
+  .oomopts { grid-template-columns: 1fr; row-gap: var(--sp-1); }
+  .oomopts .sub { margin-bottom: var(--sp-2); }
+}
 
 /* The credits line under every tab, and the way to the licence notices. */
 .powered { text-align: center; color: var(--text-dim); font-size: var(--fs-sm); margin: var(--sp-5) 0 var(--sp-4); }

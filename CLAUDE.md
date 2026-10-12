@@ -287,14 +287,15 @@ sidecar records paths, the wire carries names.
 
 ## The Image tab's folds
 
-Below the run panel, the controls column is all `<details class="fold">`: Prompts,
+Above the dock (*## The dock*), the controls column is all `<details class="fold">`: Prompts,
 Models (LoRAs included — they only fit the family they were trained on, so they sit
 with the model; above Generation, since what runs is decided before how it runs),
 Generation, After each generation, Image to image, Hi-res pass, Refine pass. The
 Video, Convert and Settings tabs use the same folds, so every tab reads alike; the
 Settings form's sections are folds in the Image tab's order (`SECTION` rows, with
-`SUB` headings inside one). *Save as defaults* and the seed stay outside them: the seed is reached for between
-renders (pinned from a result, reset to vary it), so it stays beside the button. Images
+`SUB` headings inside one). *Save as defaults* stays outside them, and the seed is in
+the dock: it is reached for between renders (pinned from a result, reset to vary it),
+so it stays beside the button. Images
 and *Keep going* are the last rows of Generation. There is no line
 summing up the run any more: the summaries say the same thing fold by fold.
 
@@ -327,6 +328,40 @@ Four things break silently:
   first option when nothing matches — 2.5 would read as 1×. `upOptions` and
   `setUpFactor` add the value when it isn't listed. The box clamps on `change`, not on
   `input`, so typing "2.5" isn't cut off at "2.".
+
+## The dock
+
+Every panel with a main action — Image, Video, Convert, Settings and the Refine
+dialog — ends in `<div class="dock">`, `position: sticky; bottom: 0`: top to bottom
+the error or out-of-memory box, the preview fold, the progress line, the seed (Image),
+`.runstop`, and the amber button. It used to head the column (`.gohead`), and
+everything in it comes and goes while a job runs, so each change pushed the Prompts
+fold up or down mid-edit. At the foot it grows upward over the folds and nothing
+above it moves, and the button is in reach however far down the column you are.
+The viewer (`#lightbox`) has one too, for the Outputs tab: *Save as new output*
+amber at the foot, *Refine & extend…* above it. Both are hidden on the Image tab,
+whose Save is in the action row, and a dock with nothing showing hides itself
+(`.dock:not(:has(> :not([hidden]):not(:empty)))`). Outputs, Get models and Help
+have no main action and no dock. The ids didn't
+change, so `jobs.js`, `busy.js` and `memory.js` never noticed.
+
+Three things break silently:
+
+- **It must stay the column's last child, with an opaque background.** Sticky
+  works because the *page* scrolls and the card is the containing block; a
+  scrolling column, or anything after the dock, and it stops sticking or floats
+  mid-column. The negative side margins carry the background to the card's
+  edges so a fold can't show past it. In the two dialogs the panel (`.lbside`)
+  scrolls itself, and sticky then stops at its *padding* edge — a strip of
+  content showed under the bar — so `.lbside > .dock` sticks at minus that
+  padding.
+- **The preview fold hides itself by CSS** (`.previewfold:not(:has(img:not([hidden])))`):
+  `jobs.js` toggles every `img.livepreview`, and nothing else knows the fold
+  exists. Its open state is remembered like any fold (`fold-preview`,
+  `rdfold-preview`).
+- **What can grow is capped**: the error box at 40vh (it scrolls inside the
+  bar), the preview at `min(--preview-h, 35vh)`. Uncapped, an out-of-memory log
+  pushes the button off the window — the one thing the bar exists to keep there.
 
 ## Image to image
 
@@ -1032,7 +1067,9 @@ one place an image is finished: the mask decides its main button (nothing painte
 the action row, not the dialog**: it sets the final size and re-diffuses the whole
 picture, partly undoing a refine made before it, so it is a step *before* finishing
 rather than one of its tools — it was in the dialog for a day and read wrong. The
-row is Hi-res (with its scale), Save, View & adjust and Refine…. **Upscale *is* in
+row is Hi-res (with its scale), Refine…, View & adjust and Save — the order the work
+is done in — and clicking the picture opens the dialog too (grading is View &
+adjust's). **Upscale *is* in
 the dialog** (`Engine::upscale`, `POST /upscale`, `Kind::Upscale`): `enlarge` — EASU
 or an upscaler model, the generate's first stage — over the image in hand, no
 diffusion. It draws nothing new, so it can't undo a refine and doesn't share Hi-res's
@@ -1166,6 +1203,12 @@ can't turn this one's Edit into "Edit and rescale" unasked.
 On the page, Compare shows an earlier step with `object-fit: contain`, because after
 an Extend it has another shape; a step records no offset, so it is shown whole rather
 than lined up.
+
+**The dialog is laid out like a tab**: Fit/1:1, *Refine with* and the prompt (which
+Refine, Edit and Extend all read) at the top; a fold per tool — Refine, Edit (hidden
+unless `can_edit`), Upscale, Extend, History — each remembered (`rememberFolds` on
+`#redraw`) and summarised by `syncDialogSummaries`, which `syncButtons` calls; and the
+dock at the foot with the mask-driven Refine button.
 
 `zoomPane` (`viewer.js`) is the viewer's Fit/1:1/pan, made a factory when the
 dialog became its second user: the centring rules (`expectNew` before a different
@@ -1425,7 +1468,9 @@ from the plain path), so section headings stand out of the white text without
 borrowing the action colour. Change them there, not per rule.
 
 **The action colour marks the one thing a controls panel is for: amber is the
-button at the head of the column, and nothing else.** Neutral is every other
+button in the column's dock, and nothing else.** (The Refine dialog's Edit is
+neutral for this reason: the docked Refine is that panel's amber; Hi-res above a
+result is the other exception, being that result's own main action.) Neutral is every other
 click; red stops or destroys something. On four of the five panels that button
 also spends GPU time, and the colour doubles as a warning about it — `Enlarge
 frames` and `Close` used to be the same blue, and a click here can cost minutes.

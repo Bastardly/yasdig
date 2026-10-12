@@ -304,9 +304,11 @@ export const TOPICS = [
     title: 'Refine',
     html: `
       <h2>Refine</h2>
-      <p>The one place an image is finished. Press <b>Refine…</b> beside the image.
+      <p>The one place an image is finished. Press <b>Refine…</b> beside the image, or click the image.
       The dialog shows the picture at Fit or <b>1:1</b> (hold <b>Space</b> to drag
-      it around), with a prompt box, the live preview and the image\u2019s History.</p>
+      it around), with a prompt box at the top, a section per tool (Refine, Edit,
+      Upscale, Extend, History) that folds away, and the live preview and the
+      Refine button at the bottom.</p>
       <h3>Whole image or an area — the mask decides</h3>
       ${table(['', 'What happens'], [
         ['Nothing painted', '<b>Refine image</b>: a light pass over the whole picture, at the Refine pass\u2019s steps and strength. Good for detail and texture.'],

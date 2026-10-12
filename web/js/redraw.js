@@ -1,4 +1,4 @@
-import { $, esc, numOr, post } from './dom.js';
+import { $, esc, numOr, post, rememberFolds } from './dom.js';
 import { S } from './state.js';
 import { isBusy, onIdle, setBusy, setIdle } from './busy.js';
 import { onJobs, runningJob, soonJobs } from './jobs.js';
@@ -70,6 +70,12 @@ function sideSet(root, onChange) {
       const gw = w + px * (sides.has('left') + sides.has('right'));
       const gh = h + px * (sides.has('top') + sides.has('bottom'));
       return `${w}×${h} → ${gw}×${gh}`;
+    },
+    // "← → 256 px" for a fold's summary, in the server's drawing order.
+    label() {
+      const arrows = { left: '←', right: '→', top: '↑', bottom: '↓' };
+      const picked = ['left', 'right', 'top', 'bottom'].filter((s) => sides.has(s));
+      return picked.length ? `${picked.map((s) => arrows[s]).join(' ')} ${amount.value} px` : '';
     },
     clear() { sides.clear(); set.sync(); },
     sync() {
@@ -334,8 +340,7 @@ function syncButtons() {
   }
   // Edit: only for a model that takes references (the image itself is the
   // first), whole-image like Upscale, and it needs an instruction to follow.
-  $('rdedit').hidden = !(live && shown.can_edit);
-  $('rdeditrescale').hidden = $('rdedit').hidden;
+  $('rdfold-edit').hidden = !(live && shown.can_edit);
   if (!isBusy('rdedit')) {
     const said = $('rpprompt').value.trim();
     $('rdedit').textContent = editSides.any() ? 'Edit and rescale' : 'Edit';
@@ -379,9 +384,26 @@ function syncButtons() {
     : !fold
       ? "blank: Refine uses this image's own prompt; Extend continues the background"
       : `blank: Refine uses the Refine pass prompt (${fold}); Extend continues the background`;
+  syncDialogSummaries();
   $('rdmodel').disabled = passRunning();
   $('rdcancel').hidden = !passRunning();
   for (const b of $('rdhistory').querySelectorAll('button')) b.disabled = passRunning();
+}
+
+// Every fold's summary says what is inside, the Image tab's rule, so a folded
+// tool still reads: what Refine will do, a rescale picked, the upscale, the
+// sides Extend will grow (or that it can't), how many steps there are.
+function syncDialogSummaries() {
+  const put = (id, text) => { $(id).textContent = text ? `— ${text}` : ''; };
+  const strength = $('rpstrength').value;
+  put('rdsum-refine', `${painted ? 'area painted' : 'whole image'} · ${strength}`);
+  const grown = shown ? editSides.note(shown.width, shown.height).split('→ ')[1] : '';
+  put('rdsum-edit', grown ? `rescale → ${grown}` : '');
+  const up = $('rdupscaler').selectedOptions[0]?.textContent ?? '';
+  put('rdsum-upscale', `${$('rdfactor').value}×${up ? ` ${up}` : ''}`);
+  put('rdsum-extend', fillReady() ? extendSides.label() : 'needs FLUX.1 Fill');
+  const n = shown?.history?.length ?? 0;
+  put('rdsum-history', n ? `${n} step${n === 1 ? '' : 's'}` : '');
 }
 
 // The Strength box shows the number for what the button will do. On a switch
@@ -641,6 +663,10 @@ export function initRedraw() {
   editSides = sideSet($('rdeditsides'), syncButtons);
   $('rdextendgo').addEventListener('click', extend);
   $('rdmodel').addEventListener('change', setModel);
+  // Open or folded, per fold and per browser, like every tab's folds.
+  rememberFolds($('redraw'));
+  $('rpstrength').addEventListener('input', syncDialogSummaries);
+  $('rdupscaler').addEventListener('change', syncDialogSummaries);
   $('rdgetfill').addEventListener('click', () => { $('redraw').close(); openGetModels('flux_fill'); });
   pane = zoomPane({
     view: $('rdview'), img: $('rdimg'), fit: $('rdfit'), full: $('rdfull'),

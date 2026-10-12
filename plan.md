@@ -133,14 +133,3 @@ Done: 3c, #4, #7, and #3/#3b on Klein (a References button in Generation; Edit i
 Refine dialog). Parked: #2 on `outpaintingV1`. Next candidates: Qwen-Image-Edit and
 FLUX.1 Kontext as families (they reuse the reference plumbing), or #5 comparison
 grids.
-
---- Cleanup 2 ---
-
-# General UI Change regarding main actions (THis is a WIP) - Here are the issue with the current layout.
-Currently, when having multiple jobs running, the preview image, cancelbutton and status text makes the prompt section jump up and down, which makes experimentation and prompt refinement harder.
-
-In the Refine dialog, the main action "Refine" is not places as the other main action like "Generate", "Save settings", "Convert" and "Generate clip". Also the preview image and OOM options are not placed the same place as it is in the Image tab menu.
-
-Refine dialog does not use <details> and <summery>
-
-After generating an image, the "View and adjust" should be placed after "Refine" since it is a post processing state. One may even argue, that it should be removed entirely from the iamge tab, and only used in outputs. And let clicking the generated image open the refine dialog instead.
