@@ -1061,7 +1061,8 @@ pub(crate) mod tests {
                 ("archive/data/1", vec![0u8; 32]),
                 ("archive/version", b"3\n".to_vec()),
             ]);
-            let path = tmp(&format!("zip-{wrapper:?}.pth"), &zip);
+            // Not `{wrapper:?}`: its quotes are a file name Windows refuses.
+            let path = tmp(&format!("zip-{}.pth", wrapper.unwrap_or("bare")), &zip);
             let w = load(&path, true).unwrap();
             assert_eq!(w.shape("a.weight"), Some(&[2, 3][..]), "{wrapper:?}");
             assert_eq!(w.get("a.weight").unwrap(), &[1., 2., 3., 4., 5., 6.]);

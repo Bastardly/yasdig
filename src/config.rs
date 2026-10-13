@@ -1589,6 +1589,44 @@ impl VideoFamily {
     }
 }
 
+/// `fs::canonicalize` without Windows' verbatim prefix. There, canonicalizing
+/// gives `\\?\C:\…`, a path that turns off Windows' own parsing: it ends up in
+/// every message and every path handed to sd-cli, and a `/` joined onto it
+/// (`vae/x.safetensors`, a name from the page) is no longer a separator. An
+/// ordinary drive path comes back as `C:\…`; a UNC share, or a path past the
+/// 260-character limit that only works verbatim, is left as it is — the `dunce`
+/// crate's rule, in a few lines. Identical to `fs::canonicalize` elsewhere.
+pub fn plain_canonicalize(p: &Path) -> std::io::Result<PathBuf> {
+    let c = std::fs::canonicalize(p)?;
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut parts = c.components();
+        if let Some(Component::Prefix(pre)) = parts.next() {
+            if let Prefix::VerbatimDisk(drive) = pre.kind() {
+                // The rest starts at the root, so joining it keeps the drive.
+                let plain = PathBuf::from(format!("{}:\\", drive as char)).join(parts.as_path());
+                if plain.as_os_str().len() < 260 {
+                    return Ok(plain);
+                }
+            }
+        }
+    }
+    Ok(c)
+}
+
+/// For tests: an empty folder under the temp dir, named for `tag` and this
+/// process, as `Config::load` will see it — canonicalized. On Windows the temp
+/// dir is the 8.3 short form (`RUNNER~1`) and canonicalizing expands it, so a
+/// path a test expects has to start from the same spelling.
+#[cfg(test)]
+pub fn fresh_test_root(tag: &str) -> PathBuf {
+    let root = std::env::temp_dir().join(format!("{tag}-{}", std::process::id()));
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::create_dir_all(&root).unwrap();
+    plain_canonicalize(&root).unwrap()
+}
+
 /// Do two paths name the same file?
 ///
 /// Canonicalized when both exist, so `models/video/x.gguf` and an absolute path
@@ -2002,7 +2040,7 @@ impl Config {
             Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
             _ => PathBuf::from("."),
         };
-        cfg.base_dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+        cfg.base_dir = plain_canonicalize(&dir).unwrap_or(dir);
 
         // Before the registry, because the registry reads it. A first run seeds
         // it from the old `[defaults]` block so an install that had tuned that
@@ -2867,9 +2905,7 @@ t5xxl = "v/umt5.gguf"
     fn discovery_finds_a_model_and_an_entry_shadows_it() {
         // Distinct from the other temp dirs in this file: `cargo test` runs the
         // suite in one process, so a pid alone is not a unique name.
-        let root =
-            std::env::temp_dir().join(format!("yasdig-cfg-discover-{}", std::process::id()));
-        std::fs::remove_dir_all(&root).ok();
+        let root = crate::config::fresh_test_root("yasdig-cfg-discover");
         let video = root.join("models").join("video");
         let dit = video.join("diffusion_models").join("wan5b.safetensors");
         fake_model(
@@ -2911,7 +2947,7 @@ t5xxl = "v/umt5.gguf"
         // Now an entry naming the same file. One model, tuned, not discovered.
         let with_entry = format!(
             "{bare}\n[[video]]\nname = \"tuned\"\nfamily = \"wan22_ti2v_5b\"\n\
-             diffusion_model = \"{}\"\nvae = \"{}\"\nt5xxl = \"{}\"\nsteps = 4\n",
+             diffusion_model = '{}'\nvae = '{}'\nt5xxl = '{}'\nsteps = 4\n",
             dit.display(),
             video.join("vae").join("wan2.2_vae.safetensors").display(),
             video
@@ -2982,8 +3018,7 @@ t5xxl = "v/umt5.gguf"
     /// stay the Video tab's.
     #[test]
     fn an_image_family_takes_its_vae_from_the_video_dir() {
-        let root = std::env::temp_dir().join(format!("yasdig-cfg-krea-{}", std::process::id()));
-        std::fs::remove_dir_all(&root).ok();
+        let root = crate::config::fresh_test_root("yasdig-cfg-krea");
         let models = root.join("models");
         fake_model(
             &models.join("diffusion_models").join("krea2.safetensors"),
@@ -3028,9 +3063,7 @@ t5xxl = "v/umt5.gguf"
 
     #[test]
     fn a_z_image_is_assembled_and_arrives_on_its_recipe() {
-        let root =
-            std::env::temp_dir().join(format!("yasdig-cfg-zimage-{}", std::process::id()));
-        std::fs::remove_dir_all(&root).ok();
+        let root = crate::config::fresh_test_root("yasdig-cfg-zimage");
         let models = root.join("models");
         fake_model(
             &models.join("zimage.safetensors"),

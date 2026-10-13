@@ -56,7 +56,7 @@ pub fn config_path(explicit: Option<&str>) -> Result<PathBuf> {
     let exe = std::env::current_exe().context("finding this executable's folder")?;
     // The canonical path, so a symlink to the executable makes its folders
     // where the real file is rather than beside the link.
-    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let exe = crate::config::plain_canonicalize(&exe).unwrap_or(exe);
     // A build still inside this checkout's `target/` belongs to the checkout,
     // whatever directory it was started from — an IDE's run button or
     // `cargo run` from a subfolder. Without this the exe-folder rule below laid

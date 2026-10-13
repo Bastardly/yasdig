@@ -3947,8 +3947,7 @@ mod tests {
     /// Parsed here, with a model of each shape.
     #[test]
     fn the_models_listing_is_json_with_every_field_where_it_belongs() {
-        let root = std::env::temp_dir().join(format!("yasdig-models-json-{}", std::process::id()));
-        std::fs::remove_dir_all(&root).ok();
+        let root = crate::config::fresh_test_root("yasdig-models-json");
         let models = root.join("models");
         std::fs::create_dir_all(&models).unwrap();
         let write = |name: &str, tensors: &str| {

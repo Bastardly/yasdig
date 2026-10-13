@@ -1565,6 +1565,12 @@ fn drain(stream: impl Read, mut on_progress: impl FnMut(&str)) -> VecDeque<Strin
 mod tests {
     use super::*;
 
+    /// `base` joined with `rest` the way the code joins them — `\` on Windows,
+    /// so an expected path is spelled the way the command will spell it.
+    fn joined(base: &str, rest: &str) -> String {
+        Path::new(base).join(rest).display().to_string()
+    }
+
     /// A config and a video model, from the same TOML the user writes. Parsing
     /// it rather than building the struct by hand is deliberate: it means these
     /// tests would also catch a field that stopped being readable from
@@ -1630,16 +1636,16 @@ flow_shift = 3.0
 
         // `vid_gen` is the literal, not `[sd].mode` — that one says `img_gen`.
         assert_eq!(flag(&a, "-M"), Some("vid_gen"));
-        assert_eq!(flag(&a, "--diffusion-model"), Some("/models/low.gguf"));
+        assert_eq!(flag(&a, "--diffusion-model"), Some(joined("/models", "low.gguf").as_str()));
         assert_eq!(
             flag(&a, "--high-noise-diffusion-model"),
-            Some("/models/high.gguf")
+            Some(joined("/models", "high.gguf").as_str())
         );
         assert_eq!(
             flag(&a, "--vae"),
-            Some("/models/wan_2.1_vae.safetensors")
+            Some(joined("/models", "wan_2.1_vae.safetensors").as_str())
         );
-        assert_eq!(flag(&a, "--t5xxl"), Some("/models/umt5.gguf"));
+        assert_eq!(flag(&a, "--t5xxl"), Some(joined("/models", "umt5.gguf").as_str()));
         assert_eq!(flag(&a, "-p"), Some("a lovely cat"));
         assert_eq!(flag(&a, "-n"), Some("blurry"));
         assert_eq!(flag(&a, "-i"), Some("/work/first.png"));
@@ -2292,7 +2298,7 @@ lora_dir = "loras""#,
             flag(&a, "-p"),
             Some("a lovely cat<lora:low4:1><lora:|high_noise|high4:1>")
         );
-        assert_eq!(flag(&a, "--lora-model-dir"), Some("/models/loras"));
+        assert_eq!(flag(&a, "--lora-model-dir"), Some(joined("/models", "loras").as_str()));
         // An empty negative is omitted rather than sent as "".
         assert!(flag(&a, "-n").is_none());
     }
@@ -2438,7 +2444,10 @@ lora_dir = "loras""#,
         let m = Monitor::with_preview(PathBuf::from("/work/current/preview"));
         let a = argv(&SdRunner::watched(&cfg, &m).base_cmd(&p, "a cat", None, 1, Path::new("o.png"), 1.0));
         assert_eq!(flag(&a, "--preview"), Some("proj"));
-        assert_eq!(flag(&a, "--preview-path"), Some("/work/current/preview/p-%04d.png"));
+        assert_eq!(
+            flag(&a, "--preview-path"),
+            Some(joined("/work/current/preview", "p-%04d.png").as_str())
+        );
         assert_eq!(m.preview(), None, "nothing running, nothing to show");
     }
 
