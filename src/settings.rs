@@ -241,7 +241,10 @@ pub struct PartialSettings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            prompt: "a lovely fluffy crab, cinematic lighting, sharp, in focus".to_string(),
+            // Draws from the two default variables below, so a first Generate
+            // already shows what `{name}` does: a batch varies its subject.
+            prompt: "a lovely {animal} with {color} hair, cinematic lighting, sharp, in focus"
+                .to_string(),
             negative: "watermark, worst quality, low quality".to_string(),
             hires_scale: 2.0,
             // Tuned for standard (non-distilled) SDXL, since that is the common
@@ -317,7 +320,14 @@ impl Default for Settings {
             // picture; direct convolution computes the same sums.
             vae_conv_direct: true,
             nightly_video: false,
-            variables: Variables::new(),
+            // What the default prompt names. A file with no `[variables]`
+            // table gets these too, which is what keeps that prompt from being
+            // a 400; one the page emptied is written as an empty table and
+            // stays empty (`emptied_variables_stay_empty`).
+            variables: Variables::from([
+                ("animal".to_string(), ["cat", "fox", "bear"].map(String::from).to_vec()),
+                ("color".to_string(), ["red", "blue", "golden"].map(String::from).to_vec()),
+            ]),
         }
     }
 }
@@ -1147,11 +1157,12 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A file written before the feature existed, and the common case anyway.
+    /// A file with no table gets the defaults, which the default prompt needs.
     #[test]
-    fn a_missing_variables_table_is_an_empty_map() {
+    fn a_missing_variables_table_is_the_defaults() {
         let s: Settings = toml::from_str("steps = 12\n").unwrap();
-        assert!(s.variables.is_empty());
+        assert_eq!(s.variables, Settings::default().variables);
+        assert!(s.prompt.contains("{animal}") && s.variables.contains_key("animal"));
         // And a table the page sent as `{}` clears the one that was stored.
         let stored = Settings {
             variables: Variables::from([("animal".to_string(), vec!["crab".to_string()])]),
@@ -1159,6 +1170,15 @@ mod tests {
         };
         let cleared = patch(&stored, br#"{"variables":{}}"#).unwrap();
         assert!(cleared.variables.is_empty());
+    }
+
+    /// Emptied on the page and saved, the table must not come back as the
+    /// defaults on the next load — it has to be written, empty.
+    #[test]
+    fn emptied_variables_stay_empty() {
+        let s = Settings { variables: Variables::new(), ..Settings::default() };
+        let back: Settings = toml::from_str(&toml::to_string_pretty(&s).unwrap()).unwrap();
+        assert!(back.variables.is_empty());
     }
 
     /// The page sends JSON; the disk holds TOML. Both have to describe the same

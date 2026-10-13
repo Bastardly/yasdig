@@ -224,7 +224,7 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 
 | field | meaning |
 |-------|---------|
-| `prompt` / `negative` | what the prompt boxes contain when the page loads. Not per-model — a checkpoint has a house step count, none has an opinion about what you usually want to draw |
+| `prompt` / `negative` | what the prompt boxes contain when the page loads. The default prompt is `a lovely {animal} with {color} hair, cinematic lighting, sharp, in focus`, drawing from the default variables below. Not per-model — a checkpoint has a house step count, none has an opinion about what you usually want to draw |
 | `width` / `height` | base generation size, default `768` each (small = fast) |
 | `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `30`, `6.0`, `euler` (Turbo → few steps, cfg 1). `sampler` is any of sd.cpp's 21 (`config::SAMPLERS`) |
 | `scheduler` | sd.cpp's `--scheduler`, default `auto`: no flag, so sd.cpp picks the model's own (`flux`/`flux2` for those families, `discrete` for SD and SDXL). `ays` is refused outside SD 1.5 and SDXL, the only models it has tables for. The Help tab compares them |
@@ -252,7 +252,7 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `clear_outputs_on_close` | the same for `work/output/` — saved images and uploads. Default `false`. Favorite outputs are never touched |
 | `clear_videos_on_close` | the same for `work/videos/`, and the enlarged frames made from each clip. Default `false` |
 | `max_image_side` | the longest side Upscale, Hi-res or a generate's output upscale may produce (default 8192, 1024–32768). Past it, the pass is refused with a message naming this setting and the GPU's own limit, which nothing can raise (16384 on a 7900 XTX). Larger images are slow to show in the page |
-| `[variables]` | named word lists a prompt draws from — `animal = ["crab", "horse"]` makes `{animal}` in any prompt one of them. See [Prompt variables](guide.md#prompt-variables) |
+| `[variables]` | named word lists a prompt draws from — `animal = ["crab", "horse"]` makes `{animal}` in any prompt one of them. Defaults: `animal = ["cat", "fox", "bear"]`, `color = ["red", "blue", "golden"]`; a file with no table gets these, and a table emptied in Settings stays empty. See [Prompt variables](guide.md#prompt-variables) |
 
 All three denoise strengths must be between **0.05 and 0.95** — a
 strength of 0 makes the pass a silent no-op, and at exactly 1.0 sd.cpp discards the
