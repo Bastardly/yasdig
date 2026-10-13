@@ -91,6 +91,16 @@ pub struct Ticket<T> {
     pub work: T,
 }
 
+/// What [`Queue::skip`] did.
+#[derive(Debug, PartialEq)]
+pub enum Skip {
+    /// Not a run the worker holds right now.
+    NotInFlight,
+    Killed,
+    /// A run, but between two sd-cli passes: nothing was running to kill.
+    BetweenPasses,
+}
+
 /// What [`Queue::stop`] did, so the caller can do the half it owns.
 pub enum Stopped<T> {
     /// It was waiting and is gone; its work comes back so anything it held
@@ -98,8 +108,9 @@ pub enum Stopped<T> {
     Removed(T),
     /// A run, now finishing the image in flight and then ending.
     Stopping,
-    /// Running and indivisible: the caller kills the child.
-    Cancel,
+    /// Running and indivisible: `kill` was called, and said whether there was
+    /// a child to kill.
+    Cancel(bool),
     Unknown,
 }
 
@@ -302,29 +313,32 @@ impl<T: Clone> Queue<T> {
     }
 
     /// *Cancel generation*: mark the image a running run has in flight as
-    /// cancelled on purpose, so the caller can kill its child and the worker
-    /// counts the failure that follows as the image being done rather than as
-    /// the run failing. Returns whether `id` is a run the worker holds; anything
-    /// else has no "next image" to jump to, and is the Stop route's to kill.
-    pub fn skip(&self, id: u64) -> bool {
+    /// cancelled on purpose and `kill` its child, so the worker counts the
+    /// failure that follows as the image being done rather than as the run
+    /// failing. Anything but a run the worker holds has no "next image" to
+    /// jump to, and is the Stop route's to kill.
+    ///
+    /// `kill` runs under the queue's lock. The worker can't get past this
+    /// image (`image_done`) or start another job (`next`) without that lock,
+    /// so the kill can only land on the image it was meant for — checking
+    /// first and killing after could kill the next image's sd-cli instead.
+    pub fn skip(&self, id: u64, kill: impl FnOnce() -> bool) -> Skip {
         let mut s = self.lock();
         if s.running != Some(id) {
-            return false;
+            return Skip::NotInFlight;
         }
-        match s.entries.iter_mut().find(|e| e.id == id) {
-            Some(e) if e.kind.is_run() => {
-                e.skipping = true;
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Take a [`Queue::skip`] back: there was no child to kill, so nothing will
-    /// fail, and a mark left standing would swallow a real failure later on.
-    pub fn unskip(&self, id: u64) {
-        if let Some(e) = self.lock().entries.iter_mut().find(|e| e.id == id) {
+        let Some(e) = s.entries.iter_mut().find(|e| e.id == id && e.kind.is_run()) else {
+            return Skip::NotInFlight;
+        };
+        // Marked before the kill, so the worker can never see the failure
+        // without the mark; taken back when there was no child, so the mark
+        // can't swallow a real failure later on.
+        e.skipping = true;
+        if kill() {
+            Skip::Killed
+        } else {
             e.skipping = false;
+            Skip::BetweenPasses
         }
     }
 
@@ -364,8 +378,9 @@ impl<T: Clone> Queue<T> {
     }
 
     /// The Jobs dialog's Stop and Remove, which are one button: what it does
-    /// depends on whether the worker has the job yet.
-    pub fn stop(&self, id: u64) -> Stopped<T> {
+    /// depends on whether the worker has the job yet. `kill` is called for a
+    /// running indivisible job, under the lock — see [`Queue::skip`].
+    pub fn stop(&self, id: u64, kill: impl FnOnce() -> bool) -> Stopped<T> {
         let mut s = self.lock();
         let Some(i) = s.entries.iter().position(|e| e.id == id) else {
             return Stopped::Unknown;
@@ -376,7 +391,7 @@ impl<T: Clone> Queue<T> {
                 e.stopping = true;
                 return Stopped::Stopping;
             }
-            return Stopped::Cancel;
+            return Stopped::Cancel(kill());
         }
         let e = s.entries.remove(i).expect("position came from this deque");
         if let Some(reply) = e.reply {
@@ -505,7 +520,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let video = q.push(Kind::Video, "v".into(), None, "video", Some(tx), false);
         q.next();
-        assert!(matches!(q.stop(video), Stopped::Removed("video")));
+        assert!(matches!(q.stop(video, || true), Stopped::Removed("video")));
         assert!(rx.recv().unwrap().is_err());
         assert_eq!(ids(&q), ["first"]);
     }
@@ -515,7 +530,7 @@ mod tests {
         let q = Queue::new();
         let id = q.push(Kind::Generate, "m".into(), None, "loop", None, false);
         q.next();
-        assert!(matches!(q.stop(id), Stopped::Stopping));
+        assert!(matches!(q.stop(id, || panic!("a run is never killed")), Stopped::Stopping));
         assert_eq!(q.snapshot().jobs[0].state, "stopping");
         assert!(!q.image_done(id));
         assert_eq!(q.len(), 0);
@@ -527,9 +542,9 @@ mod tests {
     fn a_skipped_image_counts_and_the_run_goes_on() {
         let q = Queue::new();
         let id = q.push(Kind::Generate, "m".into(), Some(3), "batch", None, false);
-        assert!(!q.skip(id), "not running yet: nothing in flight to cancel");
+        assert_eq!(q.skip(id, || true), Skip::NotInFlight, "not running yet: nothing in flight to cancel");
         q.next();
-        assert!(q.skip(id));
+        assert_eq!(q.skip(id, || true), Skip::Killed);
         assert!(q.snapshot().jobs[0].skipping);
         assert!(q.skipped(id));
         assert!(q.image_done(id));
@@ -537,12 +552,11 @@ mod tests {
         assert_eq!(q.next().done, 1);
 
         // No child to kill: the mark is taken back, so a real failure still fails.
-        assert!(q.skip(id));
-        q.unskip(id);
+        assert_eq!(q.skip(id, || false), Skip::BetweenPasses);
         assert!(!q.skipped(id));
 
         let conv = q.push(Kind::Convert, "c".into(), None, "convert", None, true);
-        assert!(!q.skip(conv), "an indivisible job has no next image");
+        assert_eq!(q.skip(conv, || true), Skip::NotInFlight, "an indivisible job has no next image");
     }
 
     #[test]
@@ -550,7 +564,7 @@ mod tests {
         let q = Queue::new();
         let id = q.push(Kind::Convert, "c".into(), None, "convert", None, false);
         q.next();
-        assert!(matches!(q.stop(id), Stopped::Cancel));
+        assert!(matches!(q.stop(id, || true), Stopped::Cancel(true)));
         assert_eq!(q.len(), 1);
         q.finish(id, Err(anyhow!("cancelled")));
         assert_eq!(q.len(), 0);
@@ -570,7 +584,7 @@ mod tests {
         let q = Queue::new();
         let id = q.push(Kind::Redraw, "m".into(), None, "redraw", None, true);
         q.next();
-        assert!(matches!(q.stop(id), Stopped::Cancel));
+        assert!(matches!(q.stop(id, || true), Stopped::Cancel(true)));
     }
 
     /// A panic on the worker must still answer the job: a waiting request

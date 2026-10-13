@@ -50,8 +50,10 @@ struct Entry {
 }
 
 impl Entry {
+    /// Saturating: dims come out of the file, and a wrapped product would
+    /// pass the bound in `read_at`.
     fn elements(&self) -> u64 {
-        self.dims.iter().product()
+        self.dims.iter().try_fold(1u64, |a, &d| a.checked_mul(d)).unwrap_or(u64::MAX)
     }
 
     fn rows(&self) -> u64 {
@@ -352,10 +354,25 @@ fn write_journal(path: &Path, regions: &[(u64, &[u8])]) -> Result<()> {
     }
     j.into_inner().map_err(|e| e.into_error())?.sync_all()?;
     std::fs::rename(&part, journal_path(path))?;
+    // The rename is only durable once the directory is: without this, a power
+    // cut after the weights are rewritten can bring the file back with no
+    // journal, and the next run folds the scales in a second time. Opening a
+    // directory fails on Windows, where the rename is already durable.
+    if let Some(dir) = path.parent() {
+        if let Ok(d) = File::open(if dir.as_os_str().is_empty() { Path::new(".") } else { dir }) {
+            d.sync_all().ok();
+        }
+    }
     Ok(())
 }
 
 fn read_at(f: &mut File, off: u64, len: u64) -> Result<Vec<u8>> {
+    // Held to the file before allocating: `len` is a tensor's size as the
+    // header claims it, and a corrupt one must be an error, not an abort.
+    let file_len = f.metadata()?.len();
+    if off.checked_add(len).is_none_or(|end| end > file_len) {
+        bail!("a tensor runs past the end of the file ({len} bytes at {off})");
+    }
     let mut buf = vec![0u8; len as usize];
     f.seek(SeekFrom::Start(off))?;
     f.read_exact(&mut buf)?;
@@ -441,43 +458,17 @@ fn all_finite(buf: &[u8], lay: &Layout, ty: u32) -> bool {
     }
 }
 
+use crate::half::f32_to_f16;
 use crate::sr::weights::f16_to_f32;
 
-/// IEEE single to half, round to nearest even, subnormals included. A carry
-/// out of the mantissa rolls into the exponent, which is what rounding is.
-fn f32_to_f16(x: f32) -> u16 {
-    let b = x.to_bits();
-    let sign = ((b >> 16) & 0x8000) as u16;
-    let exp = ((b >> 23) & 0xff) as i32;
-    let man = b & 0x7f_ffff;
-    if exp == 0xff {
-        return sign | 0x7c00 | if man != 0 { 0x200 } else { 0 };
-    }
-    let e = exp - 127 + 15;
-    if e >= 0x1f {
-        return sign | 0x7c00;
-    }
-    let round = |v: u32, shift: u32| {
-        let kept = v >> shift;
-        let rem = v & ((1 << shift) - 1);
-        let mid = 1 << (shift - 1);
-        if rem > mid || (rem == mid && kept & 1 == 1) {
-            kept + 1
-        } else {
-            kept
-        }
-    };
-    if e <= 0 {
-        if e < -10 {
-            return sign;
-        }
-        return sign | round(man | 0x80_0000, (14 - e) as u32) as u16;
-    }
-    sign | round(((e as u32) << 23) | man, 13) as u16
-}
-
+/// IEEE single to bfloat16, round to nearest even: the top half of the bits,
+/// with a carry out of the mantissa rolling into the exponent.
 fn f32_to_bf16(x: f32) -> u16 {
     let b = x.to_bits();
+    if x.is_nan() {
+        // Rounding would carry a high NaN payload out of the top bit.
+        return ((b >> 16) | 0x40) as u16;
+    }
     ((b + 0x7fff + ((b >> 16) & 1)) >> 16) as u16
 }
 

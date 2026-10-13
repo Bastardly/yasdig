@@ -248,6 +248,12 @@ async function runPost() {
       `${Math.round(performance.now() - t0)} ms · gpu ${data.timings.fsr_ms} ms`;
     $('lberr').textContent = '';
   } catch (e) {
+    // The image changed under the request: nothing to report about it.
+    if (epoch !== postEpoch) return;
+    // 409: a Refine or Hi-res landed while this drag was in flight. The image
+    // is still live — newer, under the same id — and its result is on its way
+    // in; nulling the id here used to leave Refine, Hi-res and Save dead.
+    if (e.status === 409) return;
     // Into the panel, because that is what is on screen while a slider is being
     // dragged. A 400 means the retained entry is gone, which outlives the dialog
     // — so that one is also reported on the page behind it.

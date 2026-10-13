@@ -1,4 +1,4 @@
-import { $, esc, post } from './dom.js';
+import { $, esc, getJSON, post } from './dom.js';
 import { loadModels } from './image.js';
 
 // The Get models tab: the server's catalog (`src/catalog.toml`), one card per
@@ -32,7 +32,7 @@ const fileName = (dest) => dest.split('/').pop();
 // One fetch shared by whoever asks in the same moment — this tab and the Help
 // topic's family table.
 export function fetchCatalog() {
-  pending ??= fetch('/catalog').then((r) => r.json()).finally(() => { pending = null; });
+  pending ??= getJSON('/catalog').finally(() => { pending = null; });
   return pending;
 }
 
@@ -129,7 +129,7 @@ async function refresh() {
   }
   // The first answer only sets the baseline; a later one that moved means a
   // file landed, so the model list may have a new runnable entry.
-  if (finished !== null && view.finished !== finished) loadModels();
+  if (finished !== null && view.finished !== finished) loadModels({ refill: false });
   finished = view.finished;
   draw();
   if (allEntries().some((e) => e.files.some(active))) timer = setTimeout(refresh, 1000);

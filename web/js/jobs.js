@@ -170,7 +170,11 @@ export async function pollJobs() {
   polling = true;
   clearTimeout(timer);
   try {
-    snap = await (await fetch('/jobs')).json();
+    const got = await (await fetch('/jobs')).json();
+    // An `{error}` body adopted as the snapshot used to throw in `finally`
+    // below, and the poll was never scheduled again until a reload.
+    if (!Array.isArray(got.jobs) || !Array.isArray(got.notices)) return;
+    snap = got;
     const first = seenSeq === null;
     if (first) {
       seenNotice = Math.max(0, ...snap.notices.map((n) => n.seq));

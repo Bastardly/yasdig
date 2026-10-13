@@ -472,30 +472,13 @@ impl Settings {
     /// checked against. A second copy here would be free to disagree with the
     /// one that actually gates a run.
     pub fn validate(&self) -> Result<()> {
-        if !(64..=4096).contains(&self.width) || !(64..=4096).contains(&self.height) {
-            bail!(
-                "base size is {}×{}, must be between 64 and 4096",
-                self.width,
-                self.height
-            );
-        }
-        if self.steps == 0 || self.steps > 100 {
-            bail!("steps is {}, must be between 1 and 100", self.steps);
-        }
-        if !(1.0..=MAX_UPSCALE).contains(&self.upscale_factor) {
-            bail!(
-                "upscale_factor is {}, must be between 1 and {MAX_UPSCALE}",
-                self.upscale_factor
-            );
-        }
+        // Base size, steps, upscale factor and hi-res budget are checked by
+        // `Profile::validate` at the end, which a `/generate` goes through too.
         if !(1.0..=MAX_UPSCALE).contains(&self.hires_scale) {
             bail!(
                 "hires_scale is {}, must be between 1 and {MAX_UPSCALE}",
                 self.hires_scale
             );
-        }
-        if self.hires_max_side < 64 {
-            bail!("hires_max_side is {}, must be 64 or more", self.hires_max_side);
         }
         // The GPU's own limit is checked where it is known, at the enlarge
         // (`Engine::check_side`); this only refuses what no GPU allows.

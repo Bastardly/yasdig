@@ -407,9 +407,19 @@ const HELP = [
 // id → text. Two tables declare a control — `HELP` for the form fields, and
 // `FILTERS` for the viewer's sliders, which carry their own — and this is the
 // one index both end up in, so `wireHints` has a single thing to look in.
-const HINTS = new Map();
-for (const h of HELP) for (const id of h.ids) HINTS.set(id, h.text);
-for (const f of FILTERS) if (f.help) HINTS.set(f.id, f.help);
+//
+// Built on first use rather than at load: `FILTERS` is another module's, and
+// reading it at this module's top level only worked while the import cycle
+// happened to evaluate `viewer.js` first.
+let HINTS = null;
+function hintFor(key) {
+  if (!HINTS) {
+    HINTS = new Map();
+    for (const h of HELP) for (const id of h.ids) HINTS.set(id, h.text);
+    for (const f of FILTERS) if (f.help) HINTS.set(f.id, f.help);
+  }
+  return HINTS.get(key);
+}
 
 // Put an (i) after every label that has something to say, rather than writing
 // fifty-odd of them into the markup by hand. The key is the control's id — from
@@ -423,7 +433,7 @@ export function wireHints(root = document) {
     if (label.querySelector('.hint')) continue;
     const key = label.dataset.help || label.htmlFor
       || label.querySelector('input, select, textarea')?.id;
-    const text = HINTS.get(key);
+    const text = hintFor(key);
     if (!text) continue;
     const b = document.createElement('button');
     b.type = 'button';   // the default is submit, and these are in no form by luck

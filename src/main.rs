@@ -243,6 +243,23 @@ enum Work {
     },
 }
 
+impl Work {
+    /// The retained image this job pins while it waits, if any. One list for
+    /// both places that let a pin go — the worker finishing the job and Stop
+    /// removing it — and no `_` arm, so a new kind has to say.
+    fn pinned(&self) -> Option<u64> {
+        match self {
+            Work::Refine { id, .. }
+            | Work::Hires { id, .. }
+            | Work::Redraw { id, .. }
+            | Work::Edit { id, .. }
+            | Work::Extend { id, .. }
+            | Work::Upscale { id, .. } => Some(*id),
+            Work::Run(_) | Work::Video(_) | Work::Convert(_) | Work::EnlargeClip { .. } => None,
+        }
+    }
+}
+
 /// One run: what makes each image, and what happens to it afterwards.
 ///
 /// Everything is captured when the run is queued. That is what a queue means —
@@ -517,8 +534,9 @@ fn run(args: &[String]) -> Result<()> {
         let cfg = cfg.clone();
         let web_dir = web_dir.clone();
         let monitor = monitor.clone();
+        let bound = startup.server.host.clone();
         std::thread::spawn(move || {
-            if let Err(e) = handle_conn(stream, &lanes, &cfg, web_dir.as_deref(), &monitor) {
+            if let Err(e) = handle_conn(stream, &lanes, &cfg, web_dir.as_deref(), &monitor, &bound) {
                 eprintln!("[yasdig] connection error: {e:#}");
             }
         });
@@ -530,6 +548,17 @@ fn run(args: &[String]) -> Result<()> {
 /// Run one ticket from the job queue on the diffusion worker, and settle it
 /// with the queue: one image of a run, or a whole indivisible job.
 fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs::Ticket<Work>) {
+    // A pass on a retained image: published as the latest result, its pin let
+    // go before the request is answered, whatever the outcome.
+    let pinned = t.work.pinned();
+    let retained = engine.retained();
+    let finish = |r: Result<GenResult>| {
+        let r = r.map(|r| latest(queue, &r));
+        if let Some(id) = pinned {
+            lock(&retained).unpin(id);
+        }
+        queue.finish(t.id, r);
+    };
     match t.work {
         Work::Run(plan) => match run_image(engine, saver, queue, &plan, t.done) {
             Ok(()) => {
@@ -542,36 +571,12 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
             }
             Err(e) => queue.fail_run(t.id, format!("{e:#}"), sd::oom_json(&e)),
         },
-        Work::Refine { id, over } => {
-            let r = engine.refine(id, &over).map(|r| latest(queue, &r));
-            lock(&engine.retained()).unpin(id);
-            queue.finish(t.id, r);
-        }
-        Work::Hires { id, upscale, over } => {
-            let r = engine.hires(id, upscale, &over).map(|r| latest(queue, &r));
-            lock(&engine.retained()).unpin(id);
-            queue.finish(t.id, r);
-        }
-        Work::Edit { id, req } => {
-            let r = engine.edit(id, &req).map(|r| latest(queue, &r));
-            lock(&engine.retained()).unpin(id);
-            queue.finish(t.id, r);
-        }
-        Work::Upscale { id, factor, upscaler } => {
-            let r = engine.upscale(id, factor, upscaler).map(|r| latest(queue, &r));
-            lock(&engine.retained()).unpin(id);
-            queue.finish(t.id, r);
-        }
-        Work::Redraw { id, req } => {
-            let r = engine.redraw(id, &req).map(|r| latest(queue, &r));
-            lock(&engine.retained()).unpin(id);
-            queue.finish(t.id, r);
-        }
-        Work::Extend { id, req } => {
-            let r = engine.extend(id, &req).map(|r| latest(queue, &r));
-            lock(&engine.retained()).unpin(id);
-            queue.finish(t.id, r);
-        }
+        Work::Refine { id, over } => finish(engine.refine(id, &over)),
+        Work::Hires { id, upscale, over } => finish(engine.hires(id, upscale, &over)),
+        Work::Edit { id, req } => finish(engine.edit(id, &req)),
+        Work::Upscale { id, factor, upscaler } => finish(engine.upscale(id, factor, upscaler)),
+        Work::Redraw { id, req } => finish(engine.redraw(id, &req)),
+        Work::Extend { id, req } => finish(engine.extend(id, &req)),
         Work::Video(req) => queue.finish(t.id, engine.video(&req).and_then(|r| json_body(&r))),
         Work::Convert(plan) => {
             queue.finish(t.id, engine.convert(&plan).and_then(|r| json_body(&r)))
@@ -681,13 +686,56 @@ fn handle_conn(
     cfg: &Config,
     web_dir: Option<&std::path::Path>,
     monitor: &Monitor,
+    bound: &str,
 ) -> Result<()> {
     let mut conn = http::Connection::new(stream)?;
     let req = match conn.read_request()? {
         Some(r) => r,
         None => return Ok(()),
     };
+    if !http::allowed(&req.method, req.origin.as_deref(), req.host.as_deref(), bound) {
+        eprintln!(
+            "[yasdig] refused {} {} from origin {:?}, host {:?}",
+            req.method, req.path, req.origin, req.host
+        );
+        return conn.respond(
+            403,
+            "application/json",
+            error_json("refused: this request came from another website").as_bytes(),
+        );
+    }
 
+    // A handler that panics — a model file the parsers didn't expect, say —
+    // must still answer, or the page waits on a request that will never end.
+    // The connection is this request's alone, so nothing else sees its state.
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        route(&mut conn, req, lanes, cfg, web_dir, monitor)
+    }));
+    match caught {
+        Ok(r) => r,
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown panic");
+            conn.respond(
+                500,
+                "application/json",
+                error_json(&format!("internal error: {msg}")).as_bytes(),
+            )
+        }
+    }
+}
+
+fn route(
+    conn: &mut http::Connection,
+    req: http::Request,
+    lanes: &Lanes,
+    cfg: &Config,
+    web_dir: Option<&std::path::Path>,
+    monitor: &Monitor,
+) -> Result<()> {
     // The page and everything it loads, resolved through one whitelist —
     // `web::WEB_FILES`. Ahead of the routes rather than an arm among them
     // because there are sixteen names and one answer for all of them. The client
@@ -696,7 +744,7 @@ fn handle_conn(
     // traverse out of.
     if req.method == "GET" {
         if let Some(file) = web::lookup(&req.path) {
-            return web::serve(&mut conn, web_dir, file);
+            return web::serve(conn, web_dir, file);
         }
     }
 
@@ -708,25 +756,25 @@ fn handle_conn(
         // Filesystem-only, so they answer here rather than through the job
         // queue — the worker is serialized, and a form submit queued behind a
         // render would appear to hang for the length of the render.
-        ("GET", "/settings") => handle_get_settings(&mut conn, cfg),
-        ("POST", "/settings") => handle_save_settings(&mut conn, cfg, &req.body),
-        ("GET", "/model-settings") => handle_get_model_settings(&mut conn, cfg),
-        ("POST", "/model-settings") => handle_save_model_settings(&mut conn, cfg, &req.body),
-        ("POST", "/generate") => handle_generate(&mut conn, lanes, &req.body),
-        ("POST", "/img2img") => handle_img2img(&mut conn, cfg, lanes, &req.body),
+        ("GET", "/settings") => handle_get_settings(conn, cfg),
+        ("POST", "/settings") => handle_save_settings(conn, cfg, &req.body),
+        ("GET", "/model-settings") => handle_get_model_settings(conn, cfg),
+        ("POST", "/model-settings") => handle_save_model_settings(conn, cfg, &req.body),
+        ("POST", "/generate") => handle_generate(conn, lanes, &req.body),
+        ("POST", "/img2img") => handle_img2img(conn, cfg, lanes, &req.body),
         // The one route with a binary body, and the one `http.rs` gives a large
         // limit to. Filesystem-only, so it stays off the queue — an upload must
         // not wait out the render it is meant to replace.
-        ("POST", "/upload") => handle_upload(&mut conn, cfg, &req.body),
-        ("POST", "/png-settings") => handle_png_settings(&mut conn, cfg, &req.body),
-        ("POST", "/refine") => handle_refine(&mut conn, lanes, &req.body),
-        ("POST", "/hires") => handle_hires(&mut conn, lanes, &req.body),
-        ("POST", "/redraw") => handle_redraw(&mut conn, lanes, &req.body),
-        ("POST", "/upscale") => handle_upscale(&mut conn, lanes, &req.body),
-        ("POST", "/edit") => handle_edit(&mut conn, lanes, &req.body),
-        ("POST", "/extend") => handle_extend(&mut conn, lanes, &req.body),
-        ("POST", "/history/goto") => handle_goto(&mut conn, lanes, &req.body),
-        ("POST", "/history/view") => handle_view_step(&mut conn, lanes, &req.body),
+        ("POST", "/upload") => handle_upload(conn, cfg, &req.body),
+        ("POST", "/png-settings") => handle_png_settings(conn, cfg, &req.body),
+        ("POST", "/refine") => handle_refine(conn, lanes, &req.body),
+        ("POST", "/hires") => handle_hires(conn, lanes, &req.body),
+        ("POST", "/redraw") => handle_redraw(conn, lanes, &req.body),
+        ("POST", "/upscale") => handle_upscale(conn, lanes, &req.body),
+        ("POST", "/edit") => handle_edit(conn, lanes, &req.body),
+        ("POST", "/extend") => handle_extend(conn, lanes, &req.body),
+        ("POST", "/history/goto") => handle_goto(conn, lanes, &req.body),
+        ("POST", "/history/view") => handle_view_step(conn, lanes, &req.body),
         // A history step's thumbnail. Off the queue like every thumbnail; both
         // numbers are the whole whitelist.
         ("GET", p) if p.starts_with("/history/") && p.ends_with(".png") => {
@@ -737,9 +785,9 @@ fn handle_conn(
                 None => conn.respond(404, "text/plain", b"not found"),
             }
         }
-        ("POST", "/adjust") => handle_adjust(&mut conn, lanes, &req.body),
-        ("POST", "/save-output") => handle_save_output(&mut conn, lanes, &req.body, false),
-        ("POST", "/outputs/overwrite") => handle_save_output(&mut conn, lanes, &req.body, true),
+        ("POST", "/adjust") => handle_adjust(conn, lanes, &req.body),
+        ("POST", "/save-output") => handle_save_output(conn, lanes, &req.body, false),
+        ("POST", "/outputs/overwrite") => handle_save_output(conn, lanes, &req.body, true),
 
         // Progress and Stop, both on the connection thread and both for the
         // same reason: they are *about* the job the worker is running, so
@@ -776,13 +824,13 @@ fn handle_conn(
         }
         // The queue, beside them for the same reason: the Jobs dialog is about
         // what the worker is doing and what waits behind it.
-        ("GET", "/jobs") => handle_jobs(&mut conn, &lanes.queue, monitor),
+        ("GET", "/jobs") => handle_jobs(conn, &lanes.queue, monitor),
         ("GET", "/jobs/latest") => match lanes.queue.latest() {
             Some((_, json)) => conn.respond(200, "application/json", json.as_bytes()),
             None => conn.respond(404, "application/json", error_json("no image yet").as_bytes()),
         },
-        ("POST", "/jobs/stop") => handle_stop_job(&mut conn, lanes, monitor, &req.body),
-        ("POST", "/jobs/skip") => handle_skip_job(&mut conn, lanes, monitor, &req.body),
+        ("POST", "/jobs/stop") => handle_stop_job(conn, lanes, monitor, &req.body),
+        ("POST", "/jobs/skip") => handle_skip_job(conn, lanes, monitor, &req.body),
         ("POST", "/cancel") => conn.respond(
             200,
             "application/json",
@@ -790,27 +838,27 @@ fn handle_conn(
         ),
         ("POST", "/shutdown") => {
             lanes.downloads.cancel_all();
-            handle_shutdown(&mut conn, cfg, monitor, &req.body)
+            handle_shutdown(conn, cfg, monitor, &req.body)
         }
 
         // The archive. List, thumbnail and delete are answered right here rather
         // than through `submit` — they never touch the GPU, and the worker is
         // serialized, so going through it would leave the grid dead for the
         // length of whatever render is in flight.
-        ("GET", "/workitems") => handle_list_workitems(&mut conn, cfg, Shelf::Work),
+        ("GET", "/workitems") => handle_list_workitems(conn, cfg, Shelf::Work),
         // `http.rs` strips the query string before routing, so the id has to be
         // a path segment — hence a guard arm rather than a literal.
         ("GET", p) if p.starts_with("/workitems/") && p.ends_with("/thumb.png") => {
             let id = p
                 .trim_start_matches("/workitems/")
                 .trim_end_matches("/thumb.png");
-            handle_thumb(&mut conn, cfg, Shelf::Work, id)
+            handle_thumb(conn, cfg, Shelf::Work, id)
         }
         ("POST", "/workitems/open") => {
-            handle_open_workitem(&mut conn, lanes, Shelf::Work, &req.body)
+            handle_open_workitem(conn, lanes, Shelf::Work, &req.body)
         }
         ("POST", "/workitems/delete") => {
-            handle_delete_workitems(&mut conn, cfg, Shelf::Work, &req.body)
+            handle_delete_workitems(conn, cfg, Shelf::Work, &req.body)
         }
 
         // The same four routes over `user/favorite/`, which is the same three
@@ -818,20 +866,20 @@ fn handle_conn(
         // different `Shelf`. The shelf is a *path segment* rather than a query
         // parameter because `http.rs` strips the query string before routing,
         // which is the same constraint that already puts an id in the path.
-        ("GET", "/favorites") => handle_list_workitems(&mut conn, cfg, Shelf::Favorites),
+        ("GET", "/favorites") => handle_list_workitems(conn, cfg, Shelf::Favorites),
         ("GET", p) if p.starts_with("/favorites/") && p.ends_with("/thumb.png") => {
             let id = p
                 .trim_start_matches("/favorites/")
                 .trim_end_matches("/thumb.png");
-            handle_thumb(&mut conn, cfg, Shelf::Favorites, id)
+            handle_thumb(conn, cfg, Shelf::Favorites, id)
         }
         ("POST", "/favorites/open") => {
-            handle_open_workitem(&mut conn, lanes, Shelf::Favorites, &req.body)
+            handle_open_workitem(conn, lanes, Shelf::Favorites, &req.body)
         }
         ("POST", "/favorites/delete") => {
-            handle_delete_workitems(&mut conn, cfg, Shelf::Favorites, &req.body)
+            handle_delete_workitems(conn, cfg, Shelf::Favorites, &req.body)
         }
-        ("POST", "/favorites/add") => handle_favorite(&mut conn, cfg, &req.body),
+        ("POST", "/favorites/add") => handle_favorite(conn, cfg, &req.body),
 
         // `work/output/` — the finished images, which is what the video tab
         // animates from. Same connection-thread family as the archive above, and
@@ -839,15 +887,15 @@ fn handle_conn(
         // Built live, like `/models`: a video model is tens of gigabytes across
         // several files, so "it finished downloading" is something to notice
         // without a restart.
-        ("GET", "/convert-models") => handle_convert_models(&mut conn, cfg),
-        ("POST", "/convert") => handle_convert(&mut conn, cfg, lanes, &req.body),
+        ("GET", "/convert-models") => handle_convert_models(conn, cfg),
+        ("POST", "/convert") => handle_convert(conn, cfg, lanes, &req.body),
         // Filesystem only — one header seek per file in the LoRA dir — so it
         // answers here rather than queueing behind whatever is rendering. Built
         // live for the reason `/models` is: dropping a file into a folder should
         // not need a restart to be noticed.
-        ("GET", "/loras") => handle_list_loras(&mut conn, cfg),
+        ("GET", "/loras") => handle_list_loras(conn, cfg),
         // Same shape and reason, minus the header read — see `UpscalerFile`.
-        ("GET", "/upscalers") => handle_list_upscalers(&mut conn, cfg),
+        ("GET", "/upscalers") => handle_list_upscalers(conn, cfg),
         // The Get models tab. Its own lane (`downloads`), so all four answer
         // here: a download is network, not GPU, and must neither wait behind a
         // render nor hold one up. The body names a catalog id and nothing else.
@@ -863,46 +911,46 @@ fn handle_conn(
             Ok(body) => conn.respond(200, "application/json", &body),
             Err(e) => conn.respond(500, "application/json", error_json(&format!("{e}")).as_bytes()),
         },
-        ("POST", p) if p.starts_with("/downloads/") => handle_download(&mut conn, cfg, lanes, p, &req.body),
-        ("GET", "/video-models") => handle_video_models(&mut conn, cfg),
-        ("POST", "/video") => handle_video(&mut conn, lanes, &req.body),
-        ("POST", "/videos/enlarge") => handle_enlarge_clip(&mut conn, lanes, &req.body),
-        ("GET", "/videos") => handle_list_clips(&mut conn, cfg),
+        ("POST", p) if p.starts_with("/downloads/") => handle_download(conn, cfg, lanes, p, &req.body),
+        ("GET", "/video-models") => handle_video_models(conn, cfg),
+        ("POST", "/video") => handle_video(conn, lanes, &req.body),
+        ("POST", "/videos/enlarge") => handle_enlarge_clip(conn, lanes, &req.body),
+        ("GET", "/videos") => handle_list_clips(conn, cfg),
         // Two guard arms rather than one, because a clip serves both a
         // thumbnail and its frames and only the frame route has a number in it.
         ("GET", p) if p.starts_with("/videos/") && p.ends_with("/thumb.png") => {
             let id = p
                 .trim_start_matches("/videos/")
                 .trim_end_matches("/thumb.png");
-            handle_clip_file(&mut conn, cfg, id, None)
+            handle_clip_file(conn, cfg, id, None)
         }
         ("GET", p) if p.starts_with("/videos/") && p.contains("/frames/") => {
             match clip_frame(p) {
-                Some((id, n)) => handle_clip_file(&mut conn, cfg, id, Some(n)),
+                Some((id, n)) => handle_clip_file(conn, cfg, id, Some(n)),
                 None => conn.respond(404, "text/plain", b"not found"),
             }
         }
-        ("POST", "/videos/delete") => handle_delete_clips(&mut conn, cfg, &req.body),
-        ("GET", "/outputs") => handle_list_outputs(&mut conn, cfg, Gallery::Output),
-        ("POST", "/outputs/open") => handle_open_output(&mut conn, lanes, &req.body),
-        ("POST", "/outputs/to-image") => handle_output_to_image(&mut conn, lanes, &req.body),
-        ("POST", "/image/model") => handle_set_model(&mut conn, lanes, &req.body),
+        ("POST", "/videos/delete") => handle_delete_clips(conn, cfg, &req.body),
+        ("GET", "/outputs") => handle_list_outputs(conn, cfg, Gallery::Output),
+        ("POST", "/outputs/open") => handle_open_output(conn, lanes, &req.body),
+        ("POST", "/outputs/to-image") => handle_output_to_image(conn, lanes, &req.body),
+        ("POST", "/image/model") => handle_set_model(conn, lanes, &req.body),
         ("POST", "/outputs/delete") => {
-            handle_delete_outputs(&mut conn, cfg, Gallery::Output, &req.body)
+            handle_delete_outputs(conn, cfg, Gallery::Output, &req.body)
         }
         // The kept half of the gallery. Only a listing, an add and a delete:
         // opening one, its thumbnail and starting from it all go by stem through
         // the `/outputs` routes above, which look in both (`Store::find_output`).
-        ("GET", "/favorite-outputs") => handle_list_outputs(&mut conn, cfg, Gallery::Favorites),
-        ("POST", "/favorite-outputs/add") => handle_favorite_outputs(&mut conn, cfg, &req.body),
+        ("GET", "/favorite-outputs") => handle_list_outputs(conn, cfg, Gallery::Favorites),
+        ("POST", "/favorite-outputs/add") => handle_favorite_outputs(conn, cfg, &req.body),
         ("POST", "/favorite-outputs/delete") => {
-            handle_delete_outputs(&mut conn, cfg, Gallery::Favorites, &req.body)
+            handle_delete_outputs(conn, cfg, Gallery::Favorites, &req.body)
         }
         ("GET", p) if p.starts_with("/outputs/") && p.ends_with("/thumb.png") => {
             let stem = p
                 .trim_start_matches("/outputs/")
                 .trim_end_matches("/thumb.png");
-            handle_output_thumb(&mut conn, cfg, stem)
+            handle_output_thumb(conn, cfg, stem)
         }
 
         _ => conn.respond(404, "text/plain", b"not found"),
@@ -942,7 +990,9 @@ fn handle_shutdown(
     let clear = serde_json::from_slice::<serde_json::Value>(body)
         .ok()
         .and_then(|v| v["clear"].as_bool())
-        .unwrap_or(true);
+        // Deleting is asked for, never assumed: the page always says which it
+        // wants, and a body that doesn't say is not a request to delete files.
+        .unwrap_or(false);
     monitor.cancel();
     // Always, whatever the settings say: `work/current/` is scratch, and the
     // queue it served is gone with this process anyway.
@@ -2168,6 +2218,7 @@ fn handle_png_settings(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -
     let install = pngmeta::Install {
         models: cfg.registry().into_keys().collect(),
         loras: cfg.list_loras().into_iter().filter(|l| l.usable).map(|l| l.name).collect(),
+        upscalers: cfg.list_upscalers().into_iter().filter(|u| u.supported).map(|u| u.name).collect(),
     };
     match pngmeta::read(body, &install) {
         Ok(loaded) => conn.respond(200, "application/json", &serde_json::to_vec(&loaded)?),
@@ -2618,6 +2669,9 @@ fn enqueue_wait(
         .context("gpu worker dropped the reply channel")?;
     match result {
         Ok(json) => conn.respond(200, "application/json", json.as_bytes()),
+        Err(e) if e.downcast_ref::<pipeline::Superseded>().is_some() => {
+            conn.respond(409, "application/json", error_body(&e).as_bytes())
+        }
         Err(e) => conn.respond(err_status, "application/json", error_body(&e).as_bytes()),
     }
 }
@@ -2648,27 +2702,21 @@ fn handle_stop_job(
     let Some(dto) = parse_json::<Dto>(conn, body)? else {
         return Ok(());
     };
-    let what = match lanes.queue.stop(dto.id) {
+    let what = match lanes.queue.stop(dto.id, || monitor.cancel()) {
         jobs::Stopped::Removed(work) => {
             // A queued button press was holding its image.
-            if let Work::Refine { id, .. }
-            | Work::Hires { id, .. }
-            | Work::Redraw { id, .. }
-            | Work::Upscale { id, .. }
-            | Work::Edit { id, .. }
-            | Work::Extend { id, .. } = work
-            {
+            if let Some(id) = work.pinned() {
                 lock(&lanes.retained).unpin(id);
             }
             "removed"
         }
         jobs::Stopped::Stopping => "stopping",
-        jobs::Stopped::Cancel => {
+        jobs::Stopped::Cancel(killed) => {
             // Only an sd-cli run can be killed. FSR and the `sr` models run on
             // this process's own GPU device, a pass at a time, with nothing to
             // stop part-way — say so, rather than answer "cancelled" and let it
             // finish anyway.
-            if !monitor.cancel() {
+            if !killed {
                 return conn.respond(
                     400,
                     "application/json",
@@ -2711,22 +2759,12 @@ fn handle_skip_job(
     let Some(dto) = parse_json::<Dto>(conn, body)? else {
         return Ok(());
     };
-    if !lanes.queue.skip(dto.id) {
-        return conn.respond(
-            400,
-            "application/json",
-            error_json("that job has no image in flight to cancel").as_bytes(),
-        );
-    }
-    if !monitor.cancel() {
-        lanes.queue.unskip(dto.id);
-        return conn.respond(
-            400,
-            "application/json",
-            error_json("between two passes — try again in a moment").as_bytes(),
-        );
-    }
-    conn.respond(200, "application/json", b"{\"skipped\":true}")
+    let msg = match lanes.queue.skip(dto.id, || monitor.cancel()) {
+        jobs::Skip::Killed => return conn.respond(200, "application/json", b"{\"skipped\":true}"),
+        jobs::Skip::NotInFlight => "that job has no image in flight to cancel",
+        jobs::Skip::BetweenPasses => "between two passes — try again in a moment",
+    };
+    conn.respond(400, "application/json", error_json(msg).as_bytes())
 }
 
 /// Hand display-lane work to its worker, wait, and write the JSON response.
@@ -2758,6 +2796,9 @@ fn submit(
 
     match result {
         Ok(json) => conn.respond(200, "application/json", json.as_bytes()),
+        Err(e) if e.downcast_ref::<pipeline::Superseded>().is_some() => {
+            conn.respond(409, "application/json", error_body(&e).as_bytes())
+        }
         Err(e) => conn.respond(err_status, "application/json", error_body(&e).as_bytes()),
     }
 }

@@ -178,8 +178,16 @@ impl Retained {
             // two threads of this process, and a reader must never see half.
             static N: AtomicU64 = AtomicU64::new(0);
             let tmp = raw.with_extension(format!("thumb{}.part", N.fetch_add(1, Ordering::Relaxed)));
-            img.thumbnail(256, 256).save_with_format(&tmp, image::ImageFormat::Png).ok()?;
-            std::fs::rename(&tmp, &thumb).ok()?;
+            let written = img
+                .thumbnail(256, 256)
+                .save_with_format(&tmp, image::ImageFormat::Png)
+                .is_ok()
+                && std::fs::rename(&tmp, &thumb).is_ok();
+            if !written {
+                // `.part`, so nothing else would ever sweep it.
+                let _ = std::fs::remove_file(&tmp);
+                return None;
+            }
         }
         std::fs::read(thumb).ok()
     }
@@ -214,6 +222,21 @@ impl Retained {
 
 /// Hard limit on the hi-res upscale factor a request may ask for.
 pub const MAX_UPSCALE: f32 = 4.0;
+
+/// A slider re-filter that lost to a pass finishing on the other lane: the
+/// image it was adjusting has been replaced by a newer one under the same id.
+/// Typed so the route answers 409 and the page can tell it from "that image is
+/// gone" — the image is very much still there, it is just newer.
+#[derive(Debug)]
+pub struct Superseded;
+
+impl std::fmt::Display for Superseded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("that image was replaced while it was being adjusted")
+    }
+}
+
+impl std::error::Error for Superseded {}
 
 /// Above this longest side an img2img pass gets `--vae-tiling` (and flash
 /// attention), which is what keeps a large pass inside VRAM. Below it the
@@ -2660,7 +2683,7 @@ impl Display {
         // Only over the entry it read. A pass on the other lane may have
         // replaced it meanwhile, and the drag belongs to the image it replaced.
         if !lock(&self.retained).update(id, entry) {
-            bail!("that image was replaced while it was being adjusted");
+            return Err(Superseded.into());
         }
         Ok(result)
     }
@@ -2762,7 +2785,10 @@ impl Display {
     /// the same property a live `Pending` has, extended across a restart.
     pub fn open(&mut self, work_id: &str, shelf: Shelf) -> Result<GenResult> {
         let item = self.items.load(shelf, work_id)?;
-        let stored = self.items.image_path(shelf, &item.id);
+        // The validated id, never the sidecar's own `id` field: a copied-in
+        // sidecar whose field disagrees with its file name would open another
+        // item's picture.
+        let stored = self.items.image_path(shelf, work_id);
 
         let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();
@@ -3145,9 +3171,13 @@ pub fn enlarge(
     let input = image::image_dimensions(src)
         .with_context(|| format!("reading the size of {}", src.display()))?;
     // Beside `dst` so it shares its job id and its folder; a `.png` extension
-    // so `purge_pngs` reaches it after a crash. Its own guard, since it never outlives this.
+    // so `purge_pngs` reaches it after a crash. Its own guard, since it never
+    // outlives this. Process id and a counter in the name: from the `upscale`
+    // subcommand `dst` is the user's own path, and `out.model.png` beside it
+    // could be a file of theirs that the guard would then delete.
     let mut scratch = Scratch::default();
-    let big = scratch.path(dst.with_extension("model.png"));
+    let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let big = scratch.path(dst.with_extension(format!("{}-{n}.model.png", std::process::id())));
     if crate::sr::is_esrgan(model)? {
         sd.upscale(model, src, &big)?;
     } else {

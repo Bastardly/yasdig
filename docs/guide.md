@@ -308,7 +308,8 @@ looking in and what it found there, which is the first thing to check if the lis
 empty.
 
 **Strength** is the multiplier. 1 is the weight the adapter was trained at, 0.5 is a
-hint of it, and negative subtracts — a real technique, so the range is -2 to 2.
+hint of it, and negative subtracts — a real technique. There is no limit either way:
+slider LoRAs are often published for values like -13.
 
 **A LoRA has to match the family of the model it patches**, and the picker enforces
 it. An SDXL LoRA does nothing to a Z-Image, and stable-diffusion.cpp won't say so: it

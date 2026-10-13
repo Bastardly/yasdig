@@ -1,5 +1,5 @@
-import { $, esc, post, numOr, rememberFolds } from './dom.js';
-import { showError } from './memory.js';
+import { $, esc, getJSON, post, numOr, rememberFolds } from './dom.js';
+import { MEMORY_LABELS, showError } from './memory.js';
 import { S } from './state.js';
 import { setBusy, setIdle, cancelRun } from './busy.js';
 import { soonJobs } from './jobs.js';
@@ -35,14 +35,13 @@ function currentVideoModel() {
 // Each fold's summary says what is inside, the Image tab's rule, so a folded
 // section still reads. Run from a delegated listener on the tab, and after
 // anything that sets the boxes without an event (`syncVideo`, `applyClip`).
-const MEMORY_WORDS = { auto: 'Auto', ram: 'System RAM', disk: 'Stream from SSD' };
 function syncVideoSummaries() {
   const p = $('vprompt').value.trim();
   $('vsum-prompt').textContent = p ? `— ${p.length > 60 ? p.slice(0, 60) + '…' : p}` : '';
   const m = $('vmodel').value;
   $('vsum-gen').textContent = m
     ? `— ${m} · ${$('vw').value}×${$('vh').value} · ${$('vframes').value} frames` : '';
-  $('vsum-adv').textContent = `— Memory: ${MEMORY_WORDS[$('vmemory').value] ?? $('vmemory').value}`
+  $('vsum-adv').textContent = `— Memory: ${MEMORY_LABELS[$('vmemory').value] ?? $('vmemory').value}`
     + ($('vtiling').checked ? ' · VAE tiling' : '');
 }
 
@@ -116,8 +115,8 @@ function syncVideo() {
 
 async function loadVideoModels() {
   try {
-    const data = await (await fetch('/video-models')).json();
-    if (!Array.isArray(data)) throw new Error(data.error || 'unexpected response');
+    const data = await getJSON('/video-models');
+    if (!Array.isArray(data)) throw new Error('unexpected response');
     videoModels = data;
     const sel = $('vmodel');
     sel.innerHTML = '';
@@ -230,8 +229,8 @@ const vDeleteMode = () =>
 
 async function loadClips() {
   try {
-    const data = await (await fetch('/videos')).json();
-    if (!Array.isArray(data)) throw new Error(data.error || 'unexpected response');
+    const data = await getJSON('/videos');
+    if (!Array.isArray(data)) throw new Error('unexpected response');
     clips = data;
   } catch (e) {
     clips = [];

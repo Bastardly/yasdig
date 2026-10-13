@@ -62,6 +62,9 @@ async function loadFrames(c) {
   });
   const loaded = await Promise.all(
     Array.from({ length: c.frames }, (_, n) => load(n)));
+  // Another clip was opened while these decoded: its own load owns the
+  // canvas, and these frames playing under its title would be the wrong clip.
+  if (c !== clip) return;
   vframes = loaded.filter(Boolean);
   const cv = $('vcanvas');
   if (cv) {

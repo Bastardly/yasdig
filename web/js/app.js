@@ -111,7 +111,8 @@ async function closeServer() {
       : 'Nothing is deleted.');
   if (!confirm(msg)) return;
   try {
-    const resp = await fetch('/shutdown', { method: 'POST' });
+    // `clear` said out loud: the server deletes nothing unless asked to.
+    const resp = await fetch('/shutdown', { method: 'POST', body: JSON.stringify({ clear: true }) });
     await resp.json();
   } catch {
     // The server exits right after answering, so a connection that drops here

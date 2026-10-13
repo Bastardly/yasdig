@@ -116,7 +116,8 @@ needs a Vulkan device and nothing else.
   profile's. A name that isn't on disk is a `500` naming what is.
   `loras` is the one list here, and absent is not the same as empty: omitting the key
   keeps whatever the profile has, `[]` clears it. `name` is the path relative to the
-  LoRA dir, extension included; `strength` is -2 to 2. A name that isn't on disk is a
+  LoRA dir, extension included; `strength` is any finite number (1 is as trained,
+  negative subtracts). A name that isn't on disk is a
   `500` with the available names in it rather than a render that quietly lacks it. They
   are retained with the image, so `/refine` and `/hires` run the same adapters — and
   they are *not* an escalation knob, so a `model` swap in one of those bodies replaces
@@ -346,9 +347,9 @@ needs a Vulkan device and nothing else.
   the pass was writing to a scratch file that is cleaned up on failure either way, so
   the image on screen is never a half-written one. The cancelled request itself comes
   back as an error whose message ends in `cancelled by request`.
-- `POST /shutdown` — the *Close server* button. Stops the run in flight, deletes what
-  the three `clear_*_on_close` settings in the *saved* `user/settings.toml` ask for,
-  answers `{ "closed": true, "cleared": { "workitems": 0, "outputs": 3, "videos": 0 } }`
+- `POST /shutdown {clear}` — the *Close server* button. Stops the run in flight, and
+  with `"clear": true` deletes what the three `clear_*_on_close` settings in the *saved*
+  `user/settings.toml` ask for (absent or anything else deletes nothing), answers `{ "closed": true, "cleared": { "workitems": 0, "outputs": 3, "videos": 0 } }`
   and exits, freeing the port.
 - `GET /loras` — every file in the LoRA dir, recursive: `name` (what a request puts in
   `loras[].name`), `label` (the same without its extension, for a picker), `bytes`,
@@ -488,3 +489,12 @@ image; either way it's client-side staleness, and the image is left intact to re
 Since every generation is archived, an expired id is recovered by reopening the work
 item rather than by regenerating — the page does that by itself for an image with no
 escalation in it. Malformed JSON is `400`, and `503` means the GPU worker is gone.
+`POST /adjust` answers `409` when a pass on the same image finished while the re-filter
+ran: the image is still there, just newer, and the page drops the stale answer.
+
+Every route refuses with `403` a request from another website: a non-GET whose `Origin`
+is present and isn't `http://` plus its own `Host`, or any request whose `Host` isn't a
+loopback name or `startup.toml`'s host (not checked when bound to `0.0.0.0`). Clients
+that send no `Origin` — curl, scripts — are unaffected. A request line or header line
+over 8 KB, more than 100 headers, or a request not fully sent within 30 seconds is
+dropped; a body over its route's limit answers `413`.

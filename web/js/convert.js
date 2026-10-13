@@ -1,4 +1,4 @@
-import { $, esc, post, rememberFolds } from './dom.js';
+import { $, esc, getJSON, post, rememberFolds } from './dom.js';
 import { setBusy, setIdle, cancelRun } from './busy.js';
 import { soonJobs } from './jobs.js';
 
@@ -13,8 +13,10 @@ let cfiles = [];
 let ctypes = [];
 let crunning = false;
 
+// Decimal, like Get models and the memory box: the same file must read as the
+// same number of GB on every tab.
 function gb(bytes) {
-  return (bytes / (1024 ** 3)).toFixed(2) + ' GB';
+  return (bytes / 1e9).toFixed(2) + ' GB';
 }
 
 function currentConvertFile() {
@@ -23,7 +25,7 @@ function currentConvertFile() {
 
 async function loadConvertModels() {
   try {
-    const data = await (await fetch('/convert-models')).json();
+    const data = await getJSON('/convert-models');
     ctypes = data.types || [];
     cfiles = data.files || [];
   } catch (e) {

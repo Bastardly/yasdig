@@ -84,10 +84,13 @@ fn clear_in(store: &Store, videos: &VideoStore, s: &Settings) -> Cleared {
     out
 }
 
-/// `{clip id}-x{percent}`, as `enlarge_clip` names it.
+/// `{clip id}-x{percent}`, as `enlarge_clip` names it. A clip id is
+/// `new_id`'s `{ms}-{seed}`, digits both sides — matched that tightly because
+/// `valid_id` alone also takes `holiday-x2`, a folder somebody made.
 fn is_enlarged_clip(name: &str) -> bool {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
     name.rsplit_once("-x").is_some_and(|(id, pct)| {
-        crate::workitems::valid_id(id) && !pct.is_empty() && pct.bytes().all(|b| b.is_ascii_digit())
+        digits(pct) && id.split_once('-').is_some_and(|(ms, seed)| digits(ms) && digits(seed))
     })
 }
 
@@ -141,5 +144,7 @@ mod tests {
         assert!(!is_enlarged_clip("my stuff"));
         assert!(!is_enlarged_clip("123-x"));
         assert!(!is_enlarged_clip("123-xabc"));
+        assert!(!is_enlarged_clip("holiday-x2"), "a folder the user made");
+        assert!(!is_enlarged_clip("my-holiday-x2"));
     }
 }

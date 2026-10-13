@@ -19,11 +19,22 @@ export function bar(name, ms, max) {
 }
 
 export async function post(path, payload) {
-  const resp = await fetch(path, {
+  return answer(await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-  });
+  }));
+}
+
+// A GET of a JSON route, held to the same rule as `post`: a failure answers
+// `{error}` with a 4xx/5xx, and that is a throw here, never a value a caller
+// would then index as a list. Not for `/settings`, which answers a broken file
+// with 200, its built-ins and an `error` beside them.
+export async function getJSON(path) {
+  return answer(await fetch(path));
+}
+
+async function answer(resp) {
   const data = await resp.json();
   if (!resp.ok || data.error) {
     const err = new Error(data.error || ('HTTP ' + resp.status));

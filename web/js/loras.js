@@ -1,4 +1,4 @@
-import { $, esc } from './dom.js';
+import { $, esc, getJSON } from './dom.js';
 
 // ---- LoRAs ------------------------------------------------------------------
 //
@@ -27,7 +27,7 @@ function fetchLoras(force) {
   if (force || !loading) {
     loading = (async () => {
       try {
-        const list = await (await fetch('/loras')).json();
+        const list = await getJSON('/loras');
         available = Array.isArray(list) ? list : [];
       } catch {
         available = [];
@@ -114,7 +114,7 @@ export function loraPicker({ rows, add, family = () => null, onChange = () => {}
       return `
       <div class="lorarow">
         <select data-i="${i}" aria-label="LoRA">${options(p.name, fam)}</select>
-        <input type="number" data-i="${i}" step="0.05" min="-2" max="2"
+        <input type="number" data-i="${i}" step="0.05"
           value="${p.strength}" aria-label="Strength" title="Multiplier. 1 is the weight it was trained at.">
         <button type="button" class="btn btn-danger" data-i="${i}"
           title="Remove this LoRA">&times;</button>

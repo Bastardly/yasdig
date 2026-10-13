@@ -1,4 +1,4 @@
-import { $, esc, post } from './dom.js';
+import { $, esc, getJSON, post } from './dom.js';
 import { S, escErr } from './state.js';
 import { setBusy, setIdle, onIdle } from './busy.js';
 import { setPost, setPostStart, showFullSize, setViewerImage, cancelPost } from './viewer.js';
@@ -28,7 +28,7 @@ import { openRedraw } from './redraw.js';
 // "nothing to pick", which is also what a fresh install has.
 export async function fetchOutputs(gallery = 'outputs') {
   try {
-    const list = await (await fetch(`/${gallery}`)).json();
+    const list = await getJSON(`/${gallery}`);
     return Array.isArray(list) ? list : [];
   } catch {
     return [];
@@ -73,6 +73,8 @@ export function outputGrid(el, list, { height = 200, empty = '', onPick }) {
 // `Gallery` in `src/workitems.rs`, and `shelf` in workitems.js, which this is
 // one directory along.
 let gallery = 'outputs';
+// Bumped per `loadOutputs`; only the newest answer may draw.
+let loadSeq = 0;
 const onFavorites = () => gallery === 'favorite-outputs';
 
 let outputs = [];
@@ -150,8 +152,10 @@ export async function loadOutputs() {
   // The gallery can be flipped mid-flight, and the loser of that race must not
   // draw one gallery's tiles under the other's buttons.
   const from = gallery;
+  // And an older load on the same gallery must not land after a newer one.
+  const mine = ++loadSeq;
   const list = await fetchOutputs(from);
-  if (from !== gallery) return;
+  if (from !== gallery || mine !== loadSeq) return;
   outputs = list;
   index = open ? outputs.findIndex((o) => o.stem === open) : -1;
   del.prune(outputs.map((o) => o.stem));

@@ -1,4 +1,4 @@
-import { $, bar, esc, post, numOr, rememberFolds } from './dom.js';
+import { $, bar, esc, getJSON, post, numOr, rememberFolds } from './dom.js';
 import { S, P, escErr } from './state.js';
 import { isBusy, setBusy, setIdle, onIdle, redrawBusy } from './busy.js';
 import { cancelPost, setPost, setPostStart, setViewerImage, showFullSize } from './viewer.js';
@@ -550,12 +550,17 @@ async function saveModelDefaults() {
   }
 }
 
-export async function loadModels() {
+// `refill: false` keeps the Generation boxes as they are unless the selected
+// model itself changed: a download landing in the background must not reset
+// a Steps value somebody is in the middle of tuning. A Settings save refills,
+// since new defaults are the point of it.
+export async function loadModels({ refill = true } = {}) {
+  const before = $('template').value;
   try {
     // Started before the first `await`, so `upscalersReady` is this fetch by the
     // time `initSettings` — later in the same boot tick — waits on it.
     const upscalers = loadUpscalers();
-    models = await (await fetch('/models')).json();
+    models = await getJSON('/models');
     await upscalers;
     // Three selects off one list: the one that chooses what generates, and one
     // per escalation — refine and hi-res pick their own, because the two passes
@@ -637,7 +642,7 @@ export async function loadModels() {
         + '<button type="button" class="btn">Get the missing files…</button>';
       $('getparts').querySelector('button').onclick = () => openGetModels(waiting[0].family);
     }
-    syncAdvanced();
+    if (refill || $('template').value !== before) syncAdvanced();
   } catch (e) {
     $('err').textContent = 'Could not load models: ' + e;
   }

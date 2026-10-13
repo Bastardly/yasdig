@@ -301,15 +301,10 @@ pub struct LoraRef {
     pub strength: f32,
 }
 
-/// Lowest and highest LoRA multiplier accepted.
-///
-/// The floor is negative on purpose: subtracting a LoRA is a real technique, and
-/// sd.cpp parses the number with `stof` and applies whatever it gets. The
-/// ceiling is where an adapter stops adding its subject and starts tearing the
-/// image apart — there is no hard limit in the format, so this is a guard
-/// against a typo (a stray `10`), not a claim about the math.
-pub const LORA_STRENGTH_MIN: f32 = -2.0;
-pub const LORA_STRENGTH_MAX: f32 = 2.0;
+/// Largest base size and step count a profile may ask for. Past 4096 is not a
+/// size any family was trained at — a bigger picture comes from the enlarge.
+pub const MAX_BASE_SIDE: u32 = 4096;
+pub const MAX_STEPS: u32 = 100;
 
 /// Is this a name [`Config::lora_path`] may join onto the LoRA directory?
 ///
@@ -742,6 +737,31 @@ impl Profile {
     /// compensated schedule). Called once per resolved profile at load, and
     /// again in the pipeline after per-request overrides are applied.
     pub fn validate(&self) -> Result<()> {
+        use crate::pipeline::MAX_UPSCALE;
+        // Here rather than only in `Settings::validate`: a `/generate` lands
+        // its own size, steps and factor on the profile, and `-W 0 --steps 0`
+        // reached sd-cli when only the settings file was held to these.
+        if !(64..=MAX_BASE_SIDE).contains(&self.width) || !(64..=MAX_BASE_SIDE).contains(&self.height) {
+            bail!(
+                "'{}': base size is {}×{}, must be between 64 and {MAX_BASE_SIDE}",
+                self.name,
+                self.width,
+                self.height
+            );
+        }
+        if !(1..=MAX_STEPS).contains(&self.steps) {
+            bail!("'{}': steps is {}, must be between 1 and {MAX_STEPS}", self.name, self.steps);
+        }
+        if !(1.0..=MAX_UPSCALE).contains(&self.upscale_factor) {
+            bail!(
+                "'{}': upscale_factor is {}, must be between 1 and {MAX_UPSCALE}",
+                self.name,
+                self.upscale_factor
+            );
+        }
+        if self.hires_max_side < 64 {
+            bail!("'{}': hires_max_side is {}, must be 64 or more", self.name, self.hires_max_side);
+        }
         for (field, v) in [
             ("refine_strength", self.refine_strength),
             ("hires_strength", self.hires_strength),
@@ -807,12 +827,13 @@ impl Profile {
             if !valid_lora_name(&l.name) {
                 bail!("'{}': '{}' is not a LoRA name", self.name, l.name);
             }
-            if !l.strength.is_finite()
-                || !(LORA_STRENGTH_MIN..=LORA_STRENGTH_MAX).contains(&l.strength)
-            {
+            // Any finite multiplier, unbounded on purpose: sd.cpp applies
+            // whatever `stof` reads, and slider LoRAs are published for use
+            // well past ±2 (−13 is seen in the wild). Only `inf`/`NaN` are
+            // refused, since they would print into the tag as words.
+            if !l.strength.is_finite() {
                 bail!(
-                    "'{}': LoRA '{}' has strength {}, must be between \
-                     {LORA_STRENGTH_MIN} and {LORA_STRENGTH_MAX}",
+                    "'{}': LoRA '{}' has strength {}, must be a number",
                     self.name,
                     l.name,
                     l.strength
@@ -3173,7 +3194,7 @@ t5xxl = "v/umt5.gguf"
     /// A strength is range-checked on the profile, because by then it has come
     /// off the wire and is one step from being a command line.
     #[test]
-    fn a_lora_strength_is_range_checked() {
+    fn a_lora_strength_is_any_finite_number() {
         let mut p = Profile {
             name: "t".into(),
             ..Default::default()
@@ -3184,11 +3205,14 @@ t5xxl = "v/umt5.gguf"
         }];
         assert!(p.validate().is_ok());
 
-        // Negative is legal — subtracting a LoRA is a real technique.
-        p.loras[0].strength = -0.75;
-        assert!(p.validate().is_ok());
+        // Negative is legal — subtracting a LoRA is a real technique — and
+        // there is no ceiling or floor: slider LoRAs go far past ±2.
+        for good in [-0.75, -13.0, 25.0] {
+            p.loras[0].strength = good;
+            assert!(p.validate().is_ok(), "{good} should be accepted");
+        }
 
-        for bad in [3.0, -9.0, f32::NAN] {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             p.loras[0].strength = bad;
             assert!(p.validate().is_err(), "{bad} should be rejected");
         }

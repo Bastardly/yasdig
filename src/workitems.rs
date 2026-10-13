@@ -504,9 +504,22 @@ impl Store {
     pub fn import(&self, png: &[u8], width: u32, height: u32) -> Result<String> {
         std::fs::create_dir_all(&self.output)
             .with_context(|| format!("creating {}", self.output.display()))?;
-        let stem = self.free_stem(&format!("{}-import", new_id(0)));
-        let path = self.output.join(format!("{stem}.png"));
-        std::fs::write(&path, png).with_context(|| format!("writing {}", path.display()))?;
+        // `create_new`, retried: uploads answer on connection threads, so two
+        // can pick the same free stem at once, and a plain write would let the
+        // second replace the first under one name.
+        let base = format!("{}-import", new_id(0));
+        let (stem, path, mut file) = loop {
+            let stem = self.free_stem(&base);
+            let path = self.output.join(format!("{stem}.png"));
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(f) => break (stem, path, f),
+                // Another upload took it between `free_stem` and here; the
+                // next `free_stem` sees its file and moves on.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e).with_context(|| format!("creating {}", path.display())),
+            }
+        };
+        std::io::Write::write_all(&mut file, png).with_context(|| format!("writing {}", path.display()))?;
 
         let item = WorkItem {
             id: stem.clone(),

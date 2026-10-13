@@ -387,13 +387,17 @@ pub struct Found {
 pub fn read_tensors(path: &Path) -> Result<Tensors> {
     let mut f = std::fs::File::open(path)
         .with_context(|| format!("opening {} to identify it", path.display()))?;
-    let mut magic = [0u8; 4];
-    f.read_exact(&mut magic)
+    let mut magic = [0u8; 8];
+    f.read_exact(&mut magic[..4])
         .with_context(|| format!("{} is too short to be a model file", path.display()))?;
+    // All eight for the legacy test, the same as `weights::load`: a
+    // safetensors header length can begin with the first four.
+    let n = 4 + f.read(&mut magic[4..])?;
     f.seek(SeekFrom::Start(0))?;
-    if &magic == b"GGUF" {
+    let magic4: [u8; 4] = magic[..4].try_into().unwrap();
+    if &magic4 == b"GGUF" {
         read_gguf(&mut f).with_context(|| format!("reading the GGUF header of {}", path.display()))
-    } else if &magic == b"PK\x03\x04" || magic == [0x80, 0x02, 0x8a, 0x0a] {
+    } else if &magic4 == b"PK\x03\x04" || (n == 8 && magic == crate::sr::weights::LEGACY_MAGIC) {
         let w = crate::sr::weights::load(path, false)?;
         Ok(Tensors {
             tensors: w
@@ -417,7 +421,7 @@ pub fn read_tensors(path: &Path) -> Result<Tensors> {
 /// Largest header we'll read. The biggest seen in practice is ~230 KB (a 2054
 /// tensor Qwen3-VL-32B); 64 MB is four hundred times that and still bounds a
 /// corrupt or hostile length field to something a read can survive.
-const MAX_HEADER: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_HEADER: u64 = 64 * 1024 * 1024;
 
 /// safetensors: `u64` little-endian header length, then that many bytes of JSON
 /// mapping tensor name to `{dtype, shape, data_offsets}`, plus an optional

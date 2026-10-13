@@ -1,4 +1,4 @@
-import { $, esc, post } from './dom.js';
+import { $, esc, getJSON, post } from './dom.js';
 import { S } from './state.js';
 import { imageLoras, imageSource, models, render, setParts, setUpscaler, syncCfgPlaceholders,
          syncOutSize, syncParts } from './image.js';
@@ -15,6 +15,8 @@ let workItems = [];
 // sweeps (`Delete all`, and `purge_pngs` at startup); `user/favorite/` is what
 // it never touches unasked. See `Shelf` in `src/workitems.rs`.
 let shelf = 'workitems';
+// Bumped per `loadWorkItems`; only the newest answer may draw.
+let loadSeq = 0;
 const onFavorites = () => shelf === 'favorites';
 
 // Marking, the buttons above the grid and both requests live in `gridmark.js`,
@@ -84,12 +86,16 @@ export async function loadWorkItems() {
   // which is the only rule that stays predictable, and the new item is one
   // click away.
   const from = shelf;
+  // Every image of a batch reloads the grid, so several of these can be in
+  // flight on one shelf; only the newest may draw, or an older answer landing
+  // last leaves the newest item missing until the next image.
+  const mine = ++loadSeq;
   let items = [];
   try {
-    const data = await (await fetch(`/${from}`)).json();
-    // A 500 answers with {"error": …}, not a list. Everything below assumes an
-    // array, and a TypeError here would take the whole page's wiring with it.
-    if (!Array.isArray(data)) throw new Error(data.error || 'unexpected response');
+    const data = await getJSON(`/${from}`);
+    // Everything below assumes an array, and a TypeError here would take the
+    // whole page's wiring with it.
+    if (!Array.isArray(data)) throw new Error('unexpected response');
     items = data;
   } catch (e) {
     $('err').textContent = 'Could not load work items: ' + (e.message || e);
@@ -98,7 +104,7 @@ export async function loadWorkItems() {
   // land at all — not even on `workItems`, which is what a click reads to find
   // the settings to restore. Drawing one shelf's tiles over another's list is
   // the version of this bug that looks like nothing until a tile is clicked.
-  if (from !== shelf) return;
+  if (from !== shelf || mine !== loadSeq) return;
   workItems = items;
   marks.prune(workItems.map((w) => w.id));
   renderWorkItems();

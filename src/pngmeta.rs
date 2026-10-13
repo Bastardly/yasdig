@@ -54,6 +54,7 @@ pub struct Embedded {
 /// `model`, `components`, `extra_args` (paths), no `memory` or reserve (how a
 /// run fit *here*), no `references` or source (stems on someone else's disk).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct EmbeddedProfile {
     pub width: u32,
     pub height: u32,
@@ -77,6 +78,41 @@ pub struct EmbeddedProfile {
     pub loras: Vec<LoraRef>,
 }
 
+impl EmbeddedProfile {
+    fn of(p: &Profile) -> EmbeddedProfile {
+        EmbeddedProfile {
+        width: p.width,
+        height: p.height,
+        steps: p.steps,
+        cfg_scale: p.cfg_scale,
+        sampler: p.sampler.clone(),
+        scheduler: p.scheduler.clone(),
+        cache_mode: p.cache_mode.clone(),
+        upscale_factor: p.upscale_factor,
+        upscaler: p.upscaler.clone(),
+        refine_steps: p.refine_steps,
+        refine_strength: p.refine_strength,
+        refine_cfg_scale: p.refine_cfg_scale,
+        hires_steps: p.hires_steps,
+        hires_strength: p.hires_strength,
+        hires_cfg_scale: p.hires_cfg_scale,
+        refine_model: p.refine_model.clone(),
+        hires_model: p.hires_model.clone(),
+        source_strength: p.source_strength,
+        loras: p.loras.clone(),
+    }
+    }
+}
+
+/// A field missing from a record (one written by another version) takes the
+/// built-in setting, rather than the whole record failing to parse and the PNG
+/// being read as an A1111 one without a word.
+impl Default for EmbeddedProfile {
+    fn default() -> Self {
+        EmbeddedProfile::of(&Profile::default())
+    }
+}
+
 impl Embedded {
     pub fn from_item(item: &WorkItem) -> Embedded {
         let p: &Profile = &item.profile;
@@ -88,27 +124,7 @@ impl Embedded {
             typed_negative: item.typed_negative.clone(),
             seed: item.seed,
             template: item.template.clone(),
-            profile: EmbeddedProfile {
-                width: p.width,
-                height: p.height,
-                steps: p.steps,
-                cfg_scale: p.cfg_scale,
-                sampler: p.sampler.clone(),
-                scheduler: p.scheduler.clone(),
-                cache_mode: p.cache_mode.clone(),
-                upscale_factor: p.upscale_factor,
-                upscaler: p.upscaler.clone(),
-                refine_steps: p.refine_steps,
-                refine_strength: p.refine_strength,
-                refine_cfg_scale: p.refine_cfg_scale,
-                hires_steps: p.hires_steps,
-                hires_strength: p.hires_strength,
-                hires_cfg_scale: p.hires_cfg_scale,
-                refine_model: p.refine_model.clone(),
-                hires_model: p.hires_model.clone(),
-                source_strength: p.source_strength,
-                loras: p.loras.clone(),
-            },
+            profile: EmbeddedProfile::of(p),
         }
     }
 }
@@ -339,6 +355,8 @@ pub struct Install {
     pub models: Vec<String>,
     /// LoRA names relative to the LoRA folder, extension included.
     pub loras: Vec<String>,
+    /// Runnable upscaler names, relative to the upscaler folder.
+    pub upscalers: Vec<String>,
 }
 
 /// The settings an A1111-style `parameters` text gives — each only when the
@@ -402,6 +420,24 @@ pub fn read(png: &[u8], install: &Install) -> Result<Loaded> {
             if m.as_ref().is_some_and(|n| !install.models.contains(n)) {
                 *m = None;
             }
+        }
+        // The rest of what names something: each is a note and a fallback, never
+        // a value the next Generate would be refused over.
+        let p = &mut item.profile;
+        if let Some(u) = p.upscaler.take_if(|u| !install.upscalers.contains(u)) {
+            notes.push(format!("upscaler {u} isn't installed — FSR enlarges instead"));
+        }
+        if !crate::config::SAMPLERS.contains(&p.sampler.as_str()) {
+            let fallback = Profile::default().sampler;
+            notes.push(format!("sampler {} isn't one this build has — {fallback} instead", p.sampler));
+            p.sampler = fallback;
+        }
+        if !crate::config::SCHEDULERS.contains(&p.scheduler.as_str()) {
+            notes.push(format!("scheduler {} isn't one this build has — Auto instead", p.scheduler));
+            p.scheduler = crate::config::AUTO_SCHEDULER.to_string();
+        }
+        if !crate::config::CACHE_MODES.contains(&p.cache_mode.as_str()) {
+            p.cache_mode = Profile::default().cache_mode;
         }
         return Ok(Loaded { source: "yasdig", notes, item: Some(item), params: None });
     }
@@ -609,6 +645,7 @@ mod tests {
         Install {
             models: vec!["sd_xl_base_1.0".into()],
             loras: vec!["sdxl/detail.safetensors".into()],
+            upscalers: vec![],
         }
     }
 
@@ -664,10 +701,47 @@ mod tests {
         assert_eq!(got.item.unwrap(), Embedded::from_item(&item()));
 
         // Elsewhere, without the model or the LoRA: named, and the LoRA dropped.
-        let bare = Install { models: vec![], loras: vec![] };
+        let bare = Install { models: vec![], loras: vec![], upscalers: vec![] };
         let got = read(&out, &bare).unwrap();
         assert_eq!(got.notes.len(), 2, "{:?}", got.notes);
         assert!(got.item.unwrap().profile.loras.is_empty());
+    }
+
+    /// Every name a record restores is matched against this install: a
+    /// missing upscaler, an unknown sampler or scheduler is a note and a
+    /// fallback, never a setting the next Generate is refused over.
+    #[test]
+    fn names_this_install_lacks_fall_back_with_a_note() {
+        let mut it = item();
+        it.profile.upscaler = Some("4x-Gone.pth".into());
+        it.profile.sampler = "future_sampler".into();
+        it.profile.scheduler = "future_schedule".into();
+        let got = read(&embed(&png(2, 2), &it).unwrap(), &install()).unwrap();
+        assert_eq!(got.notes.len(), 3, "{:?}", got.notes);
+        let p = got.item.unwrap().profile;
+        assert_eq!(p.upscaler, None);
+        assert_eq!(p.sampler, Profile::default().sampler);
+        assert_eq!(p.scheduler, crate::config::AUTO_SCHEDULER);
+    }
+
+    /// A record from another version, missing fields, is still ours.
+    #[test]
+    fn a_record_missing_fields_still_reads_as_yasdig() {
+        let rec = r#"{"v":1,"prompt":"a cat","negative":null,"typed_prompt":null,
+            "typed_negative":null,"seed":7,"template":"sd_xl_base_1.0","profile":{"steps":9}}"#;
+        // The image's chunks with the record spliced in before the data.
+        let mut out = SIGNATURE.to_vec();
+        for (kind, data) in chunks(&png(2, 2)).unwrap() {
+            if kind == b"IDAT" {
+                out.extend(text_chunk(YASDIG, rec, true));
+            }
+            out.extend(chunk(kind, data));
+        }
+        let got = read(&out, &install()).unwrap();
+        assert_eq!(got.source, "yasdig");
+        let p = got.item.unwrap().profile;
+        assert_eq!(p.steps, 9);
+        assert_eq!(p.width, Profile::default().width);
     }
 
     #[test]

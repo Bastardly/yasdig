@@ -93,7 +93,7 @@ impl Weights {
 /// happens to be 0x…80 bytes long opens with `0x80` too — the DAT this feature
 /// started from is 238 208 bytes of header, `80 a2 03 00`, and was read as a
 /// pickle until this said otherwise.
-const LEGACY_MAGIC: [u8; 8] = [0x80, 0x02, 0x8a, 0x0a, 0x6c, 0xfc, 0x9c, 0x46];
+pub(crate) const LEGACY_MAGIC: [u8; 8] = [0x80, 0x02, 0x8a, 0x0a, 0x6c, 0xfc, 0x9c, 0x46];
 
 /// Read a model file. `data: false` reads names and shapes only — what the
 /// listing needs, and cheap: a safetensors header, or one pickle.
@@ -153,11 +153,18 @@ fn unwrap_names(raw: Vec<(String, Tensor)>) -> BTreeMap<String, Tensor> {
 // safetensors
 // ---------------------------------------------------------------------------
 
-/// Same bound as `discover`'s: a corrupt length field must not become a 16 EB
+/// `discover`'s bound: a corrupt length field must not become a 16 EB
 /// allocation.
-const MAX_HEADER: u64 = 64 * 1024 * 1024;
+use crate::discover::MAX_HEADER;
+
+/// Elements in a shape, or `None` when the product overflows — shapes come out
+/// of the file, and a wrapped product would pass every bound check after it.
+fn elements(shape: &[usize]) -> Option<usize> {
+    shape.iter().try_fold(1usize, |a, &d| a.checked_mul(d))
+}
 
 fn read_safetensors(f: &mut std::fs::File, data: bool) -> Result<Vec<(String, Tensor)>> {
+    let file_len = f.metadata()?.len();
     let mut len = [0u8; 8];
     f.read_exact(&mut len)?;
     let len = u64::from_le_bytes(len);
@@ -193,8 +200,11 @@ fn read_safetensors(f: &mut std::fs::File, data: bool) -> Result<Vec<(String, Te
                     .and_then(|o| o.as_array())
                     .and_then(|a| Some((a.first()?.as_u64()?, a.get(1)?.as_u64()?)))
                     .with_context(|| format!("tensor '{name}' has no data_offsets"))?;
-                let n: usize = shape.iter().product();
-                if offs.1 - offs.0 != (n * dt.size()) as u64 {
+                let bytes = elements(&shape).and_then(|n| n.checked_mul(dt.size()));
+                if offs.1 < offs.0
+                    || bytes != Some((offs.1 - offs.0) as usize)
+                    || base.checked_add(offs.1).is_none_or(|end| end > file_len)
+                {
                     bail!("tensor '{name}': byte range does not match its shape");
                 }
                 f.seek(SeekFrom::Start(base + offs.0))?;
@@ -352,6 +362,12 @@ fn zip_entries(f: &mut std::fs::File) -> Result<Vec<ZipEntry>> {
         if p + 46 > cd.len() || cd[p..p + 4] != [0x50, 0x4b, 0x01, 0x02] {
             bail!("zip: bad central directory entry");
         }
+        // Name, extra field and comment lengths are the entry's own claims;
+        // all three must fit in the directory before anything is sliced.
+        let tail = u16at(&cd, p + 28) + u16at(&cd, p + 30) + u16at(&cd, p + 32);
+        if p + 46 + tail as usize > cd.len() {
+            bail!("zip: central directory entry runs past the directory");
+        }
         let method = u16at(&cd, p + 10);
         let mut size = u32at(&cd, p + 24);
         let usize_ = u32at(&cd, p + 20);
@@ -369,14 +385,15 @@ fn zip_entries(f: &mut std::fs::File) -> Result<Vec<ZipEntry>> {
             let sz = u16at(&cd, x + 2) as usize;
             if id == 1 {
                 let mut q = x + 4;
+                let end = (x + 4 + sz).min(xend);
                 if usize_ == 0xffff_ffff {
                     q += 8; // uncompressed size, same as `size` for stored
                 }
-                if size == 0xffff_ffff {
+                if size == 0xffff_ffff && q + 8 <= end {
                     size = u64at(&cd, q);
                     q += 8;
                 }
-                if local == 0xffff_ffff {
+                if local == 0xffff_ffff && q + 8 <= end {
                     local = u64at(&cd, q);
                 }
             }
@@ -401,6 +418,11 @@ fn zip_entries(f: &mut std::fs::File) -> Result<Vec<ZipEntry>> {
             bail!("zip: bad local header for '{}'", ent.name);
         }
         ent.offset += 30 + u16at(&h, 26) + u16at(&h, 28);
+        // Every later read is sized from `size`, so it is held to the file:
+        // a corrupt one must be an error, not a terabyte allocation.
+        if ent.offset.checked_add(ent.size).is_none_or(|end| end > len) {
+            bail!("zip entry '{}' runs past the end of the file", ent.name);
+        }
     }
     Ok(out)
 }
@@ -411,6 +433,9 @@ fn read_torch_zip(f: &mut std::fs::File, data: bool) -> Result<Vec<(String, Tens
         .iter()
         .find(|e| e.name.ends_with("data.pkl"))
         .context("no data.pkl in the zip — not a torch.save file")?;
+    if pkl.size > MAX_HEADER {
+        bail!("data.pkl is {} bytes — not a state dict", pkl.size);
+    }
     let root = pkl.name.trim_end_matches("data.pkl").to_string();
     f.seek(SeekFrom::Start(pkl.offset))?;
     let mut buf = vec![0u8; pkl.size as usize];
@@ -445,7 +470,7 @@ fn read_strided(f: &mut std::fs::File, base: u64, size: u64, t: &PTensor, name: 
     let mut bytes = vec![0u8; size as usize];
     f.read_exact(&mut bytes)?;
     let all = t.dtype.to_f32(&bytes);
-    let n: usize = t.shape.iter().product();
+    let n = elements(&t.shape).with_context(|| format!("tensor '{name}': shape overflows"))?;
     let contiguous = {
         let mut s = 1usize;
         let mut ok = true;
@@ -453,12 +478,12 @@ fn read_strided(f: &mut std::fs::File, base: u64, size: u64, t: &PTensor, name: 
             if *d > 1 && *st != s {
                 ok = false;
             }
-            s *= d;
+            s = s.saturating_mul(*d);
         }
         ok
     };
     if contiguous {
-        let end = t.offset + n;
+        let end = t.offset.saturating_add(n);
         if end > all.len() {
             bail!("tensor '{name}' runs past its storage ({} of {} elements, {es}-byte)", end, all.len());
         }
@@ -467,7 +492,11 @@ fn read_strided(f: &mut std::fs::File, base: u64, size: u64, t: &PTensor, name: 
     let mut out = Vec::with_capacity(n);
     let mut idx = vec![0usize; t.shape.len()];
     for _ in 0..n {
-        let at = t.offset + idx.iter().zip(&t.stride).map(|(i, s)| i * s).sum::<usize>();
+        let at = idx
+            .iter()
+            .zip(&t.stride)
+            .try_fold(t.offset, |a, (i, s)| a.checked_add(i.checked_mul(*s)?))
+            .unwrap_or(usize::MAX);
         out.push(*all.get(at).with_context(|| format!("tensor '{name}' strides past its storage"))?);
         for d in (0..idx.len()).rev() {
             idx[d] += 1;
@@ -486,7 +515,14 @@ fn read_strided(f: &mut std::fs::File, base: u64, size: u64, t: &PTensor, name: 
 
 fn read_torch_legacy(f: &mut std::fs::File, data: bool) -> Result<Vec<(String, Tensor)>> {
     let mut buf = Vec::new();
-    f.read_to_end(&mut buf)?;
+    if data {
+        f.read_to_end(&mut buf)?;
+    } else {
+        // Names and shapes are all in the pickles at the front; the storages
+        // after them are the whole rest of a multi-GB file, which listing
+        // the models folder must not read.
+        f.take(MAX_HEADER).read_to_end(&mut buf)?;
+    }
     let mut p = 0usize;
     // Magic number, protocol version, sys info: three pickles to step over.
     for _ in 0..3 {
@@ -504,7 +540,9 @@ fn read_torch_legacy(f: &mut std::fs::File, data: bool) -> Result<Vec<(String, T
     // Storages follow in key order, each an i64 element count then the bytes.
     let dtype_of: HashMap<&str, DType> = tensors.iter().map(|(_, t)| (t.key.as_str(), t.dtype)).collect();
     let mut at: HashMap<String, (usize, usize)> = HashMap::new();
-    if let Value::List(ks) = &keys {
+    if !data {
+        // Nothing below is needed, and the buffer stops short of the storages.
+    } else if let Value::List(ks) = &keys {
         for k in ks {
             let Value::Str(k) = k else { bail!("legacy torch file: storage key is not a string") };
             if p + 8 > buf.len() {
@@ -513,8 +551,8 @@ fn read_torch_legacy(f: &mut std::fs::File, data: bool) -> Result<Vec<(String, T
             let n = u64::from_le_bytes(buf[p..p + 8].try_into().unwrap()) as usize;
             p += 8;
             let es = dtype_of.get(k.as_str()).map(|d| d.size()).unwrap_or(4);
-            let bytes = n * es;
-            if p + bytes > buf.len() {
+            let bytes = n.saturating_mul(es);
+            if bytes > buf.len() - p {
                 bail!("legacy torch file: storage '{k}' runs past the end");
             }
             at.insert(k.clone(), (p, bytes));
@@ -526,10 +564,10 @@ fn read_torch_legacy(f: &mut std::fs::File, data: bool) -> Result<Vec<(String, T
         let floats = if data && t.dtype.is_float() {
             let &(off, len) = at.get(&t.key).with_context(|| format!("tensor '{name}': storage missing"))?;
             let all = t.dtype.to_f32(&buf[off..off + len]);
-            let n: usize = t.shape.iter().product();
+            let n = elements(&t.shape).unwrap_or(usize::MAX);
             // Legacy states were written contiguous; views are refused rather
             // than half-supported.
-            if t.offset + n > all.len() {
+            if t.offset.saturating_add(n) > all.len() {
                 bail!("tensor '{name}' runs past its storage");
             }
             Some(all[t.offset..t.offset + n].to_vec())
@@ -576,6 +614,31 @@ enum Value {
     Other,
 }
 
+/// How many values [`Pickle`] may copy in one parse, counted in nodes.
+const COPY_BUDGET: usize = 10_000_000;
+
+impl Value {
+    /// Nodes in this value, counting stops at `limit` so a huge value costs
+    /// no more than the limit to measure.
+    fn nodes(&self, limit: usize) -> usize {
+        let mut n = 1;
+        let mut add = |v: &Value| {
+            if n < limit {
+                n += v.nodes(limit - n);
+            }
+        };
+        match self {
+            Value::Tuple(xs) | Value::List(xs) => xs.iter().for_each(&mut add),
+            Value::Dict(kv) => kv.iter().for_each(|(k, v)| {
+                add(k);
+                add(v)
+            }),
+            _ => {}
+        }
+        n.min(limit)
+    }
+}
+
 /// Every tensor in a value, depth first, with nested dict keys joined by `.`.
 fn collect(v: &Value) -> Vec<(String, PTensor)> {
     fn walk(v: &Value, prefix: &str, out: &mut Vec<(String, PTensor)>) {
@@ -614,12 +677,18 @@ impl<'a> Pickle<'a> {
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        if self.p + n > self.b.len() {
-            bail!("pickle: truncated");
-        }
-        let s = &self.b[self.p..self.p + n];
-        self.p += n;
+        // Checked: `n` is a length field out of the file, and near `usize::MAX`
+        // it would wrap past the bound and slice backwards.
+        let end = self.p.checked_add(n).filter(|&e| e <= self.b.len()).context("pickle: truncated")?;
+        let s = &self.b[self.p..end];
+        self.p = end;
         Ok(s)
+    }
+
+    /// An 8-byte length field.
+    fn u64_len(&mut self) -> Result<usize> {
+        let s = self.take(8)?;
+        usize::try_from(u64::from_le_bytes(s.try_into().unwrap())).context("pickle: truncated")
     }
 
     fn u8(&mut self) -> Result<u8> {
@@ -638,17 +707,29 @@ impl<'a> Pickle<'a> {
 
     fn line(&mut self) -> Result<String> {
         let start = self.p;
-        while self.p < self.b.len() && self.b[self.p] != b'\n' {
-            self.p += 1;
-        }
-        let s = String::from_utf8_lossy(&self.b[start..self.p]).into_owned();
-        self.p += 1;
+        let len = self.b[start..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .context("pickle: truncated line")?;
+        let s = String::from_utf8_lossy(&self.b[start..start + len]).into_owned();
+        self.p = start + len + 1;
         Ok(s)
     }
 
     fn run(&mut self) -> Result<Value> {
         let mut stack: Vec<Value> = Vec::new();
         let mut memo: HashMap<usize, Value> = HashMap::new();
+        // Values are copied, not shared, so memo, DUP and tuples of copies can
+        // double a value per few bytes of file: sixty rounds is an exabyte.
+        // Every copy is charged by its size; a real state dict copies only
+        // small things (a storage class, an empty dict), far under the budget.
+        let mut budget = COPY_BUDGET;
+        let mut copy = |v: &Value| -> Result<Value> {
+            budget = budget
+                .checked_sub(v.nodes(budget + 1))
+                .context("pickle: too many copied values — not a plain state dict")?;
+            Ok(v.clone())
+        };
         let pop = |stack: &mut Vec<Value>| stack.pop().context("pickle: stack underflow");
         let pop_mark = |stack: &mut Vec<Value>| -> Result<Vec<Value>> {
             let at = stack
@@ -721,8 +802,7 @@ impl<'a> Pickle<'a> {
                     stack.push(Value::Str(String::from_utf8_lossy(s).into_owned()));
                 }
                 0x8d => {
-                    let s = self.take(8)?;
-                    let n = u64::from_le_bytes(s.try_into().unwrap()) as usize;
+                    let n = self.u64_len()?;
                     let s = self.take(n)?;
                     stack.push(Value::Str(String::from_utf8_lossy(s).into_owned()));
                 }
@@ -747,8 +827,7 @@ impl<'a> Pickle<'a> {
                     stack.push(Value::Bytes);
                 }
                 0x8e => {
-                    let s = self.take(8)?;
-                    let n = u64::from_le_bytes(s.try_into().unwrap()) as usize;
+                    let n = self.u64_len()?;
                     self.take(n)?;
                     stack.push(Value::Bytes);
                 }
@@ -767,23 +846,23 @@ impl<'a> Pickle<'a> {
                 }
                 b'q' => {
                     let i = self.u8()? as usize;
-                    memo.insert(i, stack.last().context("pickle: memo of nothing")?.clone());
+                    memo.insert(i, copy(stack.last().context("pickle: memo of nothing")?)?);
                 }
                 b'r' => {
                     let i = self.u32()?;
-                    memo.insert(i, stack.last().context("pickle: memo of nothing")?.clone());
+                    memo.insert(i, copy(stack.last().context("pickle: memo of nothing")?)?);
                 }
                 0x94 => {
                     let i = memo.len();
-                    memo.insert(i, stack.last().context("pickle: memo of nothing")?.clone());
+                    memo.insert(i, copy(stack.last().context("pickle: memo of nothing")?)?);
                 }
                 b'h' => {
                     let i = self.u8()? as usize;
-                    stack.push(memo.get(&i).context("pickle: unknown memo")?.clone());
+                    stack.push(copy(memo.get(&i).context("pickle: unknown memo")?)?);
                 }
                 b'j' => {
                     let i = self.u32()?;
-                    stack.push(memo.get(&i).context("pickle: unknown memo")?.clone());
+                    stack.push(copy(memo.get(&i).context("pickle: unknown memo")?)?);
                 }
                 b't' => {
                     let items = pop_mark(&mut stack)?;
@@ -864,7 +943,7 @@ impl<'a> Pickle<'a> {
                     pop(&mut stack)?;
                 }
                 b'2' => {
-                    let top = stack.last().context("pickle: DUP of nothing")?.clone();
+                    let top = copy(stack.last().context("pickle: DUP of nothing")?)?;
                     stack.push(top);
                 }
                 other => bail!("pickle: unsupported opcode 0x{other:02x} — not a plain state dict"),
@@ -1113,6 +1192,56 @@ pub(crate) mod tests {
         b.extend([0u8; 32]);
         let w = load(&tmp("legacy.pth", &b), true).unwrap();
         assert_eq!(w.get("a.weight").unwrap(), &[1., 2., 3., 4., 5., 6.]);
+    }
+
+    /// Every length in a model file is the file's own claim. Truncated or
+    /// hostile ones are errors — the scan of the models folder runs these on
+    /// every listing, and a panic there broke `/models` for as long as the
+    /// file stayed put.
+    #[test]
+    fn a_malformed_pickle_is_an_error_not_a_panic() {
+        // GLOBAL whose module line has no newline: the second line read used
+        // to slice past the end.
+        assert!(Pickle::parse(b"\x80\x02cmodule").is_err());
+        // SHORT_BINUNICODE8 claiming u64::MAX bytes: wrapped the bound check.
+        let mut huge = vec![0x80, 2, 0x8d];
+        huge.extend(u64::MAX.to_le_bytes());
+        assert!(Pickle::parse(&huge).is_err());
+        let mut huge = vec![0x80, 2, 0x8e];
+        huge.extend((u64::MAX - 2).to_le_bytes());
+        assert!(Pickle::parse(&huge).is_err());
+        // Memoise, fetch twice, pair: each round doubles the value. Sixty
+        // rounds is a few hundred bytes that used to ask for an exabyte.
+        let mut bomb = vec![0x80, 2, b']'];
+        for _ in 0..60 {
+            bomb.extend([b'q', 0, b'h', 0, 0x86]);
+        }
+        bomb.push(b'.');
+        assert!(Pickle::parse(&bomb).is_err());
+    }
+
+    #[test]
+    fn a_malformed_zip_is_an_error_not_a_panic() {
+        let good = stored_zip(&[("m/data.pkl", state_dict_pickle(None)), ("m/data/0", floats(&[1.; 6]))]);
+        let cd = good.windows(4).position(|w| w == [0x50, 0x4b, 0x01, 0x02]).unwrap();
+        // A name length far past the end of the central directory.
+        let mut long_name = good.clone();
+        long_name[cd + 28..cd + 30].copy_from_slice(&0xfff0u16.to_le_bytes());
+        assert!(load(&tmp("long-name.pth", &long_name), false).is_err());
+        // An entry size past the end of the file: refused before allocating.
+        let mut big = good.clone();
+        big[cd + 20..cd + 28].copy_from_slice(&[0xf0, 0xff, 0xff, 0x7f, 0xf0, 0xff, 0xff, 0x7f]);
+        assert!(load(&tmp("big-entry.pth", &big), false).is_err());
+    }
+
+    #[test]
+    fn a_safetensors_range_past_the_file_is_an_error() {
+        let header = r#"{"x":{"dtype":"F32","shape":[4611686018427387904,4],"data_offsets":[0,0]},"y":{"dtype":"F32","shape":[1],"data_offsets":[8,4]}}"#;
+        let mut b = Vec::new();
+        b.extend((header.len() as u64).to_le_bytes());
+        b.extend(header.as_bytes());
+        b.extend([0u8; 8]);
+        assert!(load(&tmp("bad-range.safetensors", &b), true).is_err());
     }
 
     #[test]

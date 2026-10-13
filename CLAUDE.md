@@ -504,7 +504,11 @@ Break silently:
 
 The display lane shares FSR as `Arc<Mutex<Fsr>>`; the diffusion lane locks per FSR
 step, never across sd-cli (`enlarge` doesn't lock around ESRGAN). `Retained::update`
-writes back only over the entry it read.
+writes back only over the entry it read; an `/adjust` that loses is
+`pipeline::Superseded` → 409, which the page ignores (never null `S.imageId` on it).
+**Stop/skip kill under the queue lock** (`Queue::stop`/`skip` take the kill): checking
+then killing could hit the next image's sd-cli. **`Work::pinned()` is the one list of
+pinning kinds** — no `_` arm.
 
 ## Live preview
 
@@ -992,6 +996,17 @@ from `family` goes on `VideoModelDto`.
 - `anyhow` throughout; errors are user-facing with the fix in them (`SdRunner::preflight`,
   `Engine::lookup`).
 - std-only HTTP (`src/http.rs`), no framework.
+  - **`http::allowed` is the only guard against other websites** (no login): a non-GET
+    with a foreign `Origin`, or a non-loopback `Host` (DNS rebinding), is a 403.
+    Absent `Origin` passes — the takeover and every older build send none, and send
+    `Host: localhost` with no port, so `Host` is compared by name only. A destructive
+    default must stay off: `/shutdown` clears only on an explicit `"clear": true`.
+  - **The read timeout covers the request only** (`set_read_timeout(None)` once the
+    body is in); a minutes-long render waits on a channel, not the socket. The 413
+    drains the body, or the reset swallows it.
+  - **A handler panic answers 500** (`catch_unwind` in `handle_conn`); model-file
+    parsers still must not panic — `identify` memoizes only successes, so a panicking
+    file breaks every `/models`.
   - **The query string is stripped before routing**, so ids are path segments or POST
     body fields. `workitems::valid_id` is a whitelist (alphanumerics and `-`) — widen
     it, don't replace it with `canonicalize`.

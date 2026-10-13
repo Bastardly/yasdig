@@ -352,6 +352,18 @@ fn dominant_dtype(t: &Tensors) -> String {
 ///
 /// Reading a header per file costs a seek and a few hundred KB; the measured
 /// cost of the whole scan is single-digit milliseconds even across 37 GB.
+/// Which flag converts an image model, and what to call it. `is_bundled`,
+/// never `components`: a bundled SDXL with a VAE picked has components too,
+/// and converting it through `--diffusion-model` would prefix names that
+/// already carry it.
+fn image_slot(p: &crate::config::Profile) -> (Slot, String) {
+    if p.is_bundled() {
+        (Slot::Checkpoint, "image checkpoint".to_string())
+    } else {
+        (Slot::Diffusion, format!("{} diffusion model", p.family.label()))
+    }
+}
+
 pub fn candidates(cfg: &Config) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = Vec::new();
     let mut seen: Vec<PathBuf> = Vec::new();
@@ -431,10 +443,7 @@ pub fn candidates(cfg: &Config) -> Vec<Candidate> {
             // transformer: converted through `-m` its tensors would come out
             // without the `model.diffusion_model.` prefix sd.cpp then loads it
             // under. Its VAE and encoder are left off the list for now.
-            let (slot, label) = match p.components {
-                None => (Slot::Checkpoint, "image checkpoint".to_string()),
-                Some(_) => (Slot::Diffusion, format!("{} diffusion model", p.family.label())),
-            };
+            let (slot, label) = image_slot(p);
             push(
                 &p.model,
                 slot,
@@ -571,6 +580,15 @@ mod tests {
     /// Image VAEs convert through `--vae` like a Wan VAE — the same `vae.`
     /// prefix the classifier reads back — and a `--llm` text encoder has no
     /// slot at all, since `convert_with_components` takes no such path.
+    #[test]
+    fn a_checkpoint_with_a_picked_vae_still_converts_through_m() {
+        let mut p = crate::config::Profile { bundled: Some(true), ..Default::default() };
+        p.components = Some(Default::default());
+        assert!(image_slot(&p).0 == Slot::Checkpoint);
+        p.bundled = Some(false);
+        assert!(image_slot(&p).0 == Slot::Diffusion);
+    }
+
     #[test]
     fn an_image_vae_converts_through_vae_and_an_llm_not_at_all() {
         use crate::discover::LlmKind;

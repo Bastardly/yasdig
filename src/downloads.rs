@@ -295,6 +295,16 @@ impl Downloads {
         if got != t.bytes {
             bail!("got {got} bytes, expected {}; press Download to resume", t.bytes);
         }
+        // Checked again here, not only when the download was queued: a file
+        // copied in by hand during a multi-GB download is the user's, and a
+        // rename would replace it without a word. The `.part` is kept.
+        if dest.exists() {
+            bail!(
+                "{} appeared while this downloaded — it was left alone; the download is kept as {}",
+                dest.display(),
+                part.display()
+            );
+        }
         std::fs::rename(&part, dest)?;
         println!("[yasdig] downloaded {}", dest.display());
         // What it *is*, read off its header like every other file: a catalog

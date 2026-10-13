@@ -1,4 +1,4 @@
-import { $, esc, post } from './dom.js';
+import { $, esc, getJSON, post } from './dom.js';
 import { FIELDS, labelOf } from './settings.js';
 import { loadModels, upscalersReady, upscalerOptions } from './image.js';
 import { wireHints } from './hints.js';
@@ -137,6 +137,17 @@ function fill() {
     const fallback = shown(f, m.base[f.key]);
     if (el.tagName === 'SELECT') {
       el.options[0].textContent = `— default: ${fallback} —`;
+      // A stored value the select doesn't list (a removed upscaler, a sampler
+      // this build hasn't got) would show as the blank default, and the next
+      // Save would then delete it. Carried as an option of its own, as the
+      // Settings form does — and dropped again when another model is shown,
+      // since this select is shared by all of them.
+      for (const o of [...el.options]) if (o.dataset.stray) o.remove();
+      if (v !== undefined && ![...el.options].some((o) => o.value === String(v))) {
+        const o = new Option(`${v} (from the file)`, String(v));
+        o.dataset.stray = '1';
+        el.add(o);
+      }
       el.value = v === undefined ? '' : String(v);
     } else if (f.kind === 'lines') {
       el.placeholder = `default: ${fallback}`;
@@ -194,7 +205,7 @@ function take(data) {
 // here are stale the moment one lands.
 export async function loadModelSettings() {
   try {
-    take(await (await fetch('/model-settings')).json());
+    take(await getJSON('/model-settings'));
   } catch (e) {
     $('pmerr').textContent = 'Could not read per-model settings: ' + e;
   }

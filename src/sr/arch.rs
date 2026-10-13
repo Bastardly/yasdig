@@ -105,10 +105,17 @@ impl Arch {
     }
 }
 
-/// Integer square root of a small, expected-square number.
+/// Integer square root of a small, expected-square, positive number.
 fn isqrt(n: usize) -> Option<usize> {
     let r = (n as f64).sqrt().round() as usize;
-    (r * r == n).then_some(r)
+    (r > 0 && r * r == n).then_some(r)
+}
+
+/// Dimension `i` of a tensor's shape, when the tensor has one and it is not 0.
+/// Shapes come out of the file: a short one must not index past its end, and a
+/// zero would turn into a division by zero further down.
+fn dim(w: &Weights, name: &str, i: usize) -> Option<usize> {
+    w.shape(name)?.get(i).copied().filter(|&d| d > 0)
 }
 
 pub fn detect(w: &Weights) -> Arch {
@@ -156,15 +163,14 @@ pub fn detect(w: &Weights) -> Arch {
 }
 
 fn compact(w: &Weights) -> Option<Compact> {
-    let first = w.shape("body.0.weight")?;
-    let (feat, in_ch) = (first[0], first[1]);
+    let (feat, in_ch) = (dim(w, "body.0.weight", 0)?, dim(w, "body.0.weight", 1)?);
     // The last conv is the highest-numbered 4-D `body.N.weight`.
     let last = w
         .indices("body.")
         .into_iter()
         .filter(|i| w.shape(&format!("body.{i}.weight")).map(|s| s.len()) == Some(4))
         .max()?;
-    let out = w.shape(&format!("body.{last}.weight"))?[0];
+    let out = dim(w, &format!("body.{last}.weight"), 0)?;
     let scale = isqrt(out / in_ch)? as u32;
     let prelu = w.shape("body.1.weight").map(|s| s.len()) == Some(1);
     // body = conv, act, (conv, act)×num_conv, conv — so the last conv is at
@@ -172,15 +178,14 @@ fn compact(w: &Weights) -> Option<Compact> {
     Some(Compact {
         in_ch,
         feat,
-        num_conv: (last - 2) / 2,
+        num_conv: last.checked_sub(2)? / 2,
         prelu,
         scale,
     })
 }
 
 fn swinir(w: &Weights) -> Option<SwinIR> {
-    let first = w.shape("conv_first.weight")?;
-    let (embed, in_ch) = (first[0], first[1]);
+    let (embed, in_ch) = (dim(w, "conv_first.weight", 0)?, dim(w, "conv_first.weight", 1)?);
     let layers = w.indices("layers.");
     let mut depths = Vec::new();
     let mut heads = Vec::new();
@@ -189,25 +194,28 @@ fn swinir(w: &Weights) -> Option<SwinIR> {
         let p = format!("layers.{l}.residual_group.blocks.");
         let blocks = w.indices(&p);
         depths.push(blocks.len());
-        let table = w.shape(&format!("{p}0.attn.relative_position_bias_table"))?;
-        heads.push(table[1]);
-        window = isqrt(table[0])?.div_ceil(2);
+        let table = format!("{p}0.attn.relative_position_bias_table");
+        heads.push(dim(w, &table, 1)?);
+        window = isqrt(dim(w, &table, 0)?)?.div_ceil(2);
     }
-    let mlp_hidden = w.shape("layers.0.residual_group.blocks.0.mlp.fc1.weight")?[0];
+    if window == 0 {
+        return None;
+    }
+    let mlp_hidden = dim(w, "layers.0.residual_group.blocks.0.mlp.fc1.weight", 0)?;
     let (upsampler, scale, feat) = if has_all(w, &["conv_up1.weight", "conv_hr.weight"]) {
         let s = if w.has("conv_up2.weight") { 4 } else { 2 };
-        (SwinUp::NearestConv, s, w.shape("conv_before_upsample.0.weight")?[0])
+        (SwinUp::NearestConv, s, dim(w, "conv_before_upsample.0.weight", 0)?)
     } else if w.has("conv_before_upsample.0.weight") {
-        let feat = w.shape("conv_before_upsample.0.weight")?[0];
+        let feat = dim(w, "conv_before_upsample.0.weight", 0)?;
         // Upsample: (conv to 4·feat, shuffle 2) per power of two, or one conv
         // to 9·feat for 3×.
         let convs = w.indices("upsample.");
-        let first = w.shape("upsample.0.weight")?[0];
+        let first = dim(w, "upsample.0.weight", 0)?;
         let s = if first == 9 * feat { 3 } else { 1u32 << convs.len() };
         (SwinUp::PixelShuffle, s, feat)
     } else if w.has("upsample.0.weight") {
-        let out = w.shape("upsample.0.weight")?[0];
-        let out_ch = w.shape("conv_first.weight")?[1];
+        let out = dim(w, "upsample.0.weight", 0)?;
+        let out_ch = in_ch;
         (SwinUp::Direct, isqrt(out / out_ch)? as u32, 0)
     } else {
         // Denoising/JPEG models: same size out. Not an upscaler.
@@ -233,9 +241,8 @@ fn has_all(w: &Weights, names: &[&str]) -> bool {
 }
 
 fn span(w: &Weights) -> Option<Span> {
-    let sk = w.shape("conv_1.sk.weight")?;
-    let (feat, in_ch) = (sk[0], sk[1]);
-    let up = w.shape("upsampler.0.weight")?[0];
+    let (feat, in_ch) = (dim(w, "conv_1.sk.weight", 0)?, dim(w, "conv_1.sk.weight", 1)?);
+    let up = dim(w, "upsampler.0.weight", 0)?;
     Some(Span {
         in_ch,
         feat,
@@ -255,6 +262,34 @@ pub(crate) mod tests {
             w.map.insert(n.to_string(), Tensor { shape: s.to_vec(), data: None });
         }
         w
+    }
+
+    /// Shapes are the file's claims. A short one, a zero, or a Compact whose
+    /// only conv is `body.0` is an unknown file — never an index past the end
+    /// or a division by zero while listing the models folder.
+    #[test]
+    fn a_malformed_shape_is_unknown_not_a_panic() {
+        assert_eq!(detect(&fake(&[("body.0.weight", &[64, 0, 3, 3])])), Arch::Unknown);
+        assert_eq!(detect(&fake(&[("body.0.weight", &[64, 3, 3, 3])])), Arch::Unknown);
+        let swin = |table: &'static [usize]| {
+            fake(&[
+                ("conv_first.weight", &[180, 3, 3, 3]),
+                ("layers.0.residual_group.blocks.0.norm1.weight", &[180]),
+                ("layers.0.residual_group.blocks.0.attn.qkv.weight", &[540, 180]),
+                ("layers.0.residual_group.blocks.0.attn.relative_position_bias_table", table),
+                ("layers.0.residual_group.blocks.0.mlp.fc1.weight", &[360, 180]),
+                ("conv_before_upsample.0.weight", &[64, 180, 3, 3]),
+                ("upsample.0.weight", &[256, 64, 3, 3]),
+            ])
+        };
+        assert_eq!(detect(&swin(&[0, 6])), Arch::Unknown);
+        assert_eq!(detect(&swin(&[225])), Arch::Unknown);
+        let span = fake(&[
+            ("block_1.c1_r.sk.weight", &[48, 48, 1, 1]),
+            ("conv_1.sk.weight", &[48]),
+            ("upsampler.0.weight", &[48, 48, 3, 3]),
+        ]);
+        assert_eq!(detect(&span), Arch::Unknown);
     }
 
     #[test]
