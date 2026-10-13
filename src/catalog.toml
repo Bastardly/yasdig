@@ -253,3 +253,52 @@ url = "https://huggingface.co/second-state/FLUX.1-dev-GGUF/resolve/main/ae.safet
 dest = "vae/ae.safetensors"
 bytes = 335304388
 sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+
+# ---------------------------------------------------------------------------
+# Upscalers: the models an Output upscale or the Refine dialog's Upscale can
+# pick instead of FSR. Their own table, because nothing about them is a family:
+# they live in the upscaler dir (`[sd].upscaler_dir`, `models/upscalers/` by
+# default), `dest` is a file name relative to *that*, and whether one is had is
+# `sr::identify` naming `arch` (an `Arch::name()`) — never a name-free match,
+# since two 4× ESRGANs are two different models.
+#
+# Checked 2026-10-13 the same way as above (listing, HEAD through the redirect),
+# and each file downloaded and read by `doctor` as the `arch` written here.
+# Two run through sd-cli (ESRGAN), two on yasdig's own runner (`src/sr/`); all
+# four are plain PyTorch weights on Vulkan, nothing vendor-specific.
+
+[[upscaler]]
+id = "ultrasharp-4x"
+label = "4x-UltraSharp"
+arch = "ESRGAN"
+note = "The common pick for generated images: crisp, detailed 4×. Runs through sd-cli."
+url = "https://huggingface.co/Kim2091/UltraSharp/resolve/main/4x-UltraSharp.safetensors"
+dest = "4x-UltraSharp.safetensors"
+bytes = 66864028
+
+[[upscaler]]
+id = "nomos-webphoto-4x"
+label = "4xNomosWebPhoto (ESRGAN)"
+arch = "ESRGAN"
+note = "Trained on real photos with web compression: the one for photographic pictures and uploads. Runs through sd-cli."
+url = "https://huggingface.co/Phips/4xNomosWebPhoto_esrgan/resolve/main/4xNomosWebPhoto_esrgan.safetensors"
+dest = "4xNomosWebPhoto_esrgan.safetensors"
+bytes = 33467822
+
+[[upscaler]]
+id = "realesr-general-x4v3"
+label = "Real-ESRGAN general x4v3"
+arch = "Compact"
+note = "Small and fast 4×, a general-purpose Real-ESRGAN. Runs on yasdig's own upscaler."
+url = "https://huggingface.co/jhj0517/realesr-general-x4v3/resolve/main/realesr-general-x4v3.pth"
+dest = "realesr-general-x4v3.pth"
+bytes = 4885111
+
+[[upscaler]]
+id = "nomos-uni-span-2x"
+label = "2xNomosUni SPAN"
+arch = "SPAN"
+note = "A fast 2×, for when 4× is more than the picture needs. Runs on yasdig's own upscaler."
+url = "https://huggingface.co/Phips/2xNomosUni_span_multijpg_ldl/resolve/main/2xNomosUni_span_multijpg_ldl.safetensors"
+dest = "2xNomosUni_span_multijpg_ldl.safetensors"
+bytes = 8903384

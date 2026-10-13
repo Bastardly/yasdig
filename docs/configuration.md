@@ -16,7 +16,8 @@ the URLs compiled into the program (`src/catalog.toml`) — all from ungated Hug
 Face repositories, so no account or token is needed. **Each model has its own
 licence** — some forbid commercial use or are for research only, and a GGUF
 repackage carries the original's — so check it before using what you make; every
-card links the pages its files come from. Downloads run beside renders,
+card links the pages its files come from. Its **Upscalers** cards fetch upscaler models
+into the upscaler folder the same way. Downloads run beside renders,
 not in their queue. **Help → Intro to models** explains what the files are and where
 to find more.
 

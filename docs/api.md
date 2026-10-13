@@ -406,7 +406,8 @@ needs a Vulkan device and nothing else.
   flight. The conversion itself queues on the worker: no GPU is involved, but it
   saturates the cores and the disk for minutes and must not do that underneath a render.
   Going through the worker is also what gives it `/progress` and `/cancel` for free.
-- `GET /catalog` — the Get models tab: `{curl, finished, models_dir, entries}`. Each
+- `GET /catalog` — the Get models tab: `{curl, finished, models_dir, upscaler_dir,
+  entries, upscalers}`. Each
   entry is a recommended set from `src/catalog.toml` (`id`, `family`, `family_label`,
   `label`, `note`, `bytes`) with its `files`, each carrying `slot`, `slot_label`, `dest`
   (under the models dir), `bytes`, `page` (its Hugging Face repository, where its
@@ -415,6 +416,9 @@ needs a Vulkan device and nothing else.
   `downloading` or `partial` (with `got`, the `.part` file's length), `failed` (with
   `why`), or `wrong` (`dest` exists and is something else, which is never overwritten).
   `finished` counts files landed since start; the page reloads its models when it moves.
+  `upscalers` has the same shape, one file each, with `family` `"upscaler"`, `slot_label`
+  the architecture (`ESRGAN`, `Compact`, `SPAN`), `dest` under the upscaler dir, and
+  `have` only when that file is there and reads as that architecture.
 - `POST /downloads/start`, `/downloads/cancel`, `/downloads/clear` — `{entry}`, a catalog
   id and nothing else: the page never names a URL or a path. Start queues the entry's
   files that nothing on disk fills yet; cancel drops queued ones and kills a running

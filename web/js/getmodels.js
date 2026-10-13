@@ -11,8 +11,13 @@ import { loadModels } from './image.js';
 // is not offered a second time.
 //
 // Polled once a second while anything is queued or downloading, whichever tab
-// is showing: `finished` moving is what reloads the Image tab's model list, so
-// a model whose last file just landed becomes pickable without a reload.
+// is showing: `finished` moving is what reloads the Image tab's model list —
+// and with it the upscaler list — so a file that just landed is pickable
+// without a reload.
+//
+// Upscalers are a list of their own on the wire (`upscalers`), drawn after the
+// families under one nav button. Separate because Help's family table reads
+// `entries` and an upscaler is no family.
 
 let view = null;
 let timer = null;
@@ -67,7 +72,10 @@ function pages(e) {
     + `${esc(u.replace('https://huggingface.co/', ''))}</a>`).join(', ');
 }
 
-function card(e) {
+// Every card, families first — the one list the poll and the buttons care about.
+const allEntries = () => [...view.entries, ...(view.upscalers ?? [])];
+
+function card(e, i) {
   const left = e.files.filter(needed).reduce((s, f) => s + f.bytes - f.got, 0);
   const busy = e.files.some(active);
   const partial = !busy && e.files.some((f) => f.got > 0 && (f.state === 'partial' || f.state === 'failed'));
@@ -79,12 +87,18 @@ function card(e) {
     busy ? '<button type="button" class="btn btn-danger" data-act="cancel">Cancel</button>' : '',
     partial ? '<button type="button" class="btn" data-act="clear">Remove partial</button>' : '',
   ].join('');
-  return `<div class="card gmcard" id="gm-${e.family}" data-entry="${esc(e.id)}">
+  const upscaler = e.family === 'upscaler';
+  // The upscalers share one anchor, on the first of them.
+  const anchor = upscaler ? (i === 0 ? 'id="gm-upscaler"' : '') : `id="gm-${e.family}"`;
+  const where = upscaler
+    ? 'Everything is here. Pick it under Output upscale, or in the Refine dialog’s Upscale.'
+    : 'Everything is here. Pick it in the Image tab’s model list.';
+  return `<div class="card gmcard" ${anchor} data-entry="${esc(e.id)}">
     <div class="gmhead"><b>${esc(e.label)}</b><span class="sub">${esc(e.family_label)} · ${gb(e.bytes)}</span></div>
     <p class="sub">${esc(e.note)}</p>
     <p class="sub">Licence: each file has its own — see ${pages(e)}.</p>
     <table class="helptable gmfiles"><tbody>${e.files.map(fileRow).join('')}</tbody></table>
-    ${done ? '<p class="sub">Everything is here. Pick it in the Image tab’s model list.</p>' : ''}
+    ${done ? `<p class="sub">${where}</p>` : ''}
     <div class="btnrow">${buttons}</div>
     <div class="err" data-err></div>
   </div>`;
@@ -92,13 +106,16 @@ function card(e) {
 
 function draw() {
   if (!view) return;
-  $('gmdir').innerHTML = `Saved under <code>${esc(view.models_dir)}</code>, in the folder for each kind of file.`;
+  $('gmdir').innerHTML = `Saved under <code>${esc(view.models_dir)}</code>, in the folder for each kind of file`
+    + ` — upscalers in <code>${esc(view.upscaler_dir)}</code>.`;
   $('gmerr').textContent = view.curl ? ''
     : 'curl was not found, so nothing can be downloaded from here. Install curl, or fetch the files '
       + 'by hand (docs/configuration.md, Get a model) into the folders each card names.';
+  const ups = view.upscalers ?? [];
   $('gmnav').innerHTML = view.entries.map((e) =>
-    `<button type="button" class="btn btn-choice" data-family="${e.family}">${esc(e.family_label)}</button>`).join('');
-  $('gmlist').innerHTML = view.entries.map(card).join('');
+    `<button type="button" class="btn btn-choice" data-family="${e.family}">${esc(e.family_label)}</button>`).join('')
+    + (ups.length ? '<button type="button" class="btn btn-choice" data-family="upscaler">Upscalers</button>' : '');
+  $('gmlist').innerHTML = view.entries.map((e) => card(e)).join('') + ups.map(card).join('');
 }
 
 async function refresh() {
@@ -115,7 +132,7 @@ async function refresh() {
   if (finished !== null && view.finished !== finished) loadModels();
   finished = view.finished;
   draw();
-  if (view.entries.some((e) => e.files.some(active))) timer = setTimeout(refresh, 1000);
+  if (allEntries().some((e) => e.files.some(active))) timer = setTimeout(refresh, 1000);
 }
 
 // Open the tab on one family's card. For the Image tab's "Get the missing

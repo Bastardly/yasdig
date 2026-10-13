@@ -330,8 +330,10 @@ Every render is enlarged on its way to the output size, and the **Upscaler** sel
 beside *Output upscale* in the *After each generation* fold picks what does it. **FSR (EASU)** is the
 default: milliseconds, no file, and it only redistributes the pixels the checkpoint
 drew. A **model** draws new fine texture instead — hair, fabric, skin — at the cost of
-seconds. Drop one in `models/upscalers/` (subfolders work) and it appears in the select
-with its architecture beside it; `doctor` prints the folder, what each file is, and
+seconds. **Get models → Upscalers** downloads four that run here — 4x-UltraSharp and
+4xNomosWebPhoto (ESRGAN), Real-ESRGAN general x4v3 (Compact, fast) and 2xNomosUni SPAN
+(a fast 2×) — or drop one in `models/upscalers/` (subfolders work) and it appears in
+the select with its architecture beside it; `doctor` prints the folder, what each file is, and
 whether it can run.
 
 `.pth`, `.pt` and `.safetensors` all load directly — no conversion and no Python. The

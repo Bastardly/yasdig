@@ -25,7 +25,29 @@ const SOURCE: &str = include_str!("catalog.toml");
 
 #[derive(Debug, Deserialize)]
 pub struct Catalog {
+    #[serde(default)]
     pub entry: Vec<Entry>,
+    /// Upscaler models, a table of their own: see [`Upscaler`].
+    #[serde(default)]
+    pub upscaler: Vec<Upscaler>,
+}
+
+/// One upscaler model. Not an [`Entry`]: it has no family and no parts, lives in
+/// [`crate::config::Config::upscaler_dir`] rather than the models dir, is often
+/// a `.pth`, and is told apart by [`crate::sr::identify`] — so whether it is had
+/// is "its `dest` is there and reads as `arch`", never a name-free match (two 4×
+/// ESRGANs are different models).
+#[derive(Debug, Deserialize)]
+pub struct Upscaler {
+    pub id: String,
+    pub label: String,
+    pub note: String,
+    /// What [`crate::sr::arch::Arch::name`] calls the file once it is here.
+    pub arch: String,
+    pub url: String,
+    /// Relative to the upscaler dir, `/`-separated.
+    pub dest: String,
+    pub bytes: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,16 +84,34 @@ impl Catalog {
     pub fn entry(&self, id: &str) -> Option<&Entry> {
         self.entry.iter().find(|e| e.id == id)
     }
+
+    pub fn upscaler(&self, id: &str) -> Option<&Upscaler> {
+        self.upscaler.iter().find(|u| u.id == id)
+    }
+}
+
+/// The repository page a file comes from — where its licence is. Derived from
+/// the URL rather than stored, so the two can't disagree; `parse` has already
+/// checked the URL is a `huggingface.co/{owner}/{repo}/resolve/…`.
+fn repo_page(url: &str) -> String {
+    let rest = url.trim_start_matches("https://huggingface.co/");
+    let repo = rest.split("/resolve/").next().unwrap_or(rest);
+    format!("https://huggingface.co/{repo}")
+}
+
+fn hf_resolve(url: &str) -> bool {
+    url.starts_with("https://huggingface.co/") && url.contains("/resolve/")
 }
 
 impl File {
-    /// The repository page the file comes from — where its licence is. Derived
-    /// from the URL rather than stored, so the two can't disagree; `parse` has
-    /// already checked the URL is a `huggingface.co/{owner}/{repo}/resolve/…`.
     pub fn page(&self) -> String {
-        let rest = self.url.trim_start_matches("https://huggingface.co/");
-        let repo = rest.split("/resolve/").next().unwrap_or(rest);
-        format!("https://huggingface.co/{repo}")
+        repo_page(&self.url)
+    }
+}
+
+impl Upscaler {
+    pub fn page(&self) -> String {
+        repo_page(&self.url)
     }
 }
 
@@ -123,7 +163,7 @@ fn parse(src: &str) -> Result<Catalog> {
             if !safe_dest(&f.dest) {
                 bail!("catalog: {}'s dest {:?} must be a plain relative path", e.id, f.dest);
             }
-            if !f.url.starts_with("https://huggingface.co/") || !f.url.contains("/resolve/") {
+            if !hf_resolve(&f.url) {
                 bail!("catalog: {}'s url must be a huggingface.co resolve link: {}", e.id, f.url);
             }
             if f.bytes == 0 {
@@ -148,7 +188,34 @@ fn parse(src: &str) -> Result<Catalog> {
             }
         }
     }
+    for (i, u) in c.upscaler.iter().enumerate() {
+        if c.entry.iter().any(|e| e.id == u.id) || c.upscaler[..i].iter().any(|o| o.id == u.id) {
+            bail!("catalog: id {:?} is listed twice", u.id);
+        }
+        if !safe_upscaler_dest(&u.dest) {
+            bail!("catalog: {}'s dest {:?} must be a plain .pth or .safetensors name", u.id, u.dest);
+        }
+        if !hf_resolve(&u.url) {
+            bail!("catalog: {}'s url must be a huggingface.co resolve link: {}", u.id, u.url);
+        }
+        if u.bytes == 0 {
+            bail!("catalog: {} has no size", u.id);
+        }
+        if c.upscaler[..i].iter().any(|o| o.dest == u.dest) {
+            bail!("catalog: {} is listed twice", u.dest);
+        }
+    }
     Ok(c)
+}
+
+/// An upscaler's destination: [`safe_dest`]'s rule with the extensions
+/// [`crate::config::Config::list_upscalers`] lists and sd-cli or `sr` can read.
+/// `.gguf` is left out: no upscaler ships as one.
+fn safe_upscaler_dest(dest: &str) -> bool {
+    let p = Path::new(dest);
+    crate::config::valid_lora_name(dest)
+        && p.components().all(|c| matches!(c, Component::Normal(_)))
+        && matches!(p.extension().and_then(|x| x.to_str()), Some("pth" | "safetensors"))
 }
 
 /// A destination is relative, made only of plain names, and is a model file
@@ -187,6 +254,29 @@ mod tests {
                     assert!(e.file.iter().any(|f| f.slot == s.key), "{} lacks its {}", e.id, s.label);
                 }
             }
+        }
+        // Every upscaler names an architecture this build runs — a listed
+        // download that the select then greys out would be a broken promise.
+        assert!(!c.upscaler.is_empty());
+        let runnable = ["ESRGAN", "Compact", "SPAN", "SwinIR-S", "SwinIR-M", "SwinIR-L"];
+        for u in &c.upscaler {
+            assert!(runnable.contains(&u.arch.as_str()), "{} names arch {:?}", u.id, u.arch);
+        }
+    }
+
+    #[test]
+    fn a_bad_upscaler_is_refused() {
+        let up = "[[upscaler]]\nid = \"u\"\nlabel = \"u\"\nnote = \"\"\narch = \"SPAN\"\nurl = \"https://huggingface.co/a/b/resolve/main/u.pth\"\ndest = \"u.pth\"\nbytes = 1\n";
+        assert!(parse(up).is_ok());
+        for bad in [
+            up.replace("dest = \"u.pth\"", "dest = \"../u.pth\""),
+            up.replace("dest = \"u.pth\"", "dest = \"u.gguf\""),
+            up.replace("dest = \"u.pth\"", "dest = \"u.pth.part\""),
+            up.replace("https://huggingface.co/a/b/resolve", "https://example.com/a/b/resolve"),
+            up.replace("bytes = 1", "bytes = 0"),
+            format!("{up}{up}"),
+        ] {
+            assert!(parse(&bad).is_err(), "accepted:\n{bad}");
         }
     }
 
@@ -239,10 +329,12 @@ mod tests {
 
     #[test]
     fn a_files_page_is_its_repository() {
-        for f in Catalog::get().entry.iter().flat_map(|e| &e.file) {
-            let page = f.page();
+        let c = Catalog::get();
+        let files = c.entry.iter().flat_map(|e| &e.file).map(|f| (f.page(), &f.url));
+        let ups = c.upscaler.iter().map(|u| (u.page(), &u.url));
+        for (page, url) in files.chain(ups) {
             assert!(!page.contains("/resolve/") && page.matches('/').count() == 4, "{page}");
-            assert!(f.url.starts_with(&format!("{page}/resolve/")), "{page}");
+            assert!(url.starts_with(&format!("{page}/resolve/")), "{page}");
         }
     }
 }

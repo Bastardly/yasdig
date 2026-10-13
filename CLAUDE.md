@@ -369,6 +369,13 @@ binary); `doctor` warns when missing.
 - **Own lane, never the job queue**; *Close server* calls `cancel_all`. Cancel keeps
   the `.part`.
 
+**Upscalers are a table of their own** (`[[upscaler]]`, `catalog::Upscaler`): no
+family, `dest` relative to `Config::upscaler_dir`, `.pth`/`.safetensors`, and "have" =
+that `dest` exists and `sr::identify` names its `arch` — never a name-free match (two
+4× ESRGANs are different models). `downloads::Want` picks the post-download check;
+state is keyed by full path, since the two tables have different roots. On the wire
+they are `upscalers`, beside `entries`, so Help's family table never meets one.
+
 Cards link source repos (`File::page`). **No licence names in the catalog**, on purpose.
 Page: `finished` moving triggers `loadModels()`; `#getparts` opens the family's card
 (`openGetModels`).
