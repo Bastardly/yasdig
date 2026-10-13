@@ -220,6 +220,66 @@ impl<T: Clone> Queue<T> {
         priority: bool,
     ) -> u64 {
         let mut s = self.lock();
+        let id = Self::insert(&mut s, kind, label, total, work, reply, priority);
+        drop(s);
+        self.inner.1.notify_all();
+        id
+    }
+
+    /// Queue a loop ("Keep going until stopped") — or, when one is already
+    /// queued or running, **update it**: its kind, label and work are replaced
+    /// and it keeps its id, its count and its place. There is one loop at a
+    /// time, and its settings are the page's as they are now: the image in
+    /// flight finishes with what it was handed (`next` cloned it), and the next
+    /// one is drawn from the new work. Returns the id and whether it updated.
+    ///
+    /// A *stopping* loop is ending and isn't updated, so Start right after Stop
+    /// queues a fresh one. One lock for the look and the push, so two quick
+    /// requests can't both find no loop and make two.
+    pub fn push_loop(&self, kind: Kind, label: String, work: T) -> (u64, bool) {
+        let mut s = self.lock();
+        let work = match Self::replace_loop(&mut s, kind, label.clone(), work) {
+            Ok(id) => return (id, true),
+            Err(work) => work,
+        };
+        let id = Self::insert(&mut s, kind, label, None, work, None, false);
+        drop(s);
+        self.inner.1.notify_all();
+        (id, false)
+    }
+
+    /// [`Queue::push_loop`] that never starts one: the page's edits to a loop
+    /// it saw running. If the loop has ended meanwhile, an edit is not a
+    /// request to start another.
+    pub fn update_loop(&self, kind: Kind, label: String, work: T) -> Option<u64> {
+        Self::replace_loop(&mut self.lock(), kind, label, work).ok()
+    }
+
+    fn replace_loop(s: &mut State<T>, kind: Kind, label: String, work: T) -> Result<u64, T> {
+        match s
+            .entries
+            .iter_mut()
+            .find(|e| e.kind.is_run() && e.total.is_none() && !e.stopping)
+        {
+            Some(e) => {
+                e.kind = kind;
+                e.label = label;
+                e.work = work;
+                Ok(e.id)
+            }
+            None => Err(work),
+        }
+    }
+
+    fn insert(
+        s: &mut State<T>,
+        kind: Kind,
+        label: String,
+        total: Option<u32>,
+        work: T,
+        reply: Option<Sender<Result<String>>>,
+        priority: bool,
+    ) -> u64 {
         let id = s.next_id;
         s.next_id += 1;
         let total = if kind.is_run() { total.map(|n| n.max(1)) } else { Some(1) };
@@ -247,8 +307,6 @@ impl<T: Clone> Queue<T> {
         } else {
             s.entries.push_back(entry);
         }
-        drop(s);
-        self.inner.1.notify_all();
         id
     }
 
@@ -496,6 +554,41 @@ mod tests {
         assert_eq!(q.next().id, lp);
         assert!(q.image_done(lp));
         assert_eq!(ids(&q), ["loop"]);
+    }
+
+    /// One loop at a time, and it takes the page's settings as they change:
+    /// a second loop request updates the first in place — id, count and
+    /// place kept — and the image in flight keeps what it was handed.
+    #[test]
+    fn a_second_loop_updates_the_first() {
+        let q = Queue::new();
+        let (lp, updated) = q.push_loop(Kind::Generate, "m".into(), "car");
+        assert!(!updated);
+        let t = q.next();
+        assert_eq!((t.id, t.work), (lp, "car"));
+
+        // Edited while image 0 renders: same job, and only the next image sees it.
+        assert_eq!(q.push_loop(Kind::Img2img, "n".into(), "cat"), (lp, true));
+        assert!(q.image_done(lp));
+        let t = q.next();
+        assert_eq!((t.id, t.done, t.work), (lp, 1, "cat"));
+        let snap = q.snapshot();
+        assert_eq!(snap.jobs.len(), 1);
+        assert_eq!((snap.jobs[0].kind, snap.jobs[0].label.as_str()), (Kind::Img2img, "n"));
+
+        // A batch is not a loop, and is never updated by one.
+        q.push(Kind::Generate, "m".into(), Some(2), "batch", None, false);
+        assert_eq!(q.push_loop(Kind::Generate, "m".into(), "dog"), (lp, true));
+        assert_eq!(ids(&q), ["dog", "batch"]);
+
+        // A stopping loop is ending: the next Start is a new loop.
+        assert!(matches!(q.stop(lp, || panic!("a run is never killed")), Stopped::Stopping));
+        // And an edit from a page that hadn't seen it end starts nothing.
+        assert_eq!(q.update_loop(Kind::Generate, "m".into(), "late"), None);
+        let (fresh, updated) = q.push_loop(Kind::Generate, "m".into(), "fresh");
+        assert!(!updated);
+        assert_ne!(fresh, lp);
+        assert_eq!(q.update_loop(Kind::Generate, "m".into(), "edit"), Some(fresh));
     }
 
     #[test]

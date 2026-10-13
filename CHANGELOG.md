@@ -3,6 +3,15 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### Changed
+
+- **Keep going until stopped follows your edits.** Change the prompt, the model or any
+  other setting while a loop runs, and the next image uses it; the image already
+  drawing finishes as it started. There is one loop at a time: starting a loop while
+  one runs updates it instead of queuing a second.
+
 ## 0.1.4 — 2026-10-13
 
 ### Changed

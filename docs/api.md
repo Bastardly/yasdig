@@ -86,7 +86,11 @@ needs a Vulkan device and nothing else.
   (Flux.2 Klein) — are named in the prompt as image 1, image 2; `[]` is none, and a
   model that doesn't take them refuses any.
   The run itself: `count` images (default 1, at most 1000), or `"loop": true` to keep
-  going until stopped; a pinned `seed` advances by one per image. `after` is the
+  going until stopped; a pinned `seed` advances by one per image. There is one loop at
+  a time: a `"loop": true` request while one is queued or running replaces its
+  settings from its next image (same job, count kept) and answers
+  `{ "job": id, "updated": true }`. With `"update_only": true` it never starts a loop,
+  and answers `{ "job": null, "updated": false }` when there is none. `after` is the
   *After each generation* fold — each pass `null` to skip it, `model` empty or absent
   for the checkpoint that made the image, and the escalation knobs below apply to
   both passes:

@@ -569,7 +569,10 @@ appears as it lands, so you can watch the batch fill the work items strip rather
 than waiting for the lot. Tick **Keep going until stopped** and the button
 becomes `Start loop generation`: it ignores the count and keeps going until you press
 **Stop job**, which finishes the image in flight and then ends the run (it only shows
-for more than one image). **Cancel generation**, beside it, throws the image in flight
+for more than one image). A loop **follows the panel**: change the prompt, the model or
+any setting while it runs and the next image uses it ("Loop updated" under the
+button); the image already drawing finishes as it started. There is one loop at a
+time — starting a loop while one runs just hands it the panel at once. **Cancel generation**, beside it, throws the image in flight
 away and moves on to the next one in the run — a single image simply ends; on a Refine
 or Hi-res pass it cancels that pass and leaves the image as it was.
 

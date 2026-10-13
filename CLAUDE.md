@@ -513,7 +513,11 @@ Break silently:
 - **A run answers `{job}` at once; images come via `/jobs/latest`** (`set_latest`,
   `latest_seq`). Refine, Hi-res, Video, Convert, Enlarge answer on their own request
   (`enqueue_wait`) and also publish; `takeResult` skips one already shown.
-- **Everything a run needs is captured at queue time.**
+- **Everything a run needs is captured at queue time — except the loop.** There is
+  one (`Queue::push_loop`); a loop request updates it (kind, label, work; id and
+  `done` kept), and the page re-sends the panel on change (`syncLoop` from
+  `syncSummaries`: debounced, deduplicated, skipped on a blank prompt, `update_only`
+  so a stale edit never restarts an ended loop).
 - **A run's failure has no request**: `fail_run` ends it with a `Notice`; the page's
   first poll adopts existing notices.
 - **`/generate` validates only the count**; everything else surfaces as a notice.

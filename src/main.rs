@@ -267,9 +267,10 @@ impl Work {
 /// One run: what makes each image, and what happens to it afterwards.
 ///
 /// Everything is captured when the run is queued. That is what a queue means —
-/// job A keeps the boxes it was queued with while job B is set up — and it
-/// replaces the page loop's "read the boxes once per image", which only made
-/// sense while there was only ever one run.
+/// job A keeps the boxes it was queued with while job B is set up. **The loop
+/// is the exception**: there is only ever one, so "read the boxes once per
+/// image" still makes sense for it, and the page re-sends them on every change
+/// (`Queue::push_loop`, `syncLoop` in image.js).
 #[derive(Clone)]
 struct RunPlan {
     start: Start,
@@ -1903,6 +1904,10 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         count: Option<u32>,
         #[serde(default, rename = "loop")]
         looping: bool,
+        /// With `loop`: only update the running loop, never start one. The
+        /// page's live edits send it (`syncLoop`).
+        #[serde(default)]
+        update_only: bool,
         /// The *After each generation* fold.
         #[serde(default)]
         after: AfterEach,
@@ -1959,7 +1964,8 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
     };
 
     let label = req.template.clone();
-    queue_run(conn, lanes, jobs::Kind::Generate, label, total, RunPlan {
+    let update_only = dto.update_only;
+    queue_run(conn, lanes, jobs::Kind::Generate, label, total, update_only, RunPlan {
         start: Start::Generate(req),
         after,
         escalate,
@@ -2010,6 +2016,7 @@ fn queue_run(
     kind: jobs::Kind,
     label: String,
     total: Option<u32>,
+    update_only: bool,
     plan: RunPlan,
 ) -> Result<()> {
     if total.is_some_and(|n| n == 0 || n > MAX_RUN) {
@@ -2022,10 +2029,23 @@ fn queue_run(
             .as_bytes(),
         );
     }
-    let id = lanes
-        .queue
-        .push(kind, label, total, Work::Run(Box::new(plan)), None, false);
-    conn.respond(200, "application/json", format!("{{\"job\":{id}}}").as_bytes())
+    let work = Work::Run(Box::new(plan));
+    // A loop request while a loop exists is that loop's new settings, from its
+    // next image on (`Queue::push_loop`): there is one loop, and it follows
+    // the page the way the page's own loop once did.
+    let (id, updated) = match total {
+        Some(_) => (lanes.queue.push(kind, label, total, work, None, false), false),
+        None if update_only => match lanes.queue.update_loop(kind, label, work) {
+            Some(id) => (id, true),
+            None => return conn.respond(200, "application/json", b"{\"job\":null,\"updated\":false}"),
+        },
+        None => lanes.queue.push_loop(kind, label, work),
+    };
+    conn.respond(
+        200,
+        "application/json",
+        format!("{{\"job\":{id},\"updated\":{updated}}}").as_bytes(),
+    )
 }
 
 /// One img2img pass over an image already in `work/output/` — a saved result or
@@ -2106,6 +2126,10 @@ fn handle_img2img(
         count: Option<u32>,
         #[serde(default, rename = "loop")]
         looping: bool,
+        /// With `loop`: only update the running loop, never start one. The
+        /// page's live edits send it (`syncLoop`).
+        #[serde(default)]
+        update_only: bool,
         /// The *After each generation* fold.
         #[serde(default)]
         after: AfterEach,
@@ -2174,7 +2198,8 @@ fn handle_img2img(
     };
 
     let label = req.template.clone();
-    queue_run(conn, lanes, jobs::Kind::Img2img, label, total, RunPlan {
+    let update_only = dto.update_only;
+    queue_run(conn, lanes, jobs::Kind::Img2img, label, total, update_only, RunPlan {
         start: Start::Img2Img(req),
         after,
         escalate,

@@ -2,7 +2,7 @@ import { $, bar, esc, getJSON, post, numOr, rememberFolds } from './dom.js';
 import { S, P, escErr } from './state.js';
 import { isBusy, setBusy, setIdle, onIdle, redrawBusy } from './busy.js';
 import { cancelPost, setPost, setPostStart, setViewerImage, showFullSize } from './viewer.js';
-import { onJobs, onNotice, onResult, runningJob, soonJobs, stopJob } from './jobs.js';
+import { activeLoop, onJobs, onNotice, onResult, runningJob, soonJobs, stopJob } from './jobs.js';
 import { applyWorkItem, loadWorkItems, markGrid } from './workitems.js';
 import { loraPicker } from './loras.js';
 import { sourceSlot } from './source-slot.js';
@@ -220,6 +220,9 @@ function syncPassButtons() {
 }
 
 function syncSummaries() {
+  // Everything that changes a summary is something a running loop should
+  // hear, so this is also where the loop is told.
+  syncLoop();
   syncPassButtons();
   // Before `/models` answers every box is empty, and "× · steps" says nothing.
   if (!currentModel()) return;
@@ -1090,23 +1093,97 @@ function afterEach() {
   };
 }
 
+// A run's whole request: the panel as it is now, how many, and what after.
+// One builder for Generate and for the loop's live edits, so the two can't
+// disagree about what a run is.
+function runBody(n) {
+  const [route, body] = genPayload();
+  return [route, {
+    ...body,
+    count: n === Infinity ? null : n,
+    loop: n === Infinity,
+    after: afterEach(),
+  }];
+}
+
 async function startRun() {
   $('err').textContent = '';
   const n = runTotal();
-  const [route, body] = genPayload();
+  const [route, body] = runBody(n);
   $('go').disabled = true;
   try {
-    await post(route, {
-      ...body,
-      count: n === Infinity ? null : n,
-      loop: n === Infinity,
-      after: afterEach(),
-    });
+    const r = await post(route, body);
+    // Start with a loop already running updates that loop (one at a time,
+    // `Queue::push_loop`) rather than queuing a second.
+    if (n === Infinity) {
+      lastLoop = JSON.stringify([route, body]);
+      if (r.updated) loopUpdated();
+    }
     soonJobs();
   } catch (e) {
     $('err').textContent = String(e.message || e);
   } finally {
     $('go').disabled = false;
+  }
+}
+
+// ---- The loop follows the panel ---------------------------------------------
+//
+// "Keep going until stopped" draws each image from the Image tab as it is
+// *now*: change the prompt to "lovely cat" and the next image is a cat. A batch
+// keeps what it was queued with; the loop is the one run that listens, and
+// there is only ever one (`Queue::push_loop`). The image in flight finishes as
+// it started.
+//
+// Debounced, so a word typed is one request, not one per key; deduplicated, so
+// opening a fold sends nothing; and skipped on a blank prompt, because clearing
+// the box on the way to a new one would fail the next image, and a failed
+// image ends the run. `update_only`, because an edit landing after the loop
+// ended must not start another.
+const LOOP_DEBOUNCE_MS = 800;
+let loopTimer = null;
+// The body the loop last got, as JSON.
+let lastLoop = null;
+// The loop image count from which the note is stale: the in-flight image is
+// the old settings', the one after it is the first with the new ones.
+let loopNoteUntil = null;
+
+function syncLoop() {
+  clearTimeout(loopTimer);
+  loopTimer = setTimeout(updateLoop, LOOP_DEBOUNCE_MS);
+}
+
+async function updateLoop() {
+  if (!activeLoop() || !currentModel() || !$('prompt').value.trim()) return;
+  const [route, body] = runBody(Infinity);
+  const key = JSON.stringify([route, body]);
+  if (key === lastLoop) return;
+  lastLoop = key;
+  try {
+    const r = await post(route, { ...body, update_only: true });
+    if (r.updated) loopUpdated();
+    soonJobs();
+  } catch (e) {
+    // Not sent, so the same edit may be tried again.
+    lastLoop = null;
+    $('err').textContent = String(e.message || e);
+  }
+}
+
+function loopUpdated() {
+  const j = activeLoop();
+  loopNoteUntil = j ? j.done + 2 : null;
+  $('loopnote').textContent = 'Loop updated — the next image uses it.';
+}
+
+// After every poll: the note goes once the loop has drawn an image with the
+// new settings, or has ended.
+function syncLoopNote() {
+  if (!$('loopnote').textContent) return;
+  const j = activeLoop();
+  if (!j || (loopNoteUntil !== null && j.done >= loopNoteUntil)) {
+    $('loopnote').textContent = '';
+    loopNoteUntil = null;
   }
 }
 
@@ -1328,6 +1405,7 @@ export function initImage() {
   onIdle(syncPassButtons);
   onResult(takeResult);
   onJobs(syncStopButton);
+  onJobs(syncLoopNote);
   // A run that failed has no request waiting on it; its message comes here.
   onNotice((msg, oom) => {
     if (/cancelled by request/.test(msg)) {
