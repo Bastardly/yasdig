@@ -287,6 +287,11 @@ needs a Vulkan device and nothing else.
   across. Same response shape as `/generate`, with the time reported in `fsr_ms`.
 - `POST /save-output` — `{ "image_id": 3 }`. Copies the image on screen, filters and
   all, into `work/output/`. Returns `{ "path": "work/output/…png" }`.
+- `POST /outputs/overwrite` — `{ "image_id": 3 }`, the Outputs viewer's *Save changes*:
+  writes the image on screen back over the saved picture it was opened from, in
+  `work/output/` and in your favourites if it is there too, keeping the file's date so
+  the grid keeps its order. Only for an image opened through `/outputs/open` (a 400
+  otherwise). Returns `{ "path": … }`.
 - `GET /workitems` — every archived generation, newest first. Each carries `id`,
   `created_ms`, `prompt`, `negative`, `seed`, `template`, `width` / `height`,
   `thumb_width` / `thumb_height`, `source` (the `work/output/` stem an

@@ -85,6 +85,7 @@
 //!   POST /videos/delete  -> {ids:[..]}
 //!   GET  /outputs/{stem}/thumb.png   generated on first request
 //!   POST /save-output      -> {image_id} keep the image on screen
+//!   POST /outputs/overwrite -> {image_id} save it over the output it was opened from
 //!   GET  /progress    -> what the worker is rendering right now, step by step
 //!   GET  /preview/{n}.png  the live preview of the run in flight; `n` is
 //!                     the `preview` number /progress and /jobs report
@@ -173,6 +174,9 @@ enum JobKind {
     /// Copy the image on screen into `work/output/`. No GPU, but the only copy
     /// of which file that is lives in the retained images.
     SaveOutput(u64),
+    /// Write the image on screen back over the saved file it was opened from
+    /// (`Display::overwrite_output`) — the Outputs viewer's *Save changes*.
+    OverwriteOutput(u64),
     /// Step to another state in an image's history (`Display::goto`). A
     /// `publish`, so the display lane's — it answers mid-render.
     Goto { id: u64, index: usize },
@@ -475,6 +479,7 @@ fn run(args: &[String]) -> Result<()> {
                         display.open_output(&stem, slot, fallback.as_deref()).map(|r| result_json(&r))
                     }
                     JobKind::SaveOutput(id) => display.save_output(id).map(|p| saved_json(&p)),
+                    JobKind::OverwriteOutput(id) => display.overwrite_output(id).map(|p| saved_json(&p)),
                     JobKind::Goto { id, index } => display.goto(id, index).map(|r| result_json(&r)),
                     JobKind::SetModel { id, model } => display.set_model(id, &model).map(|r| result_json(&r)),
                     JobKind::ViewStep { id, index } => display.view_step(id, index).map(|(png, w, h)| {
@@ -730,7 +735,8 @@ fn handle_conn(
             }
         }
         ("POST", "/adjust") => handle_adjust(&mut conn, lanes, &req.body),
-        ("POST", "/save-output") => handle_save_output(&mut conn, lanes, &req.body),
+        ("POST", "/save-output") => handle_save_output(&mut conn, lanes, &req.body, false),
+        ("POST", "/outputs/overwrite") => handle_save_output(&mut conn, lanes, &req.body, true),
 
         // Progress and Stop, both on the connection thread and both for the
         // same reason: they are *about* the job the worker is running, so
@@ -1722,10 +1728,13 @@ fn handle_favorite_outputs(conn: &mut http::Connection, cfg: &Config, body: &[u8
     )
 }
 
+/// `/save-output` mints a new file; `/outputs/overwrite` writes back over the
+/// one the viewer opened. Same body, same lane.
 fn handle_save_output(
     conn: &mut http::Connection,
     lanes: &Lanes,
     body: &[u8],
+    overwrite: bool,
 ) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
@@ -1733,7 +1742,14 @@ fn handle_save_output(
     }
 
     match parse_json::<Dto>(conn, body)? {
-        Some(dto) => submit(conn, &lanes.display, JobKind::SaveOutput(dto.image_id), 400),
+        Some(dto) => {
+            let kind = if overwrite {
+                JobKind::OverwriteOutput(dto.image_id)
+            } else {
+                JobKind::SaveOutput(dto.image_id)
+            };
+            submit(conn, &lanes.display, kind, 400)
+        }
         None => Ok(()),
     }
 }

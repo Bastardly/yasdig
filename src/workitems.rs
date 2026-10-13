@@ -607,42 +607,102 @@ impl Store {
         if thumb.is_file() {
             return Ok(thumb);
         }
-        let img = image::open(&src)
-            .with_context(|| format!("loading {} for a thumbnail", src.display()))?;
-        let tw = ((img.width() as f32) * (THUMB_HEIGHT as f32) / (img.height().max(1) as f32))
-            .round() as u32;
-        let small = img.thumbnail(tw.max(1), THUMB_HEIGHT);
-        // Written under a unique name and renamed into place, because two
-        // requests for the same tile are two connection threads, and interleaved
-        // writes to one PNG produce a file that decodes to garbage rather than an
-        // error. Rename within a directory is atomic, so the loser of the race
-        // simply replaces identical bytes.
-        //
-        // The counter is what makes the name unique, not the pid: both racing
-        // writers are *this* process, so a pid would have given them the same
-        // temp file and re-created the problem one step earlier.
-        let tmp = dir.join(format!(
-            "{stem}-thumb.{}.tmp",
-            TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        // `save` picks the encoder from the extension, and this name has none
-        // it would recognise, so the format is named.
-        small
-            .save_with_format(&tmp, image::ImageFormat::Png)
-            .with_context(|| format!("writing {}", tmp.display()))?;
-        // On Windows the loser's rename can fail outright instead, because the
-        // winner's file may already be open for the response — and a file open
-        // there can't be replaced. The race was for identical bytes, so a tile
-        // that exists by now is the answer either way.
-        if let Err(e) = std::fs::rename(&tmp, &thumb) {
-            let _ = std::fs::remove_file(&tmp);
-            if !thumb.is_file() {
-                return Err(e).with_context(|| format!("publishing {}", thumb.display()));
-            }
-        }
-        Ok(thumb)
+        write_output_thumb(&src, stem)
     }
 
+    /// Write the edited pixels in `display` over the saved image `stem`, in
+    /// every gallery that holds it — the viewer's *Save changes*.
+    ///
+    /// Safe where it looks dangerous, because of what the viewer holds: a
+    /// scratch *copy* of the file taken when it was opened (invariant 8), which
+    /// the sliders re-filter. So saving twice never stacks the grade, and Reset
+    /// then Save puts the original pixels back while the viewer stays on it.
+    ///
+    /// Both galleries, because a stem names one picture wherever it lives
+    /// ([`Store::free_stem`]): updating only `work/output/` would leave the
+    /// favourite showing the old picture under the same name. The file's mtime
+    /// is put back, since the grid is ordered by it and an edit shouldn't move
+    /// a picture to the front. Through a temp name and a rename, so a failure
+    /// halfway leaves the old file whole. The sidecar is left alone: it still
+    /// says how the picture was made.
+    pub fn overwrite_output(&self, stem: &str, display: &Path) -> Result<PathBuf> {
+        if !valid_id(stem) {
+            bail!("'{stem}' is not an output name");
+        }
+        let copies: Vec<PathBuf> = [&self.output, &self.favorite_outputs]
+            .into_iter()
+            .map(|d| d.join(format!("{stem}.png")))
+            .filter(|p| p.is_file())
+            .collect();
+        if copies.is_empty() {
+            bail!("'{stem}' is no longer in work/output/ or your favourites — use Save as new output");
+        }
+        for png in &copies {
+            let dir = png.parent().unwrap_or(&self.output);
+            let mtime = std::fs::metadata(png).and_then(|m| m.modified()).ok();
+            let tmp = dir.join(format!("{stem}.{}.tmp", TMP_COUNTER.fetch_add(1, Ordering::Relaxed)));
+            std::fs::copy(display, &tmp).with_context(|| format!("writing {}", tmp.display()))?;
+            if let Some(t) = mtime {
+                // Best-effort: a picture saved but moved to the front of the
+                // grid is a small surprise, not a failed save.
+                let _ = std::fs::File::options().write(true).open(&tmp).and_then(|f| f.set_modified(t));
+            }
+            if let Err(e) = std::fs::rename(&tmp, png) {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e).with_context(|| format!("saving over {}", png.display()));
+            }
+            let _ = std::fs::remove_file(dir.join(format!("{stem}-thumb.png")));
+            if let Err(e) = write_output_thumb(png, stem) {
+                eprintln!("[yasdig] thumbnail for {stem} deferred: {e:#}");
+            }
+        }
+        Ok(copies[0].clone())
+    }
+}
+
+/// Make `{stem}-thumb.png` beside the output PNG `src`. Shared by
+/// [`Store::ensure_output_thumb`] and [`Store::overwrite_output`], which needs
+/// a fresh one beside each copy it wrote.
+fn write_output_thumb(src: &Path, stem: &str) -> Result<PathBuf> {
+    let dir = src.parent().context("an output has a folder")?;
+    let thumb = dir.join(format!("{stem}-thumb.png"));
+    let img = image::open(src)
+        .with_context(|| format!("loading {} for a thumbnail", src.display()))?;
+    let tw = ((img.width() as f32) * (THUMB_HEIGHT as f32) / (img.height().max(1) as f32))
+        .round() as u32;
+    let small = img.thumbnail(tw.max(1), THUMB_HEIGHT);
+    // Written under a unique name and renamed into place, because two
+    // requests for the same tile are two connection threads, and interleaved
+    // writes to one PNG produce a file that decodes to garbage rather than an
+    // error. Rename within a directory is atomic, so the loser of the race
+    // simply replaces identical bytes.
+    //
+    // The counter is what makes the name unique, not the pid: both racing
+    // writers are *this* process, so a pid would have given them the same
+    // temp file and re-created the problem one step earlier.
+    let tmp = dir.join(format!(
+        "{stem}-thumb.{}.tmp",
+        TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    // `save` picks the encoder from the extension, and this name has none
+    // it would recognise, so the format is named.
+    small
+        .save_with_format(&tmp, image::ImageFormat::Png)
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    // On Windows the loser's rename can fail outright instead, because the
+    // winner's file may already be open for the response — and a file open
+    // there can't be replaced. The race was for identical bytes, so a tile
+    // that exists by now is the answer either way.
+    if let Err(e) = std::fs::rename(&tmp, &thumb) {
+        let _ = std::fs::remove_file(&tmp);
+        if !thumb.is_file() {
+            return Err(e).with_context(|| format!("publishing {}", thumb.display()));
+        }
+    }
+    Ok(thumb)
+}
+
+impl Store {
     /// Everything in `work/output/`, newest first.
     ///
     /// Keyed by stem, and the sidecar is read for the rest — an output PNG whose
@@ -872,6 +932,42 @@ mod tests {
             assert!(p.with_extension("json").is_file());
         }
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// *Save changes*: the new pixels land over every copy of the stem, the
+    /// grid keeps its order (mtime kept), each copy gets a fresh tile, and the
+    /// sidecar still describes the picture.
+    #[test]
+    fn overwrite_output_replaces_every_copy_in_place() {
+        let dir = std::env::temp_dir().join(format!("yasdig-over-{}", new_id(3)));
+        let store = Store::new(&dir, &dir.join("user"));
+        let old = dir.join("old.png");
+        let new = dir.join("new.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255])).save(&old).unwrap();
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([9, 9, 9, 255])).save(&new).unwrap();
+        let it = item("400-1", 400);
+        let saved = store.save_output(&old, &it).unwrap();
+        let stem = saved.file_stem().unwrap().to_str().unwrap().to_string();
+        store.favorite_output(&stem).unwrap();
+        let fav = dir.join("user").join("favorite_outputs").join(format!("{stem}.png"));
+        assert!(fav.is_file(), "{}", fav.display());
+
+        let when = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        std::fs::File::options().write(true).open(&saved).unwrap().set_modified(when).unwrap();
+        let thumb_before = std::fs::read(store.output_thumb_path(&stem)).unwrap();
+
+        store.overwrite_output(&stem, &new).unwrap();
+        for png in [&saved, &fav] {
+            assert_eq!(std::fs::read(png).unwrap(), std::fs::read(&new).unwrap(), "{}", png.display());
+        }
+        assert_eq!(std::fs::metadata(&saved).unwrap().modified().unwrap(), when);
+        assert_ne!(std::fs::read(store.output_thumb_path(&stem)).unwrap(), thumb_before);
+        assert!(saved.with_extension("json").is_file());
+        assert_eq!(store.list_outputs(Gallery::Output).len(), 1);
+
+        assert!(store.overwrite_output("../x", &new).is_err());
+        assert!(store.overwrite_output("999-gone", &new).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 

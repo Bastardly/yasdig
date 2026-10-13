@@ -387,9 +387,13 @@ sliders live, and **←** / **→** step to the previous and next image with the
 left up. A focused slider keeps its own arrow keys, so click the picture to hand them
 back to the gallery.
 
-**Save as new output**, at the bottom of the viewer's panel, keeps the edit as a new file beside the
-original. It never overwrites: an output can descend from a refine, and those aren't
-archived, so the pixels you started from exist nowhere else.
+**Save changes**, at the bottom of the viewer's panel, writes the edit back over the
+picture (and over its favourite copy, if you kept one), and the tile stays where it was
+in the grid. The viewer holds the picture as it was when you opened it and the sliders
+work on that, so saving twice doesn't grade on top of the first save, and **Reset**
+then **Save changes** puts the original back — until you open another picture.
+**Save as new output**, above it, keeps the original and saves the edit as a new file
+beside it.
 
 The same **Click to open / Click to favorite / Click to delete** toggle the work-item
 grid has is above this one, and behaves identically: a click marks, `Delete N

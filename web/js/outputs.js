@@ -48,13 +48,18 @@ export async function fetchOutputs(gallery = 'outputs') {
 // thumbnail is generated on first request, so there is nothing to report about
 // its size until it exists. The aspect from the sidecar reserves the space, and
 // a sidecar-less image (`0`) falls back to a square.
+// A stem whose picture was saved over this session, and when: the tile's URL
+// carries it, so the browser fetches the new thumbnail instead of reusing the
+// old one under the same name. The server routes on the path alone.
+const edited = new Map();
+
 export function outputGrid(el, list, { height = 200, empty = '', onPick }) {
   el.innerHTML = list.map((o) => {
     const w = o.height ? Math.round(height * o.width / o.height) : height;
     return `<button type="button" data-stem="${esc(o.stem)}"
       title="${esc(o.prompt || o.stem)}&#10;${o.width}×${o.height} · seed ${o.seed}${
         o.template ? ` · ${esc(o.template)}` : ''}">
-      <img src="/outputs/${esc(o.stem)}/thumb.png" alt="" loading="lazy"
+      <img src="/outputs/${esc(o.stem)}/thumb.png${edited.has(o.stem) ? `?v=${edited.get(o.stem)}` : ''}" alt="" loading="lazy"
         width="${w}" height="${height}"></button>`;
   }).join('') || empty;
   for (const b of el.querySelectorAll('button')) {
@@ -201,6 +206,10 @@ async function openAt(i) {
   markGrid();
   $('oerr').textContent = '';
   setBusy('lbsave', 'Opening…');
+  // Not while the next picture opens: `index` already names it, and the save
+  // would be of the one still retained. `setIdle('lbsave')` re-enables it
+  // through the `onIdle` hook below.
+  $('lbsavechanges').disabled = true;
   try {
     const data = await post('/outputs/open', { stem: outputs[i].stem });
     S.imageId = data.image_id;
@@ -240,9 +249,9 @@ function step(d) {
   if (i !== index) openAt(i);
 }
 
-// Keep the edit. A new file beside the original, never over it: the pre-edit
-// pixels exist nowhere else — an output can descend from a refine, and those are
-// not archived — so `free_stem` suffixing the name is the whole safety net.
+// Keep the edit as a new file beside the original. `free_stem` suffixes the
+// name, so this never touches the picture it was opened from — that is
+// Save changes' job, below.
 async function saveEdit() {
   if (S.imageId === null) return;
   setBusy('lbsave', 'Saving…');
@@ -258,6 +267,28 @@ async function saveEdit() {
     $('lberr').textContent = String(e.message || e);
   } finally {
     setIdle('lbsave');
+  }
+}
+
+// Save the edit over the picture it was opened from (`/outputs/overwrite`).
+// Safe to press twice: the viewer holds a copy of the file as it was opened and
+// the sliders re-filter that, so a second save replaces the first rather than
+// grading on top of it — and Reset, then Save changes, puts the original back.
+// That copy goes when another picture is opened, which is what the line says.
+async function saveChanges() {
+  if (S.imageId === null) return;
+  const stem = outputs[index]?.stem;
+  setBusy('lbsavechanges', 'Saving…');
+  $('lberr').textContent = '';
+  try {
+    await post('/outputs/overwrite', { image_id: S.imageId });
+    if (stem) edited.set(stem, Date.now());
+    $('lbsaved').textContent = `saved over ${stem} — Reset and save again to undo, until you move on`;
+    await loadOutputs();
+  } catch (e) {
+    $('lberr').textContent = String(e.message || e);
+  } finally {
+    setIdle('lbsavechanges');
   }
 }
 
@@ -291,6 +322,7 @@ export function initOutputs() {
   $('ocurrent').addEventListener('click', () => setGallery('outputs'));
   $('ofavorites').addEventListener('click', () => setGallery('favorite-outputs'));
   $('lbsave').addEventListener('click', saveEdit);
+  $('lbsavechanges').addEventListener('click', saveChanges);
   $('lbrefine').addEventListener('click', toImage);
 
   // On `document`, because a modal <dialog>'s keydown still bubbles out of it —
@@ -312,6 +344,7 @@ export function initOutputs() {
   // Save is only pressable once something is open, which IDLE_LABELS can't know.
   onIdle(() => {
     $('lbsave').disabled = S.imageId === null;
+    $('lbsavechanges').disabled = S.imageId === null;
     $('lbrefine').disabled = S.imageId === null;
   });
 

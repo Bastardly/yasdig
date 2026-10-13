@@ -635,8 +635,14 @@ the viewer; ←/→ step. **No Refine/Hi-res here** — a saved output is `displ
   from them).
 - **A missing sidecar is `Profile::default()`**, not an error.
 
-Copied into scratch (invariant 8). `work_id`/`step` restored so saves land as
-`{id}-s{step}-2.png`. **Save is never an overwrite.**
+Copied into scratch (invariant 8). `work_id`/`step` restored so *Save as new* lands
+as `{id}-s{step}-2.png`. **Save changes overwrites, and is safe because of that copy**
+(`Display::overwrite_output` → `Store::overwrite_output`): the sliders re-filter the
+copy taken at open, so a second save never stacks the grade and Reset + Save restores
+the original while the viewer stays on it. Only `Pending::opened_from` (set by
+`open_output` into `Slot::Output`) names the file. It writes **every gallery holding
+the stem** (one stem, one picture), keeps the mtime (grid order), rebuilds each tile,
+and leaves the sidecar; the page cache-busts the tile (`edited` in `outputs.js`).
 
 - **Deleting is `gridmark.js`**, shared with the work-item grid (one action here, two
   there). **Delete all = the same request with every id.** One of three `confirm()`s

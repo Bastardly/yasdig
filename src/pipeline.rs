@@ -782,6 +782,11 @@ struct Pending {
     /// A stem, never a path — for the same reason `work_id` is an id. The file
     /// it names belongs to the user, and `remove_files` would delete it.
     source: Option<String>,
+    /// The saved image the Outputs viewer opened this from, so *Save changes*
+    /// can write back over exactly that file (`Display::overwrite_output`).
+    /// Set only by `open_output` into `Slot::Output`; every pass starts a new
+    /// picture and leaves it `None`. A stem, never a path, for `source`'s reason.
+    opened_from: Option<String>,
     refine_passes: u32,
     hires_passes: u32,
     /// How many escalations this result has been through. Only used to keep
@@ -1448,6 +1453,7 @@ impl Engine {
             seed,
             work_id,
             source: None,
+            opened_from: None,
             refine_passes: 0,
             hires_passes: 0,
             step: 0,
@@ -1692,6 +1698,7 @@ impl Engine {
             seed,
             work_id,
             source: Some(req.source.clone()),
+            opened_from: None,
             refine_passes: 0,
             hires_passes: 0,
             step: 0,
@@ -2793,6 +2800,7 @@ impl Display {
             // generation puts its source back rather than quietly forgetting
             // where the picture came from.
             source: item.source,
+            opened_from: None,
             refine_passes: item.refine_passes,
             hires_passes: item.hires_passes,
             step: 0,
@@ -2898,6 +2906,9 @@ impl Display {
             // is what stops it overwriting the image being edited.
             work_id: item.as_ref().map(|i| i.id.clone()),
             source: item.as_ref().and_then(|i| i.source.clone()),
+            // Only the Outputs viewer's own slot saves back over the file;
+            // *Refine & extend…* (`Slot::Image`) makes a new picture of it.
+            opened_from: (slot == Slot::Output).then(|| stem.to_string()),
             refine_passes: item.as_ref().map(|i| i.refine_passes).unwrap_or(0),
             hires_passes: item.as_ref().map(|i| i.hires_passes).unwrap_or(0),
             step: item.as_ref().map(|i| i.step).unwrap_or(0),
@@ -2905,6 +2916,20 @@ impl Display {
         let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
         lock(&self.retained).store(id, slot, entry, false);
         Ok(result)
+    }
+
+    /// Save the image on screen back over the output it was opened from — the
+    /// Outputs viewer's *Save changes*. Only an image `open_output` put in
+    /// `Slot::Output` knows that file (`Pending::opened_from`); anything else is
+    /// refused rather than guessed at. Why it is safe to do: see
+    /// [`workitems::Store::overwrite_output`].
+    pub fn overwrite_output(&self, id: u64) -> Result<PathBuf> {
+        let p = lock(&self.retained).get(id, "save")?;
+        let stem = p
+            .opened_from
+            .as_deref()
+            .context("this image wasn't opened from Outputs, so there is no file to save over")?;
+        self.items.overwrite_output(stem, &p.display)
     }
 
     /// Copy the image currently on screen into `work/output/`, and return where
@@ -3360,6 +3385,7 @@ mod tests {
             seed: 0,
             work_id: None,
             source: None,
+            opened_from: None,
             refine_passes: 0,
             hires_passes: 0,
             step: 0,

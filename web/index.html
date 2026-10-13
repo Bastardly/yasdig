@@ -858,9 +858,14 @@
            edit. Neutral: opening it spends nothing; the dialog's buttons do. -->
       <button type="button" id="lbrefine" class="btn btn-block" hidden
         title="Open this picture on the Image tab, in the Refine dialog. It opens the saved file — save slider changes first to keep them.">Refine &amp; extend…</button>
-      <!-- The Outputs tab's Save, and this panel's one amber button: keeping
-           the edit is what the viewer is for there. -->
-      <button type="button" id="lbsave" class="btn btn-run btn-block" hidden>Save as new output</button>
+      <!-- A copy, beside the original: for keeping both. Neutral, since
+           Save changes below is what an edit usually ends with. -->
+      <button type="button" id="lbsave" class="btn btn-block" hidden
+        title="Keep the original and save this as a new picture beside it.">Save as new output</button>
+      <!-- The Outputs tab's Save, and this panel's one amber button: the edit
+           written back over the picture it was opened from. -->
+      <button type="button" id="lbsavechanges" class="btn btn-run btn-block" hidden
+        title="Write the edit over this picture (and its favourite copy, if it has one). Until you move on, Reset and Save changes again puts the original back.">Save changes</button>
     </div>
   </div>
   <div class="lbview fit" id="lbview">
