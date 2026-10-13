@@ -1598,6 +1598,19 @@ removed**: the routes, `/video-models`, the clips on disk, the Convert tab's *Vi
 models* group and every server-side rule stay exactly as they are, which is what lets
 the feature be worked on in place and turned back on with a tick.
 
+## Website
+
+`site/` is yasdig.com: one static page (`index.html`, `style.css`, `CNAME`), deployed
+by `.github/workflows/pages.yml` on a push that touches it — kept out of `docs/` so
+Jekyll never renders the Markdown reference. **Keep it short and download-first.**
+Its tokens and button look are a hand-kept copy of `web/style.css`'s. The download
+buttons point at the Releases page and a few lines of JS repoint them at the newest
+release's files through `api.github.com/…/releases` — not at
+`releases/latest/download/…`, which skips pre-releases and would 404 while every
+release is one. Any failure leaves the Releases-page links, never a dead button; the
+release's asset names (`yasdig-windows-x86_64.exe`, `yasdig-linux-x86_64`) are what
+it matches, so renaming them in `release.yml` means changing the page's patterns too.
+
 ## Licences
 
 yasdig is Apache-2.0 (`LICENSE`, `Cargo.toml`). A release embeds sd-cli, so the

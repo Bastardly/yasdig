@@ -1,5 +1,7 @@
 # YASDIG
 
+**[yasdig.com](https://yasdig.com)** · [Download](https://github.com/Bastardly/yasdig/releases)
+
 **Yet Another Stable Diffusion Image Generator** — a nod to the open-source habit of
 calling a thing "yet another" one, and to the many generators before it. It was called
 *rustimage* until October 2026.

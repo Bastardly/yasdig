@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YASDIG — Yet Another Stable Diffusion Image Generator</title>
+<meta name="description" content="Make pictures on your own PC with stable-diffusion.cpp: draft fast, then finish only the ones worth keeping. One file, no Python, any Vulkan GPU.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23e0912b'/%3E%3Ctext x='16' y='23' font-family='Arial,sans-serif' font-size='20' font-weight='700' text-anchor='middle' fill='%23100c05'%3EY%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="brand"><b>YASDIG</b></div>
+  <a href="https://github.com/Bastardly/yasdig">GitHub</a>
+</header>
+
+<section class="hero">
+  <h1>YASDIG</h1>
+  <p class="expand">Yet Another Stable Diffusion Image Generator</p>
+  <p class="pitch">Make pictures on your own PC: draft fast, then finish only the ones
+    worth keeping.</p>
+
+  <!-- Each button goes to the Releases page until the script below finds the
+       newest release's file, so with no JS, or the GitHub API down, nothing is
+       a dead link. The script also makes the button for your system amber. -->
+  <div class="downloads">
+    <a class="btn" id="dl-win" href="https://github.com/Bastardly/yasdig/releases">
+      Download for Windows<small>Windows 10 / 11, 64-bit</small></a>
+    <a class="btn" id="dl-linux" href="https://github.com/Bastardly/yasdig/releases">
+      Download for Linux<small>x86-64</small></a>
+  </div>
+  <p class="sub release" id="release"></p>
+  <p class="sub noos" id="noos" hidden>There is no build for this system yet: YASDIG
+    runs on Windows and Linux PCs.</p>
+  <p class="sub links"><a href="https://github.com/Bastardly/yasdig/releases">All releases</a>
+    · <a href="https://github.com/Bastardly/yasdig">Source on GitHub</a></p>
+</section>
+
+<section class="points">
+  <div class="card">
+    <h3>Draft cheap, finish what's worth it</h3>
+    <p>Generate small and fast, keep the good ones, then Hi-res, Refine, Edit,
+      Extend or Upscale just those — each step one you can undo.</p>
+  </div>
+  <div class="card">
+    <h3>One file, no Python</h3>
+    <p>Nothing to install. Runs on AMD, NVIDIA and Intel graphics cards through
+      Vulkan, powered by stable-diffusion.cpp.</p>
+  </div>
+  <div class="card">
+    <h3>Models in one click</h3>
+    <p>SDXL, Flux, Flux.2 Klein, Z-Image, Krea 2, Qwen-Image and more — downloaded
+      to the right place from inside the app.</p>
+  </div>
+</section>
+
+<section class="card start">
+  <h2>Getting started</h2>
+  <ol>
+    <li><b>Download</b> the file for your system, above.</li>
+    <li><b>Put it in a folder of its own</b> and start it. Your browser opens on the app.</li>
+    <li>Open <b>Get models</b>, download a model, then press <b>Generate</b>.</li>
+  </ol>
+  <p class="sub">You need a graphics card with a current driver (AMD, NVIDIA or Intel).
+    How much memory depends on the model; the app says per model.</p>
+  <p class="sub">On Linux, make the file executable once: <code>chmod +x yasdig-linux-x86_64</code>.
+    On Windows, a new download may show <i>Windows protected your PC</i>:
+    choose <i>More info → Run anyway</i>.</p>
+</section>
+
+<footer>
+  <a href="https://github.com/Bastardly/yasdig">GitHub</a>
+  <a href="https://github.com/Bastardly/yasdig/blob/master/LICENSE">Apache-2.0</a>
+  <!-- Switch on when the accounts exist:
+  <a href="https://twitter.com/…">Twitter</a>
+  <a href="https://youtube.com/@…">YouTube</a>
+  -->
+  <span>Powered by <a href="https://github.com/leejet/stable-diffusion.cpp">stable-diffusion.cpp</a></span>
+</footer>
+
+</div>
+
+<script>
+// Which system is this? The button for it is the amber one. A Mac, a phone or a
+// tablet gets neither, and a line saying there is no build for it.
+(function () {
+  const ua = navigator.userAgent;
+  const os = /Windows/i.test(ua) ? 'win'
+    : /Android|iPhone|iPad|Macintosh|Mac OS/i.test(ua) ? null
+    : /Linux|X11/i.test(ua) ? 'linux' : null;
+  if (os) document.getElementById(os === 'win' ? 'dl-win' : 'dl-linux').classList.add('btn-run');
+  else document.getElementById('noos').hidden = false;
+})();
+
+// The newest release, pre-releases included — GitHub's own
+// releases/latest/download/… link skips those, and every release is one for
+// now. On any failure the buttons keep pointing at the Releases page.
+(async function () {
+  try {
+    const r = await fetch('https://api.github.com/repos/Bastardly/yasdig/releases?per_page=10');
+    if (!r.ok) return;
+    const rel = (await r.json()).find((x) => !x.draft
+      && x.assets.some((a) => /windows.*\.exe$/.test(a.name) || /linux/.test(a.name)));
+    if (!rel) return;
+    for (const [id, test] of [['dl-win', /windows.*\.exe$/], ['dl-linux', /linux/]]) {
+      const a = rel.assets.find((x) => test.test(x.name));
+      if (a) document.getElementById(id).href = a.browser_download_url;
+    }
+    const date = new Date(rel.published_at).toLocaleDateString(undefined,
+      { day: 'numeric', month: 'short', year: 'numeric' });
+    document.getElementById('release').textContent =
+      `${rel.tag_name}${rel.prerelease ? ' · pre-release' : ''} · ${date}`;
+  } catch { /* keep the Releases page links */ }
+})();
+</script>
+</body>
+</html>

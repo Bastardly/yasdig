@@ -1,0 +1,114 @@
+/* yasdig.com — one page, styled as the app is. The tokens and the button look
+   are copied from web/style.css (the app's stylesheet); keep the two in step by
+   hand when the app's palette moves. Same rules as there: a rule names a role,
+   never a value, and amber marks the one action the page is for — here, the
+   download for your system. */
+
+:root {
+  --ink-900: #0a0a0b;
+  --ink-800: #121213;
+  --ink-700: #17181a;
+  --ink-600: #1f2022;
+  --ink-500: #2c2d30;
+  --ink-400: #3c3d41;
+
+  --text:       #ebeae7;
+  --text-dim:   #9b9a96;
+  --text-faint: #6c6b68;
+
+  --accent:    #e0912b;
+  --accent-hi: #f0a643;
+  --on-accent: #100c05;
+  --heading:   #e8b16d;   /* the app's --fold-title */
+
+  --font-ui:  Inter, "SF Pro Text", "Segoe UI Variable Text", Cantarell, "Noto Sans", system-ui, sans-serif;
+  --font-num: "JetBrains Mono", "IBM Plex Mono", "DejaVu Sans Mono", ui-monospace, monospace;
+  --fs-sm:      13px;
+  --fs-body:    15px;
+  --fs-title:   20px;
+  --fs-display: 40px;
+  --lh-body: 1.55;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 40px;
+
+  --r-md: 8px;
+  --r-lg: 12px;
+  --line: 1px solid var(--ink-500);
+
+  --page-w: 880px;
+}
+
+* { box-sizing: border-box; }
+html { background: var(--ink-900); }
+body {
+  margin: 0; padding: var(--sp-6) var(--sp-4) var(--sp-8);
+  font: var(--fs-body)/var(--lh-body) var(--font-ui);
+  background: var(--ink-900); color: var(--text);
+}
+.page { max-width: var(--page-w); margin: 0 auto; }
+a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
+a:hover { color: var(--accent-hi); }
+code { font-family: var(--font-num); font-size: .92em; background: var(--ink-800);
+       border: var(--line); border-radius: 4px; padding: 0 4px; }
+h2 { font-size: var(--fs-title); color: var(--heading); margin: 0 0 var(--sp-3); }
+.sub { color: var(--text-dim); font-size: var(--fs-sm); }
+
+/* ---- Header */
+header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4);
+         padding-bottom: var(--sp-4); border-bottom: var(--line); }
+.brand { display: flex; align-items: center; gap: var(--sp-3); }
+.brand b { font-size: var(--fs-title); letter-spacing: .04em; }
+
+/* ---- Hero */
+.hero { text-align: center; padding: var(--sp-8) 0; }
+.hero h1 { font-size: var(--fs-display); line-height: 1.15; margin: 0 0 var(--sp-2); letter-spacing: .03em; }
+.hero .expand { color: var(--heading); margin: 0 0 var(--sp-5); }
+.hero .pitch { font-size: 18px; max-width: 34em; margin: 0 auto var(--sp-6); }
+
+/* ---- Buttons: the app's .btn and .btn-run */
+.btn {
+  display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; padding: var(--sp-3) var(--sp-6); border-radius: var(--r-md);
+  font-weight: 600; text-decoration: none;
+  background: var(--ink-600); color: var(--text); border: var(--line);
+}
+.btn:hover { background: var(--ink-500); color: var(--text); }
+.btn-run { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.btn-run:hover { background: var(--accent-hi); color: var(--on-accent); }
+.btn small { font-weight: 400; font-size: var(--fs-sm); opacity: .8; }
+.downloads { display: flex; justify-content: center; gap: var(--sp-3); flex-wrap: wrap; }
+.downloads .btn { min-width: 220px; font-size: 17px; }
+.release { margin-top: var(--sp-3); }
+.noos { margin-top: var(--sp-2); }
+.links { margin-top: var(--sp-2); }
+
+/* ---- Cards */
+.card { background: var(--ink-700); border: var(--line); border-radius: var(--r-lg);
+        padding: var(--sp-5); }
+.points { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3);
+          margin-bottom: var(--sp-6); }
+.points h3 { margin: 0 0 var(--sp-2); font-size: var(--fs-body); }
+.points p { margin: 0; color: var(--text-dim); font-size: var(--fs-sm); }
+.start ol { margin: 0 0 var(--sp-3); padding-left: 1.3em; }
+.start li { margin-bottom: var(--sp-2); }
+.start .sub { margin: var(--sp-2) 0 0; }
+
+/* ---- Footer */
+footer { margin-top: var(--sp-8); padding-top: var(--sp-4); border-top: var(--line);
+         display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-5);
+         color: var(--text-faint); font-size: var(--fs-sm); }
+footer a { color: var(--text-dim); }
+
+/* ---- Narrow: one column, buttons full width */
+@media (max-width: 600px) {
+  :root { --fs-display: 30px; }
+  .hero { padding: var(--sp-6) 0; }
+  .points { grid-template-columns: 1fr; }
+  .downloads .btn { width: 100%; }
+}
