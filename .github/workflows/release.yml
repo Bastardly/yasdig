@@ -1,8 +1,10 @@
 # The one-file release: stable-diffusion.cpp's sd-cli built static, then baked
 # into yasdig (see build.rs and src/bundle.rs), for Linux and Windows.
 #
-# Push a tag `v*` to publish a release with both executables attached, or run it
-# by hand from the Actions tab to get them as workflow artifacts only.
+# Draft a release on GitHub with a new `v*` tag (or push one), and both
+# executables are attached to it when the builds finish, ~30 minutes later. A
+# tag not starting with `v` builds nothing. Run it by hand from the Actions tab
+# to get the files as workflow artifacts only.
 #
 # Three flags on the sd.cpp build are what make the result travel, and all three
 # fail on *someone else's* machine rather than here:
@@ -26,7 +28,7 @@ env:
   # The sd.cpp commit yasdig is tested against. Bump deliberately: yasdig
   # parses sd-cli's progress output and reads its source for several behaviours
   # (see CLAUDE.md), so a newer commit is a change to test, not a free upgrade.
-  SD_CPP_REF: 59c23bce0d82be3a922023ab811194f05b3e2faa
+  SD_CPP_REF: f89d9b13d730eabeede7314ce49dacd18d3c90c2
   VULKAN_VERSION: 1.4.328.1
 
 jobs:
@@ -149,8 +151,18 @@ jobs:
         with:
           merge-multiple: true
       - name: Release
+        # Two ways in, both ending with the executables attached: a release
+        # drafted by hand on GitHub (its tag push started this run, and its
+        # title, notes and pre-release tick are kept — the files are uploaded
+        # to it), or a bare `git push origin v…` (the release is created here).
+        # `gh release create` alone failed on the first, since the release
+        # already existed by the time the builds were done.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes \
-            yasdig-linux-x86_64 yasdig-windows-x86_64.exe
+          files="yasdig-linux-x86_64 yasdig-windows-x86_64.exe"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber $files
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes $files
+          fi
