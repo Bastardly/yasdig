@@ -3096,7 +3096,8 @@ t5xxl = "v/umt5.gguf"
             ],
         );
         let with_template = format!(
-            "{toml}\n[templates.zbase]\nmodel = \"{}\"\nsteps = 28\n",
+            // A literal string: a Windows path's `\U` is an escape in a basic one.
+            "{toml}\n[templates.zbase]\nmodel = '{}'\nsteps = 28\n",
             models.join("zimage.safetensors").display()
         );
         std::fs::write(root.join("models.toml"), with_template).unwrap();
