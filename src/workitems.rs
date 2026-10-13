@@ -443,12 +443,16 @@ impl Store {
     /// two separate sessions of refining the same original both reach `-s1`;
     /// without the suffix the second save would silently overwrite the first,
     /// which is the one thing this button must never do.
-    pub fn save_output(&self, display: &Path, item: &WorkItem) -> Result<PathBuf> {
+    ///
+    /// With `embed`, the PNG carries the settings that made it
+    /// ([`crate::pngmeta`]) — `Settings::embed_png_settings`.
+    pub fn save_output(&self, display: &Path, item: &WorkItem, embed: bool) -> Result<PathBuf> {
         std::fs::create_dir_all(&self.output)
             .with_context(|| format!("creating {}", self.output.display()))?;
         let stem = self.free_stem(&format!("{}-s{}", item.id, item.step));
         let png = self.output.join(format!("{stem}.png"));
-        std::fs::copy(display, &png).with_context(|| format!("saving to {}", png.display()))?;
+        let bytes = output_bytes(display, embed.then_some(item))?;
+        std::fs::write(&png, bytes).with_context(|| format!("saving to {}", png.display()))?;
         write_sidecar(&self.output.join(format!("{stem}.json")), item)?;
         // Best-effort: a save that produced the PNG the user asked for has done
         // its job, and a missing thumbnail is something `ensure_output_thumb`
@@ -625,7 +629,7 @@ impl Store {
     /// a picture to the front. Through a temp name and a rename, so a failure
     /// halfway leaves the old file whole. The sidecar is left alone: it still
     /// says how the picture was made.
-    pub fn overwrite_output(&self, stem: &str, display: &Path) -> Result<PathBuf> {
+    pub fn overwrite_output(&self, stem: &str, display: &Path, embed: bool) -> Result<PathBuf> {
         if !valid_id(stem) {
             bail!("'{stem}' is not an output name");
         }
@@ -637,11 +641,15 @@ impl Store {
         if copies.is_empty() {
             bail!("'{stem}' is no longer in work/output/ or your favourites — use Save as new output");
         }
+        // The settings from the sidecar it was saved with; a PNG dropped in by
+        // hand has none and is written plain.
+        let item = if embed { self.load_output(stem) } else { None };
+        let bytes = output_bytes(display, item.as_ref())?;
         for png in &copies {
             let dir = png.parent().unwrap_or(&self.output);
             let mtime = std::fs::metadata(png).and_then(|m| m.modified()).ok();
             let tmp = dir.join(format!("{stem}.{}.tmp", TMP_COUNTER.fetch_add(1, Ordering::Relaxed)));
-            std::fs::copy(display, &tmp).with_context(|| format!("writing {}", tmp.display()))?;
+            std::fs::write(&tmp, &bytes).with_context(|| format!("writing {}", tmp.display()))?;
             if let Some(t) = mtime {
                 // Best-effort: a picture saved but moved to the front of the
                 // grid is a small surprise, not a failed save.
@@ -658,6 +666,20 @@ impl Store {
         }
         Ok(copies[0].clone())
     }
+}
+
+/// The bytes an output is written with: `display`, with the settings of `item`
+/// embedded when there is one. Embedding failing (a PNG it can't parse) costs
+/// the metadata, never the save.
+fn output_bytes(display: &Path, item: Option<&WorkItem>) -> Result<Vec<u8>> {
+    let bytes = std::fs::read(display).with_context(|| format!("reading {}", display.display()))?;
+    Ok(match item {
+        Some(item) => crate::pngmeta::embed(&bytes, item).unwrap_or_else(|e| {
+            eprintln!("[yasdig] saving without settings in the PNG: {e:#}");
+            bytes
+        }),
+        None => bytes,
+    })
 }
 
 /// Make `{stem}-thumb.png` beside the output PNG `src`. Shared by
@@ -918,9 +940,9 @@ mod tests {
             .unwrap();
 
         let it = item("300-7", 300);
-        let first = store.save_output(&src, &it).unwrap();
-        let second = store.save_output(&src, &it).unwrap();
-        let third = store.save_output(&src, &it).unwrap();
+        let first = store.save_output(&src, &it, false).unwrap();
+        let second = store.save_output(&src, &it, false).unwrap();
+        let third = store.save_output(&src, &it, false).unwrap();
 
         assert_ne!(first, second);
         assert_ne!(second, third);
@@ -947,7 +969,7 @@ mod tests {
         image::RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255])).save(&old).unwrap();
         image::RgbaImage::from_pixel(8, 8, image::Rgba([9, 9, 9, 255])).save(&new).unwrap();
         let it = item("400-1", 400);
-        let saved = store.save_output(&old, &it).unwrap();
+        let saved = store.save_output(&old, &it, false).unwrap();
         let stem = saved.file_stem().unwrap().to_str().unwrap().to_string();
         store.favorite_output(&stem).unwrap();
         let fav = dir.join("user").join("favorite_outputs").join(format!("{stem}.png"));
@@ -957,7 +979,7 @@ mod tests {
         std::fs::File::options().write(true).open(&saved).unwrap().set_modified(when).unwrap();
         let thumb_before = std::fs::read(store.output_thumb_path(&stem)).unwrap();
 
-        store.overwrite_output(&stem, &new).unwrap();
+        store.overwrite_output(&stem, &new, false).unwrap();
         for png in [&saved, &fav] {
             assert_eq!(std::fs::read(png).unwrap(), std::fs::read(&new).unwrap(), "{}", png.display());
         }
@@ -966,8 +988,8 @@ mod tests {
         assert!(saved.with_extension("json").is_file());
         assert_eq!(store.list_outputs(Gallery::Output).len(), 1);
 
-        assert!(store.overwrite_output("../x", &new).is_err());
-        assert!(store.overwrite_output("999-gone", &new).is_err());
+        assert!(store.overwrite_output("../x", &new, false).is_err());
+        assert!(store.overwrite_output("999-gone", &new, false).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -985,8 +1007,8 @@ mod tests {
         let mut it = item("400-7", 400);
         it.width = 300;
         it.height = 100;
-        let first = store.save_output(&src, &it).unwrap();
-        let second = store.save_output(&src, &it).unwrap();
+        let first = store.save_output(&src, &it, false).unwrap();
+        let second = store.save_output(&src, &it, false).unwrap();
 
         // Saving writes the thumbnail now, so the grid is warm immediately.
         assert!(store.output_thumb_path("400-7-s0").is_file());
@@ -1053,7 +1075,7 @@ mod tests {
             .unwrap();
 
         let it = item("600-7", 600);
-        store.save_output(&src, &it).unwrap();
+        store.save_output(&src, &it, false).unwrap();
         assert!(store.output_path("600-7-s0").is_file());
         assert!(store.output_thumb_path("600-7-s0").is_file());
 
@@ -1095,7 +1117,7 @@ mod tests {
         it.refine_passes = 1;
         it.sharpness = 0.4;
         it.profile.name = "someturbo".to_string();
-        store.save_output(&src, &it).unwrap();
+        store.save_output(&src, &it, false).unwrap();
 
         let back = store
             .load_output("500-7-s2")
@@ -1212,7 +1234,7 @@ mod tests {
             .save(&src)
             .unwrap();
         let it = item("900-7", 900);
-        let saved = store.save_output(&src, &it).unwrap();
+        let saved = store.save_output(&src, &it, false).unwrap();
         assert!(saved.ends_with("900-7-s0.png"));
 
         store.favorite_output("900-7-s0").unwrap();
@@ -1233,7 +1255,7 @@ mod tests {
 
         // The next save of the same step must not reuse the favourite's name,
         // or one stem would mean two pictures.
-        let next = store.save_output(&src, &it).unwrap();
+        let next = store.save_output(&src, &it, false).unwrap();
         assert!(next.ends_with("900-7-s0-2.png"), "{}", next.display());
 
         // And the other direction: deleting the favourite leaves the gallery.

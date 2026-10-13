@@ -353,6 +353,13 @@ const HELP = [
   { ids: ['setclearvid'],
     text: 'When you press Close server, delete every clip on the Video tab, and '
         + 'the enlarged frames made from them. Only Close server does this.' },
+  { ids: ['setembedpng'],
+    text: 'Writes the prompt, negative prompt, model, seed, steps, sampler and CFG '
+        + 'into each image you save to output, in the format A1111, Forge and Civitai '
+        + 'read — and the rest of the Image tab’s settings for yasdig. Dropping such a '
+        + 'PNG on the prompt box loads them back. Turn it off if you share pictures '
+        + 'and would rather your prompts did not travel with them. No file paths are '
+        + 'ever written.' },
   { ids: ['setnightlyvideo'],
     text: 'Shows the Video tab. Video generation works but is unfinished: models, '
         + 'settings and results may change or break between versions. Your clips stay '

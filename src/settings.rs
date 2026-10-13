@@ -155,6 +155,12 @@ pub struct Settings {
     /// removed: the routes, the models and the clips on disk are all still
     /// there. Page-level.
     pub nightly_video: bool,
+    /// Write the settings that made a picture into the PNG when it is saved to
+    /// output: A1111's `parameters` text and yasdig's own record
+    /// ([`crate::pngmeta`]). On by default, as in A1111; off for someone who
+    /// shares pictures and would rather their prompts didn't travel with them.
+    /// Page-level.
+    pub embed_png_settings: bool,
 
     /// The `[variables]` table: `{animal}` in a prompt and the words it can
     /// stand for. See [`crate::variables`].
@@ -320,6 +326,7 @@ impl Default for Settings {
             // picture; direct convolution computes the same sums.
             vae_conv_direct: true,
             nightly_video: false,
+            embed_png_settings: true,
             // What the default prompt names. A file with no `[variables]`
             // table gets these too, which is what keeps that prompt from being
             // a 400; one the page emptied is written as an empty table and
@@ -385,6 +392,7 @@ impl Settings {
             reference_size: self.reference_size,
             vae_conv_direct: self.vae_conv_direct,
             nightly_video: self.nightly_video,
+            embed_png_settings: self.embed_png_settings,
             variables: self.variables.clone(),
         }
     }
@@ -861,6 +869,7 @@ const PAGE_ONLY: &[&str] = &[
     "reference_size",
     "vae_conv_direct",
     "nightly_video",
+    "embed_png_settings",
 ];
 
 /// The most of the card [`Settings::gpu_reserve_gb`] may keep free. Past this
@@ -1026,6 +1035,7 @@ mod tests {
         assert!(PAGE_ONLY.contains(&"vae_conv_direct") && Settings::default().vae_conv_direct);
         // Video is a nightly feature: off unless asked for, page-level.
         assert!(PAGE_ONLY.contains(&"nightly_video") && !Settings::default().nightly_video);
+        assert!(PAGE_ONLY.contains(&"embed_png_settings") && Settings::default().embed_png_settings);
         let on = Settings { nightly_video: true, ..Settings::default() };
         assert!(toml::from_str::<Settings>(&toml::to_string_pretty(&on).unwrap()).unwrap().nightly_video);
     }

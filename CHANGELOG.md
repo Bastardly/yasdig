@@ -3,6 +3,20 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### New
+
+- **Settings inside saved PNGs.** Every image saved to output carries the settings
+  that made it, in the format A1111, Forge and Civitai read: prompt, negative
+  prompt, model, seed, steps, sampler, CFG, size and LoRAs. yasdig also writes its
+  own record of the rest of the Image tab. No file paths are ever written, and
+  Settings → *Saved images* turns it off.
+- **Load settings from a PNG.** Drop a PNG on the prompt box, or use *Load settings
+  from a PNG…*, to fill the controls from it. A yasdig image restores everything; an
+  image from A1111, Forge or Civitai fills what it names. Anything you haven't
+  installed is named instead of picked.
+
 ## 0.1.1 — 2026-10-13
 
 ### New

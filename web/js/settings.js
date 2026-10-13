@@ -115,6 +115,10 @@ export const FIELDS = [
   { key: 'gpu_reserve_gb', page: true, label: 'Keep free on the GPU (GB)', help: 'setgpureserve', kind: 'num', min: 0, max: 16, step: 0.5 },
   { key: 'max_image_side', page: true, label: 'Largest image side', help: 'setmaxside', kind: 'int', min: 1024, max: 32768, step: 512 },
 
+  // What goes into a picture saved to output, beside its pixels.
+  SECTION('Saved images'),
+  { key: 'embed_png_settings', page: true, label: 'Settings inside saved PNGs', help: 'setembedpng', kind: 'check' },
+
   // Not a default for any control either: what *Close server* deletes on the
   // way out (`src/shutdown.rs`). Off unless ticked, and favourites never.
   SECTION('When the server is closed'),

@@ -2929,7 +2929,7 @@ impl Display {
             .opened_from
             .as_deref()
             .context("this image wasn't opened from Outputs, so there is no file to save over")?;
-        self.items.overwrite_output(stem, &p.display)
+        self.items.overwrite_output(stem, &p.display, self.cfg.settings().embed_png_settings)
     }
 
     /// Copy the image currently on screen into `work/output/`, and return where
@@ -2964,7 +2964,7 @@ impl Display {
             source: p.source.clone(),
             profile: p.profile.clone(),
         };
-        self.items.save_output(&p.display, &item)
+        self.items.save_output(&p.display, &item, self.cfg.settings().embed_png_settings)
     }
 }
 

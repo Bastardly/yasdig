@@ -174,7 +174,10 @@ let opening = false;
 // restores the same profile onto the reopened image, so this is only about what
 // the boxes say — but they have to agree, or the next Generate would silently
 // differ from the image beside it.
-function applyWorkItem(item) {
+// Also what a PNG carrying yasdig's own record restores through
+// (`loadPngSettings` in image.js): the same shape, minus the paths and stems
+// that only mean something on the machine that made it.
+export function applyWorkItem(item) {
   const p = item.profile;
   // The prompt as it was typed, where the roll made those two different things:
   // `{animal}` goes back in the box, not the crab it drew. Lossless because the

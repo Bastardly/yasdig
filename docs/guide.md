@@ -168,6 +168,27 @@ this UI:
 Ctrl+Z walks the edits back one nudge at a time; the shortcut writes through the
 field's own undo stack rather than replacing its contents.
 
+## Settings inside a PNG
+
+Every image you save to output carries the settings that made it, written into the
+PNG the way A1111 and Forge write theirs. Civitai, A1111's *PNG Info* and any other
+tool that reads those files see the prompt, negative prompt, model, seed, steps,
+sampler, CFG and size, with each LoRA as a `<lora:name:weight>` tag on the prompt.
+yasdig also writes its own record beside it, holding the rest of the Image tab:
+the refine and hi-res settings, the prompt as you typed it before its
+`{variables}` rolled, and the LoRA picker. No file path is ever written.
+
+**Load settings from a PNG…** under the prompts, or dropping a PNG on the prompt box,
+puts them back. A yasdig PNG restores everything, so Generate makes the same
+picture again. A PNG from A1111, Forge or Civitai fills what it names and leaves
+every other box alone. A seed from another program gives a close picture rather than
+the same one. A model or LoRA you haven't installed is named in the line under the
+button instead of being picked. A ComfyUI PNG holds a node graph rather than
+settings, so it loads nothing and says so.
+
+Settings → *Saved images* turns the writing off, if you share pictures and would
+rather your prompts didn't travel with them.
+
 ## Work items
 
 Every image you generate is kept, in `work/workitems/`: the unsharpened

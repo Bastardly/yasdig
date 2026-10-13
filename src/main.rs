@@ -86,6 +86,7 @@
 //!   GET  /outputs/{stem}/thumb.png   generated on first request
 //!   POST /save-output      -> {image_id} keep the image on screen
 //!   POST /outputs/overwrite -> {image_id} save it over the output it was opened from
+//!   POST /png-settings -> raw PNG bytes; the settings it carries ({source, notes, item|params})
 //!   GET  /progress    -> what the worker is rendering right now, step by step
 //!   GET  /preview/{n}.png  the live preview of the run in flight; `n` is
 //!                     the `preview` number /progress and /jobs report
@@ -112,6 +113,7 @@ mod home;
 mod http;
 mod jobs;
 mod pipeline;
+mod pngmeta;
 mod redraw;
 mod preflight;
 mod sd;
@@ -716,6 +718,7 @@ fn handle_conn(
         // limit to. Filesystem-only, so it stays off the queue — an upload must
         // not wait out the render it is meant to replace.
         ("POST", "/upload") => handle_upload(&mut conn, cfg, &req.body),
+        ("POST", "/png-settings") => handle_png_settings(&mut conn, cfg, &req.body),
         ("POST", "/refine") => handle_refine(&mut conn, lanes, &req.body),
         ("POST", "/hires") => handle_hires(&mut conn, lanes, &req.body),
         ("POST", "/redraw") => handle_redraw(&mut conn, lanes, &req.body),
@@ -2153,6 +2156,25 @@ fn handle_upload(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Resu
             500,
             "application/json",
             error_json(&format!("{e:#}")).as_bytes(),
+        ),
+    }
+}
+
+/// The settings a dropped PNG carries (`pngmeta::read`), matched against what is
+/// installed. Raw PNG bytes, like `/upload` — but the original file's, since the
+/// page's `<canvas>` re-encode would strip the very chunks this reads. Answered
+/// here, not through a lane: it only reads the body and the model lists.
+fn handle_png_settings(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    let install = pngmeta::Install {
+        models: cfg.registry().into_keys().collect(),
+        loras: cfg.list_loras().into_iter().filter(|l| l.usable).map(|l| l.name).collect(),
+    };
+    match pngmeta::read(body, &install) {
+        Ok(loaded) => conn.respond(200, "application/json", &serde_json::to_vec(&loaded)?),
+        Err(e) => conn.respond(
+            400,
+            "application/json",
+            error_json(&format!("{e:#} — only PNG files carry settings")).as_bytes(),
         ),
     }
 }

@@ -158,7 +158,17 @@ needs a Vulkan device and nothing else.
   conditioned, with every [`{variable}`](guide.md#prompt-variables) already drawn — it is
   what the work item records, and what a later `/refine` or `/hires` of this image
   runs with.
-- `POST /upload` — the one route with a **binary body**: a PNG, sent as-is with
+- `POST /png-settings` — a PNG's bytes, as-is (like `/upload`, but the original file,
+  since a canvas re-encode strips text chunks). Answers the settings it carries,
+  matched against what is installed: `{source, notes, item?, params?}`. `source` is
+  `yasdig` (`item`, the shape a work item restores from: prompt, negative, typed
+  prompts, seed, template and a `profile` of the Image tab's knobs — no paths),
+  `a1111` (`params`: only the fields its `parameters` text named — prompt, negative,
+  seed, steps, cfg_scale, sampler, scheduler, width, height, template, loras), or
+  `none`. `notes` says what couldn't be applied: a model or LoRA not installed, a
+  sampler sd.cpp hasn't got, a ComfyUI graph. A 400 for a body that isn't a PNG.
+  Answered on the connection thread, with the 32 MiB body limit.
+- `POST /upload` — a route with a **binary body**: a PNG, sent as-is with
   `Content-Type: image/png`. No multipart, no base64 — `Request.body` is bytes
   already, and skipping the envelope is a third off the wire. It lands in
   `work/output/` under a minted stem and answers

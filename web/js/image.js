@@ -3,7 +3,7 @@ import { S, P, escErr } from './state.js';
 import { isBusy, setBusy, setIdle, onIdle, redrawBusy } from './busy.js';
 import { cancelPost, setPost, setPostStart, setViewerImage, showFullSize } from './viewer.js';
 import { onJobs, onNotice, onResult, runningJob, soonJobs, stopJob } from './jobs.js';
-import { loadWorkItems, markGrid } from './workitems.js';
+import { applyWorkItem, loadWorkItems, markGrid } from './workitems.js';
 import { loraPicker } from './loras.js';
 import { sourceSlot } from './source-slot.js';
 import { wireHints } from './hints.js';
@@ -1182,7 +1182,85 @@ async function saveOutput() {
   }
 }
 
+// ---- Settings from a PNG --------------------------------------------------
+//
+// The server reads the file (`POST /png-settings`, `src/pngmeta.rs`) and
+// matches it against what is installed; this only applies the answer. The
+// original file's bytes are sent — `/upload`'s canvas re-encode would strip
+// the text chunks this is for.
+
+// An A1111-style answer names only some settings: each box it doesn't name
+// keeps what it has. The model goes first, through `change`, because
+// `syncAdvanced` refills every box from the model's defaults — the PNG's
+// numbers land on top of that.
+function applyParams(p) {
+  if (p.template && p.template !== $('template').value) {
+    $('template').value = p.template;
+    $('template').dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  $('prompt').value = p.prompt;
+  if (p.negative !== undefined) $('negative').value = p.negative;
+  const set = (id, v) => { if (v !== undefined && v !== null) $(id).value = v; };
+  set('seed', p.seed);
+  set('steps', p.steps);
+  set('cfg', p.cfg_scale);
+  set('sampler', p.sampler);
+  set('scheduler', p.scheduler);
+  set('w', p.width);
+  set('h', p.height);
+  imageLoras.set(p.loras ?? []);
+  syncCfgPlaceholders();
+  syncOutSize();
+}
+
+async function loadPngSettings(file) {
+  const note = $('pngnote');
+  note.hidden = false;
+  note.textContent = `Reading ${file.name}…`;
+  try {
+    const resp = await fetch('/png-settings', { method: 'POST', body: await file.arrayBuffer() });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+    if (data.item) applyWorkItem(data.item);
+    else if (data.params) applyParams(data.params);
+    const from = { yasdig: 'yasdig', a1111: 'A1111-style' }[data.source];
+    const head = from ? `Settings from ${file.name} (${from})` : `Nothing loaded from ${file.name}`;
+    note.textContent = [head, ...data.notes].join(' — ');
+    // The summaries follow the boxes through the column's `input` listener,
+    // which assigning `.value` never fires.
+    $('prompt').dispatchEvent(new Event('input', { bubbles: true }));
+  } catch (e) {
+    note.textContent = `Couldn't read ${file.name}: ${e.message || e}`;
+  }
+}
+
+function initPngSettings() {
+  $('pngload').addEventListener('click', () => $('pngfile').click());
+  $('pngfile').addEventListener('change', () => {
+    const f = $('pngfile').files[0];
+    if (f) loadPngSettings(f);
+    $('pngfile').value = '';
+  });
+  // A dropped file on the prompt box. `dragover` has to be cancelled for a file
+  // or the browser opens it in place of the page; a text drag is left to the
+  // textarea, which inserts it as it always has.
+  const box = $('prompt');
+  const hasFile = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files');
+  box.addEventListener('dragover', (e) => { if (hasFile(e)) e.preventDefault(); });
+  box.addEventListener('drop', (e) => {
+    const f = e.dataTransfer?.files?.[0];
+    if (!f) return;
+    e.preventDefault();
+    if (f.type === 'image/png' || f.name.toLowerCase().endsWith('.png')) loadPngSettings(f);
+    else {
+      $('pngnote').hidden = false;
+      $('pngnote').textContent = `${f.name} isn't a PNG — only PNG files carry settings.`;
+    }
+  });
+}
+
 export function initImage() {
+  initPngSettings();
   imageLoras.init();
   onRefsChange(syncSummaries);
   initFolds();

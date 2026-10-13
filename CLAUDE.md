@@ -380,6 +380,30 @@ Cards link source repos (`File::page`). **No licence names in the catalog**, on 
 Page: `finished` moving triggers `loadModels()`; `#getparts` opens the family's card
 (`openGetModels`).
 
+## Settings in the PNG
+
+`src/pngmeta.rs` writes two text chunks into every output `Store::save_output` and
+`overwrite_output` write: A1111's `parameters` text and a `yasdig` JSON record.
+`POST /png-settings` reads a dropped PNG back. Gated by `Settings::embed_png_settings`
+(on, page-level). Not written into the work-item archive or the live display, since
+*Save to output* is the "keep this one" button.
+
+- **The record is `pngmeta::Embedded`, curated, never the sidecar.** A `Profile` holds
+  absolute paths (`model`, `components`, `extra_args`), and a PNG is a file people post
+  (`the_record_never_carries_a_path`). A new Image-tab knob that should travel goes in
+  `EmbeddedProfile` too.
+- **Read on the server**, so the A1111 sampler/scheduler table is one table
+  (`every_mapped_name_is_one_sd_cpp_takes`), and matched against what is installed: a
+  missing model or LoRA becomes a `note`, never a setting the next Generate is refused
+  over.
+- **Chunks go before the first `IDAT`** (PIL-based readers stop collecting text
+  there), and ours are replaced on re-save rather than stacked. Only `tEXt` and
+  uncompressed `iTXt` are read, which keeps it dependency-free.
+- **The page sends the original file's bytes**, not through `/upload`'s canvas
+  re-encode, which strips the chunks. A yasdig answer goes through `applyWorkItem`; an
+  A1111 one through `applyParams`, which sets only the fields it names, model first
+  (its `change` refills every box).
+
 ## Memory
 
 `Profile::memory` (`config::MEMORY_MODES`: `auto`, `ram`, `disk`),
