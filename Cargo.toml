@@ -1,6 +1,6 @@
 [package]
 name = "yasdig"
-version = "0.1.4"
+version = "0.1.5"
 license = "Apache-2.0"
 edition = "2021"
 description = "Yet Another Stable Diffusion Image Generator: Python-free, Vulkan, stable-diffusion.cpp + native FSR post-process"
