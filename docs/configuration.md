@@ -239,10 +239,10 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `hires_scale` | where the hi-res pass's enlarge factor starts, default `2.0`, 1 to 4. The select above a finished image and the *Hi-res scale* box in the Hi-res pass fold are the same setting |
 | `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the viewer's slider starts. The only display filter here besides `clarity`: the eight colour knobs are not per-model and always start neutral |
 | `clarity` | local contrast, -1..1, default `0.0` = off — positive adds mid-frequency depth, negative softens; likewise the slider's starting value |
-| `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size (0 steps = disabled) |
+| `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size. Defaults `4` / `0.30`; steps is a floor, raised to `steps × strength`, and `0` turns the pass off |
 | `refine_cfg_scale` *(opt)* | CFG for the refine pass alone; unset follows `cfg_scale` |
 | `source_strength` | the one pass over an [*Image to image*](guide.md#image-to-image) source. Default `0.55` — far higher than the two escalations, because this one is asked to make a picture *out of* one rather than to finish one it made. The pass runs `steps` at `cfg_scale`, like the txt2img would |
-| `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, after an enlarge (0 steps = disabled) |
+| `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, after an enlarge. Defaults `12` / `0.30`; a floor like `refine_steps`, and `0` turns the pass off |
 | `hires_cfg_scale` *(opt)* | the same, for the hi-res pass. Two knobs rather than one because the two passes work on different pixels at different sizes |
 | `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job. Does not limit refine. Also where *Image to image*'s working size starts |
 | `hires_flash_attn` | `--diffusion-fa` for the img2img passes when they run large (default true; worth 6× at 2048²) |

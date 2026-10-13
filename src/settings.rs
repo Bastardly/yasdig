@@ -271,13 +271,19 @@ impl Default for Settings {
             // what the model and the upscaler actually produced.
             sharpness: 0.0,
             clarity: 0.0,
-            refine_steps: 0,
+            // On by default: at 0 a fresh install showed both buttons greyed out
+            // and the after-each passes ran nothing. Both counts are floors
+            // (`SdRunner::img2img` raises them to `steps × strength`), so a
+            // small number already adapts — 30-step SDXL at 0.30 runs 9 — and
+            // only a few-step distilled model runs exactly this. 4 and 12 are
+            // the values tuned on the dev box's own settings.
+            refine_steps: 4,
             refine_strength: 0.30,
             // Both unset, which is what makes this change invisible to an
             // existing install: every pass keeps following `cfg_scale`.
             refine_cfg_scale: None,
             hires_cfg_scale: None,
-            hires_steps: 0,
+            hires_steps: 12,
             // Same denoise as the refine: enough to resolve real detail at the
             // larger size, low enough that the composition doesn't drift.
             hires_strength: 0.30,
