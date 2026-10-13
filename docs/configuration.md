@@ -378,7 +378,8 @@ cost is re-reading the file if it has fallen out of the page cache.
 Order is free and both repeat. The hi-res button disappears once the image is past
 `hires_max_side`; refine is not under that ceiling, because it doesn't rescale and so
 has nowhere to fall back to — and an image FSR has stretched beyond its last diffusion
-is the one most worth refining. Either button is hidden if its pass is set to 0 steps.
+is the one most worth refining. Either button is greyed out while its fold's steps box
+says 0.
 
 That does mean refine will diffuse at whatever size you're at, 3072² included. Keep an
 eye on VRAM; if the pass fails, the image is left intact so you can retry.

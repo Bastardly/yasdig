@@ -1,6 +1,6 @@
 import { $, bar, esc, post, numOr, rememberFolds } from './dom.js';
 import { S, P, escErr } from './state.js';
-import { setBusy, setIdle, onIdle, redrawBusy } from './busy.js';
+import { isBusy, setBusy, setIdle, onIdle, redrawBusy } from './busy.js';
 import { cancelPost, setPost, setPostStart, setViewerImage, showFullSize } from './viewer.js';
 import { onJobs, onNotice, onResult, runningJob, soonJobs, stopJob } from './jobs.js';
 import { loadWorkItems, markGrid } from './workitems.js';
@@ -196,7 +196,31 @@ function syncModelsSummary() {
 // The checkpoint a pass will run: the one picked for it, or the one generating.
 const passModel = (sel) => models.find((m) => m.name === $(sel).value) ?? currentModel();
 
+// The steps a press of that pass will run with: the fold's box, which
+// `escalateSettings()` sends and the server folds over the image's profile
+// before it checks. An empty box sends nothing, so the profile's own count
+// stands — the picked model's here, the nearest thing the page holds.
+export function passSteps(which) {
+  const n = parseInt($(which === 'hires' ? 'hsteps' : 'rsteps').value, 10);
+  if (Number.isFinite(n)) return n;
+  return passModel(which === 'hires' ? 'hiresmodel' : 'refmodel')?.[`${which}_steps`] ?? 0;
+}
+
+// The Hi-res button follows its fold's steps, not the image's profile: a
+// fresh install's profile says 0, and gating on that hid a pass the fold was
+// set to run (and that ran fine as an after-each). The server still says
+// whether the image is inside the hi-res budget — that decides whether the
+// button is drawn at all. A button waiting on its own request is setBusy's.
+function syncPassButtons() {
+  const b = $('hires');
+  if (!b || isBusy('hires')) return;
+  const off = passSteps('hires') <= 0;
+  b.disabled = off;
+  b.title = off ? 'Hi-res steps is 0 — set it in the Hi-res pass fold' : '';
+}
+
 function syncSummaries() {
+  syncPassButtons();
   // Before `/models` answers every box is empty, and "× · steps" says nothing.
   if (!currentModel()) return;
   // The line is cut to fit (`.fold > summary`), so the whole of it is the title.
@@ -809,6 +833,7 @@ export function render(data) {
   // The action row was just rebuilt; a Refine still waiting on its request
   // keeps saying so.
   redrawBusy();
+  syncPassButtons();
 }
 
 // The Image tab's result as it was last drawn, so coming back from another
@@ -1216,6 +1241,8 @@ export function initImage() {
   // `IDLE_LABELS.go` is only a fallback: what the button says at rest depends on
   // the run panel, which that map can't know.
   onIdle(syncGoLabel);
+  // `setIdle` re-enables a button blindly; a Hi-res with no steps stays off.
+  onIdle(syncPassButtons);
   onResult(takeResult);
   onJobs(syncStopButton);
   // A run that failed has no request waiting on it; its message comes here.

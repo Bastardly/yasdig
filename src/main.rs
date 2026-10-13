@@ -14,7 +14,7 @@
 //!   GET  /jobs        -> {jobs:[{id, kind, label, done, total, state}],
 //!                         latest_seq, notices, progress}
 //!   GET  /jobs/latest -> the newest image a job made: {image_base64, width,
-//!                         height, seed, image_id, can_refine, can_hires, timings}
+//!                         height, seed, image_id, can_hires, timings}
 //!   POST /jobs/stop   -> {id}  remove a waiting job, or stop a running one
 //!   POST /jobs/skip   -> {id}  cancel the image a run has in flight; the run
 //!                        goes on to its next image
@@ -2724,9 +2724,9 @@ fn submit(
     }
 }
 
-/// The image plus its metadata as JSON. `can_refine` / `can_hires` say which
-/// escalations are still available for `image_id`, which is what the UI keys
-/// the buttons above the image off.
+/// The image plus its metadata as JSON. `can_hires` says whether `image_id` is
+/// still inside the hi-res budget; whether either pass has steps is the page's
+/// to read off its fold boxes, since those are what a press sends.
 fn result_json(res: &GenResult) -> String {
     let b64 = base64::engine::general_purpose::STANDARD.encode(&res.png);
     // The filters go out as one nested object, serialized from the struct that
@@ -2737,7 +2737,7 @@ fn result_json(res: &GenResult) -> String {
     let start = serde_json::to_string(&res.start).unwrap_or_else(|_| "{}".to_string());
     format!(
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
-         \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_refine\":{},\"can_hires\":{},\"model\":{},\"can_edit\":{},\
+         \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_hires\":{},\"model\":{},\"can_edit\":{},\
          \"filters\":{},\"filters_start\":{},\"prompt\":{},\
          \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{},\"weights\":{},\"load_ms\":{},\"stages\":{}}}}}",
         b64,
@@ -2756,7 +2756,6 @@ fn result_json(res: &GenResult) -> String {
             .as_deref()
             .map(json_str)
             .unwrap_or_else(|| "null".to_string()),
-        res.can_refine,
         res.can_hires,
         json_str(&res.model),
         res.can_edit,

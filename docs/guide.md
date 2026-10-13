@@ -522,9 +522,10 @@ steps, strengths, CFG, hi-res budget and slider starting points, and the
 boxes in the panel are then applied on top — which is what you'd expect, since
 picking a model for a pass refills that pass's boxes from it. The two
 model choices themselves survive it, being no checkpoint's to state. It also
-means the buttons re-derive from the new model, so picking one with
-`hires_steps = 0` removes the Hi-res button for that image, and one with a
-smaller `hires_max_side` may say the image is already past its budget.
+means the buttons re-derive from the new model: picking one with
+`hires_steps = 0` puts 0 in the Hi-res steps box, which greys out the Hi-res
+button, and one with a smaller `hires_max_side` may say the image is already
+past its budget.
 
 ## Batch and loop
 

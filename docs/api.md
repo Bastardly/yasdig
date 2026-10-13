@@ -137,7 +137,7 @@ needs a Vulkan device and nothing else.
   { "image_base64": "…", "width": 1536, "height": 1536, "seed": 12345,
     "refine_passes": 0, "hires_passes": 0,
     "image_id": 3, "work_id": "1758104523000-12345",
-    "can_refine": true, "can_hires": true,
+    "can_hires": true,
     "filters": { "sharpness": 0.35, "clarity": 0.0, "lightness": 0.0, "contrast": 0.0,
                  "highlights": 0.0, "shadows": 0.0, "saturation": 0.0, "hue": 0.0,
                  "temperature": 0.0, "tint": 0.0 },
@@ -146,8 +146,9 @@ needs a Vulkan device and nothing else.
     "timings": { "gen_ms": 0, "upscale_ms": 0, "fsr_ms": 0, "refine_ms": 0, "hires_ms": 0 } }
   ```
   `upscale_ms` is an ESRGAN model's share of the enlarge, reduce included, and `0` when
-  EASU did it. `image_id` addresses the retained intermediates; `can_refine` / `can_hires` say which
-  escalations that image can still take; `filters` reports all ten display filters as
+  EASU did it. `image_id` addresses the retained intermediates; `can_hires` says whether that
+  image is still inside the hi-res budget (whether a pass has steps is the request's
+  `refine_steps`/`hires_steps`, so the client decides that); `filters` reports all ten display filters as
   actually applied, which is what the UI's sliders reflect, and `filters_start` reports
   where they would start on a new image from the same model — the two differ after an
   escalation, which carries the colour grade across, and `filters_start` is what the
@@ -265,7 +266,7 @@ needs a Vulkan device and nothing else.
   The swap is wholesale, so the named model's refine/hi-res steps, strengths,
   CFGs, `hires_max_side`, `weight_type` and `extra_args` all come with it,
   and the explicit fields in this body are then applied on top. The profile the
-  pass actually ran with is what is retained, so `can_refine`, `can_hires` and the
+  pass actually ran with is what is retained, so `can_hires` and the
   filter starting points in the reply describe the model that ran.
 
   Each is optional and an omitted one keeps the retained value, so a bare

@@ -686,7 +686,12 @@ pub struct GenResult {
     /// thumbnail is on screen. Unrelated to `image_id`: that one addresses the
     /// in-memory cache and restarts at 0, this one outlives the process.
     pub work_id: Option<String>,
-    pub can_refine: bool,
+    /// Whether this image is still inside the hi-res budget — the size half of
+    /// [`Pending::can_hires`] only. Neither pass's step count is in here: a
+    /// press sends the fold's boxes, which override the retained profile before
+    /// the server checks, so only the page knows whether the press will have
+    /// steps. A fresh install's profile says 0 for both, and gating the buttons
+    /// on that hid passes the fold was set to run.
     pub can_hires: bool,
     /// The model this step's passes run on — the registry name. The Refine
     /// dialog's model picker shows it for a picture opened from Outputs.
@@ -902,8 +907,13 @@ impl Pending {
     /// A hi-res pass needs room to diffuse: once the image is past the budget
     /// there's no affordable pass left to run on it.
     fn can_hires(&self) -> bool {
-        self.profile.hires_steps > 0
-            && self.raw_w.max(self.raw_h) <= self.profile.hires_max_side
+        self.profile.hires_steps > 0 && self.hires_fits()
+    }
+
+    /// The size half of [`Pending::can_hires`], which is all the page is told:
+    /// it reads the steps off its own boxes (see [`GenResult::can_hires`]).
+    fn hires_fits(&self) -> bool {
+        self.raw_w.max(self.raw_h) <= self.profile.hires_max_side
     }
 
     /// Whether an img2img pass at this size needs the large-image memory flags.
@@ -2983,8 +2993,7 @@ impl Pending {
             hires_passes: self.hires_passes,
             image_id: id,
             work_id: self.work_id.clone(),
-            can_refine: self.can_refine(),
-            can_hires: self.can_hires(),
+            can_hires: self.hires_fits(),
             model: self.profile.name.clone(),
             can_edit: self.profile.family.takes_references(),
             filters: self.filters,

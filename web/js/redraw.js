@@ -3,7 +3,7 @@ import { S } from './state.js';
 import { isBusy, onIdle, setBusy, setIdle } from './busy.js';
 import { onJobs, runningJob, soonJobs } from './jobs.js';
 import { zoomPane } from './viewer.js';
-import { fillReady, oomOptions, refine, render, takeResult, upscalerOptions, upscalersReady } from './image.js';
+import { fillReady, oomOptions, passSteps, refine, render, takeResult, upscalerOptions, upscalersReady } from './image.js';
 import { openGetModels } from './getmodels.js';
 import { showError } from './memory.js';
 import { references } from './refs.js';
@@ -334,9 +334,12 @@ function syncButtons() {
   syncStrength();
   if (!isBusy('redrawgo')) {
     $('redrawgo').textContent = painted ? 'Refine area' : 'Refine image';
-    $('redrawgo').disabled = !live || (!painted && !shown.can_refine);
-    $('redrawgo').title = !painted && live && !shown.can_refine
-      ? 'This model has no refine pass (Refine steps is 0)' : '';
+    // The fold's steps, not the image's profile: that box is what the press
+    // sends, and it overrides the profile before the server checks.
+    const noSteps = passSteps('refine') <= 0;
+    $('redrawgo').disabled = !live || (!painted && noSteps);
+    $('redrawgo').title = !painted && live && noSteps
+      ? 'Refine steps is 0 — set it in the Refine pass fold' : '';
   }
   // Edit: only for a model that takes references (the image itself is the
   // first), whole-image like Upscale, and it needs an instruction to follow.

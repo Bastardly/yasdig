@@ -868,6 +868,10 @@ sharpness/clarity, no grade), stored as `postStart`; double-click one slider res
    768..2303 or 2304..3839). Fixing it means fractional taps, which costs the limiter
    guarantee (see `sharpen.wgsl`).
 7. **`hires_max_side` gates hi-res but not refine** (`Pending::can_refine`) — not a bug.
+   **The buttons are gated on the fold's steps, not the profile's**: a press sends
+   `#hsteps`/`#rsteps`, which override the retained profile before the server checks,
+   and a profile can say 0. So `GenResult.can_hires` is the size budget
+   only (`Pending::hires_fits`) and the page reads steps with `passSteps`.
 8. **Nothing a `Pending` owns lives in a durable directory.** `Engine::run` copies
    `raw` into `work/workitems/`; `Display::open` copies it back out to
    `{id}-0-raw.png`; sources, references, outputs and favourites are likewise copied
@@ -919,7 +923,7 @@ top** — only knobs for a pass that hasn't happened: `refine_steps`/`_strength`
 the swap is **wholesale**: the new model brings its own `refine_*`, `hires_*`,
 `hires_max_side`, `weight_type`, `extra_args`, slider starts, and drops LoRAs. The
 request's knobs land on top (the page refills fold boxes via `fillPass`). The swapped
-profile is retained, so `can_refine`/`can_hires`/reset points describe what ran.
+profile is retained, so `can_hires`/reset points describe what ran.
 **`refine_model`/`hires_model` are the exception**: request-only, lifted across the
 swap so sidecars and reopened items keep both pickers; `/generate` and `/img2img` carry
 them for that reason. On the wire an escalation names it **`model`**, not `template`
