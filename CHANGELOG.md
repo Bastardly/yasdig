@@ -3,7 +3,7 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
-## Unreleased
+## 0.1.2 — 2026-10-13
 
 ### New
 
@@ -16,6 +16,12 @@ What changed in each release of yasdig. Each release's executables are on the
   from a PNG…*, to fill the controls from it. A yasdig image restores everything; an
   image from A1111, Forge or Civitai fills what it names. Anything you haven't
   installed is named instead of picked.
+
+### Build
+
+- The release build now pins its third-party GitHub Actions to exact commits,
+  checks the Vulkan SDK downloads against their published checksums, and runs with
+  a read-only token except for the step that attaches the executables.
 
 ## 0.1.1 — 2026-10-13
 
