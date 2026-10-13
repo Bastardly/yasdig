@@ -3,6 +3,38 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## 0.1.3 — 2026-10-13
+
+### Changed
+
+- **LoRA strength is no longer limited to -2..2.** Any number goes; some LoRAs are
+  made to be used at -13 or beyond.
+
+### Fixed
+
+- **Other websites can no longer reach the server.** A page open in another tab
+  could send it requests, including *Close server* with its clear-on-close
+  settings. Requests from anything but yasdig's own page are now refused, and
+  *Close server* only deletes anything when the page explicitly asks it to.
+- **A damaged or hostile model file no longer breaks the model list.** A truncated
+  or malformed upscaler (`.pth`, `.safetensors`) or GGUF used to crash the request
+  that read it, every time. It is now listed as unreadable.
+- **Too-large uploads say so** instead of the connection dropping.
+- **Dragging a grade slider during a Refine** no longer leaves the image unusable
+  afterwards.
+- **Stop and Cancel generation** can no longer kill the next job's render by
+  arriving at the wrong moment.
+- **Converting a checkpoint with a picked VAE** no longer writes a broken file.
+- **A finished download or a Settings save** no longer resets the Generation boxes.
+- **Loading settings from a PNG** made on another install now falls back, with a
+  note, for a sampler, scheduler or upscaler this one doesn't have.
+- Sizes, steps and the upscale factor are checked on every generation, not only
+  when saved in Settings.
+- Smaller fixes: two uploads in the same millisecond no longer overwrite each
+  other, a download never replaces a file already at its destination, *Clear
+  videos* no longer matches a folder you named like `holiday-x2`, and several
+  lists on the page can no longer be drawn over by an older answer.
+
 ## 0.1.2 — 2026-10-13
 
 ### New
