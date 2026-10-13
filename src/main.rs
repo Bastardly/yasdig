@@ -104,6 +104,7 @@
 //! two are *about* the render in flight, so going through the queue would make
 //! them arrive only once there was nothing left to report or to stop.
 
+mod area;
 mod bundle;
 mod config;
 mod catalog;
@@ -161,7 +162,12 @@ struct Job {
 /// opened while a batch ran. See [`pipeline::Display`].
 enum JobKind {
     /// Re-filter an earlier result — display passes only, no diffusion.
-    Adjust { id: u64, patch: FiltersPatch },
+    Adjust { id: u64, patch: FiltersPatch, area: Option<Option<area::Area>> },
+    /// Crop the image to a rectangle, as a history step (`Display::crop`).
+    Crop { id: u64, rect: (u32, u32, u32, u32) },
+    /// Make the look part of the picture, as a history step
+    /// (`Display::apply_look`).
+    Apply(u64),
     /// Reopen an archived generation as a live result. Needs a worker because
     /// it ends in a `publish`, and because the new `Pending` lives there. The
     /// shelf rides along because the two grids — Current and Favorites — hold
@@ -493,9 +499,11 @@ fn run(args: &[String]) -> Result<()> {
             let mut display = display;
             for job in display_rx {
                 let result = match job.kind {
-                    JobKind::Adjust { id, patch } => {
-                        display.adjust(id, &patch).map(|r| result_json(&r))
+                    JobKind::Adjust { id, patch, area } => {
+                        display.adjust(id, &patch, area).map(|r| result_json(&r))
                     }
+                    JobKind::Crop { id, rect } => display.crop(id, rect).map(|r| result_json(&r)),
+                    JobKind::Apply(id) => display.apply_look(id).map(|r| result_json(&r)),
                     JobKind::Open { id, shelf } => {
                         display.open(&id, shelf).map(|r| result_json(&r))
                     }
@@ -779,6 +787,8 @@ fn route(
         ("POST", "/edit") => handle_edit(conn, lanes, &req.body),
         ("POST", "/extend") => handle_extend(conn, lanes, &req.body),
         ("POST", "/history/goto") => handle_goto(conn, lanes, &req.body),
+        ("POST", "/crop") => handle_crop(conn, lanes, &req.body),
+        ("POST", "/apply") => handle_apply(conn, lanes, &req.body),
         ("POST", "/history/view") => handle_view_step(conn, lanes, &req.body),
         // A history step's thumbnail. Off the queue like every thumbnail; both
         // numbers are the whole whitelist.
@@ -2627,6 +2637,9 @@ fn handle_adjust(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Res
         image_id: u64,
         #[serde(flatten)]
         patch: FiltersPatch,
+        /// The area's whole state: absent keeps it, `null` removes it.
+        #[serde(default, deserialize_with = "double_option")]
+        area: Option<Option<area::Area>>,
     }
 
     match parse_json::<Dto>(conn, body)? {
@@ -2636,7 +2649,44 @@ fn handle_adjust(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Res
             JobKind::Adjust {
                 id: dto.image_id,
                 patch: dto.patch,
+                area: dto.area,
             },
+            400,
+        ),
+        None => Ok(()),
+    }
+}
+
+/// `POST /apply {image_id}`: *Apply adjustments* — the look becomes the
+/// picture, as a history step (`Display::apply_look`). Display lane.
+fn handle_apply(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+    }
+    match parse_json::<Dto>(conn, body)? {
+        Some(d) => submit(conn, &lanes.display, JobKind::Apply(d.image_id), 400),
+        None => Ok(()),
+    }
+}
+
+/// `POST /crop {image_id, x, y, width, height}`: crop the image, in its own
+/// pixels, as a history step (`Display::crop`). The display lane's: no
+/// diffusion, so it answers mid-render like the sliders.
+fn handle_crop(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    }
+    match parse_json::<Dto>(conn, body)? {
+        Some(d) => submit(
+            conn,
+            &lanes.display,
+            JobKind::Crop { id: d.image_id, rect: (d.x, d.y, d.width, d.height) },
             400,
         ),
         None => Ok(()),
@@ -2857,10 +2907,11 @@ fn result_json(res: &GenResult) -> String {
     // thing that keeps slider eleven from touching this function at all.
     let filters = serde_json::to_string(&res.filters).unwrap_or_else(|_| "{}".to_string());
     let start = serde_json::to_string(&res.start).unwrap_or_else(|_| "{}".to_string());
+    let area = serde_json::to_string(&res.area).unwrap_or_else(|_| "null".to_string());
     format!(
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
          \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_hires\":{},\"model\":{},\"can_edit\":{},\
-         \"filters\":{},\"filters_start\":{},\"prompt\":{},\
+         \"filters\":{},\"filters_start\":{},\"area\":{},\"prompt\":{},\
          \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{},\"weights\":{},\"load_ms\":{},\"stages\":{}}}}}",
         b64,
         res.width,
@@ -2883,6 +2934,7 @@ fn result_json(res: &GenResult) -> String {
         res.can_edit,
         filters,
         start,
+        area,
         // What was actually conditioned, so the page can show a `{variable}`
         // prompt's roll under the image.
         json_str(&res.prompt),
@@ -3217,7 +3269,7 @@ fn run_fsr_cli(args: &[String]) -> Result<()> {
     let fsr = fsr::Fsr::new()?;
     println!("[fsr] adapter: {}", fsr.adapter_name());
     let start = std::time::Instant::now();
-    // Two positional filters and no more: the eight grading knobs are a UI
+    // Two positional filters and no more: the nine grading knobs are a UI
     // thing, and a command line with ten trailing floats on it is unusable.
     let (w, h) = fsr.process(&in_png, &out_png, factor, &Filters::starting_at(sharp, clarity))?;
     println!(
@@ -3241,7 +3293,7 @@ fn run_fsr_cli(args: &[String]) -> Result<()> {
 ///    byte-identical to the input. `sharpen.wgsl`, `contrast.wgsl` and
 ///    `grade.wgsl` all claim this in their headers and `docs/api.md` promises
 ///    it to users; until now nothing checked it.
-/// 3. **The grade** — that each of the eight knobs is wired at all, and that
+/// 3. **The grade** — that each of the nine knobs is wired at all, and that
 ///    the four with an unambiguous direction move that way. See [`check_grade`].
 /// 4. **Band response** — printed, then asserted. See [`report_bands`].
 fn run_fsr_selftest(args: &[String]) -> Result<()> {
@@ -3342,12 +3394,13 @@ fn check_grade(
 
     // Every knob at +1, and the count of pixels it moved. Zero is the failure.
     type Knob = (&'static str, fn(&mut Filters));
-    let knobs: [Knob; 8] = [
+    let knobs: [Knob; 9] = [
         ("lightness", |f| f.lightness = 1.0),
         ("contrast", |f| f.contrast = 1.0),
         ("highlights", |f| f.highlights = 1.0),
         ("shadows", |f| f.shadows = 1.0),
         ("saturation", |f| f.saturation = 1.0),
+        ("vibrance", |f| f.vibrance = 1.0),
         ("hue", |f| f.hue = 1.0),
         ("temperature", |f| f.temperature = 1.0),
         ("tint", |f| f.tint = 1.0),

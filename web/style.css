@@ -707,14 +707,38 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   padding: 0; border: 0; background: none; accent-color: var(--state);
 }
 .slider input:disabled { opacity: .5; }
-/* A heading every few sliders, so ten controls read as three short lists
-   rather than one column to scroll. A rule and a quiet line — the information
-   is "a new group starts here", and that is all it has to say. */
-.lbgroup {
-  margin-top: var(--sp-5); padding-top: var(--sp-2);
-  border-top: var(--line); font-size: var(--fs-micro); color: var(--text-faint);
+/* The viewer's tools are folds, as on the Image tab: Tone, Colour and Detail
+   (a fold per FILTERS group), then Crop and Area. The first slider of a fold
+   sits closer to its heading than to the slider above. */
+.lbside .fold .slider:first-of-type { margin-top: var(--sp-1); }
+.lbside .fold .lbzoom, .lbside .fold .checks, .lbside .fold .row,
+.lbside .fold > .btn-block, #lbareabox > .btn-block { margin-top: var(--sp-2); }
+
+/* The Crop and Area box (`regiontool.js`), laid over the image like the
+   Refine dialog's mask, so it scrolls and zooms with the picture. The pane is
+   its containing block. */
+#lightbox .lbview { position: relative; }
+.region { position: absolute; overflow: hidden; cursor: crosshair; touch-action: none; }
+.regionbox, .featherin, .featherout { position: absolute; box-sizing: border-box; }
+.regionbox { border: 1px solid var(--state); cursor: move; }
+/* Crop: what goes, dimmed; one huge shadow is the cheapest way to dim
+   everything outside a box, and `.region` clips it to the picture. */
+.region.dim .regionbox { box-shadow: 0 0 0 100vmax var(--scrim-soft); }
+.regionbox.ellipse, .featherin.ellipse, .featherout.ellipse { border-radius: 50%; }
+/* Where the area's blend starts and ends. */
+.featherin, .featherout { border: 1px dashed var(--text-dim); pointer-events: none; }
+.region .handle {
+  position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px;
+  background: var(--state); border: 1px solid var(--on-state); border-radius: 2px;
 }
-.lbgroup:first-child { margin-top: var(--sp-3); border-top: 0; padding-top: 0; }
+.handle[data-h=nw] { left: 0; top: 0; cursor: nwse-resize; }
+.handle[data-h=n] { left: 50%; top: 0; cursor: ns-resize; }
+.handle[data-h=ne] { left: 100%; top: 0; cursor: nesw-resize; }
+.handle[data-h=e] { left: 100%; top: 50%; cursor: ew-resize; }
+.handle[data-h=se] { left: 100%; top: 100%; cursor: nwse-resize; }
+.handle[data-h=s] { left: 50%; top: 100%; cursor: ns-resize; }
+.handle[data-h=sw] { left: 0; top: 100%; cursor: nesw-resize; }
+.handle[data-h=w] { left: 0; top: 50%; cursor: ew-resize; }
 
 /* ============================ The frame player ============================ */
 

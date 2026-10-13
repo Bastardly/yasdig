@@ -239,7 +239,7 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `upscale_factor` | the enlarge every base render goes through, default `2.0` (768 → 1536) — not a diffusion pass. Also a box in the Image tab's *After each generation* fold, where `1` means no enlarge at all |
 | `upscaler` *(opt)* | what does that enlarge: unset (the default) is FSR's EASU; a file name under the upscaler dir, extension included, is an ESRGAN model. See [Upscalers](guide.md#upscalers) |
 | `hires_scale` | where the hi-res pass's enlarge factor starts, default `2.0`, 1 to 4. The select above a finished image and the *Hi-res scale* box in the Hi-res pass fold are the same setting |
-| `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the viewer's slider starts. The only display filter here besides `clarity`: the eight colour knobs are not per-model and always start neutral |
+| `sharpness` | RCAS sharpness, 0..1, default `0.0` = off (1.0 = RCAS at full strength) — where the viewer's slider starts. The only display filter here besides `clarity`: the nine colour knobs are not per-model and always start neutral |
 | `clarity` | local contrast, -1..1, default `0.0` = off — positive adds mid-frequency depth, negative softens; likewise the slider's starting value |
 | `refine_steps` / `refine_strength` | the "Refine image" img2img pass, in place at the current size. Defaults `4` / `0.30`; steps is a floor, raised to `steps × strength`, and `0` turns the pass off |
 | `refine_cfg_scale` *(opt)* | CFG for the refine pass alone; unset follows `cfg_scale` |

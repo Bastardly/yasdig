@@ -7,10 +7,10 @@
 //! between the two, for the mid-frequency depth a diffusion refine can't reach
 //! without re-composing the image — its knob is signed, so negative softens that
 //! band rather than boosting it (`contrast.wgsl`). And a colour grade ahead of
-//! both, eight per-pixel knobs in one dispatch (`grade.wgsl`).
+//! both, nine per-pixel knobs in one dispatch (`grade.wgsl`).
 //!
 //! Every stage is skipped when it would be a no-op — EASU at scale 1.0, the
-//! grade when all eight of its knobs are 0, contrast at clarity 0.0 — so
+//! grade when all nine of its knobs are 0, contrast at clarity 0.0 — so
 //! `process(.., 1.0, &Filters { sharpness, ..Filters::NONE })` is an exact
 //! sharpen-only pass, and `Filters::NONE` at scale 1.0 is byte-exact.
 //!
@@ -39,7 +39,7 @@ struct SharpenParams {
     radius: i32,
 }
 
-/// The eight grading knobs, plus the hue rotation already turned into a matrix.
+/// The nine grading knobs, plus the hue rotation already turned into a matrix.
 /// Field order and padding must match `Params` in `grade.wgsl`: 2 u32 + 9 f32 +
 /// one pad word = 48 bytes, which is the 16-byte multiple a uniform needs.
 #[repr(C)]
@@ -55,7 +55,7 @@ struct GradeParams {
     tint: f32,
     hue_sin: f32,
     hue_cos: f32,
-    _pad: f32,
+    vibrance: f32,
 }
 
 #[repr(C)]
@@ -421,9 +421,26 @@ impl Fsr {
         // takes the GPU worker thread down with the request still waiting on
         // it, so the page waits for ever. An error scope turns it into an `Err`.
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let done = self.process_inner(&img, out_png, (in_w, in_h), (out_w, out_h), filters);
+        let done = self.process_inner(&img, (in_w, in_h), (out_w, out_h), filters);
         if let Some(e) = pollster::block_on(self.device.pop_error_scope()) {
             bail!("the GPU refused the post-process at {out_w}×{out_h}: {e}");
+        }
+        done?
+            .save(out_png)
+            .with_context(|| format!("saving {}", out_png.display()))?;
+        Ok((out_w, out_h))
+    }
+
+    /// [`Fsr::process`] at scale 1 on pixels already in memory, answering
+    /// pixels: for `pipeline::publish` when an area composites two looks, so
+    /// neither pass round-trips through a PNG.
+    pub fn filter(&self, img: &image::RgbaImage, filters: &Filters) -> Result<image::RgbaImage> {
+        let (w, h) = img.dimensions();
+        self.check_fits(w, h)?;
+        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let done = self.process_inner(img, (w, h), (w, h), filters);
+        if let Some(e) = pollster::block_on(self.device.pop_error_scope()) {
+            bail!("the GPU refused the post-process at {w}×{h}: {e}");
         }
         done
     }
@@ -458,11 +475,10 @@ impl Fsr {
     fn process_inner(
         &self,
         img: &image::RgbaImage,
-        out_png: &Path,
         (in_w, in_h): (u32, u32),
         (out_w, out_h): (u32, u32),
         filters: &Filters,
-    ) -> Result<(u32, u32)> {
+    ) -> Result<image::RgbaImage> {
 
         // Source texture (uploaded), intermediate (upscaled), and final.
         let src = self.make_texture(
@@ -594,7 +610,7 @@ impl Fsr {
             tint: filters.tint,
             hue_sin,
             hue_cos,
-            _pad: 0.0,
+            vibrance: filters.vibrance,
         };
         let grade_buf = self
             .device
@@ -861,13 +877,8 @@ impl Fsr {
         drop(data);
         readback.unmap();
 
-        let out_img: image::RgbaImage = image::ImageBuffer::from_raw(out_w, out_h, pixels)
-            .context("failed to assemble output image")?;
-        out_img
-            .save(out_png)
-            .with_context(|| format!("saving {}", out_png.display()))?;
-
-        Ok((out_w, out_h))
+        image::ImageBuffer::from_raw(out_w, out_h, pixels)
+            .context("failed to assemble output image")
     }
 }
 

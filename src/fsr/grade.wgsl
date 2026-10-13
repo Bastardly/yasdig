@@ -1,7 +1,7 @@
-// Colour grading: eight per-pixel knobs in one pass.
+// Colour grading: nine per-pixel knobs in one pass.
 //
 // Everything here reads exactly one texel and writes exactly one texel, which is
-// the whole reason there is one shader rather than eight. The two filters either
+// the whole reason there is one shader rather than nine. The two filters either
 // side of it (clarity, RCAS) are *spatial* — their kernels are sized from the
 // image — and this one has no kernel at all, so its cost is one dispatch
 // whatever any of the knobs are set to: one full-resolution pass of two
@@ -9,7 +9,7 @@
 // cheap to measure on a 7900 XTX — a 3072² publish is 56 ms best-of-5 with the
 // grade and 56 ms without, the PNG round trip being most of it.
 //
-// Exact identity when all eight are 0 — but `Fsr::process` skips the pass
+// Exact identity when all nine are 0 — but `Fsr::process` skips the pass
 // entirely at neutral rather than relying on that, because the round trip below
 // is not byte-exact: sRGB -> linear -> OKLab -> linear -> sRGB loses a
 // least-significant bit here and there, and `fsr-selftest` asserts byte
@@ -17,7 +17,7 @@
 //
 // ## Why OKLab
 //
-// Because in it all eight knobs are one named operation on three numbers:
+// Because in it all nine knobs are one named operation on three numbers:
 // lightness and the three tone knobs move L, saturation scales the chroma pair,
 // hue rotates it, and the two white-balance knobs are *exactly* its two chroma
 // axes — b is blue-yellow (temperature), a is green-magenta (tint). Doing the
@@ -59,7 +59,7 @@ struct Params {
     // reason to pay for a sin and a cos per pixel to rebuild it 9 million times.
     hue_sin: f32,
     hue_cos: f32,
-    _pad: f32,
+    vibrance: f32,
 }
 
 @group(0) @binding(2) var<uniform> params: Params;
@@ -73,6 +73,13 @@ const MID_L: f32 = 0.5981;
 /// OKLab's a and b run to about ±0.3 on a saturated colour, so 0.06 is a shift
 /// you can see on a neutral without it becoming a colour of its own.
 const WB_RANGE: f32 = 0.06;
+
+/// The chroma at which vibrance has stopped acting. OKLab chroma on a fully
+/// saturated sRGB primary is about 0.26-0.32 and on skin about 0.05-0.10, so
+/// 0.2 leaves the vivid colours alone while a muted background still gets the
+/// most of it. Skin sits in the lower half, so it moves, but less than grey-blue
+/// sky does — that is the difference from Saturation, which moves all of it.
+const VIBRANCE_KNEE: f32 = 0.2;
 
 /// How far highlights/shadows move their end of the range at full travel, in L.
 /// Less than lightness gets, deliberately: the point of these two is that they
@@ -150,9 +157,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     lab.x = lab.x + params.shadows * TONE_RANGE * (1.0 - smoothstep(0.0, 0.5, lab.x));
     lab.x = clamp(lab.x, 0.0, 1.0);
 
-    // --- Colour. Saturation is a plain chroma scale, so -1 lands exactly on
-    // a = b = 0, which is exactly greyscale rather than nearly.
-    let chroma = lab.yz * (1.0 + params.saturation);
+    // --- Colour. Vibrance first: a chroma scale that fades out as chroma
+    // rises, so what is already vivid stays put and clipping doesn't arrive
+    // first on the colours that were fine. Negative mutes the dull ones first.
+    // Then saturation, a plain chroma scale, so -1 lands exactly on a = b = 0,
+    // which is exactly greyscale rather than nearly.
+    let muted = 1.0 - smoothstep(0.0, VIBRANCE_KNEE, length(lab.yz));
+    let chroma = lab.yz * (1.0 + params.vibrance * muted) * (1.0 + params.saturation);
     lab.y = chroma.x * params.hue_cos - chroma.y * params.hue_sin;
     lab.z = chroma.x * params.hue_sin + chroma.y * params.hue_cos;
 

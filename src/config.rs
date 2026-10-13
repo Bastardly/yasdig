@@ -853,14 +853,14 @@ impl Profile {
 
 /// Every display filter on one image, as one value.
 ///
-/// Ten knobs travel together through `publish`, `Pending`, `/adjust` and the
+/// Eleven knobs travel together through `publish`, `Pending`, `/adjust` and the
 /// result JSON, so they are one struct rather than ten parameters: adding the
 /// eleventh is a field here, a row in [`Filters::TABLE`], a line in `grade.wgsl`
 /// and a row in the page's `FILTERS` list — not a signature edited in six files.
 ///
 /// **Only the first two are per-model.** `sharpness` and `clarity` are on
 /// `Defaults`/`Template` because a checkpoint has a house look for them; the
-/// eight grading knobs always start neutral, because no checkpoint has an
+/// nine grading knobs always start neutral, because no checkpoint has an
 /// opinion about your hue. That is also why this struct isn't the one the config
 /// deserializes — see [`Profile`].
 ///
@@ -874,7 +874,7 @@ pub struct Filters {
     pub sharpness: f32,
     /// Difference-of-Gaussians local contrast, -1..1. Negative softens the band.
     pub clarity: f32,
-    // The eight below are the grade pass: per-pixel, -1..1, 0 = identity, and
+    // The nine below are the grade pass: per-pixel, -1..1, 0 = identity, and
     // all of them are one dispatch together whatever they are set to.
     /// Perceptual lightness, ±1.5 stops at the ends.
     pub lightness: f32,
@@ -886,6 +886,9 @@ pub struct Filters {
     pub shadows: f32,
     /// Chroma scale. -1 is exactly greyscale, +1 is double.
     pub saturation: f32,
+    /// Chroma scale weighted towards muted colours: the dull ones move most,
+    /// the already-saturated ones barely.
+    pub vibrance: f32,
     /// Hue rotation, -1..1 = ±180°.
     pub hue: f32,
     /// Blue↔yellow shift.
@@ -906,6 +909,7 @@ impl Filters {
         highlights: 0.0,
         shadows: 0.0,
         saturation: 0.0,
+        vibrance: 0.0,
         hue: 0.0,
         temperature: 0.0,
         tint: 0.0,
@@ -945,7 +949,7 @@ impl Filters {
 
     /// Name, value and lower bound of each knob. The upper bound is 1.0 for all
     /// ten. One table so that a new knob is range-checked by existing code.
-    fn table(&self) -> [(&'static str, f32, f32); 10] {
+    fn table(&self) -> [(&'static str, f32, f32); 11] {
         [
             ("sharpness", self.sharpness, 0.0),
             ("clarity", self.clarity, -1.0),
@@ -954,13 +958,25 @@ impl Filters {
             ("highlights", self.highlights, -1.0),
             ("shadows", self.shadows, -1.0),
             ("saturation", self.saturation, -1.0),
+            ("vibrance", self.vibrance, -1.0),
             ("hue", self.hue, -1.0),
             ("temperature", self.temperature, -1.0),
             ("tint", self.tint, -1.0),
         ]
     }
 
-    /// Does the grade pass have anything to do? All eight at 0 is an exact
+    /// The knobs set away from off, by wire name, in table order: what an
+    /// applied look is labelled with (`pipeline::adjust_label`), so a new knob
+    /// is named there with no code of its own.
+    pub fn changed(&self) -> Vec<(&'static str, f32)> {
+        self.table()
+            .into_iter()
+            .filter(|(_, v, _)| *v != 0.0)
+            .map(|(name, v, _)| (name, v))
+            .collect()
+    }
+
+    /// Does the grade pass have anything to do? All nine at 0 is an exact
     /// identity, so the pass is skipped and its texture never allocated — which
     /// is what keeps a neutral `process` byte-exact.
     pub fn grades(&self) -> bool {
@@ -1001,6 +1017,7 @@ pub struct FiltersPatch {
     pub highlights: Option<f32>,
     pub shadows: Option<f32>,
     pub saturation: Option<f32>,
+    pub vibrance: Option<f32>,
     pub hue: Option<f32>,
     pub temperature: Option<f32>,
     pub tint: Option<f32>,
@@ -1016,6 +1033,7 @@ impl FiltersPatch {
             (&mut f.highlights, self.highlights),
             (&mut f.shadows, self.shadows),
             (&mut f.saturation, self.saturation),
+            (&mut f.vibrance, self.vibrance),
             (&mut f.hue, self.hue),
             (&mut f.temperature, self.temperature),
             (&mut f.tint, self.tint),
@@ -3634,6 +3652,7 @@ lora_dir = "adapters"
             ("highlights", |f, v| f.highlights = v),
             ("shadows", |f, v| f.shadows = v),
             ("saturation", |f, v| f.saturation = v),
+            ("vibrance", |f, v| f.vibrance = v),
             ("hue", |f, v| f.hue = v),
             ("temperature", |f, v| f.temperature = v),
             ("tint", |f, v| f.tint = v),

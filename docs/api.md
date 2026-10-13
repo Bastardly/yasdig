@@ -24,13 +24,13 @@ yasdig sr-selftest               # the upscaler shaders against CPU references, 
 From a source checkout, put them after `--`: `cargo run --release -- doctor`.
 
 Each post-process stage is skipped when it would be a no-op — EASU at scale 1.0, the
-grade with all eight knobs at 0, clarity at 0.0 — so `yasdig fsr in.png out.png 1.0 0.5`
+grade with all nine knobs at 0, clarity at 0.0 — so `yasdig fsr in.png out.png 1.0 0.5`
 is an exact sharpen-only pass, and `yasdig fsr in.png out.png 1.0 0.0 0.0` is a
 byte-exact copy. That is also what **Output upscale** means by `1`: not a small enlarge,
 but no EASU pass at all, which is how you see the pixels the checkpoint actually drew.
 
 `fsr-selftest` verifies the output dimensions, asserts that every filter at 0 really is
-a byte-exact copy (the promise above), checks each of the eight colour knobs
+a byte-exact copy (the promise above), checks each of the nine colour knobs
 one at a time — that it reaches the GPU at all, and that lightness, contrast, saturation
 and temperature run in the direction they claim — and then measures how much each detail
 filter moves each spatial frequency, at three image sizes, because those two size their
@@ -133,7 +133,7 @@ needs a Vulkan device and nothing else.
   that pass keeps following whatever `cfg_scale` this request used. `sharpness` and
   `clarity` are the exception, because they aren't generation settings: they set the
   image's starting filters, `/adjust` moves them from there, and every later pass resets
-  them. The web UI leaves both out for that reason. The eight colour knobs aren't here
+  them. The web UI leaves both out for that reason. The nine colour knobs aren't here
   at all — they are not per-model, so they start at 0 on every image and only `/adjust`
   sets them. `seed` defaults to `-1` (pick one).
   Each image, as `GET /jobs/latest` serves it (and as `/refine`, `/hires` and the
@@ -298,8 +298,24 @@ needs a Vulkan device and nothing else.
   returns in milliseconds — it is what the viewer's sliders call, and it is safe to call
   repeatedly because the image it filters is always the unfiltered one. The new values
   belong to that image and last until the next pass over it — `/refine` and `/hires`
-  reset `sharpness` and `clarity` to the model's values and carry the eight colour knobs
+  reset `sharpness` and `clarity` to the model's values and carry the nine colour knobs
   across. Same response shape as `/generate`, with the time reported in `fsr_ms`.
+  `area` sets the image's one area with a look of its own: `{ "shape": "rect" |
+  "ellipse", "x0", "y0", "x1", "y1" (fractions of the frame), "feather" (0..0.5 of the
+  short side), "invert", "filters": { …the same keys… } }`, applied over the whole
+  picture's filters inside the shape. Absent keeps it, `null` removes it. Every result
+  carries `area` (or `null`).
+- `POST /apply` — `{ "image_id": 3 }`. *Apply adjustments*: the image as shown (filters
+  and area in it) becomes the image itself, as a history step labelled with what
+  moved; the filters and area reset to none and the slider start points to 0. Passes
+  after it work on the adjusted picture. `400` when nothing is set; display lane,
+  `409` when a pass replaced the image first.
+- `POST /crop` — `{ "image_id": 3, "x": 64, "y": 0, "width": 768, "height": 768 }`, in
+  the image's pixels. Crops the retained image as a history step (so `/history/goto`
+  undoes it and a later pass works on the crop). Width and height are rounded down to
+  a multiple of 8, must be at least 64, inside the picture, and not all of it. The
+  filters are kept and an area is mapped into the new frame. Display lane, like
+  `/adjust`; `409` when a pass replaced the image first.
 - `POST /save-output` — `{ "image_id": 3 }`. Copies the image on screen, filters and
   all, into `work/output/`. Returns `{ "path": "work/output/…png" }`.
 - `POST /outputs/overwrite` — `{ "image_id": 3 }`, the Outputs viewer's *Save changes*:

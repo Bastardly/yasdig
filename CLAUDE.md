@@ -89,9 +89,9 @@ so they read `sdxl/x` on Windows too.
   goes negative and the filter inverts. More sharpening comes from `rcas_radius`.
 - `contrast.wgsl` — **not FSR**: DoG band-pass on luma ("clarity") on a 1/8 plane.
   Identity at 0. **Signed** -1..1 (negative softens).
-- `grade.wgsl` — eight grading knobs in **one** pass, in **OKLab** (temperature/tint
-  are exactly its chroma axes; header says what they are not). A ninth knob belongs
-  here. Neutral is skipped, since the sRGB/OKLab round trip loses LSBs and
+- `grade.wgsl` — nine grading knobs in **one** pass, in **OKLab** (temperature/tint
+  are exactly its chroma axes; header says what they are not). Vibrance is a chroma
+  scale faded out by `VIBRANCE_KNEE`. A tenth knob belongs here. Neutral is skipped, since the sRGB/OKLab round trip loses LSBs and
   `fsr-selftest` asserts byte equality. `check_grade` fails a knob that moves nothing
   (the `GradeParams`/shader `Params` copy-paste trap).
 
@@ -895,9 +895,33 @@ Tooltip text: a few sentences on how to *choose*, saying when the answer belongs
 checkpoint.
 
 **Viewer** (`<dialog id="lightbox">`): post-processing is judged full size here.
-**The ten sliders come from `FILTERS`** (id = wire name; read by markup, `setPost`,
+**The eleven sliders come from `FILTERS`** (id = wire name; read by markup, `setPost`,
 `syncPostLabels`, `setBusy`, the `/adjust` body, listeners) — never hand-write one.
-Label above the track; panel fixed 300 px and scrolls.
+Label above the track; panel fixed 300 px and scrolls. **The panel is folds** (a fold per
+`FILTERS` `group`, then Crop and Area; `viewerSummaries`, `rememberFolds`).
+- **Two looks, one set of sliders**: `target` says whether they show the whole
+  picture's filters or the area's; the other set is held (`parked` / `area.filters`).
+  `/adjust` always sends both (`area: null` removes). `setLook(data)` is how a result
+  reaches the viewer (filters, start, area, history) — not `setPost`, which is the
+  whole picture's values only.
+- **Crop is a history step on `raw`** (`Display::crop`, display lane, `advance` +
+  `Retained::replace` → `Superseded`), never a filter: passes read `raw`. Snapped down
+  to 8, ≥ 64. Keeps `opened_from` so Outputs' *Save changes* writes it. Locked while a
+  pass runs (`passRunning` in jobs.js, shared with the Refine dialog's History).
+- **The area is composited in `publish`** (`crate::area`): global filters, the area's
+  on top (`Fsr::filter`, in memory), `area::composite` by an analytic weight. Pixels
+  at weight 0 are the base's bytes. Normalised to the frame, so it survives a pass;
+  `Area::crop` maps it on a crop; `Area::restart` at every `Filters::restart` site;
+  not in a `Snapshot` (an undo of a crop doesn't map it back).
+- **`regiontool.js`** is the box for both: one at a time (opening one fold closes the
+  other), laid over the image like Redraw's mask; its pointerdown stops the pane's
+  pan, so the middle button and Space+drag pan instead.
+- **Crop, Apply and History jumps go through `stepRequest`** (one at a time, after
+  `settlePost` lets a pending `/adjust` land) and answer through the pane's handler
+  (`onViewerResult`: `render` on Image, the Outputs viewer's own). All three are
+  locked while a pass runs (`passRunning`).
+- **The viewer's History and the Refine dialog's are one markup** (`historyMarkup`
+  in viewer.js). `open_output` seeds its first step as "Opened".
 - **Closing is `×` and Escape only.**
 - **Fit/1:1/Reset are `.btn-choice`**; `setFit` toggles `active`.
 - **1:1 centres inline and again on `load`** (a fresh `data:` URL has no size yet) —
@@ -916,7 +940,10 @@ sharpness/clarity, no grade), stored as `postStart`; double-click one slider res
    unfiltered image; every escalation reads it; display passes run once, in
    `pipeline::publish()`. This makes `Display::adjust` lossless and lets the grade
    **carry across an escalation** (`Filters::restart`) while sharpness/clarity reset
-   (they're sized from the image). That asymmetry is deliberate.
+   (they're sized from the image). That asymmetry is deliberate. **One exception,
+   asked for**: the viewer's *Apply adjustments* (`Display::apply_look`) copies
+   `display` to a new `raw` step and zeroes the look and its start points; passes
+   after it work on the adjusted picture, and History holds the untouched step.
 2. **sd.cpp trims an img2img schedule by strength**, so `SdRunner::img2img` passes
    `steps / strength` (else `--steps 2 --strength 0.3` changes nothing).
 3. **`MAX_STRENGTH` is 0.95** (`src/config.rs`): at 1.0 sd.cpp discards the init image.
@@ -999,7 +1026,7 @@ them for that reason. On the wire an escalation names it **`model`**, not `templ
 **Display filters**: `profile.sharpness`/`clarity` are slider *start* points;
 `Pending.filters` is where all ten are now. `adjust` writes only the latter;
 `run`/`img2img`/`open` reset it from the profile (`refine`/`hires` use
-`Filters::restart`). **The eight grading knobs aren't per-model**: a field on
+`Filters::restart`). **The nine grading knobs aren't per-model**: a field on
 `Filters`, a row in `Filters::table`, a line in `grade.wgsl` + `GradeParams`, a row in
 the page's `FILTERS`.
 

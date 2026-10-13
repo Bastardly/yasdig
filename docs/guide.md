@@ -688,7 +688,7 @@ is measured: 254 MB of VAE takes 2.07 s serialized against 0.53 s at four thread
 
 ## Postprocessing
 
-Ten sliders live in the **viewer** — press **View & adjust** (clicking the picture
+Eleven sliders live in the **viewer** — press **View & adjust** (clicking the picture
 opens the Refine dialog instead).
 They work like a photo editor rather than a generation setting: drag one and the image
 re-filters under the cursor. There is no diffusion involved — the server re-runs the GPU
@@ -699,7 +699,7 @@ it.
 | | |
 |---|---|
 | **Tone** | **Lightness** overall brightness, about ±1.5 stops. **Contrast** steepens or flattens the curve about mid-grey. **Highlights** and **Shadows** move one end of the range and leave the other alone — pull Highlights down to recover a blown sky, push Shadows up to open the dark half. |
-| **Colour** | **Saturation** (-1 is exactly greyscale, +1 is double). **Temperature** blue↔yellow and **Tint** green↔magenta, scaled so black stays black. **Hue** rotates every colour, ±180°. |
+| **Colour** | **Saturation** (-1 is exactly greyscale, +1 is double). **Vibrance** is saturation for the dull colours only: muted ones gain most, vivid ones barely move. **Temperature** blue↔yellow and **Tint** green↔magenta, scaled so black stays black. **Hue** rotates every colour, ±180°. |
 | **Detail** | **Clarity** and **Sharpness**, described below. |
 
 They are in the viewer because that is the only place you can see what they do. The two
@@ -709,10 +709,14 @@ viewer opens with the whole frame fitted, which is the right view for a grade an
 clarity, and **1:1** switches to true pixels, which is the right view for sharpness —
 drag the image to move around it. Only the **×** and Escape close it, so a stray click
 while you are working can't dismiss the thing you are working on. **Reset** puts every
-slider back to where this image started, and a double-click does the same for one.
+slider back to where this image started (and removes an area), and a double-click does
+the same for one.
 
-The eight colour knobs are one GPU pass between the upscale and the detail filters, so
-moving eight of them costs exactly what moving one does. They are all 0 by default and
+The panel is folds, like the Image tab: **Tone**, **Colour** and **Detail** hold the
+sliders, then **Crop** and **Area**. Folded, each says what is set inside it.
+
+The nine colour knobs are one GPU pass between the upscale and the detail filters, so
+moving nine of them costs exactly what moving one does. They are all 0 by default and
 0 is exactly off — the pass is skipped outright rather than run as an identity, so an
 ungraded image is byte-for-byte what came out of the upscaler.
 
@@ -758,7 +762,7 @@ whatever sharpening looked right a moment ago is stale by definition, and inheri
 would hide what the pass actually did under a filter chosen for the previous image.
 Dialling it back in costs a drag, not a render.
 
-**The eight colour sliders survive Refine and Hi-res**, which is the other half of the
+**The nine colour sliders survive Refine and Hi-res**, which is the other half of the
 same argument: +0.2 saturation means the same thing at any size, so there is nothing
 stale about it, and losing a grade every time you climb a rung would be a reason not to
 climb it. It is re-applied to the new pixels rather than stacked on them — the escalation
@@ -767,3 +771,46 @@ or from a picture — or reopening a work item all start from neutral again.
 
 A different config file can be passed as the first argument:
 `cargo run --release -- /path/to/models.toml`.
+
+### Crop
+
+Open the **Crop** fold and a box appears over the picture: drag its corners or edges,
+drag inside it to move it, or drag anywhere else on the picture to draw a new one.
+**Aspect** locks it to a shape (Original keeps the picture's own), and the
+**⟲** button beside it turns that shape between landscape and portrait; the size under it
+is what you will get, rounded down to a multiple of 8 pixels. **Apply crop** crops;
+closing the fold or **Cancel** leaves the picture alone. At 1:1, pan with the middle
+button or Space+drag while the box is up.
+
+A crop is a step in the image's history, not a filter: it shows in the Refine
+dialog's and the viewer's **History**, which step back from it, and a Refine or Hi-res after it
+works on the cropped picture — crop to the face, then Hi-res it. The sliders keep
+their values. On the Outputs tab, **Save changes** writes the crop over the file.
+
+### Area
+
+**Area** gives one part of the picture a look of its own. In the **Area** fold, press
+**Area**: an ellipse appears, and the sliders now adjust only inside it — on top of the
+whole picture's look, so 0 means "as the rest". **Whole image** points the sliders back.
+Drag the shape like a crop box; choose **Rectangle** or **Ellipse**, set **Feather**
+for how soft its edge is (the dashed lines show where the blend starts and ends), and
+**Invert** to adjust everything *but* the shape — darkening the edges around a
+subject, for instance. **Remove area** drops it.
+
+The area follows the picture through a Refine or Hi-res, keeps its colour settings and
+resets its detail ones, as the whole picture's do. A crop moves it with the picture.
+
+### Apply and History
+
+The sliders, the area and a crop are all live until you decide otherwise.
+**Apply adjustments**, at the foot of the viewer's panel, makes the look part of the
+picture: the picture doesn't change on screen, but every slider goes back to 0 and the
+next change starts from the adjusted picture. Each Apply, like each crop, is a step in
+**History** (the last fold), labelled with what it changed — *Adjust: Lightness +0.30,
+Vibrance +0.20*. Click any step to go back to it, or forward again; adjusting and
+applying from an earlier step starts a new branch from there, as an undo does.
+
+Until you apply, a Refine or Hi-res works on the picture as generated and your sliders
+carry over to the result, as they always have. After you apply, they work on the
+adjusted picture — that is the point of applying — and the step before the Apply in
+History is the untouched one to go back to. The Refine dialog shows the same History.

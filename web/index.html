@@ -848,7 +848,62 @@
          out here: adding one is meant to be a row in a list, not a block of
          markup plus a matching entry in five functions. -->
     <div id="lbsaved" class="meta"></div>
+    <!-- Tone, Colour and Detail: a fold per `group` of FILTERS, built by
+         initViewer. Each summary says what has moved (`viewerSummaries`). -->
     <div id="lbsliders"></div>
+    <!-- A history step on the retained image, not a filter: a pass after it
+         runs on the crop. Opening the fold puts the box up; closing it drops
+         an unapplied one (`regiontool.js`). -->
+    <details id="fold-lb-crop" class="fold">
+      <summary>Crop <span class="foldstate" id="sum-lb-crop"></span></summary>
+      <div class="rdrow">
+        <label for="lbaspect">Aspect</label>
+        <!-- Landscape ratios only: the button beside turns one portrait. -->
+        <select id="lbaspect">
+          <option value="">Free</option>
+          <option value="orig">Original</option>
+          <option value="1">1:1</option>
+          <option value="1.25">5:4</option>
+          <option value="1.3333">4:3</option>
+          <option value="1.5">3:2</option>
+          <option value="1.7778">16:9</option>
+        </select>
+        <button type="button" id="lbaspectturn" class="btn" title="Turn the aspect: landscape ↔ portrait">⟲</button>
+      </div>
+      <p class="sub" id="lbcropsize"></p>
+      <div class="row spaced">
+        <div><button type="button" id="lbcropapply" class="btn btn-block">Apply crop</button></div>
+        <div><button type="button" id="lbcropcancel" class="btn btn-block">Cancel</button></div>
+      </div>
+    </details>
+    <!-- One shape with a look of its own, over the whole-image look. "Area"
+         points the sliders above at it; "Whole image" points them back. -->
+    <details id="fold-lb-area" class="fold">
+      <summary>Area <span class="foldstate" id="sum-lb-area"></span></summary>
+      <div class="lbzoom">
+        <button type="button" id="lbtargetall" class="btn btn-choice active">Whole image</button>
+        <button type="button" id="lbtargetarea" class="btn btn-choice">Area</button>
+      </div>
+      <div id="lbareabox" hidden>
+        <div class="lbzoom">
+          <button type="button" id="lbshaperect" class="btn btn-choice">Rectangle</button>
+          <button type="button" id="lbshapeellipse" class="btn btn-choice">Ellipse</button>
+        </div>
+        <div class="slider">
+          <div class="head"><label for="lbfeather">Feather</label><span class="val" id="lbfeatherval"></span></div>
+          <input id="lbfeather" type="range" min="0" max="0.5" step="0.01" value="0.1">
+        </div>
+        <div class="checks"><label><input type="checkbox" id="lbinvert"> Invert — everything but the shape</label></div>
+        <button type="button" id="lbarearemove" class="btn btn-block">Remove area</button>
+      </div>
+    </details>
+    <!-- Every state of this picture — Apply and Crop each add one, as the
+         Refine dialog's passes do. The same list as that dialog's History
+         (`historyMarkup`); click one to go back or forward to it. -->
+    <details id="fold-lb-history" class="fold">
+      <summary>History <span class="foldstate" id="sum-lb-history"></span></summary>
+      <ol id="lbhistory" class="rdhistory"></ol>
+    </details>
     <!-- The dock, as on every panel with a main action — here only the
          Outputs tab's, since the Image tab's Save is in its action row (both
          buttons are hidden there, and an empty dock hides itself). -->
@@ -857,6 +912,10 @@
            dialog is modal the result block is behind it and an error written
            there is an error nobody reads. -->
       <div id="lberr" class="err"></div>
+      <!-- The breakpoint: the look becomes the picture, as a History step,
+           and the sliders start from zero on it. Neutral — it spends nothing. -->
+      <button type="button" id="lbapply" class="btn btn-block" disabled
+        title="Make these adjustments part of the picture and start the sliders from zero on it. Refine and Hi-res afterwards work on the adjusted picture; History steps back.">Apply adjustments</button>
       <!-- The Outputs tab's way into the Refine dialog: the saved file becomes
            the Image tab's result (`/outputs/to-image`), to refine, extend or
            edit. Neutral: opening it spends nothing; the dialog's buttons do. -->

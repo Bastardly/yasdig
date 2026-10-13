@@ -26,6 +26,7 @@
 //! re-run on it for free: that is `adjust`, and it is why they are a slider
 //! rather than a reason to regenerate.
 
+use crate::area::Area;
 use crate::config::{Config, Filters, FiltersPatch, LoraRef, Profile, MAX_STRENGTH, MIN_STRENGTH};
 use crate::redraw;
 use crate::fsr::Fsr;
@@ -735,6 +736,9 @@ pub struct GenResult {
     /// still describes the model that actually ran even when the escalation
     /// named a different checkpoint.
     pub start: Filters,
+    /// The area with a look of its own, if the image has one, so a reopened
+    /// viewer shows it again.
+    pub area: Option<Area>,
     /// The prompt as it was actually conditioned — with every `{variable}`
     /// already drawn. It is the retained one, so a refine or a hi-res reports
     /// the sentence that made the image rather than whatever is in the box now,
@@ -771,10 +775,14 @@ struct Pending {
     /// Carrying sharpness and clarity forward was the obvious thing and the
     /// wrong one — a new pass replaces the pixels, so the amount of sharpening
     /// that looked right is stale by definition, and inheriting it hides what
-    /// the pass did underneath a filter chosen for the previous image. The eight
+    /// the pass did underneath a filter chosen for the previous image. The nine
     /// grading knobs have no such tie to the pixels, and re-dialling a look on
     /// every rung of the ladder is a reason not to climb it.
     filters: Filters,
+    /// An area with a look of its own, over `filters` (`crate::area`). The
+    /// look, like `filters`: carried across a pass with its detail reset
+    /// (`Area::restart`), mapped by a crop, never in a `Snapshot`.
+    area: Option<Area>,
     prompt: String,
     negative: Option<String>,
     /// The prompt and negative as they were typed, before `variables::expand`
@@ -1411,7 +1419,7 @@ impl Engine {
 
         // 3) Sharpen for display.
         let filters = Filters::starting_at(tpl.sharpness, tpl.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None)?;
         let fsr_ms = t.elapsed().as_millis() - upscale_ms;
 
         // Past every `?`: these two are the result, and the `Pending` below owns
@@ -1468,6 +1476,7 @@ impl Engine {
             raw_h: h,
             display,
             filters,
+            area: None,
             profile: profile.clone(),
             prompt: prompt.clone(),
             negative: negative.clone(),
@@ -1668,7 +1677,7 @@ impl Engine {
         //    sd.cpp rounds an init image to the latent grid and only warns.
         let t = Instant::now();
         let filters = Filters::starting_at(profile.sharpness, profile.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None)?;
         let fsr_ms = fsr_ms_in + t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -1713,6 +1722,7 @@ impl Engine {
             raw_h: h,
             display,
             filters,
+            area: None,
             profile,
             prompt: prompt.clone(),
             negative: negative.clone(),
@@ -2019,7 +2029,8 @@ impl Engine {
         // rounds an init image to what the latent grid allows, so the pass can
         // return a slightly different size than it was given.
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let area = p.area.as_ref().map(Area::restart);
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref())?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2036,6 +2047,7 @@ impl Engine {
             // Detail back to the model's starting point, the grade kept — see
             // `Filters::restart`.
             filters,
+            area,
             refine_passes: p.refine_passes + 1,
             step,
             ..p
@@ -2151,7 +2163,8 @@ impl Engine {
         redraw::composite(&mut base, &patch, &alpha, (crop.x, crop.y));
         base.save(&raw).with_context(|| format!("writing {}", raw.display()))?;
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let area = p.area.as_ref().map(Area::restart);
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref())?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2163,6 +2176,7 @@ impl Engine {
             raw_h: h,
             display,
             filters,
+            area,
             step,
             ..p
         };
@@ -2265,14 +2279,15 @@ impl Engine {
         base.save(&raw).with_context(|| format!("writing {}", raw.display()))?;
         // A new size, so the detail filters restart for it; the grade carries.
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let area = p.area.as_ref().map(Area::restart);
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref())?;
         let fsr_ms = t.elapsed().as_millis();
         scratch.keep(&raw);
         scratch.keep(&display);
 
         let what = format!("Extend {}", req.expand.describe());
         let prev = p.clone();
-        let entry = Pending { raw, raw_w: w, raw_h: h, display, filters, step, ..p };
+        let entry = Pending { raw, raw_w: w, raw_h: h, display, filters, area, step, ..p };
         let entry = advance(&prev, entry, step_label(&what, req.prompt.as_deref()));
         let result = entry.result(id, png, Timings {
             fsr_ms,
@@ -2366,7 +2381,8 @@ impl Engine {
         let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
         img.to_rgb8().save(&raw).with_context(|| format!("writing {}", raw.display()))?;
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let area = p.area.as_ref().map(Area::restart);
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref())?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2378,6 +2394,7 @@ impl Engine {
             raw_h: h,
             display,
             filters,
+            area,
             step,
             ..p
         };
@@ -2424,7 +2441,8 @@ impl Engine {
 
         let t = Instant::now();
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let area = p.area.as_ref().map(Area::restart);
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref())?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2436,6 +2454,7 @@ impl Engine {
             raw_h: h,
             display,
             filters,
+            area,
             step,
             ..p
         };
@@ -2566,7 +2585,8 @@ impl Engine {
 
         // 4) Sharpen for display.
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let area = p.area.as_ref().map(Area::restart);
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref())?;
         fsr_ms += t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2580,6 +2600,7 @@ impl Engine {
             // Detail back to the model's starting point, the grade kept — see
             // `Filters::restart`.
             filters,
+            area,
             hires_passes: p.hires_passes + 1,
             step,
             ..p
@@ -2656,11 +2677,20 @@ impl Display {
     /// how overrides work everywhere else here, and keeping a one-filter request
     /// a one-field body. The change applies to this image only, and only until
     /// the next pass — see [`Pending::filters`].
-    pub fn adjust(&mut self, id: u64, patch: &FiltersPatch) -> Result<GenResult> {
+    ///
+    /// `area` is the area's whole new state: `None` keeps it, `Some(None)`
+    /// removes it.
+    pub fn adjust(&mut self, id: u64, patch: &FiltersPatch, area: Option<Option<Area>>) -> Result<GenResult> {
         let mut p = lock(&self.retained).get(id, "adjust")?;
         patch.apply(&mut p.filters);
         // Same bounds the config goes through, from the same place.
         p.filters.validate(&p.profile.name)?;
+        if let Some(area) = area {
+            if let Some(a) = &area {
+                a.validate()?;
+            }
+            p.area = area;
+        }
 
         let t = Instant::now();
         // Straight back over the same `display` path, and `step` doesn't move:
@@ -2671,7 +2701,7 @@ impl Display {
         // Deliberately no `Scratch` here, unlike the three passes above. This
         // writes over a file the retained `Pending` already owns, so putting it
         // under the guard would mean a failed drag deleting a live image.
-        let (png, w, h) = publish(&self.fsr, &p.raw, &p.display, &p.filters)?;
+        let (png, w, h) = publish(&self.fsr, &p.raw, &p.display, &p.filters, p.area.as_ref())?;
         let fsr_ms = t.elapsed().as_millis();
 
         let entry = Pending {
@@ -2698,7 +2728,7 @@ impl Display {
         let history = p.steps();
         let s = p.step(index).with_context(|| format!("this image has no step {index}"))?;
         let t = Instant::now();
-        let (png, w, h) = publish(&self.fsr, &s.raw, &p.display, &p.filters)?;
+        let (png, w, h) = publish(&self.fsr, &s.raw, &p.display, &p.filters, p.area.as_ref())?;
         let fsr_ms = t.elapsed().as_millis();
         let was = p.raw.clone();
         let entry = Pending {
@@ -2717,6 +2747,114 @@ impl Display {
         if !lock(&self.retained).replace(id, &was, entry) {
             bail!("that image changed while stepping through its history — try again");
         }
+        Ok(result)
+    }
+
+    /// Crop the image to `rect` — `(x, y, width, height)` in its own pixels —
+    /// as a history step, so the Refine dialog's History and the viewer's
+    /// *Undo crop* step back from it. On `raw`, not a display filter: every
+    /// pass reads `raw` (invariant 1), so a crop that lived only in the display
+    /// would be undone by the next Refine, and "crop to the face, then Hi-res"
+    /// is the point. No diffusion, so the display lane's, like `goto`.
+    ///
+    /// The filters stay as they are — it is the same picture, smaller — and
+    /// the area is mapped into the new frame (`Area::crop`). `opened_from` is
+    /// kept, unlike after a pass, so the Outputs viewer's *Save changes*
+    /// writes the crop back over the file it opened.
+    pub fn crop(&mut self, id: u64, rect: (u32, u32, u32, u32)) -> Result<GenResult> {
+        let p = lock(&self.retained).get(id, "crop")?;
+        let (x, y, w, h) = crop_rect(rect, p.raw_w, p.raw_h)?;
+        let step = p.step + 1;
+        let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut scratch = Scratch::default();
+        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
+        let img = image::open(&p.raw).with_context(|| format!("loading {}", p.raw.display()))?;
+        img.crop_imm(x, y, w, h)
+            .save(&raw)
+            .with_context(|| format!("writing {}", raw.display()))?;
+        let area = p.area.and_then(|a| a.crop((x, y, w, h), p.raw_w, p.raw_h));
+
+        let t = Instant::now();
+        let (png, out_w, out_h) = publish(&self.fsr, &raw, &display, &p.filters, area.as_ref())?;
+        let fsr_ms = t.elapsed().as_millis();
+
+        let was = p.raw.clone();
+        let prev = p.clone();
+        let entry = Pending {
+            raw: raw.clone(),
+            raw_w: out_w,
+            raw_h: out_h,
+            display: display.clone(),
+            area,
+            step,
+            ..p
+        };
+        let entry = advance(&prev, entry, format!("Crop {w}×{h}"));
+        let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
+        // Only over the image it read, as `goto`: a pass that landed meanwhile
+        // owns the image now, and the crop was of the one it replaced. The new
+        // files stay under `scratch` until then, so a refusal removes them.
+        if !lock(&self.retained).replace(id, &was, entry) {
+            return Err(Superseded.into());
+        }
+        scratch.keep(&raw);
+        scratch.keep(&display);
+        Ok(result)
+    }
+
+    /// *Apply adjustments*: make the image as it is shown — grade, detail and
+    /// area all in it — the image itself, as a history step, and start the
+    /// look over from nothing on it. The filters go to `NONE`, the area to
+    /// `None`, and the profile's slider start points to 0, as `open_output`
+    /// does for a picture whose look is already in its pixels.
+    ///
+    /// **The one place a look reaches `raw`**, and only because it was asked
+    /// for: a Refine or Hi-res after it works on the adjusted picture, as
+    /// *Refine & extend* on a saved output does. Without it invariant 1 holds;
+    /// with it, the step before is the untouched picture to go back to.
+    pub fn apply_look(&mut self, id: u64) -> Result<GenResult> {
+        let p = lock(&self.retained).get(id, "apply adjustments to")?;
+        let acting_area = p.area.filter(Area::acts);
+        if p.filters == Filters::NONE && acting_area.is_none() {
+            bail!("nothing to apply — every slider is at 0");
+        }
+        let label = adjust_label(&p.filters, acting_area.as_ref());
+        let step = p.step + 1;
+        let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut scratch = Scratch::default();
+        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
+        std::fs::copy(&p.display, &raw).with_context(|| format!("copying {}", p.display.display()))?;
+
+        let t = Instant::now();
+        // Neutral, so the published picture is the applied one to the byte.
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &Filters::NONE, None)?;
+        let fsr_ms = t.elapsed().as_millis();
+
+        let was = p.raw.clone();
+        let prev = p.clone();
+        let mut profile = p.profile.clone();
+        profile.sharpness = 0.0;
+        profile.clarity = 0.0;
+        let entry = Pending {
+            raw: raw.clone(),
+            raw_w: w,
+            raw_h: h,
+            display: display.clone(),
+            filters: Filters::NONE,
+            area: None,
+            profile,
+            step,
+            ..p
+        };
+        let entry = advance(&prev, entry, label);
+        let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
+        if !lock(&self.retained).replace(id, &was, entry) {
+            return Err(Superseded.into());
+        }
+        scratch.keep(&raw);
+        scratch.keep(&display);
         Ok(result)
     }
 
@@ -2766,7 +2904,7 @@ impl Display {
         let tmp = self
             .scratch
             .join(format!("{id}-view-{}.png", N.fetch_add(1, Ordering::Relaxed)));
-        let shown = publish(&self.fsr, &s.raw, &tmp, &p.filters);
+        let shown = publish(&self.fsr, &s.raw, &tmp, &p.filters, p.area.as_ref());
         let _ = std::fs::remove_file(&tmp);
         shown
     }
@@ -2801,7 +2939,7 @@ impl Display {
         // Filters start where the model says again, exactly as a fresh generate
         // does — the archived image is unsharpened, so there is nothing to undo.
         let filters = Filters::starting_at(item.profile.sharpness, item.profile.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2815,6 +2953,7 @@ impl Display {
             raw_h: h,
             display,
             filters,
+            area: None,
             profile: item.profile,
             prompt: item.prompt,
             negative: item.negative,
@@ -2888,7 +3027,7 @@ impl Display {
         std::fs::copy(&stored, &raw)
             .with_context(|| format!("opening {}", stored.display()))?;
         let filters = Filters::NONE;
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2912,7 +3051,7 @@ impl Display {
         profile.sharpness = 0.0;
         profile.clarity = 0.0;
 
-        let entry = Pending {
+        let mut entry = Pending {
             history: Vec::new(),
             at: 0,
             raw,
@@ -2920,6 +3059,7 @@ impl Display {
             raw_h: h,
             display,
             filters,
+            area: None,
             profile,
             prompt: item.as_ref().map(|i| i.prompt.clone()).unwrap_or_default(),
             negative: item.as_ref().and_then(|i| i.negative.clone()),
@@ -2939,6 +3079,9 @@ impl Display {
             hires_passes: item.as_ref().map(|i| i.hires_passes).unwrap_or(0),
             step: item.as_ref().map(|i| i.step).unwrap_or(0),
         };
+        // Its first step is the saved picture, not a generation: the implicit
+        // label would say "Generated" in the viewer's History.
+        entry.history = vec![Snapshot::of(&entry, "Opened".into())];
         let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
         lock(&self.retained).store(id, slot, entry, false);
         Ok(result)
@@ -3022,8 +3165,29 @@ fn publish(
     raw: &Path,
     display: &Path,
     filters: &Filters,
+    area: Option<&Area>,
 ) -> Result<(Vec<u8>, u32, u32)> {
-    let (w, h) = lock(fsr).process(raw, display, 1.0, filters)?;
+    let (w, h) = match area.filter(|a| a.acts()) {
+        None => lock(fsr).process(raw, display, 1.0, filters)?,
+        // Two looks and a blend: the whole picture's, then the area's on top
+        // of it, mixed by the area's weight (`area::composite`). In memory, so
+        // neither look round-trips through a PNG; only the blend is written.
+        Some(a) => {
+            let img = image::open(raw)
+                .with_context(|| format!("loading {}", raw.display()))?
+                .to_rgba8();
+            let (mut base, local) = {
+                let fsr = lock(fsr);
+                let base = fsr.filter(&img, filters)?;
+                let local = fsr.filter(&base, &a.filters)?;
+                (base, local)
+            };
+            crate::area::composite(&mut base, &local, a);
+            base.save(display)
+                .with_context(|| format!("saving {}", display.display()))?;
+            base.dimensions()
+        }
+    };
     let png = std::fs::read(display)?;
     Ok((png, w, h))
 }
@@ -3049,9 +3213,54 @@ impl Pending {
             can_edit: self.profile.family.takes_references(),
             filters: self.filters,
             start: Filters::starting_at(self.profile.sharpness, self.profile.clarity),
+            area: self.area,
             prompt: self.prompt.clone(),
         }
     }
+}
+
+/// An applied look's history label: the knobs it moved, by name, or a count
+/// past three, and whether an area went in with it.
+fn adjust_label(filters: &Filters, area: Option<&Area>) -> String {
+    let moved = filters.changed();
+    let mut text = if moved.len() > 3 {
+        format!("{} changes", moved.len())
+    } else {
+        moved
+            .iter()
+            .map(|(name, v)| {
+                let mut c = name.chars();
+                let first = c.next().map(|f| f.to_uppercase().collect::<String>()).unwrap_or_default();
+                format!("{first}{} {v:+.2}", c.as_str())
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if area.is_some() {
+        text = if text.is_empty() { "area".into() } else { format!("{text} + area") };
+    }
+    format!("Adjust: {text}")
+}
+
+/// The smallest crop: below a model's smallest working size a Refine or
+/// Hi-res of it would be enlarging a thumbnail.
+const MIN_CROP: u32 = 64;
+
+/// A crop request as it will run: width and height snapped *down* to a
+/// multiple of 8, so a later Refine or Hi-res latent covers the picture
+/// exactly, then checked to lie inside the picture and to change something.
+fn crop_rect((x, y, w, h): (u32, u32, u32, u32), full_w: u32, full_h: u32) -> Result<(u32, u32, u32, u32)> {
+    let (w, h) = (w / 8 * 8, h / 8 * 8);
+    if w < MIN_CROP || h < MIN_CROP {
+        bail!("a crop must be at least {MIN_CROP}×{MIN_CROP} pixels");
+    }
+    if x.checked_add(w).is_none_or(|r| r > full_w) || y.checked_add(h).is_none_or(|b| b > full_h) {
+        bail!("the crop must lie inside the picture ({full_w}×{full_h})");
+    }
+    if (w, h) == (full_w, full_h) {
+        bail!("that crop is the whole picture");
+    }
+    Ok((x, y, w, h))
 }
 
 /// Files a pass created that shouldn't outlive it. Anything still listed when
@@ -3358,6 +3567,7 @@ fn random_seed() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
+        adjust_label, crop_rect,
         advance, after_model, edit_size, fit_to, pass_prompt, step_label, AfterModel, Expand, Pending, Retained,
         Slot, MAX_HISTORY,
     };
@@ -3396,6 +3606,37 @@ mod tests {
 
     /// A retained image whose two files exist, so eviction has something to
     /// delete and the tests something to look for.
+    #[test]
+    fn an_applied_look_is_labelled_by_what_it_moved() {
+        let f = Filters { lightness: 0.2, vibrance: 0.3, ..Filters::NONE };
+        assert_eq!(adjust_label(&f, None), "Adjust: Lightness +0.20, Vibrance +0.30");
+        let many = Filters { lightness: 0.1, contrast: 0.1, shadows: -0.1, hue: 0.1, ..Filters::NONE };
+        assert_eq!(adjust_label(&many, None), "Adjust: 4 changes");
+        let a = crate::area::Area {
+            shape: crate::area::Shape::Rect,
+            x0: 0.1,
+            y0: 0.1,
+            x1: 0.5,
+            y1: 0.5,
+            feather: 0.0,
+            invert: false,
+            filters: Filters { tint: 0.2, ..Filters::NONE },
+        };
+        assert_eq!(adjust_label(&Filters::NONE, Some(&a)), "Adjust: area");
+        assert_eq!(adjust_label(&f, Some(&a)), "Adjust: Lightness +0.20, Vibrance +0.30 + area");
+    }
+
+    #[test]
+    fn a_crop_snaps_to_eight_and_stays_inside_the_picture() {
+        assert_eq!(crop_rect((10, 20, 515, 300), 1024, 1024).unwrap(), (10, 20, 512, 296));
+        assert!(crop_rect((0, 0, 70, 63), 1024, 1024).is_err(), "too small once snapped");
+        assert!(crop_rect((600, 0, 512, 512), 1024, 1024).is_err(), "past the right edge");
+        assert!(crop_rect((u32::MAX, 0, 512, 512), 1024, 1024).is_err(), "no overflow");
+        assert!(crop_rect((0, 0, 1024, 1024), 1024, 1024).is_err(), "the whole picture");
+        // A side that isn't a multiple of 8 can still be kept whole on the other axis.
+        assert_eq!(crop_rect((0, 0, 1000, 700), 1000, 768).unwrap(), (0, 0, 1000, 696));
+    }
+
     fn live(dir: &Path, name: &str) -> Pending {
         let raw = dir.join(format!("{name}-raw.png"));
         let display = dir.join(format!("{name}-full.png"));
@@ -3408,6 +3649,7 @@ mod tests {
             display,
             profile: Profile::default(),
             filters: Filters::NONE,
+            area: None,
             prompt: String::new(),
             negative: None,
             typed_prompt: None,

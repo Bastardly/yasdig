@@ -1,7 +1,7 @@
 import { $, esc, getJSON, post } from './dom.js';
 import { S, escErr } from './state.js';
 import { setBusy, setIdle, onIdle } from './busy.js';
-import { setPost, setPostStart, showFullSize, setViewerImage, cancelPost } from './viewer.js';
+import { cancelPost, onViewerResult, setLook, showFullSize, setViewerImage } from './viewer.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
 import { render } from './image.js';
 import { openRedraw } from './redraw.js';
@@ -233,8 +233,7 @@ async function openAt(i) {
     // Both of these are `Filters::NONE` for an output — the picture already
     // carries whatever was applied when it was saved, so 0 means "as saved" and
     // Reset means "back to the file on disk".
-    setPostStart(data.filters_start ?? data.filters);
-    setPost(data.filters);
+    setLook(data);
     $('postms').textContent = '';
     // `showFullSize` clears this, but swapping the image inside an open dialog
     // doesn't — so the previous image's failure would sit under the new one.
@@ -355,6 +354,16 @@ export function initOutputs() {
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName)) return;
     e.preventDefault();
     step(e.key === 'ArrowRight' ? 1 : -1);
+  });
+
+  // A crop (or its undo) in the viewer: the same picture, a new state of it.
+  // The file isn't touched until Save changes or Save as new.
+  onViewerResult('outputs', (data) => {
+    S.imageId = data.image_id;
+    S.currentSrc = `data:image/png;base64,${data.image_base64}`;
+    setLook(data);
+    $('lbsaved').textContent = `${outputs[index]?.stem ?? ''} · ${data.width}×${data.height}`;
+    setViewerImage(S.currentSrc);
   });
 
   // Save is only pressable once something is open, which IDLE_LABELS can't know.

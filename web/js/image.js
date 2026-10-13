@@ -1,7 +1,7 @@
 import { $, bar, esc, getJSON, post, numOr, rememberFolds } from './dom.js';
 import { S, P, escErr } from './state.js';
 import { isBusy, setBusy, setIdle, onIdle, redrawBusy } from './busy.js';
-import { cancelPost, setPost, setPostStart, setViewerImage, showFullSize } from './viewer.js';
+import { cancelPost, onViewerResult, setLook, setPost, setViewerImage, showFullSize } from './viewer.js';
 import { activeLoop, onJobs, onNotice, onResult, runningJob, soonJobs, stopJob } from './jobs.js';
 import { applyWorkItem, loadWorkItems, markGrid } from './workitems.js';
 import { loraPicker } from './loras.js';
@@ -835,8 +835,8 @@ export function render(data) {
   // the grade carried over from the last edit. Taking the applied values as the
   // reset target would make each edit the next image's neutral, with no way
   // back to an ungraded picture.
-  setPostStart(data.filters_start ?? data.filters);
-  setPost(data.filters);
+  // `setLook` also restores the area and what the Crop fold says.
+  setLook(data);
   $('postms').textContent = '';
   // The action row was just rebuilt; a Refine still waiting on its request
   // keeps saying so.
@@ -1405,6 +1405,8 @@ export function initImage() {
   onIdle(syncPassButtons);
   onResult(takeResult);
   onJobs(syncStopButton);
+  // A crop (or its undo) in the viewer is a new state of this image.
+  onViewerResult('image', render);
   onJobs(syncLoopNote);
   // A run that failed has no request waiting on it; its message comes here.
   onNotice((msg, oom) => {

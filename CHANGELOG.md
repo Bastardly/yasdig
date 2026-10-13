@@ -5,6 +5,23 @@ What changed in each release of yasdig. Each release's executables are on the
 
 ## Unreleased
 
+### New
+
+- **Vibrance** in the viewer's Colour sliders: saturation for the dull colours only,
+  so muted colours gain the most and vivid ones barely move.
+- **Crop** in the viewer. Drag a box, lock it to an aspect if you like, and apply. It
+  is a step in the image's history, so it can be undone, and a Refine or Hi-res
+  afterwards works on the cropped picture.
+- **Area adjustments.** Give one part of the picture its own look: a rectangle or an
+  ellipse with a soft edge (or everything outside it), with its own set of the
+  viewer's sliders on top of the whole picture's.
+- **Apply and History in the viewer.** *Apply adjustments* makes the current look
+  part of the picture and starts the sliders from zero on it, as a step in a
+  **History** you can jump back and forward through — the same list as the Refine
+  dialog's. Crops are steps there too.
+- **The viewer's panel is folds** — Tone, Colour, Detail, Crop, Area, History — each
+  saying what is set inside it when folded.
+
 ### Changed
 
 - **Keep going until stopped follows your edits.** Change the prompt, the model or any

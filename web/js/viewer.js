@@ -1,5 +1,7 @@
-import { $, post } from './dom.js';
+import { $, esc, post, rememberFolds } from './dom.js';
 import { S, P, escErr } from './state.js';
+import { onJobs, passRunning } from './jobs.js';
+import { regionTool } from './regiontool.js';
 
 // The viewer's panel, top to bottom. This list is the only place a filter is
 // declared: the markup, the labels, setPost, the /adjust body and the
@@ -7,11 +9,11 @@ import { S, P, escErr } from './state.js';
 // server's `Filters`. The names are the wire names — that is what lets the body
 // and the response be built by looping rather than by naming ten keys twice.
 //
-// Only the last two are per-model; the eight grading knobs always start at 0,
+// Only the last two are per-model; the nine grading knobs always start at 0,
 // because a checkpoint has a house sharpness and no opinion about your hue.
 // `help` is the tooltip text, and it lives here rather than in `HELP` below for
 // the reason the rest of the row does: a slider is declared in one place, and
-// number eleven should be one line in one list.
+// number twelve should be one line in one list.
 export const FILTERS = [
   { group: 'Tone', id: 'lightness', label: 'Lightness',
     help: 'Overall brightness, applied as an exposure change in stops rather than '
@@ -31,6 +33,10 @@ export const FILTERS = [
   { group: 'Colour', id: 'saturation', label: 'Saturation',
     help: 'How colourful everything is. −1 is exactly greyscale. Small positive '
         + 'amounts go a long way, since every colour moves at once.' },
+  { id: 'vibrance', label: 'Vibrance',
+    help: 'Saturation for the dull colours only: muted ones gain the most, and '
+        + 'colours that are already vivid barely move, so nothing clips first. '
+        + 'Gentler on skin than Saturation. Negative mutes the dull ones first.' },
   { id: 'temperature', label: 'Temperature',
     help: 'Warm (yellow) against cool (blue) — the usual white-balance knob. The '
         + 'shift is scaled by how bright a pixel is, so black stays black instead '
@@ -65,8 +71,12 @@ export const FILTERS = [
 // A missing key is 0, not "leave it": the two callers both describe a *whole*
 // state — a model's start points, or what the server has applied — and a knob
 // either of them omits is a knob that is off.
+//
+// These are the *whole picture's* filters. While the sliders point at the area
+// (`target`), they are parked and set there instead.
 export function setPost(filters) {
-  for (const f of FILTERS) $(f.id).value = filters[f.id] ?? 0;
+  if (target === 'all') writeSliders(filters);
+  else parked = { ...filters };
   syncPostLabels();
 }
 
@@ -74,6 +84,246 @@ export function syncPostLabels() {
   for (const f of FILTERS) {
     const v = Number($(f.id).value);
     $(f.id + 'val').textContent = f.fmt ? f.fmt(v) : v.toFixed(2);
+  }
+  viewerSummaries();
+}
+
+const readSliders = () => Object.fromEntries(FILTERS.map((f) => [f.id, parseFloat($(f.id).value)]));
+function writeSliders(v) {
+  for (const f of FILTERS) $(f.id).value = v[f.id] ?? 0;
+}
+
+// ---- Two looks: the whole picture's, and the area's -------------------------
+//
+// The eleven sliders are one set of controls for two sets of values: the whole
+// picture's filters, and the area's (`crate::area` on the server). `target`
+// says which the sliders show; the other is held here. Sent whole, both, on
+// every re-filter.
+let target = 'all';
+// The whole picture's filters while the sliders show the area's.
+let parked = {};
+// The area: {shape, x0, y0, x1, y1 (0..1 of the frame), feather, invert,
+// filters}, or null. Its `filters` are stale while the sliders show them.
+let area = null;
+// The last result the viewer was handed: its size and history, for Crop.
+let shown = null;
+// What a crop or an undo's answer goes through, per pane: the Image tab's
+// `render`, the Outputs viewer's own. Registered by those modules.
+const resultHandlers = {};
+export const onViewerResult = (pane, fn) => { resultHandlers[pane] = fn; };
+
+const globalFilters = () => (target === 'all' ? readSliders() : parked);
+const areaState = () => area && { ...area, filters: target === 'area' ? readSliders() : area.filters };
+
+function setTarget(t) {
+  if (t === target || (t === 'area' && !area)) return;
+  if (target === 'all') parked = readSliders(); else area.filters = readSliders();
+  target = t;
+  writeSliders(t === 'all' ? parked : area.filters);
+  $('lbtargetall').classList.toggle('active', t === 'all');
+  $('lbtargetarea').classList.toggle('active', t === 'area');
+  syncPostLabels();
+}
+
+// A new picture, or a new state of this one: the server's word on both looks,
+// where Reset goes, and the history Crop's undo reads.
+export function setLook(data) {
+  shown = data;
+  postStart = data.filters_start ?? data.filters;
+  target = 'all';
+  $('lbtargetall').classList.add('active');
+  $('lbtargetarea').classList.remove('active');
+  area = data.area ?? null;
+  writeSliders(data.filters);
+  syncArea();
+  drawHistory();
+  syncPostLabels();
+  // The box describes the picture that was there; put it on this one once
+  // it has decoded and has a size.
+  if (box?.shown()) $('lbimg').addEventListener('load', reshowTool, { once: true });
+}
+
+// ---- Summaries --------------------------------------------------------------
+//
+// Every fold says what is inside it when folded, as the Image tab's do.
+const signed = (f, v) => (f.fmt ? f.fmt(v) : `${v > 0 ? '+' : ''}${v.toFixed(2)}`);
+function say(id, text, on) {
+  $(id).textContent = text ? '— ' + text : '';
+  $(id).title = text;
+  $(id).classList.toggle('on', !!on);
+}
+function viewerSummaries() {
+  // Before initViewer has built the slider folds there is nothing to say.
+  if (!$('sum-lb-tone')) return;
+  const v = readSliders();
+  const base = target === 'all' ? postStart : {};
+  for (const [group, rows] of groups()) {
+    const moved = rows.filter((f) => Math.abs((v[f.id] ?? 0) - (base[f.id] ?? 0)) > 0.004);
+    const text = moved.map((f) => `${f.label} ${signed(f, v[f.id])}`).join(' · ') || 'neutral';
+    say(`sum-lb-${group.toLowerCase()}`, (target === 'area' ? 'Area: ' : '') + text, moved.length);
+  }
+  const a = areaState();
+  const changes = a ? Object.values(a.filters).filter((x) => Math.abs(x) > 0.004).length : 0;
+  say('sum-lb-area', a
+    ? [a.shape === 'ellipse' ? 'ellipse' : 'rectangle',
+      `${changes} change${changes === 1 ? '' : 's'}`, a.invert ? 'inverted' : null]
+      .filter(Boolean).join(' · ')
+    : 'none', !!a);
+  const cropped = isCrop();
+  say('sum-lb-crop', cropped ? `${shown.width}×${shown.height}` : 'whole picture', cropped);
+  syncApply();
+}
+
+// FILTERS' rows by their `group`, which only the first row of each names.
+function groups() {
+  const out = [];
+  for (const f of FILTERS) {
+    if (f.group) out.push([f.group, []]);
+    out[out.length - 1][1].push(f);
+  }
+  return out;
+}
+
+// ---- Crop and Area: one box tool, one use at a time --------------------------
+//
+// Opening the Crop fold puts a crop box up and closing it drops an unapplied
+// one; opening Area shows the area's shape for dragging. Only one of the two
+// is open at once, so the box under the pointer is never ambiguous.
+let box = null; // the box tool, made in initViewer
+let toolMode = null; // 'crop' | 'area' | null
+
+// Whether the picture on screen has been cropped: any crop step up to here.
+const isCrop = () => !!shown && (shown.history ?? []).slice(0, shown.at + 1).some((l) => /^Crop /.test(l));
+
+// The list holds each ratio once, landscape; `turned` stands it on end. For
+// Original it swaps the picture's own sides, so a landscape picture can be cut
+// to a portrait of the same proportions.
+let turned = false;
+function aspectValue() {
+  const v = $('lbaspect').value;
+  if (!v) return null;
+  const r = v === 'orig' ? (shown ? shown.width / shown.height : null) : Number(v);
+  return r && turned ? 1 / r : r;
+}
+
+// Turning means nothing for Free or 1:1, so the button says so.
+function syncTurn() {
+  const v = $('lbaspect').value;
+  const b = $('lbaspectturn');
+  b.disabled = !v || v === '1';
+  b.classList.toggle('active', turned && !b.disabled);
+  b.title = b.disabled ? 'Pick an aspect to turn it'
+    : turned ? 'Portrait — turn back to landscape' : 'Landscape — turn to portrait';
+}
+
+function showCropTool() {
+  toolMode = 'crop';
+  box.show(null, { dim: true, shape: 'rect', feather: 0, aspect: aspectValue() });
+}
+
+function showAreaTool() {
+  if (!area) { box.hide(); toolMode = null; return; }
+  toolMode = 'area';
+  const w = $('lbimg').naturalWidth || 1, h = $('lbimg').naturalHeight || 1;
+  box.show(
+    { x: area.x0 * w, y: area.y0 * h, w: (area.x1 - area.x0) * w, h: (area.y1 - area.y0) * h },
+    { dim: false, shape: area.shape, feather: area.feather, aspect: null },
+  );
+}
+
+function reshowTool() {
+  if (toolMode === 'crop') box.reset();
+  else if (toolMode === 'area') showAreaTool();
+}
+
+function onBox(b) {
+  const w = $('lbimg').naturalWidth || 1, h = $('lbimg').naturalHeight || 1;
+  if (toolMode === 'crop') {
+    const snap = (v) => Math.floor(v / 8) * 8;
+    $('lbcropsize').textContent = `${snap(b.w)} × ${snap(b.h)} px`;
+  } else if (toolMode === 'area' && area) {
+    Object.assign(area, { x0: b.x / w, y0: b.y / h, x1: (b.x + b.w) / w, y1: (b.y + b.h) / h });
+    schedulePost();
+  }
+}
+
+// Crop, Apply and History all make or move a history step, which a pass
+// landing afterwards would silently overwrite: locked while one runs.
+function syncCrop() {
+  const busy = passRunning();
+  $('lbcropapply').disabled = busy || stepping;
+  $('lbcropapply').title = busy ? 'A pass is running on the image — crop when it lands' : '';
+  for (const b of $('lbhistory').querySelectorAll('button')) b.disabled = busy || stepping;
+  syncApply();
+}
+
+// Apply is for a look that isn't neutral: a whole-picture slider off 0, or an
+// area that changes something.
+function syncApply() {
+  const g = globalFilters();
+  const a = areaState();
+  const moved = Object.values(g).some((v) => v !== 0)
+    || (!!a && Object.values(a.filters).some((v) => v !== 0));
+  $('lbapply').disabled = !moved || passRunning() || stepping || S.imageId === null;
+}
+
+// ---- History -----------------------------------------------------------------
+//
+// The image's states, newest first, as the Refine dialog lists them — one
+// markup for both lists, so they can't come to disagree about a step.
+export const historyMarkup = (data) => (data?.history ?? []).map((label, i) => `
+    <li><button type="button" data-step="${i}" class="${i === data.at ? 'active' : ''}">
+      <img src="/history/${data.image_id}/${i}.png" alt="" loading="lazy">
+      <span>${i + 1}. ${esc(label)}</span>
+    </button></li>`).reverse().join('');
+
+function drawHistory() {
+  $('lbhistory').innerHTML = historyMarkup(shown);
+  const n = shown?.history?.length ?? 0;
+  say('sum-lb-history', n ? `${n} step${n === 1 ? '' : 's'} · at ${shown.at + 1}` : '',
+    n > 0 && shown.at < n - 1);
+  syncCrop();
+}
+
+function syncArea() {
+  $('lbareabox').hidden = !area;
+  if (area) {
+    $('lbshaperect').classList.toggle('active', area.shape === 'rect');
+    $('lbshapeellipse').classList.toggle('active', area.shape === 'ellipse');
+    $('lbfeather').value = area.feather;
+    $('lbfeatherval').textContent = area.feather.toFixed(2);
+    $('lbinvert').checked = area.invert;
+  }
+  if (toolMode === 'area' && !area) { box.hide(); toolMode = null; }
+}
+
+// The crop or the undo answered with a new state of the image: the pane that
+// owns the viewer draws it, the same way it draws any other result.
+function deliver(data) {
+  resultHandlers[S.pane]?.(data);
+}
+
+// A crop, an Apply or a jump through History: each answers with a new state
+// of the image, and says whether it landed. One at a time, and after any re-filter still on its way — so
+// what is applied or cropped is what is on screen.
+let stepping = false;
+async function stepRequest(route, body) {
+  if (S.imageId === null || stepping) return false;
+  stepping = true;
+  syncCrop();
+  $('lberr').textContent = '';
+  try {
+    await settlePost();
+    const data = await post(route, { image_id: S.imageId, ...body });
+    deliver(data);
+    return true;
+  } catch (e) {
+    // A pass landed first: the image is newer, and its result is on its way.
+    if (e.status !== 409) $('lberr').textContent = String(e.message || e);
+    return false;
+  } finally {
+    stepping = false;
+    syncCrop();
   }
 }
 
@@ -223,7 +473,18 @@ export function schedulePost() {
   postTimer = setTimeout(runPost, 120);
 }
 
+// Let a debounced or in-flight re-filter land before a step is taken from
+// the picture (Apply, Crop, a History jump), so the step is of what is shown.
+async function settlePost() {
+  if (postTimer !== null) {
+    clearTimeout(postTimer);
+    await runPost();
+  }
+  while (postBusy) await new Promise((r) => { setTimeout(r, 30); });
+}
+
 async function runPost() {
+  postTimer = null;
   // The sliders stay live while a pass runs: they are on the display lane, and
   // if a refine replaces the image mid-drag the server refuses the drag rather
   // than writing it over the new one (`Retained::update`).
@@ -239,7 +500,10 @@ async function runPost() {
     const epoch = postEpoch;
     const data = await post('/adjust', {
       image_id: S.imageId,
-      ...Object.fromEntries(FILTERS.map((f) => [f.id, parseFloat($(f.id).value)])),
+      ...globalFilters(),
+      // Always sent, `null` included: the panel is the whole state, and `null`
+      // is how the server hears that the area was removed.
+      area: areaState(),
     });
     // The image this was filtering is no longer the one on screen.
     if (epoch !== postEpoch) return;
@@ -265,9 +529,6 @@ async function runPost() {
   }
 }
 
-// Read-only imported bindings again: only this module's own wiring reads
-// `postStart`, so only the write crosses a file boundary.
-export const setPostStart = (v) => { postStart = v; };
 
 // Drop a debounced re-filter and disown one already in flight. Called when the
 // image under the sliders is being replaced by a different one — the Outputs
@@ -294,22 +555,29 @@ export function initViewer() {
   // Built once, at load, so the panel exists before the first image does —
   // `syncAdvanced` writes the model's start points into it while the viewer is
   // still closed.
-  $('lbsliders').innerHTML = FILTERS.map((f) => `
-    ${f.group ? `<div class="lbgroup">${f.group}</div>` : ''}
-    <div class="slider">
-      <div class="head">
-        <label for="${f.id}">${f.label}</label><span class="val" id="${f.id}val"></span>
-      </div>
-      <input id="${f.id}" type="range" min="${f.min ?? -1}" max="1" step="0.01" value="0">
-    </div>`).join('');
+  // A fold per group, Tone and Colour open by default; `rememberFolds` below
+  // keeps whatever the user leaves them as.
+  $('lbsliders').innerHTML = groups().map(([group, rows]) => `
+    <details id="fold-lb-${group.toLowerCase()}" class="fold"${group === 'Detail' ? '' : ' open'}>
+      <summary>${group} <span class="foldstate" id="sum-lb-${group.toLowerCase()}"></span></summary>
+      ${rows.map((f) => `
+      <div class="slider">
+        <div class="head">
+          <label for="${f.id}">${f.label}</label><span class="val" id="${f.id}val"></span>
+        </div>
+        <input id="${f.id}" type="range" min="${f.min ?? -1}" max="1" step="0.01" value="0">
+      </div>`).join('')}
+    </details>`).join('');
 
   // 'input', not 'change': the point is to see the filter while dragging. Double
   // click sends one knob home, which is the only way back to an exact 0 on a
   // pointer — a drag can always land a hundredth off.
   for (const f of FILTERS) {
     $(f.id).addEventListener('input', schedulePost);
+    // Home is the image's start point for the whole picture, and 0 — "as the
+    // rest of the picture" — for the area.
     $(f.id).addEventListener('dblclick', () => {
-      $(f.id).value = postStart[f.id] ?? 0;
+      $(f.id).value = target === 'all' ? (postStart[f.id] ?? 0) : 0;
       schedulePost();
     });
   }
@@ -318,9 +586,105 @@ export function initViewer() {
   // nothing else: a click-anywhere-to-dismiss is fine for something you only look
   // at and hostile for something you edit in.
   $('lbclose').addEventListener('click', () => $('lightbox').close());
-  $('lbreset').addEventListener('click', () => { setPost(postStart); schedulePost(); });
+  // Reset is the whole look: the picture's sliders home, and the area gone.
+  $('lbreset').addEventListener('click', () => {
+    setTarget('all');
+    area = null;
+    syncArea();
+    setPost(postStart);
+    schedulePost();
+  });
+  // Left drag pans at 1:1; the middle button too, which is the pan left while
+  // a crop or area box has the left one.
   lb = zoomPane({
     view: $('lbview'), img: $('lbimg'), fit: $('lbfit'), full: $('lbfull'),
-    pans: (e) => e.button === 0,
+    pans: (e) => e.button === 0 || e.button === 1,
   });
+
+  box = regionTool({ view: $('lbview'), img: $('lbimg'), onChange: onBox });
+  box.init();
+  const crop = $('fold-lb-crop'), areaFold = $('fold-lb-area');
+  crop.addEventListener('toggle', () => {
+    if (crop.open) {
+      areaFold.open = false;
+      showCropTool();
+    } else if (toolMode === 'crop') {
+      box.hide();
+      toolMode = null;
+    }
+  });
+  areaFold.addEventListener('toggle', () => {
+    if (areaFold.open) {
+      crop.open = false;
+      showAreaTool();
+    } else if (toolMode === 'area') {
+      box.hide();
+      toolMode = null;
+    }
+  });
+  $('lbaspect').addEventListener('change', () => { syncTurn(); box.set({ aspect: aspectValue() }); });
+  $('lbaspectturn').addEventListener('click', () => {
+    turned = !turned;
+    syncTurn();
+    box.set({ aspect: aspectValue() });
+  });
+  syncTurn();
+  $('lbcropcancel').addEventListener('click', () => { crop.open = false; });
+  // A crop is done once it has landed: the fold closes, which takes the box
+  // down, so the next drag on the picture is a pan again.
+  $('lbcropapply').addEventListener('click', async () => {
+    const b = box.box();
+    if (toolMode !== 'crop' || !b) return;
+    if (await stepRequest('/crop', { x: b.x, y: b.y, width: b.w, height: b.h })) crop.open = false;
+  });
+  $('lbapply').addEventListener('click', () => stepRequest('/apply', {}));
+  $('lbhistory').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-step]');
+    if (!b || b.disabled || !shown) return;
+    const index = Number(b.dataset.step);
+    if (index === shown.at) return;
+    $('lbimg').addEventListener('load', reshowTool, { once: true });
+    stepRequest('/history/goto', { index });
+  });
+
+  // The area: made on first choosing it, a centred ellipse.
+  $('lbtargetarea').addEventListener('click', () => {
+    if (!area) {
+      area = { shape: 'ellipse', x0: 0.3, y0: 0.3, x1: 0.7, y1: 0.7, feather: 0.1, invert: false, filters: {} };
+      syncArea();
+    }
+    setTarget('area');
+    if (areaFold.open) showAreaTool();
+  });
+  $('lbtargetall').addEventListener('click', () => setTarget('all'));
+  for (const [id, shape] of [['lbshaperect', 'rect'], ['lbshapeellipse', 'ellipse']]) {
+    $(id).addEventListener('click', () => {
+      if (!area) return;
+      area.shape = shape;
+      syncArea();
+      box.set({ shape });
+      schedulePost();
+    });
+  }
+  $('lbfeather').addEventListener('input', () => {
+    if (!area) return;
+    area.feather = Number($('lbfeather').value);
+    $('lbfeatherval').textContent = area.feather.toFixed(2);
+    box.set({ feather: area.feather });
+    schedulePost();
+  });
+  $('lbinvert').addEventListener('change', () => {
+    if (!area) return;
+    area.invert = $('lbinvert').checked;
+    schedulePost();
+  });
+  $('lbarearemove').addEventListener('click', () => {
+    setTarget('all');
+    area = null;
+    syncArea();
+    schedulePost();
+  });
+
+  onJobs(syncCrop);
+  rememberFolds($('lightbox'));
 }

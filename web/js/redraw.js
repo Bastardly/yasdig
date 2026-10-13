@@ -1,8 +1,8 @@
 import { $, esc, numOr, post, rememberFolds } from './dom.js';
 import { S } from './state.js';
 import { isBusy, onIdle, setBusy, setIdle } from './busy.js';
-import { onJobs, runningJob, soonJobs } from './jobs.js';
-import { zoomPane } from './viewer.js';
+import { onJobs, passRunning, runningJob, soonJobs } from './jobs.js';
+import { historyMarkup, zoomPane } from './viewer.js';
 import { fillReady, oomOptions, passSteps, refine, render, takeResult, upscalerOptions, upscalersReady } from './image.js';
 import { openGetModels } from './getmodels.js';
 import { showError } from './memory.js';
@@ -318,11 +318,7 @@ function drawCompare() {
   if (comparing) fetchBefore();
 }
 
-// Whether a pass on some image is running. The history is locked meanwhile: a
-// step back and a pass that lands afterwards would disagree about which state
-// is current, and the pass would win without saying so.
-const PASSES = ['refine', 'hires', 'redraw', 'upscale', 'edit', 'extend'];
-const passRunning = () => PASSES.includes(runningJob()?.kind);
+// `passRunning` (jobs.js): the history is locked while a pass runs.
 
 // What the dialog's buttons say and allow, from the mask and the result on
 // screen. Painted is "Refine area" (the redraw pass); nothing painted is
@@ -593,12 +589,7 @@ async function setModel() {
 function drawHistory() {
   if (!shown) return;
   drawModel();
-  const steps = shown.history ?? [];
-  $('rdhistory').innerHTML = steps.map((label, i) => `
-    <li><button type="button" data-step="${i}" class="${i === shown.at ? 'active' : ''}">
-      <img src="/history/${shown.image_id}/${i}.png" alt="" loading="lazy">
-      <span>${i + 1}. ${esc(label)}</span>
-    </button></li>`).reverse().join('');
+  $('rdhistory').innerHTML = historyMarkup(shown);
   drawCompare();
   syncButtons();
 }
