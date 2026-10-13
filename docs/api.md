@@ -310,24 +310,29 @@ needs a Vulkan device and nothing else.
   `profile` object holding the full resolved
   settings the image was generated with — per-request overrides already applied, and
   the pass CFGs still `null` if they were left unset. That is what lets the UI
-  restore an item's controls without a second request.
+  restore an item's controls without a second request. Lists both
+  shelves: a favourite is still a work item, and `favorite: true` says it lives in
+  `user/favorite/` (its star is filled, and its routes are `/favorites/…`). An id on
+  both shelves is listed once, as the favourite.
 - `GET /workitems/{id}/thumb.png` — the thumbnail. An id is digits and `-` only;
   anything else is `404`.
 - `POST /workitems/open` — `{ "id": "1758104523000-12345" }`. Copies the archived image
   back into the working set and returns the `/generate` shape with a fresh `image_id`,
   so the escalations and the sliders work on it immediately. No diffusion runs.
 - `POST /workitems/delete` — `{ "ids": ["…", "…"] }`. Returns `{ "deleted": 2 }`.
-- `POST /favorites/add` — `{ "ids": ["…", "…"] }`. Copies those work items — image,
-  thumbnail and sidecar — into `user/favorite/`, out of reach of `Delete all`.
-  Returns `{ "favorited": 2 }`. A copy, not a move: the originals stay in the grid.
+- `POST /favorites/add` — `{ "ids": ["…", "…"] }`. Moves those work items — image,
+  thumbnail and sidecar — into `user/favorite/`, out of reach of `Delete all` and the
+  clear on close. Returns `{ "favorited": 2 }`. They stay in `GET /workitems`.
+- `POST /favorites/remove` — the same body. Moves them back to `work/workitems/`.
 - `GET /favorites`, `GET /favorites/{id}/thumb.png`, `POST /favorites/open`,
-  `POST /favorites/delete` — the four routes above, over `user/favorite/` instead.
-  Same shapes, same ids, same guard. There is no separate "unfavorite": deleting
-  from that shelf is one, and it touches nothing under `work/`.
-- `POST /favorite-outputs/add` — `{ "stems": ["…"] }`. Copies those saved images into
-  `user/favorite_outputs/`. Returns `{ "favorited": 1 }`. `GET /favorite-outputs` lists
-  them in the `/outputs` shape and `POST /favorite-outputs/delete` removes them from
-  there only. There is no open or thumbnail route of their own: a stem names one
+  `POST /favorites/delete` — `/favorites` lists that shelf alone; the other three are
+  the routes above over `user/favorite/`. Same shapes, same ids, same guard.
+  `delete` deletes the files; un-starring is `remove`.
+- `POST /favorite-outputs/add` — `{ "stems": ["…"] }`. Moves those saved images into
+  `user/favorite_outputs/`, keeping their stems and file times. Returns
+  `{ "favorited": 1 }`. `POST /favorite-outputs/remove` moves them back.
+  `GET /favorite-outputs` lists that gallery alone in the `/outputs` shape, and
+  `POST /favorite-outputs/delete` deletes from there only. There is no open or thumbnail route of their own: a stem names one
   picture in either gallery, so `/outputs/open`, `/outputs/{stem}/thumb.png` and a
   `source` on `/img2img` or `/video` find a favourite by stem as well.
 - `GET /progress` — what the worker is doing right now:
@@ -369,7 +374,9 @@ needs a Vulkan device and nothing else.
   tensor names — a safetensors header, or a `.pth`'s pickle — never the weights, so it
   answers on the connection thread. See [Upscalers](guide.md#upscalers).
 - `GET /outputs` — every image in `work/output/`, newest first: `stem`, `created_ms`,
-  `width` / `height`, `prompt`, `seed`, `template`. Uploads are in here too, with an
+  `width` / `height`, `prompt`, `seed`, `template`, and `favorite`. Lists both
+  galleries, as `/workitems` does: `favorite: true` is an image in
+  `user/favorite_outputs/`. Uploads are in here too, with an
   empty prompt and `template: "(imported)"` — one pool, because at the moment you are
   choosing a source image the difference is not interesting. Keyed by filename **stem**, not by
   work item id — several saves come out of one generation (`{id}-s{step}`, plus a `-2`

@@ -2,7 +2,7 @@ import { $, esc, getJSON, post } from './dom.js';
 import { S } from './state.js';
 import { imageLoras, imageSource, models, render, setParts, setUpscaler, syncCfgPlaceholders,
          syncOutSize, syncParts } from './image.js';
-import { gridMarks } from './gridmark.js';
+import { gridMarks, star, wireStars } from './gridmark.js';
 import { setReferences } from './refs.js';
 
 // The last listing. It carries each item's full settings, so opening one needs
@@ -25,21 +25,14 @@ const onFavorites = () => shelf === 'favorites';
 const marks = gridMarks({
   grid: 'wigrid',
   mode: 'wimode',
-  ids: () => workItems.map((w) => w.id),
+  // On Current, only what lives there: a starred item is in user/favorite/,
+  // out of reach of a delete here until it is un-starred.
+  ids: () => workItems.filter((w) => onFavorites() || !w.favorite).map((w) => w.id),
   reload: loadWorkItems,
   err: (msg) => { $('err').textContent = msg; },
   onMode: () => markGrid(),
+  // Keeping one is the tile's star (`wireStars` below), not a mode here.
   actions: [{
-    // Keeping one. A copy rather than a move, so the original stays in the grid
-    // and `Delete all` stays the blunt instrument it is — which is the whole
-    // point: the favourites are what survives it.
-    value: 'favorite',
-    button: 'wifavorite',
-    mark: 'keep',
-    label: (n) => `Favorite ${n} selected`,
-    route: () => '/favorites/add',
-    key: 'ids',
-  }, {
     value: 'delete',
     button: 'widelete',
     mark: 'sel',
@@ -51,7 +44,7 @@ const marks = gridMarks({
     all: {
       button: 'wideleteall',
       noun: 'work item',
-      label: (n) => `Delete all ${n}`,
+      label: (n) => (n ? `Delete all ${n} unstarred` : 'Delete all unstarred'),
       // Not on the favourites shelf. Emptying that directory in one press is
       // the exact thing it exists to be safe from; the marked delete above is
       // still there for taking one back out.
@@ -62,16 +55,13 @@ const marks = gridMarks({
 
 // Flip which directory the grid reads. Everything else follows from `shelf`, so
 // this only has to reset the things that don't: the mode (marks belong to the
-// shelf they were made on, and "Click to favorite" isn't offered here), and
-// which of the two choice buttons is lit.
+// shelf they were made on), and which of the two choice buttons is lit.
 function setShelf(next) {
   shelf = next;
   $('wicurrent').classList.toggle('active', !onFavorites());
   $('wifavorites').classList.toggle('active', onFavorites());
-  // Favouriting a favourite means nothing, so the radio goes away — and with it
-  // the mode, if that is where we were standing. Assigning `checked` fires no
-  // `change`, so the marks are cleared by hand through the same path.
-  $('wifavlabel').hidden = onFavorites();
+  // Assigning `checked` fires no `change`, so the marks are cleared by hand
+  // through the same path.
   const open = document.querySelector('input[name=wimode][value=open]');
   if (!open.checked) {
     open.checked = true;
@@ -110,11 +100,15 @@ export async function loadWorkItems() {
   renderWorkItems();
 }
 
+// The shelf an item's files are on, as its routes' first segment: Current
+// lists both, and a starred item is read from user/favorite/.
+const home = (w) => (w.favorite ? 'favorites' : 'workitems');
+
 function renderWorkItems() {
   const grid = $('wigrid');
   if (!workItems.length) {
     grid.innerHTML = `<p class="sub">${onFavorites()
-      ? 'No favorites yet — mark some work items and keep them.'
+      ? 'No favorites yet — star a work item on Current to keep it.'
       : 'No work items yet — generate something.'}</p>`;
     marks.sync();
     return;
@@ -124,19 +118,33 @@ function renderWorkItems() {
   // other end of the same problem: a loop left running overnight leaves hundreds
   // of entries here, and there is no reason for the page to hold a decoded copy
   // of each. With the dimensions already declared, deferring them costs nothing.
-  grid.innerHTML = workItems.map((w) => `
+  grid.innerHTML = workItems.map((w) => `<span class="tile">
     <button type="button" data-id="${esc(w.id)}"
       title="${esc(w.prompt)}&#10;${w.width}×${w.height} · seed ${w.seed} · ${esc(w.template)}">
-      <img src="/${shelf}/${esc(w.id)}/thumb.png" alt="" loading="lazy"
-        width="${w.thumb_width}" height="${w.thumb_height}"></button>`).join('');
-  for (const b of grid.querySelectorAll('button')) {
+      <img src="/${home(w)}/${esc(w.id)}/thumb.png" alt="" loading="lazy"
+        width="${w.thumb_width}" height="${w.thumb_height}"></button>${star(w.favorite)}</span>`).join('');
+  for (const b of grid.querySelectorAll('button[data-id]')) {
     b.addEventListener('click', () => clickWorkItem(b.dataset.id));
   }
+  // Starring moves the item to user/favorite/ and un-starring moves it back;
+  // either way it stays in Current's grid. `/favorites/delete` is the other
+  // thing, and only *Click to delete* on Favorites sends it.
+  wireStars(grid, {
+    of: (btn) => {
+      const id = btn.previousElementSibling.dataset.id;
+      const w = workItems.find((x) => x.id === id);
+      return { favorite: !!w?.favorite, body: { ids: [id] } };
+    },
+    add: '/favorites/add',
+    remove: '/favorites/remove',
+    reload: loadWorkItems,
+    err: (msg) => { $('err').textContent = msg; },
+  });
   markGrid();
 }
 
 export function markGrid() {
-  for (const b of $('wigrid').querySelectorAll('button')) {
+  for (const b of $('wigrid').querySelectorAll('button[data-id]')) {
     marks.mark(b, b.dataset.id);
     b.classList.toggle('active', b.dataset.id === S.workId);
   }
@@ -164,7 +172,7 @@ async function clickWorkItem(id) {
   $('err').textContent = '';
   try {
     applyWorkItem(item);
-    render(await post(`/${shelf}/open`, { id }));
+    render(await post(`/${home(item)}/open`, { id }));
   } catch (e) {
     $('err').textContent = String(e.message || e);
   } finally {

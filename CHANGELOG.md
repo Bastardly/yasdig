@@ -3,6 +3,21 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### Changed
+
+- **Favourite with one click.** Every thumbnail in Work items and Outputs has a star
+  in its corner; click it to keep the image as a favourite, click it again to let it
+  go. It replaces the *Click to favorite* mode.
+- **Favourites stay in the grid.** A starred image is still shown under Current, but
+  it lives with the favourites: *Delete all* neither counts nor deletes it, and
+  un-starring moves it back among the rest. Favourites kept by an earlier version
+  show once, starred.
+- **Delete all is always shown** on Current, whichever mode the grid is in, and reads
+  *Delete all N unstarred*, so it says what it will take. It still asks before deleting
+  anything, and still never appears on Favorites.
+
 ## 0.1.3 — 2026-10-13
 
 ### Changed

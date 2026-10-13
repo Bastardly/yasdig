@@ -211,35 +211,37 @@ removed until you press it, so culling twenty images from a batch is twenty clic
 one confirmation rather than twenty confirmations. Switching back to **Click to open**
 clears the marks.
 
-**Delete all N** appears beside it, in delete mode only, and is the one button on the
-page that asks first: marking is visible and reversible, and emptying the directory is
-neither. The Outputs tab has the same two controls, working the same way.
+**Delete all N unstarred** is always beside them, and is the one button on the grid that asks
+first: marking is visible and reversible, and emptying the directory is neither. The
+Outputs tab has the same controls, working the same way.
 
 ### Favorites
 
 Which is the problem: a grid of every image you have ever made is used by emptying
-it, and that takes the good ones with the rest. So there is a third mode, **Click to
-favorite** — mark thumbnails green the same way, press `Favorite N selected`, and
-those work items are **copied** to `user/favorite/`. A copy, not a move: the
-originals stay in the grid, `Delete all` stays the blunt instrument it is, and what
-survives it is what you chose.
+it, and that takes the good ones with the rest. So every thumbnail has a **star** in
+its top-right corner (it shows when you hover; a filled one always shows). Click it
+and that work item **moves** to `user/favorite/`; click it again and it moves back.
+Clicking the star never opens the image. A starred item stays where it was in the
+grid, but it is out of reach: `Delete all` doesn't count it or delete it, and *Click
+to delete* can't mark it. So `Delete all` stays the blunt instrument it is, and what
+survives it is what you starred.
 
 `user/` rather than `work/` on purpose. `work/` is the directory this program
 deletes from — it is cleared of scratch at startup and emptied on request — and
 nothing that took a decision to create should live under a sweeper. The same reason
 `settings.toml` is there.
 
-**Current** and **Favorites** above the grid flip which directory it is showing.
-They hold the same thing, so a favourite opens exactly as a work item does: the
+**Current** shows everything, starred or not; **Favorites** shows only the starred
+ones. A favourite opens exactly as a work item does: the
 controls repopulate, the picture comes back, Refine and Hi-res and the sliders work
 on it. With the prompt restored as you *typed* it — braces and all, see
 [Prompt variables](#prompt-variables) — that is a saved workflow rather than a saved
 picture.
 
-On the favourites shelf, **Click to favorite** is gone (favouriting a favourite means
-nothing) and so is **Delete all**, since emptying that directory in one press is the
-exact thing it exists to be safe from. **Click to delete** is still there, and is how
-you take one back out; it touches nothing under `work/`.
+On the favourites shelf every star is filled, and **Delete all** is gone, since
+emptying that directory in one press is the exact thing it exists to be safe from.
+Un-starring a tile moves it back among the ordinary work items. **Click to delete**
+on this shelf deletes a favourite outright.
 
 Refined and hi-res results are deliberately **not** archived: those are the expensive
 rungs and most of them are experiments. **Save to output**, above the image, writes the
@@ -410,24 +412,24 @@ left up. A focused slider keeps its own arrow keys, so click the picture to hand
 back to the gallery.
 
 **Save changes**, at the bottom of the viewer's panel, writes the edit back over the
-picture (and over its favourite copy, if you kept one), and the tile stays where it was
+picture, and the tile stays where it was
 in the grid. The viewer holds the picture as it was when you opened it and the sliders
 work on that, so saving twice doesn't grade on top of the first save, and **Reset**
 then **Save changes** puts the original back — until you open another picture.
 **Save as new output**, above it, keeps the original and saves the edit as a new file
 beside it.
 
-The same **Click to open / Click to favorite / Click to delete** toggle the work-item
-grid has is above this one, and behaves identically: a click marks, `Delete N
-selected` removes the set, and **Delete all N** empties `work/output/` behind a
-confirmation. Deleting the image the viewer is showing is safe — the server is holding
+The same **Click to open / Click to delete** toggle and stars the work-item grid has
+are on this one, and behave identically: a click marks, `Delete N
+selected` removes the set, and **Delete all N unstarred** deletes everything that isn't
+starred, behind a confirmation. Deleting the image the viewer is showing is safe — the server is holding
 a copy of it in its scratch dir, so the sliders and Save keep working; it just has
 nothing to go back to.
 
-**Current** and **Favorites** flip the gallery, as they do for work items.
-`Favorite N selected` **copies** the marked images to `user/favorite_outputs/`, so
-`Delete all` and the clear-on-close settings can't reach them; on Favorites, *Delete
-all* is gone and deleting removes only the favourite. A favourite opens in the viewer,
+**Current** and **Favorites** flip the gallery, as they do for work items. The star
+**moves** an image to `user/favorite_outputs/`, so `Delete all` and the clear-on-close
+settings can't reach it, and it stays in Current's grid; un-starring moves it back.
+On Favorites, *Delete all* is gone. A favourite opens in the viewer,
 and can be picked as an *Image to image* source — the picker
 behind **Choose…** has the same Current / Favorites toggle. A new save never takes
 the name of a favourite, so one name always means one picture.

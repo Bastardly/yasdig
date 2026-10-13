@@ -113,6 +113,8 @@ mod tests {
             .unwrap();
         let stem = store.import(&std::fs::read(&png).unwrap(), 32, 16).unwrap();
         store.favorite_output(&stem).unwrap();
+        // And one left unstarred, which is the only thing a clear may take.
+        store.import(&std::fs::read(&png).unwrap(), 32, 16).unwrap();
         let enlarged = store.output_dir().join("123-4-x200");
         let mine = store.output_dir().join("my stuff");
         std::fs::create_dir_all(&enlarged).unwrap();

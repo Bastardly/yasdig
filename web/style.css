@@ -45,12 +45,6 @@
   --danger:      #b8413a;
   --danger-hi:   #cc4c44;
   --danger-text: #ff9c8f;
-  /* The other mark. Red and green are the two things a click can be about to do
-     to a marked thumbnail — destroy it, or keep it — so this is a *mark*, not a
-     state, and the rule above about state being achromatic doesn't reach it.
-     Desaturated to roughly the red's weight, so neither shouts over the other
-     across a strip of pictures. */
-  --keep:        #3f8f5c;
   /* The Jobs button: something is queued. The danger red's saturation and
      lightness (52%, 47%) at a green hue, so the two buttons in the tab row read
      as a pair of the same weight. A green that light carries dark text — white
@@ -113,6 +107,7 @@
                             doing the same job on two tabs */
   --thumb-h-pick: 140px; /* the first-frame picker */
   --thumb-h-chosen: 120px; /* the one chosen image, above its buttons */
+  --star: 28px;          /* the favourite star's disc on a thumbnail */
   --preview-h: 420px;    /* the live preview under the progress line; a cap,
                             so a portrait render can't push the folds away */
   --bar-name: 60px;
@@ -467,8 +462,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    width follows its own aspect ratio. A narrow gap, per the brief. */
 .wigrid { display: flex; flex-wrap: wrap; gap: var(--gap-thumbs); margin-top: var(--sp-3); }
 /* A frame around a picture, and nothing else — which is why these carry no
-   .btn: the chrome *is* the border. */
-.wigrid button { line-height: 0; border: 2px solid transparent; border-radius: 6px; }
+   .btn: the chrome *is* the border. `:not(.star)` because the star sits in
+   the same grid and is a different kind of button. */
+.wigrid button:not(.star) { line-height: 0; border: 2px solid transparent; border-radius: 6px; }
 .wigrid img { height: var(--thumb-h); width: auto; display: block; border-radius: var(--r-sm); }
 /* The image currently on screen. Bone rather than a hue, so a mark that sits on
    a photograph doesn't tint the judgement of it. */
@@ -482,12 +478,33 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    itself would leave a blue image marked a different colour from a red one. */
 .wigrid button.sel { border-color: var(--danger); }
 .wigrid button.sel img { filter: sepia(1) saturate(3) hue-rotate(-40deg) brightness(.85); }
-.wigrid button.keep { border-color: var(--keep); }
-.wigrid button.keep img { filter: sepia(1) saturate(3) hue-rotate(70deg) brightness(.85); }
 /* Which action the mode radios have live, carried as data because there is one
    hover colour per action and `gridmark.js` owns which one that is. */
-.wigrid[data-mark="delete"] button:hover { border-color: var(--danger); }
-.wigrid[data-mark="favorite"] button:hover { border-color: var(--keep); }
+.wigrid[data-mark="delete"] button:not(.star):hover { border-color: var(--danger); }
+/* A tile the live action can't reach (a favourite, seen from Current): no
+   red promise on hover, since a click on it marks nothing. */
+.wigrid[data-mark] button.locked:hover { border-color: transparent; cursor: not-allowed; }
+
+/* A tile with a favourite star: the picture's button and the star side by
+   side in one box, never one inside the other — a button in a button is
+   invalid markup, and its click would open the picture too. */
+.wigrid .tile { position: relative; display: block; line-height: 0; }
+/* Amber, the one use of it outside a dock's main button: bone on a dark
+   disc was lost against a bright picture, and a star is the convention for
+   this colour. Bone on hover, the state colour, as the pointer's answer. On a
+   dark disc so it reads over a white sky. Hollow stars only show on hover, so
+   a strip of pictures isn't a strip of icons; a filled one always shows, and
+   so does every star where nothing can hover. */
+.wigrid .star {
+  position: absolute; top: var(--sp-2); right: var(--sp-2);
+  width: var(--star); height: var(--star); padding: 0; border: 0; border-radius: 50%;
+  font-size: var(--fs-title); line-height: var(--star); text-align: center;
+  background: var(--scrim-soft); color: var(--accent-hi); cursor: pointer; opacity: 0;
+}
+.wigrid .tile:hover .star, .wigrid .star:focus-visible, .wigrid .star.on { opacity: 1; }
+.wigrid .star:hover { color: var(--state); }
+.wigrid .star:disabled { cursor: progress; }
+@media (hover: none) { .wigrid .star { opacity: 1; } }
 
 /* The outputs picker. Same grid as the work items, in a dialog. */
 #picker {

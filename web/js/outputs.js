@@ -2,7 +2,7 @@ import { $, esc, getJSON, post } from './dom.js';
 import { S, escErr } from './state.js';
 import { setBusy, setIdle, onIdle } from './busy.js';
 import { setPost, setPostStart, showFullSize, setViewerImage, cancelPost } from './viewer.js';
-import { gridMarks } from './gridmark.js';
+import { gridMarks, star, wireStars } from './gridmark.js';
 import { render } from './image.js';
 import { openRedraw } from './redraw.js';
 
@@ -53,18 +53,22 @@ export async function fetchOutputs(gallery = 'outputs') {
 // old one under the same name. The server routes on the path alone.
 const edited = new Map();
 
-export function outputGrid(el, list, { height = 200, empty = '', onPick }) {
+// `star`, when given, is `wireStars`' options: each tile gets the favourite
+// star. The picker behind "Start from" passes none — choosing is its only job.
+export function outputGrid(el, list, { height = 200, empty = '', onPick, star: stars }) {
   el.innerHTML = list.map((o) => {
     const w = o.height ? Math.round(height * o.width / o.height) : height;
-    return `<button type="button" data-stem="${esc(o.stem)}"
+    const tile = `<button type="button" data-stem="${esc(o.stem)}"
       title="${esc(o.prompt || o.stem)}&#10;${o.width}×${o.height} · seed ${o.seed}${
         o.template ? ` · ${esc(o.template)}` : ''}">
       <img src="/outputs/${esc(o.stem)}/thumb.png${edited.has(o.stem) ? `?v=${edited.get(o.stem)}` : ''}" alt="" loading="lazy"
         width="${w}" height="${height}"></button>`;
+    return stars ? `<span class="tile">${tile}${star(o.favorite)}</span>` : tile;
   }).join('') || empty;
-  for (const b of el.querySelectorAll('button')) {
+  for (const b of el.querySelectorAll('button[data-stem]')) {
     b.addEventListener('click', () => onPick(b.dataset.stem));
   }
+  if (stars) wireStars(el, stars);
 }
 
 // ---- The tab ----------------------------------------------------------------
@@ -96,18 +100,14 @@ let queued = null;
 const del = gridMarks({
   grid: 'ogrid',
   mode: 'omode',
-  ids: () => outputs.map((o) => o.stem),
+  // On Current, only what lives in work/output/: a starred image is in
+  // user/favorite_outputs/, out of reach of a delete here until un-starred.
+  ids: () => outputs.filter((o) => onFavorites() || !o.favorite).map((o) => o.stem),
   reload: loadOutputs,
   err: (msg) => { $('oerr').textContent = msg; },
   onMode: () => markGrid(),
+  // Keeping one is the tile's star (`wireStars`), not a mode here.
   actions: [{
-    value: 'favorite',
-    button: 'ofavorite',
-    mark: 'keep',
-    label: (n) => `Favorite ${n} selected`,
-    route: () => '/favorite-outputs/add',
-    key: 'stems',
-  }, {
     value: 'delete',
     button: 'odelete',
     mark: 'sel',
@@ -117,7 +117,7 @@ const del = gridMarks({
     all: {
       button: 'odeleteall',
       noun: 'saved image',
-      label: (n) => `Delete all ${n}`,
+      label: (n) => (n ? `Delete all ${n} unstarred` : 'Delete all unstarred'),
       // Not on Favorites: emptying that in one press is what it exists to
       // prevent. The same rule as the work-item shelf.
       when: () => !onFavorites(),
@@ -127,13 +127,12 @@ const del = gridMarks({
 
 // Flip which gallery the grid reads — `setShelf` in workitems.js, and for the
 // same reasons: the mode goes back to open (marks belong to the gallery they
-// were made on, and favouriting a favourite means nothing), and the image open
-// in the viewer stays open, since it is a copy in scratch either way.
+// were made on), and the image open in the viewer stays open, since it is a
+// copy in scratch either way.
 function setGallery(next) {
   gallery = next;
   $('ocurrent').classList.toggle('active', !onFavorites());
   $('ofavorites').classList.toggle('active', onFavorites());
-  $('ofavlabel').hidden = onFavorites();
   $('owhere').textContent = (onFavorites() ? 'user/favorite_outputs/' : 'work/output/')
     + ' — click one to open it in the viewer, then ← / → to step';
   const open = document.querySelector('input[name=omode][value=open]');
@@ -161,11 +160,24 @@ export async function loadOutputs() {
   del.prune(outputs.map((o) => o.stem));
   outputGrid($('ogrid'), outputs, {
     empty: onFavorites()
-      ? '<p class="sub">No favorites yet — pick "Click to favorite" on Current, '
-        + 'mark some images and keep them.</p>'
+      ? '<p class="sub">No favorites yet — star an image on Current to keep it.</p>'
       : '<p class="sub">Nothing in work/output/ yet — press "Save to output" '
         + 'under an image on the Image tab, or upload one with Start from.</p>',
     onPick: pick,
+    // Starring moves the image to user/favorite_outputs/ and un-starring moves
+    // it back; it stays in Current's grid either way, and keeps its stem, so
+    // the viewer and the thumbnail routes find it by name wherever it is.
+    star: {
+      of: (btn) => {
+        const stem = btn.previousElementSibling.dataset.stem;
+        const o = outputs.find((x) => x.stem === stem);
+        return { favorite: !!o?.favorite, body: { stems: [stem] } };
+      },
+      add: '/favorite-outputs/add',
+      remove: '/favorite-outputs/remove',
+      reload: loadOutputs,
+      err: (msg) => { $('oerr').textContent = msg; },
+    },
   });
   markGrid();
 }
@@ -182,7 +194,7 @@ function pick(stem) {
 
 function markGrid() {
   const stem = outputs[index]?.stem;
-  for (const b of $('ogrid').querySelectorAll('button')) {
+  for (const b of $('ogrid').querySelectorAll('button[data-stem]')) {
     del.mark(b, b.dataset.stem);
     // The image the viewer is on. Bone rather than red — the two marks mean
     // opposite things and land on the same tiles.

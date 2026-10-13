@@ -38,6 +38,7 @@
 use crate::config::Profile;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -65,9 +66,10 @@ const MAX_ID_LEN: usize = 64;
 /// and under the same rule: nothing that took a decision to create may live
 /// under a sweeper.
 ///
-/// A favourite is a **copy**, not a move (see [`Store::favorite`]), so the
-/// original stays in the grid and `Delete all` stays the blunt instrument it
-/// is. That is the whole feature; a move would just relocate the problem.
+/// A favourite is **moved** here (see [`Store::favorite`]), and the grid's
+/// Current listing reads both shelves ([`Store::listing`]), so a starred item
+/// stays in the grid while `Delete all` — which goes through `list(Work)` —
+/// neither counts nor reaches it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shelf {
     Work,
@@ -77,8 +79,9 @@ pub enum Shelf {
 /// Which gallery of saved images a call is about: [`Shelf`]'s argument again,
 /// one directory along. `Output` is `work/output/`, which `Delete all` and the
 /// clear-on-close settings empty; `Favorites` is `user/favorite_outputs/`, which
-/// nothing touches unasked. A favourite is a copy (see
-/// [`Store::favorite_output`]).
+/// nothing touches unasked. A favourite is moved there (see
+/// [`Store::favorite_output`]) and still listed on Current
+/// ([`Store::output_listing`]).
 ///
 /// Only listing and deleting take one. **Reading by stem doesn't**: a stem names
 /// one picture wherever it lives — [`Store::free_stem`] never mints a name either
@@ -308,6 +311,30 @@ impl Store {
         out
     }
 
+    /// [`Store::list`] as the grid wants it. Current is *both* shelves: a
+    /// favourite lives in `user/favorite/` and is still shown among the work
+    /// items, starred. Favorites is that shelf alone. An id on both shelves (a
+    /// favourite kept by a build that copied rather than moved) is listed
+    /// once, as the favourite.
+    pub fn listing(&self, shelf: Shelf) -> Vec<Listed> {
+        let favorites = self.list(Shelf::Favorites);
+        let kept: HashSet<String> = favorites.iter().map(|i| i.id.clone()).collect();
+        let mut out: Vec<Listed> = favorites
+            .into_iter()
+            .map(|item| Listed { item, favorite: true })
+            .collect();
+        if shelf == Shelf::Work {
+            out.extend(
+                self.list(Shelf::Work)
+                    .into_iter()
+                    .filter(|i| !kept.contains(&i.id))
+                    .map(|item| Listed { item, favorite: false }),
+            );
+            out.sort_by(|a, b| b.item.created_ms.cmp(&a.item.created_ms));
+        }
+        out
+    }
+
     /// Remove an item and both of its companions. Missing files are not an
     /// error — the point is that afterwards it's gone.
     /// One shelf only. `Delete all` on the grid is this in a loop, and the
@@ -330,49 +357,46 @@ impl Store {
         Ok(())
     }
 
-    /// Keep a work item: copy its three files onto the favourites shelf.
+    /// Star a work item: **move** its three files onto the favourites shelf.
     ///
-    /// A **copy**, which is the entire point. The original stays in the grid,
-    /// so the answer to a directory of three hundred generations is still
-    /// `Delete all` — it just no longer takes the good ones with it. A move
-    /// would make favouriting a way of hiding an image from the grid it was
-    /// just found in.
+    /// A move, so `Delete all` — which empties `work/workitems/` — can't reach
+    /// it, and so its count is only what it would delete. The Current grid
+    /// still shows it ([`Store::listing`] reads both shelves), so starring
+    /// never hides an image from the grid it was found in.
     ///
-    /// Overwriting is fine and needs no `free_stem`: an id is
-    /// `{unix_millis}-{seed}`, so the only thing that can land on a favourite
-    /// is that same favourite, and the bytes are identical.
-    ///
-    /// A missing image or sidecar is an error — there is nothing to keep, and a
-    /// silent success would leave a tile that never appears. A missing
-    /// *thumbnail* is not: `save` has written one since the beginning, and an
-    /// entry old enough to lack one is still worth keeping.
+    /// Copy first, then remove the original: a crash between the two leaves the
+    /// item on both shelves, which the listing shows once. Already starred is
+    /// success. A missing image or sidecar is an error — there is nothing to
+    /// keep. A missing *thumbnail* is not: an entry old enough to lack one is
+    /// still worth keeping.
     pub fn favorite(&self, id: &str) -> Result<()> {
         if !valid_id(id) {
             bail!("'{id}' is not a work item id");
         }
-        std::fs::create_dir_all(&self.favorites)
-            .with_context(|| format!("creating {}", self.favorites.display()))?;
-        for (from, to) in [
-            (
-                self.image_path(Shelf::Work, id),
-                self.image_path(Shelf::Favorites, id),
-            ),
-            (
-                self.sidecar_path(Shelf::Work, id),
-                self.sidecar_path(Shelf::Favorites, id),
-            ),
-        ] {
-            std::fs::copy(&from, &to)
-                .with_context(|| format!("keeping {}", from.display()))?;
+        let (work, fav) = (self.shelf_dir(Shelf::Work), self.shelf_dir(Shelf::Favorites));
+        if !self.image_path(Shelf::Work, id).is_file()
+            && self.image_path(Shelf::Favorites, id).is_file()
+        {
+            return Ok(());
         }
-        let (from, to) = (
-            self.thumb_path(Shelf::Work, id),
-            self.thumb_path(Shelf::Favorites, id),
-        );
-        if from.is_file() {
-            std::fs::copy(&from, &to).with_context(|| format!("keeping {}", from.display()))?;
+        copy_picture(work, fav, id, true)?;
+        self.delete(Shelf::Work, id)
+    }
+
+    /// Un-star: move a favourite back to `work/workitems/`, where `Delete all`
+    /// can reach it again. Never a delete — that is `/favorites/delete`. An
+    /// item already on both shelves just loses its favourite copy.
+    pub fn unfavorite(&self, id: &str) -> Result<()> {
+        if !valid_id(id) {
+            bail!("'{id}' is not a work item id");
         }
-        Ok(())
+        if !self.image_path(Shelf::Favorites, id).is_file() {
+            return Ok(());
+        }
+        if !self.image_path(Shelf::Work, id).is_file() {
+            copy_picture(self.shelf_dir(Shelf::Favorites), self.shelf_dir(Shelf::Work), id, true)?;
+        }
+        self.delete(Shelf::Favorites, id)
     }
 
     /// Remove a saved image from `work/output/`: the PNG, its sidecar and its
@@ -406,31 +430,37 @@ impl Store {
         Ok(())
     }
 
-    /// Keep a saved image: copy its files into `user/favorite_outputs/`.
-    ///
-    /// [`Store::favorite`] one directory along, and a copy for its reason: the
-    /// original stays in the gallery, so `Delete all` there stays the blunt
-    /// instrument it is. Overwriting needs no `free_stem` — stems are unique
-    /// across both galleries, so the only thing that can land on a favourite is
-    /// that same picture. A missing sidecar is fine here, unlike a work item's:
-    /// a PNG dropped into `work/output/` by hand is listed, so it can be kept.
+    /// Star a saved image: move its files into `user/favorite_outputs/`.
+    /// [`Store::favorite`] one directory along, and for its reasons. A missing
+    /// sidecar is fine here, unlike a work item's: a PNG dropped into
+    /// `work/output/` by hand is listed, so it can be kept. The stem doesn't
+    /// change — stems are unique across both galleries (`free_stem`).
     pub fn favorite_output(&self, stem: &str) -> Result<()> {
         if !valid_id(stem) {
             bail!("'{stem}' is not an output name");
         }
-        std::fs::create_dir_all(&self.favorite_outputs)
-            .with_context(|| format!("creating {}", self.favorite_outputs.display()))?;
-        let from = self.output_path(stem);
-        std::fs::copy(&from, self.favorite_outputs.join(format!("{stem}.png")))
-            .with_context(|| format!("keeping {}", from.display()))?;
-        for name in [format!("{stem}.json"), format!("{stem}-thumb.png")] {
-            let from = self.output.join(&name);
-            if from.is_file() {
-                std::fs::copy(&from, self.favorite_outputs.join(&name))
-                    .with_context(|| format!("keeping {}", from.display()))?;
-            }
+        let (out, fav) = (self.gallery_dir(Gallery::Output), self.gallery_dir(Gallery::Favorites));
+        if !self.output_path(stem).is_file() && fav.join(format!("{stem}.png")).is_file() {
+            return Ok(());
         }
-        Ok(())
+        copy_picture(out, fav, stem, false)?;
+        self.delete_output(Gallery::Output, stem)
+    }
+
+    /// Un-star a saved image: back into `work/output/`. [`Store::unfavorite`]
+    /// for the Outputs tab.
+    pub fn unfavorite_output(&self, stem: &str) -> Result<()> {
+        if !valid_id(stem) {
+            bail!("'{stem}' is not an output name");
+        }
+        let (out, fav) = (self.gallery_dir(Gallery::Output), self.gallery_dir(Gallery::Favorites));
+        if !fav.join(format!("{stem}.png")).is_file() {
+            return Ok(());
+        }
+        if !self.output_path(stem).is_file() {
+            copy_picture(fav, out, stem, false)?;
+        }
+        self.delete_output(Gallery::Favorites, stem)
     }
 
     /// Keep the image currently on screen. Saves `display` rather than the
@@ -761,13 +791,30 @@ impl Store {
                 if stem.ends_with("-thumb") || !valid_id(stem) {
                     return None;
                 }
-                Some(self.output_entry(stem, &path))
+                let mut entry = self.output_entry(stem, &path);
+                entry.favorite = gallery == Gallery::Favorites;
+                Some(entry)
             })
             .collect();
-        // Newest first. Stems begin with the generation's millisecond timestamp,
-        // but several saves share one, so the file's own mtime is what orders
-        // them — it is when *this* image was saved.
-        out.sort_by(|a, b| b.created_ms.cmp(&a.created_ms).then(b.stem.cmp(&a.stem)));
+        sort_outputs(&mut out);
+        out
+    }
+
+    /// [`Store::list_outputs`] as the gallery shows it: Current is both
+    /// galleries, the favourites starred — [`Store::listing`] one directory
+    /// along. `list_outputs` stays one directory, since Close server's clear
+    /// counts and deletes through it.
+    pub fn output_listing(&self, gallery: Gallery) -> Vec<Output> {
+        let mut out = self.list_outputs(Gallery::Favorites);
+        if gallery == Gallery::Output {
+            let kept: HashSet<String> = out.iter().map(|o| o.stem.clone()).collect();
+            out.extend(
+                self.list_outputs(Gallery::Output)
+                    .into_iter()
+                    .filter(|o| !kept.contains(&o.stem)),
+            );
+            sort_outputs(&mut out);
+        }
         out
     }
 
@@ -790,8 +837,53 @@ impl Store {
                 .as_ref()
                 .map(|i| i.template.clone())
                 .unwrap_or_default(),
+            favorite: false,
         }
     }
+}
+
+/// Newest first. Stems begin with the generation's millisecond timestamp, but
+/// several saves share one, so the file's own mtime is what orders them — it is
+/// when *this* image was saved.
+fn sort_outputs(out: &mut [Output]) {
+    out.sort_by(|a, b| b.created_ms.cmp(&a.created_ms).then(b.stem.cmp(&a.stem)));
+}
+
+/// Copy one picture's files between two directories of the same layout:
+/// `{stem}.png`, `{stem}.json` (required when `sidecar` is), and
+/// `{stem}-thumb.png` when there is one. The modification time comes along,
+/// since the output gallery is ordered by it and starring an image must not
+/// move it to the front.
+fn copy_picture(from: &Path, to: &Path, stem: &str, sidecar: bool) -> Result<()> {
+    std::fs::create_dir_all(to).with_context(|| format!("creating {}", to.display()))?;
+    for (name, required) in [
+        (format!("{stem}.png"), true),
+        (format!("{stem}.json"), sidecar),
+        (format!("{stem}-thumb.png"), false),
+    ] {
+        let src = from.join(&name);
+        if !required && !src.is_file() {
+            continue;
+        }
+        let dst = to.join(&name);
+        std::fs::copy(&src, &dst).with_context(|| format!("keeping {}", src.display()))?;
+        if let Ok(t) = std::fs::metadata(&src).and_then(|m| m.modified()) {
+            let _ = std::fs::File::options().write(true).open(&dst).and_then(|f| f.set_modified(t));
+        }
+    }
+    Ok(())
+}
+
+/// A work item as the grid lists it. Not fields on [`WorkItem`], because that
+/// struct is the sidecar and neither fact is stored: both are read off the two
+/// shelves at listing time.
+#[derive(Debug, Serialize)]
+pub struct Listed {
+    #[serde(flatten)]
+    pub item: WorkItem,
+    /// It lives on the favourites shelf — the tile's star is filled, and its
+    /// routes (open, thumbnail) are `/favorites/…`.
+    pub favorite: bool,
 }
 
 /// One saved image in `work/output/`, as the picker needs it.
@@ -812,6 +904,8 @@ pub struct Output {
     pub prompt: String,
     pub seed: i64,
     pub template: String,
+    /// It lives in `user/favorite_outputs/` — the tile's star is filled.
+    pub favorite: bool,
 }
 
 fn write_sidecar(path: &Path, item: &WorkItem) -> Result<()> {
@@ -984,7 +1078,8 @@ mod tests {
         let it = item("400-1", 400);
         let saved = store.save_output(&old, &it, false).unwrap();
         let stem = saved.file_stem().unwrap().to_str().unwrap().to_string();
-        store.favorite_output(&stem).unwrap();
+        // On both galleries, as a favourite kept by a build that copied is.
+        copy_picture(&store.output, &store.favorite_outputs, &stem, false).unwrap();
         let fav = dir.join("user").join("favorite_outputs").join(format!("{stem}.png"));
         assert!(fav.is_file(), "{}", fav.display());
 
@@ -1178,23 +1273,27 @@ mod tests {
         assert_eq!(back.typed_negative, None);
     }
 
-    /// The one thing this feature exists to make true: a favourite outlives
-    /// `Delete all`. Both halves are silent failures — a move rather than a
-    /// copy would empty the grid of the images just kept, and a `delete` that
-    /// reached both shelves would destroy them a moment later.
+    /// A favourite lives on its own shelf, out of `Delete all`'s reach, and is
+    /// still listed among the work items, starred. Un-starring puts it back.
+    /// The silent failures: a favourite missing from Current, a favourite
+    /// counted by `Delete all` (which deletes through `list(Shelf::Work)`), and
+    /// an item on both shelves shown twice.
     #[test]
-    fn a_favourite_survives_deleting_the_original() {
+    fn a_favourite_moves_to_its_shelf_and_is_still_listed_with_the_work() {
         let dir = std::env::temp_dir().join(format!("yasdig-fav-{}", new_id(7)));
         let store = Store::new(&dir, &dir.join("user"));
         let src = dir.join("src.png");
         image::RgbaImage::from_pixel(64, 32, image::Rgba([7, 7, 7, 255]))
             .save(&src)
             .unwrap();
+        let listed = |shelf| -> Vec<(String, bool)> {
+            store.listing(shelf).into_iter().map(|l| (l.item.id, l.favorite)).collect()
+        };
 
         let mut keep = item("700-7", 700);
-        let mut drop = item("800-7", 800);
+        let mut other = item("800-7", 800);
         store.save(&src, &mut keep).unwrap();
-        store.save(&src, &mut drop).unwrap();
+        store.save(&src, &mut other).unwrap();
 
         store.favorite("700-7").unwrap();
         for p in [
@@ -1204,42 +1303,59 @@ mod tests {
         ] {
             assert!(p.is_file(), "{} was not kept", p.display());
         }
-        // A copy: the original is still in the grid it was picked from.
-        assert_eq!(store.list(Shelf::Work).len(), 2);
-        let favs = store.list(Shelf::Favorites);
-        assert_eq!(favs.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["700-7"]);
+        // Moved: what `Delete all` and Close server's clear go through no
+        // longer has it, while the grid still shows it, starred.
+        assert!(!store.image_path(Shelf::Work, "700-7").exists());
+        assert_eq!(
+            store.list(Shelf::Work).iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            ["800-7"]
+        );
+        assert_eq!(listed(Shelf::Work), [("800-7".into(), false), ("700-7".into(), true)]);
+        assert_eq!(listed(Shelf::Favorites), [("700-7".into(), true)]);
+        // Starring twice is still one favourite.
+        store.favorite("700-7").unwrap();
+        assert_eq!(listed(Shelf::Favorites).len(), 1);
 
-        // Now the thing the feature is for.
         for it in store.list(Shelf::Work) {
             store.delete(Shelf::Work, &it.id).unwrap();
         }
-        assert!(store.list(Shelf::Work).is_empty());
-        let back = store.load(Shelf::Favorites, "700-7").unwrap();
-        assert_eq!(back.prompt, keep.prompt);
+        assert_eq!(listed(Shelf::Work), [("700-7".into(), true)]);
         // The sidecar came over whole, so a favourite reopens as the workflow
         // it was — braces and all — rather than as a picture.
+        let back = store.load(Shelf::Favorites, "700-7").unwrap();
         assert_eq!(back.typed_prompt, keep.typed_prompt);
         assert_eq!(back.seed, keep.seed);
 
-        // And the other direction: deleting a favourite leaves `work/` alone.
-        store.save(&src, &mut drop).unwrap();
-        store.delete(Shelf::Favorites, "700-7").unwrap();
+        // Un-starring is a move back, never a delete.
+        store.unfavorite("700-7").unwrap();
         assert!(store.list(Shelf::Favorites).is_empty());
-        assert_eq!(store.list(Shelf::Work).len(), 1);
+        assert_eq!(store.load(Shelf::Work, "700-7").unwrap().prompt, keep.prompt);
+        assert_eq!(listed(Shelf::Work), [("700-7".into(), false)]);
+
+        // A favourite kept by a build that copied: on both shelves, listed
+        // once, and un-starring drops only the favourite copy.
+        store.favorite("700-7").unwrap();
+        copy_picture(&store.favorites, &store.items, "700-7", true).unwrap();
+        assert_eq!(listed(Shelf::Work), [("700-7".into(), true)]);
+        store.unfavorite("700-7").unwrap();
+        assert_eq!(listed(Shelf::Work), [("700-7".into(), false)]);
+        assert!(store.list(Shelf::Favorites).is_empty());
 
         // Nothing to keep is an error, not a silent success that would leave a
         // tile which never appears. The traversal guard is the same whitelist
         // as everywhere else.
         assert!(store.favorite("900-7").is_err());
         assert!(store.favorite("../models.toml").is_err());
+        assert!(store.unfavorite("../models.toml").is_err());
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// The same guarantee for saved images, plus the rule that lets a favourite
-    /// be read by stem alone: no new save may take a stem a favourite holds.
+    /// The same for saved images, plus two things only a gallery has: its
+    /// order is the files' mtime, which starring must not reset, and a stem
+    /// names one picture wherever it lives.
     #[test]
-    fn a_favourite_output_survives_its_gallery_and_keeps_its_name() {
+    fn a_favourite_output_moves_and_keeps_its_place_and_name() {
         let dir = std::env::temp_dir().join(format!("yasdig-favout-{}", new_id(4)));
         let store = Store::new(&dir, &dir.join("user"));
         let src = dir.join("src.png");
@@ -1249,18 +1365,27 @@ mod tests {
         let it = item("900-7", 900);
         let saved = store.save_output(&src, &it, false).unwrap();
         assert!(saved.ends_with("900-7-s0.png"));
+        // A newer save beside it, so the order has something to keep.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let newer = store.save_output(&src, &item("901-7", 901), false).unwrap();
+        assert!(newer.ends_with("901-7-s0.png"));
+        let order = |g| -> Vec<(String, bool)> {
+            store.output_listing(g).into_iter().map(|o| (o.stem, o.favorite)).collect()
+        };
 
         store.favorite_output("900-7-s0").unwrap();
         let fav = dir.join("user/favorite_outputs/900-7-s0.png");
         assert!(fav.is_file() && fav.with_extension("json").is_file());
-        // A copy: still in the gallery it was picked from.
+        assert!(!store.output_path("900-7-s0").exists());
+        // Out of what the clear deletes through, still in the gallery, starred
+        // and in the place it was.
         assert_eq!(store.list_outputs(Gallery::Output).len(), 1);
-        assert_eq!(store.list_outputs(Gallery::Favorites).len(), 1);
-
-        // Deleting all of the gallery leaves the favourite, and reading by stem
-        // now finds it there — sidecar, thumbnail and all.
-        store.delete_output(Gallery::Output, "900-7-s0").unwrap();
-        assert!(store.list_outputs(Gallery::Output).is_empty());
+        assert_eq!(
+            order(Gallery::Output),
+            [("901-7-s0".into(), false), ("900-7-s0".into(), true)]
+        );
+        assert_eq!(order(Gallery::Favorites), [("900-7-s0".into(), true)]);
+        // Reading by stem finds it there — sidecar, thumbnail and all.
         assert_eq!(store.find_output("900-7-s0").as_deref(), Some(fav.as_path()));
         assert_eq!(store.load_output("900-7-s0").unwrap().seed, it.seed);
         let thumb = store.ensure_output_thumb("900-7-s0").unwrap();
@@ -1270,12 +1395,16 @@ mod tests {
         // or one stem would mean two pictures.
         let next = store.save_output(&src, &it, false).unwrap();
         assert!(next.ends_with("900-7-s0-2.png"), "{}", next.display());
+        store.delete_output(Gallery::Output, "900-7-s0-2").unwrap();
 
-        // And the other direction: deleting the favourite leaves the gallery.
-        store.delete_output(Gallery::Favorites, "900-7-s0").unwrap();
+        // Un-starring moves it back, still in its place.
+        store.unfavorite_output("900-7-s0").unwrap();
         assert!(store.list_outputs(Gallery::Favorites).is_empty());
-        assert_eq!(store.list_outputs(Gallery::Output).len(), 1);
-        assert!(store.find_output("900-7-s0").is_none());
+        assert!(store.output_path("900-7-s0").is_file());
+        assert_eq!(
+            order(Gallery::Output),
+            [("901-7-s0".into(), false), ("900-7-s0".into(), false)]
+        );
 
         assert!(store.favorite_output("nope-s0").is_err());
         assert!(store.favorite_output("../models.toml").is_err());

@@ -319,27 +319,43 @@ Page: `loadUpscalers` starts **before** `loadModels`' first `await` (Settings aw
 ## Favourites
 
 `user/favorite/` holds the same three files as `work/workitems/`, same ids, via
-`workitems::Shelf`. The grid's Current/Favorites toggle only changes the route's shelf.
-**A favourite is a copy, never a move** (`Store::favorite`), so *Delete all* stays
-blunt and the chosen survive. Under `user/` because nothing sweeps it.
+`workitems::Shelf`. **A favourite is a move** (`Store::favorite`/`unfavorite`, copy
+then delete), and **Current lists both shelves** (`Store::listing`,
+`Store::output_listing`, `favorite` on each entry), so *Delete all* — which goes
+through the one-directory `list`/`list_outputs`, as Close server's clear does — never
+counts or reaches a starred item while the grid still shows it. Under `user/` because
+nothing sweeps it.
 
 - **`Shelf` → directory only in `Store::shelf_dir`**; all path/load/list/delete take a
   shelf. `save` doesn't (generations archive to Current).
 - **`delete` touches one shelf** (`a_favourite_survives_deleting_the_original`).
 - **The shelf is a path segment** (`/favorites`, `/favorites/{id}/thumb.png`,
   `/favorites/open|delete|add`); `JobKind::Open` carries one.
-- **No `unfavorite` route** — use `/favorites/delete`.
+- **Un-star is `/favorites/remove` (moves back); `/favorites/delete` deletes.**
+- **An id on both shelves** (kept by the copying build) lists once, as the
+  favourite. `copy_picture` keeps mtime (the output gallery sorts by it).
 - **Reopening a favourite is copy-in/copy-out** (`Display::open` takes a `Shelf`).
+- **`list`/`list_outputs` stay one directory**; only the routes' listings merge.
 
 Page: one module-level shelf string in `workitems.js`; `setShelf` lights the button,
-hides *Click to favorite*, reloads. `loadWorkItems` drops responses that lost a race.
-A generate doesn't switch shelves. `gridmark.js` holds the actions table (`value`,
-`button`, `mark`, `label`, `route` thunk, `key`, optional `all`) with one shared marked
-`Set`; `all.when()` hides *Delete all* on favourites.
+reloads. `loadWorkItems` drops responses that lost a race. A generate doesn't switch
+shelves. **Favouriting is the tile's star** (`star`/`wireStars` in `gridmark.js`):
+
+- **The star is a sibling of the tile's button inside `.tile`**, never a child
+  (nested buttons, and the click would open the picture); handler stops the event
+  too. Grid code addresses tiles as `button[data-id]`/`[data-stem]`, not `button`.
+- **A starred tile reads from its own shelf** (`home(w)` in `workitems.js`; outputs
+  find a stem in either gallery). `outputGrid` draws stars only when passed `star`.
+- **`gridMarks`' `ids()` is what the actions may reach** — on Current it leaves
+  favourites out, so they can't be marked (`locked`) or counted by *Delete all*.
+
+`gridmark.js` holds the actions table (`value`, `button`, `mark`, `label`, `route`
+thunk, `key`, optional `all`), today delete alone, with one shared marked `Set`.
+*Delete all* shows in every mode; `all.when()` hides it on favourites.
 
 ### Favourite outputs
 
-`user/favorite_outputs/` (`workitems::Gallery`, `Store::favorite_output`, a copy).
+`user/favorite_outputs/` (`workitems::Gallery`, `Store::favorite_output`, a move).
 **A stem names one picture wherever it lives**: `Store::free_stem` refuses a name either
 gallery holds, so `Store::find_output` searches both and `output_source`,
 `open_output`, `load_output` and the thumbnail read through it.
@@ -672,10 +688,10 @@ the original while the viewer stays on it. Only `Pending::opened_from` (set by
 the stem** (one stem, one picture), keeps the mtime (grid order), rebuilds each tile,
 and leaves the sidecar; the page cache-busts the tile (`edited` in `outputs.js`).
 
-- **Deleting is `gridmark.js`**, shared with the work-item grid (one action here, two
-  there). **Delete all = the same request with every id.** One of three `confirm()`s
+- **Deleting is `gridmark.js`**, shared with the work-item grid.
+  **Delete all = the same request with every id.** One of three `confirm()`s
   (with Close server and Jobs Stop/Remove).
-- **`outputGrid` is the one tile** (`height`, `empty`, `onPick`); height must match
+- **`outputGrid` is the one tile** (`height`, `empty`, `onPick`, optional `star`); height must match
   `.wigrid`.
 - **Arrow keys yield to a focused range input**; listener on `document`.
 - **Opens coalesce like a slider drag**; `cancelPost` bumps the epoch `runPost` checks.
@@ -686,7 +702,8 @@ and leaves the sidecar; the page cache-busts the tile (`edited` in `outputs.js`)
 role, never a value**: colour, type, space, radius and column caps are `:root` tokens —
 a hex elsewhere means a missing token. Ink ramp and state colour are neutral (bone)
 because they sit beside a graded image. `--fold-title`/`--fold-on` for fold headings.
-**Amber (`.btn-run`) is the dock's main button only** (plus Hi-res above a result);
+**Amber (`.btn-run`) is the dock's main button only** (plus Hi-res above a result,
+and the thumbnails' favourite star as a glyph colour);
 `.btn` neutral, `.btn-danger` red, `.btn-choice` for "where you are" sets.
 
 - **A bare `<button>` is unstyled**: every button carries `.btn` or `.hint`, except

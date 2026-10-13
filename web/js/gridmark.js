@@ -3,8 +3,8 @@ import { $, post } from './dom.js';
 // ---- Click-to-mark, for a grid of thumbnails --------------------------------
 //
 // Three grids use this — the work items on the Image tab, the same grid showing
-// favourites, and the Outputs gallery — and between them it owns the two things
-// on the page that *destroy* a file and the one that keeps one. That is exactly
+// favourites, and the Outputs gallery — and between them it owns the things on
+// the page that *destroy* a file. That is exactly
 // the code not to have two copies of: a fix to one that misses the other is a
 // fix that only half worked, on the half nobody was looking at.
 //
@@ -13,25 +13,31 @@ import { $, post } from './dom.js';
 // tab draws its own tiles and calls `mark()` on them while drawing, because the
 // two carry different data attributes and mean different things by "active".
 //
-// **The actions are a table**, the way `FILTERS`, `FIELDS` and `WEB_FILES` are,
-// because there are two of them now and the second arrived a feature later. One
-// entry per radio value that isn't "open":
+// **The actions are a table**, the way `FILTERS`, `FIELDS` and `WEB_FILES` are.
+// Today it holds delete alone: favouriting was the second row until it became a
+// one-click star on the tile, owned by each grid. One entry per radio value
+// that isn't "open":
 //
 //   value    the radio value that makes this action the live one
 //   button   id of the button that acts on the marks
-//   mark     class put on a marked tile — `sel` is red, `keep` is green
+//   mark     class put on a marked tile — `sel` is red
 //   label    that button's text, given the number marked
 //   route    a *thunk*: the work-item grid's route moves with its shelf
 //   key      the body key the ids go under, `ids` or `stems`
 //   all      optional { button, noun, label, when } — the "do it to everything"
-//            button. Only delete has one, and `when()` is what takes it away on
+//            button, shown in every mode. `when()` is what takes it away on
 //            the favourites shelf, where emptying the directory is the one thing
 //            the shelf exists to prevent.
 //
-// One marked set, shared by both actions rather than one each: a single radio
+// `ids()` is what the actions may reach — on Current that leaves the starred
+// tiles out, so they can't be marked and *Delete all* doesn't count them. A
+// favourite lives in another directory; un-starring is how it comes back in
+// reach. A click on one in a marking mode does nothing, and the tile says so
+// (`locked`).
+//
+// One marked set, shared by every action rather than one each: a single radio
 // group means exactly one action is live at a time, and changing mode already
-// clears the marks. Two sets would be two overlapping state machines describing
-// one radio group.
+// clears the marks.
 //
 // The shape is a factory rather than a class because there is no inheritance
 // here. It builds a closure and a Set and nothing else — every listener and
@@ -66,11 +72,12 @@ export function gridMarks({ grid, mode, ids, reload, err, onMode, actions }) {
       $(a.button).hidden = !on || n === 0;
       if (on && n) $(a.button).textContent = a.label(n);
       if (!a.all) continue;
-      // Only for the live action, only when there is something to act on, and
-      // only where the shelf allows it. An always-visible "Delete all" beside a
-      // gallery is a misclick waiting for a slow afternoon; the confirm below is
-      // the second line of defence, not the first.
-      $(a.all.button).hidden = !on || total === 0 || !allowed(a);
+      // In every mode, so clearing the shelf doesn't start with finding the
+      // right radio — only where the shelf allows it, and disabled on an empty
+      // grid. The confirm below, with the count in it, is what stands between a
+      // misclick and the files.
+      $(a.all.button).hidden = !allowed(a);
+      $(a.all.button).disabled = total === 0;
       $(a.all.button).textContent = a.all.label(total);
     }
   }
@@ -91,6 +98,7 @@ export function gridMarks({ grid, mode, ids, reload, err, onMode, actions }) {
       err(String(e.message || e));
     } finally {
       for (const b of buttons) $(b).disabled = false;
+      sync();
     }
   }
 
@@ -99,16 +107,18 @@ export function gridMarks({ grid, mode, ids, reload, err, onMode, actions }) {
     prune,
     sync,
     // Paint a tile. The factory owns the mark classes because it owns which
-    // action is live, and a tile marked green under a red button would be the
-    // page lying about what the next press does.
+    // action is live, and a tile wearing one action's mark under another
+    // action's button would be the page lying about what the next press does.
     mark(el, id) {
       const now = live();
       for (const a of actions) el.classList.toggle(a.mark, a === now && marked.has(id));
+      el.classList.toggle('locked', !!now && !ids().includes(id));
     },
     // A click in a marking mode marks instead of opening. Returns whether it
     // did, so the caller can stop before doing the other thing.
     toggle(id) {
       if (!live()) return false;
+      if (!ids().includes(id)) return true;
       if (!marked.delete(id)) marked.add(id);
       return true;
     },
@@ -125,7 +135,8 @@ export function gridMarks({ grid, mode, ids, reload, err, onMode, actions }) {
           if (!list.length || !allowed(a)) return;
           if (!confirm(
             `${a.all.label(list.length)} ${a.all.noun}${list.length === 1 ? '' : 's'}?\n\n`
-            + 'This removes the files from disk and cannot be undone.')) return;
+            + 'Starred ones are kept. This removes the rest from disk and cannot be undone.'))
+            return;
           send(a, list);
         });
       }
@@ -146,4 +157,45 @@ export function gridMarks({ grid, mode, ids, reload, err, onMode, actions }) {
       }
     },
   };
+}
+
+// ---- The favourite star -----------------------------------------------------
+//
+// One click stars a picture — moves it into the favourites directory, where
+// *Delete all* can't reach it — and one more moves it back. It used to be a
+// mode of the table above (pick *Click to favorite*, mark, press the button),
+// three clicks for the commonest thing a grid is for. Current lists both
+// directories, so a starred picture stays where it was in the grid.
+//
+// The star is a *sibling* of the tile's own button inside a `.tile`, never a
+// child: a button inside a button is invalid markup, and its click would reach
+// the tile and open the picture as well. The handler stops the event anyway.
+const STAR_LABELS = { true: 'Remove from favorites', false: 'Add to favorites' };
+
+export const star = (on) => `<button type="button" class="star${on ? ' on' : ''}"
+  aria-pressed="${on}" aria-label="${STAR_LABELS[on]}" title="${STAR_LABELS[on]}">${
+  on ? '★' : '☆'}</button>`;
+
+// Wire every star in `grid`. `of(btn)` says what the click is about: the
+// listing entry's `favorite`, and the request body. The grid is redrawn by
+// `reload` afterwards, success or not, so the star shows what the disk says
+// rather than what was clicked.
+export function wireStars(grid, { of, add, remove, reload, err }) {
+  for (const btn of grid.querySelectorAll('.star')) {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const { favorite, body } = of(btn);
+      // Flipped at once, so the click is answered before the disk is.
+      btn.disabled = true;
+      btn.classList.toggle('on', !favorite);
+      btn.textContent = favorite ? '☆' : '★';
+      try {
+        await post(favorite ? remove : add, body);
+      } catch (e2) {
+        err(String(e2.message || e2));
+      }
+      await reload();
+    });
+  }
 }

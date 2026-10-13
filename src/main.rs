@@ -52,9 +52,11 @@
 //!   GET  /workitems/{id}/thumb.png
 //!   POST /workitems/open   -> {id}       reopen one as a live image_id
 //!   POST /workitems/delete -> {ids:[..]} remove them from disk
-//!   POST /favorites/add    -> {ids:[..]} copy them to user/favorite/, so
+//!   POST /favorites/add    -> {ids:[..]} move them to user/favorite/, so
 //!                        "delete all" on the grid can't reach them
-//!   GET  /favorites   -> the same listing, read from user/favorite/
+//!   POST /favorites/remove -> {ids:[..]} move them back to work/workitems/
+//!   GET  /favorites   -> user/favorite/ alone (/workitems lists both, with
+//!                        `favorite` saying which shelf each lives on)
 //!   GET  /favorites/{id}/thumb.png
 //!   POST /favorites/open   -> {id}
 //!   POST /favorites/delete -> {ids:[..]}
@@ -64,14 +66,16 @@
 //!   GET  /upscalers   -> every file in the upscaler dir, with its architecture
 //!                        and whether it can run. Pick one per generate with
 //!                        `upscaler: "<name>"`; `""` is FSR
-//!   GET  /outputs     -> every image in work/output/, newest first
+//!   GET  /outputs     -> every image in work/output/ and the favourites,
+//!                        newest first, each with `favorite`
 //!   POST /outputs/open -> {stem}     open a saved image as a live image_id,
 //!                        so the viewer's sliders can work on it
 //!   POST /outputs/to-image -> {stem, model?} open it as the Image tab's
 //!                        result instead, for the Refine dialog
 //!   POST /image/model -> {image_id, model}  the model an image's passes run on
 //!   POST /outputs/delete -> {stems:[..]} remove them from work/output/
-//!   POST /favorite-outputs/add -> {stems:[..]} copy them to user/favorite_outputs/
+//!   POST /favorite-outputs/add -> {stems:[..]} move them to user/favorite_outputs/
+//!   POST /favorite-outputs/remove -> {stems:[..]} move them back to work/output/
 //!   GET  /favorite-outputs     -> the same listing, read from there
 //!   POST /favorite-outputs/delete -> {stems:[..]}
 //!                        (a favourite opens, starts a generation and gets its
@@ -879,7 +883,8 @@ fn route(
         ("POST", "/favorites/delete") => {
             handle_delete_workitems(conn, cfg, Shelf::Favorites, &req.body)
         }
-        ("POST", "/favorites/add") => handle_favorite(conn, cfg, &req.body),
+        ("POST", "/favorites/add") => handle_favorite(conn, cfg, &req.body, true),
+        ("POST", "/favorites/remove") => handle_favorite(conn, cfg, &req.body, false),
 
         // `work/output/` — the finished images, which is what the video tab
         // animates from. Same connection-thread family as the archive above, and
@@ -942,7 +947,10 @@ fn route(
         // opening one, its thumbnail and starting from it all go by stem through
         // the `/outputs` routes above, which look in both (`Store::find_output`).
         ("GET", "/favorite-outputs") => handle_list_outputs(conn, cfg, Gallery::Favorites),
-        ("POST", "/favorite-outputs/add") => handle_favorite_outputs(conn, cfg, &req.body),
+        ("POST", "/favorite-outputs/add") => handle_favorite_outputs(conn, cfg, &req.body, true),
+        ("POST", "/favorite-outputs/remove") => {
+            handle_favorite_outputs(conn, cfg, &req.body, false)
+        }
         ("POST", "/favorite-outputs/delete") => {
             handle_delete_outputs(conn, cfg, Gallery::Favorites, &req.body)
         }
@@ -1025,7 +1033,7 @@ fn handle_list_workitems(
     cfg: &Config,
     shelf: Shelf,
 ) -> Result<()> {
-    let items = store(cfg).list(shelf);
+    let items = store(cfg).listing(shelf);
     match serde_json::to_vec(&items) {
         Ok(body) => conn.respond(200, "application/json", &body),
         Err(e) => conn.respond(
@@ -1550,7 +1558,7 @@ fn handle_delete_clips(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -
 }
 
 fn handle_list_outputs(conn: &mut http::Connection, cfg: &Config, gallery: Gallery) -> Result<()> {
-    let items = store(cfg).list_outputs(gallery);
+    let items = store(cfg).output_listing(gallery);
     match serde_json::to_vec(&items) {
         Ok(body) => conn.respond(200, "application/json", &body),
         Err(e) => conn.respond(
@@ -1678,21 +1686,24 @@ fn handle_delete_workitems(
     )
 }
 
-/// Keep work items: copy them to `user/favorite/`.
+/// Star (`keep`) or un-star work items: move them to `user/favorite/`, or back
+/// to `work/workitems/` ([`Store::favorite`], [`Store::unfavorite`]).
 ///
-/// A list rather than one id, for the reason `/workitems/delete` is one — the
-/// page marks a set and acts on it once — and answered on the connection thread
-/// beside it, because it is three `fs::copy`s and touches no GPU.
-///
-/// `add` rather than a verb on `/workitems`, because the route names the shelf
-/// it writes to and every other favourites route reads from that same prefix.
-/// There is no "unfavorite": `POST /favorites/delete` already is one, and a
-/// second name for removing a file is a second place to get the guard wrong.
+/// A list rather than one id, for the reason `/workitems/delete` is one, and
+/// answered on the connection thread beside it, because it is a few file
+/// copies and touches no GPU. Un-starring is `remove`, not `/favorites/delete`:
+/// that one deletes the files, this one puts them back where `Delete all` can
+/// reach them.
 ///
 /// Failures are logged and skipped, exactly as the delete loop does: an id the
 /// grid has that the disk hasn't means the page's copy is stale, and taking the
 /// whole request down over it would lose the ones that did work.
-fn handle_favorite(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+fn handle_favorite(
+    conn: &mut http::Connection,
+    cfg: &Config,
+    body: &[u8],
+    keep: bool,
+) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
         ids: Vec<String>,
@@ -1704,7 +1715,8 @@ fn handle_favorite(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Re
     let store = store(cfg);
     let mut favorited = 0usize;
     for id in &dto.ids {
-        match store.favorite(id) {
+        let moved = if keep { store.favorite(id) } else { store.unfavorite(id) };
+        match moved {
             Ok(()) => favorited += 1,
             Err(e) => eprintln!("[yasdig] {e:#}"),
         }
@@ -1754,10 +1766,15 @@ fn handle_delete_outputs(
     )
 }
 
-/// Keep saved images: copy them to `user/favorite_outputs/`. [`handle_favorite`]
-/// for the Outputs tab, and the same shape for the same reasons — a list,
-/// answered here, a failure logged and skipped.
-fn handle_favorite_outputs(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+/// Star or un-star saved images: [`handle_favorite`] for the Outputs tab, and
+/// the same shape for the same reasons — a list, answered here, a failure
+/// logged and skipped.
+fn handle_favorite_outputs(
+    conn: &mut http::Connection,
+    cfg: &Config,
+    body: &[u8],
+    keep: bool,
+) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
         stems: Vec<String>,
@@ -1769,7 +1786,8 @@ fn handle_favorite_outputs(conn: &mut http::Connection, cfg: &Config, body: &[u8
     let store = store(cfg);
     let mut favorited = 0usize;
     for stem in &dto.stems {
-        match store.favorite_output(stem) {
+        let moved = if keep { store.favorite_output(stem) } else { store.unfavorite_output(stem) };
+        match moved {
             Ok(()) => favorited += 1,
             Err(e) => eprintln!("[yasdig] {e:#}"),
         }
