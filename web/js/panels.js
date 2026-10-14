@@ -1,12 +1,13 @@
 import { followPointer } from './dom.js';
 
-// ---- Floating panels: the Refine & adjust dialog's tools ------------------------
+// ---- Floating panels: the Refine & adjust dialog's, and the workspaces' -------
 //
-// The dialog is a narrow rail and the picture; each tool is a panel floating
-// over the picture, opened from its rail button, dragged by its header to
-// wherever it is wanted. Several can be open at once — Selection beside Adjust
-// is how a colour pick is used — and viewer.js decides which of them own the
-// pointer.
+// A narrow rail and the picture; each tool is a panel floating over the
+// picture, opened from its rail button, dragged by its header to wherever it is
+// wanted. The Refine & adjust dialog is built this way, and so are the Image
+// and Video tabs (`host` is the dialog or the tab's `.workspace`). Several can
+// be open at once — Selection beside Adjust is how a colour pick is used — and
+// viewer.js decides which of the dialog's own the pointer.
 //
 // Each panel's element gets an `open` property that fires `toggle` when it
 // changes, as a <details> does, so code written against a fold reads a panel
@@ -108,7 +109,9 @@ export function floatPanels({ host, rail, defs }) {
   return {
     init() {
       defs.forEach((d, index) => {
-        const el = document.getElementById(`panel-${d.id}`);
+        // `el` when the panel kept an older id (the Image tab's folds did,
+        // so the code that opens one by id still finds it).
+        const el = document.getElementById(d.el ?? `panel-${d.id}`);
         const p = {
           id: d.id, el, index, corner: d.corner,
           head: el.querySelector('.fphead'),
@@ -139,7 +142,7 @@ export function floatPanels({ host, rail, defs }) {
       });
       window.addEventListener('resize', () => { for (const p of panels.values()) place(p); });
     },
-    // The dialog was just shown: now there is a size to place against.
+    // The dialog or the tab was just shown: now there is a size to place against.
     layout() {
       for (const p of panels.values()) {
         if (!p.el.hidden) { place(p); front(p); }

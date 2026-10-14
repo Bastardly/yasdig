@@ -61,7 +61,7 @@ export const runningJob = () => snap.jobs.find((j) => j.state !== 'queued') ?? n
 const PASSES = ['refine', 'hires', 'redraw', 'upscale', 'edit', 'extend'];
 export const passRunning = () => PASSES.includes(runningJob()?.kind);
 
-// The loop ("Keep going until stopped"), unless it is ending. There is one at
+// The loop ("Until stopped"), unless it is ending. There is one at
 // a time (`Queue::push_loop`), and it takes the Image tab's edits.
 export const activeLoop = () =>
   snap.jobs.find((j) => isRun(j) && j.total === null && j.state !== 'stopping') ?? null;

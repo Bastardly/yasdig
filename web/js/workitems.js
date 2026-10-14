@@ -5,174 +5,178 @@ import { imageLoras, imageSource, models, render, setParts, setUpscaler, syncCfg
 import { gridMarks, star, wireStars } from './gridmark.js';
 import { setReferences } from './refs.js';
 
-// The last listing. It carries each item's full settings, so opening one needs
-// no second request.
-let workItems = [];
-
-// Which shelf the grid is showing, as the first segment of its routes — the two
-// are the same three files under the same ids, so the only difference between
-// Current and Favorites is this string. `work/workitems/` is what this program
-// sweeps (`Delete all`, and `purge_pngs` at startup); `user/favorite/` is what
-// it never touches unasked. See `Shelf` in `src/workitems.rs`.
-let shelf = 'workitems';
-// Bumped per `loadWorkItems`; only the newest answer may draw.
-let loadSeq = 0;
-const onFavorites = () => shelf === 'favorites';
-
-// Marking, the buttons above the grid and both requests live in `gridmark.js`,
-// shared with the Outputs gallery — the places on the page that remove a file,
-// and so the ones that must not drift apart.
-const marks = gridMarks({
-  grid: 'wigrid',
-  mode: 'wimode',
-  // On Current, only what lives there: a starred item is in user/favorite/,
-  // out of reach of a delete here until it is un-starred.
-  ids: () => workItems.filter((w) => onFavorites() || !w.favorite).map((w) => w.id),
-  reload: loadWorkItems,
-  err: (msg) => { $('err').textContent = msg; },
-  onMode: () => markGrid(),
-  // Keeping one is the tile's star (`wireStars` below), not a mode here.
-  actions: [{
-    value: 'delete',
-    button: 'widelete',
-    mark: 'sel',
-    label: (n) => `Delete ${n} selected`,
-    // Follows the shelf, which is why the route is a thunk: on Favorites this
-    // removes the kept copy and nothing under `work/`.
-    route: () => `/${shelf}/delete`,
-    key: 'ids',
-    all: {
-      button: 'wideleteall',
-      noun: 'work item',
-      label: (n) => (n ? `Delete all ${n} unstarred` : 'Delete all unstarred'),
-      // Not on the favourites shelf. Emptying that directory in one press is
-      // the exact thing it exists to be safe from; the marked delete above is
-      // still there for taking one back out.
-      when: () => !onFavorites(),
-    },
-  }],
-});
-
-// Flip which directory the grid reads. Everything else follows from `shelf`, so
-// this only has to reset the things that don't: the mode (marks belong to the
-// shelf they were made on), and which of the two choice buttons is lit.
-function setShelf(next) {
-  shelf = next;
-  $('wicurrent').classList.toggle('active', !onFavorites());
-  $('wifavorites').classList.toggle('active', onFavorites());
-  // Assigning `checked` fires no `change`, so the marks are cleared by hand
-  // through the same path.
-  const open = document.querySelector('input[name=wimode][value=open]');
-  if (!open.checked) {
-    open.checked = true;
-    open.dispatchEvent(new Event('change'));
-  }
-  loadWorkItems();
-}
-
-export async function loadWorkItems() {
-  // Whichever shelf is showing. A generate reloads this too and deliberately
-  // does *not* switch you back to Current: the toggle is where you left it,
-  // which is the only rule that stays predictable, and the new item is one
-  // click away.
-  const from = shelf;
-  // Every image of a batch reloads the grid, so several of these can be in
-  // flight on one shelf; only the newest may draw, or an older answer landing
-  // last leaves the newest item missing until the next image.
-  const mine = ++loadSeq;
+// Two shelves of the same thing, each its own panel and grid: Current is
+// `work/workitems/` (which lists starred items too, from user/favorite/),
+// Favorites is `user/favorite/` alone. The shelf is the first segment of every
+// route, so the two differ only in that string. `work/workitems/` is what this
+// program sweeps (`Delete all`, and `purge_pngs` at startup); `user/favorite/`
+// is what it never touches unasked. See `Shelf` in `src/workitems.rs`.
+//
+// A factory, gridMarks' shape: closures only, until `init()`.
+function shelfGrid({ shelf, grid, mode, del, all, empty }) {
+  // The last listing. It carries each item's full settings, so opening one
+  // needs no second request.
   let items = [];
-  try {
-    const data = await getJSON(`/${from}`);
-    // Everything below assumes an array, and a TypeError here would take the
-    // whole page's wiring with it.
-    if (!Array.isArray(data)) throw new Error('unexpected response');
-    items = data;
-  } catch (e) {
-    $('err').textContent = 'Could not load work items: ' + (e.message || e);
+  // Bumped per `load`; only the newest answer may draw.
+  let seq = 0;
+  const onFavorites = shelf === 'favorites';
+
+  // Marking, the buttons above the grid and both requests live in
+  // `gridmark.js`, shared with the Outputs gallery — the places on the page
+  // that remove a file, and so the ones that must not drift apart.
+  const marks = gridMarks({
+    grid,
+    mode,
+    // On Current, only what lives there: a starred item is in user/favorite/,
+    // out of reach of a delete here until it is un-starred.
+    ids: () => items.filter((w) => onFavorites || !w.favorite).map((w) => w.id),
+    reload: loadWorkItems,
+    err: (msg) => { $('err').textContent = msg; },
+    onMode: () => mark(),
+    // Keeping one is the tile's star (`wireStars` below), not a mode here.
+    actions: [{
+      value: 'delete',
+      button: del,
+      mark: 'sel',
+      label: (n) => `Delete ${n} selected`,
+      // On Favorites this removes the kept copy and nothing under `work/`.
+      route: () => `/${shelf}/delete`,
+      key: 'ids',
+      // Not on Favorites: emptying that directory in one press is the exact
+      // thing it exists to be safe from; the marked delete is still there for
+      // taking one back out.
+      ...(all ? {
+        all: {
+          button: all,
+          noun: 'work item',
+          label: (n) => (n ? `Delete all ${n} unstarred` : 'Delete all unstarred'),
+        },
+      } : {}),
+    }],
+  });
+
+  async function load() {
+    // Every image of a batch reloads the grids, so several of these can be in
+    // flight; only the newest may draw, or an older answer landing last leaves
+    // the newest item missing until the next image.
+    const mine = ++seq;
+    let got = [];
+    try {
+      const data = await getJSON(`/${shelf}`);
+      // Everything below assumes an array, and a TypeError here would take
+      // the whole page's wiring with it.
+      if (!Array.isArray(data)) throw new Error('unexpected response');
+      got = data;
+    } catch (e) {
+      $('err').textContent = 'Could not load work items: ' + (e.message || e);
+    }
+    if (mine !== seq) return;
+    items = got;
+    marks.prune(items.map((w) => w.id));
+    draw();
   }
-  // The shelf can be flipped mid-flight, and the loser of that race must not
-  // land at all — not even on `workItems`, which is what a click reads to find
-  // the settings to restore. Drawing one shelf's tiles over another's list is
-  // the version of this bug that looks like nothing until a tile is clicked.
-  if (from !== shelf || mine !== loadSeq) return;
-  workItems = items;
-  marks.prune(workItems.map((w) => w.id));
-  renderWorkItems();
+
+  function draw() {
+    const el = $(grid);
+    if (!items.length) {
+      el.innerHTML = `<p class="sub">${empty}</p>`;
+      marks.sync();
+      return;
+    }
+    // width/height on every thumbnail so the strip reserves its space up front
+    // and doesn't reflow, row by row, as the images decode. `loading="lazy"`
+    // for the other end of the same problem: a loop left running overnight
+    // leaves hundreds of entries here, and there is no reason for the page to
+    // hold a decoded copy of each. With the dimensions declared, deferring them
+    // costs nothing.
+    el.innerHTML = items.map((w) => `<span class="tile">
+      <button type="button" data-id="${esc(w.id)}"
+        title="${esc(w.prompt)}&#10;${w.width}×${w.height} · seed ${w.seed} · ${esc(w.template)}">
+        <img src="/${home(w)}/${esc(w.id)}/thumb.png" alt="" loading="lazy"
+          width="${w.thumb_width}" height="${w.thumb_height}"></button>${star(w.favorite)}</span>`).join('');
+    for (const b of el.querySelectorAll('button[data-id]')) {
+      b.addEventListener('click', () => click(b.dataset.id));
+    }
+    // Starring moves the item to user/favorite/ and un-starring moves it
+    // back; either way it stays in Current's grid, and both grids reload.
+    // `/favorites/delete` is the other thing, and only *Click to delete* on
+    // Favorites sends it.
+    wireStars(el, {
+      of: (btn) => {
+        const id = btn.previousElementSibling.dataset.id;
+        const w = items.find((x) => x.id === id);
+        return { favorite: !!w?.favorite, body: { ids: [id] } };
+      },
+      add: '/favorites/add',
+      remove: '/favorites/remove',
+      reload: loadWorkItems,
+      err: (msg) => { $('err').textContent = msg; },
+    });
+    mark();
+  }
+
+  function mark() {
+    for (const b of $(grid).querySelectorAll('button[data-id]')) {
+      marks.mark(b, b.dataset.id);
+      b.classList.toggle('active', b.dataset.id === S.workId);
+    }
+    marks.sync();
+  }
+
+  // In delete mode a click only *marks*: nothing is destroyed until the
+  // button above the grid is pressed. That makes culling a batch one click per
+  // image plus one at the end, with the marks visible the whole time — rather
+  // than a confirmation per image, or a misclick that can't be taken back.
+  function click(id) {
+    if (marks.toggle(id)) {
+      mark();
+      return;
+    }
+    const item = items.find((w) => w.id === id);
+    if (item) openItem(item);
+  }
+
+  return { init: () => marks.init(), load, mark };
 }
 
 // The shelf an item's files are on, as its routes' first segment: Current
 // lists both, and a starred item is read from user/favorite/.
 const home = (w) => (w.favorite ? 'favorites' : 'workitems');
 
-function renderWorkItems() {
-  const grid = $('wigrid');
-  if (!workItems.length) {
-    grid.innerHTML = `<p class="sub">${onFavorites()
-      ? 'No favorites yet — star a work item on Current to keep it.'
-      : 'No work items yet — generate something.'}</p>`;
-    marks.sync();
-    return;
-  }
-  // width/height on every thumbnail so the strip reserves its space up front and
-  // doesn't reflow, row by row, as the images decode. `loading="lazy"` for the
-  // other end of the same problem: a loop left running overnight leaves hundreds
-  // of entries here, and there is no reason for the page to hold a decoded copy
-  // of each. With the dimensions already declared, deferring them costs nothing.
-  grid.innerHTML = workItems.map((w) => `<span class="tile">
-    <button type="button" data-id="${esc(w.id)}"
-      title="${esc(w.prompt)}&#10;${w.width}×${w.height} · seed ${w.seed} · ${esc(w.template)}">
-      <img src="/${home(w)}/${esc(w.id)}/thumb.png" alt="" loading="lazy"
-        width="${w.thumb_width}" height="${w.thumb_height}"></button>${star(w.favorite)}</span>`).join('');
-  for (const b of grid.querySelectorAll('button[data-id]')) {
-    b.addEventListener('click', () => clickWorkItem(b.dataset.id));
-  }
-  // Starring moves the item to user/favorite/ and un-starring moves it back;
-  // either way it stays in Current's grid. `/favorites/delete` is the other
-  // thing, and only *Click to delete* on Favorites sends it.
-  wireStars(grid, {
-    of: (btn) => {
-      const id = btn.previousElementSibling.dataset.id;
-      const w = workItems.find((x) => x.id === id);
-      return { favorite: !!w?.favorite, body: { ids: [id] } };
-    },
-    add: '/favorites/add',
-    remove: '/favorites/remove',
-    reload: loadWorkItems,
-    err: (msg) => { $('err').textContent = msg; },
-  });
-  markGrid();
+const grids = [
+  shelfGrid({
+    shelf: 'workitems', grid: 'wigrid', mode: 'wimode', del: 'widelete', all: 'wideleteall',
+    empty: 'No work items yet — generate something.',
+  }),
+  shelfGrid({
+    shelf: 'favorites', grid: 'figrid', mode: 'fimode', del: 'fidelete',
+    empty: 'No favorites yet — star a work item to keep it.',
+  }),
+];
+
+// Both shelves: a generate, a star or a delete can change either. A generate
+// adds to Current; it never opens or closes a panel.
+export function loadWorkItems() {
+  return Promise.all(grids.map((g) => g.load()));
 }
 
+// The open item, framed in whichever grids show it.
 export function markGrid() {
-  for (const b of $('wigrid').querySelectorAll('button[data-id]')) {
-    marks.mark(b, b.dataset.id);
-    b.classList.toggle('active', b.dataset.id === S.workId);
-  }
-  marks.sync();
+  for (const g of grids) g.mark();
 }
 
-// In delete mode a click only *marks*: nothing is destroyed until the button
-// above the grid is pressed. That makes culling a batch one click per image plus
-// one at the end, with the marks visible the whole time — rather than a
-// confirmation dialog per image, or a single misclick that can't be taken back.
-async function clickWorkItem(id) {
-  if (marks.toggle(id)) {
-    markGrid();
-    return;
-  }
-  // Opening works during a run too: it is on the display lane, so it never
-  // waits for the render in flight. The run's next image will replace it on
-  // screen when it lands, as a run's images always replaced each other — but
-  // only on screen: the run holds its own image (`Retained::pin`), and this one
-  // stays one click away in the grid.
+// Opening works during a run too: it is on the display lane, so it never waits
+// for the render in flight. The run's next image will replace it on screen when
+// it lands, as a run's images always replaced each other — but only on screen:
+// the run holds its own image (`Retained::pin`), and this one stays one click
+// away in the grid.
+async function openItem(item) {
   if (opening) return;
-  const item = workItems.find((w) => w.id === id);
-  if (!item) return;
   opening = true;
   $('err').textContent = '';
   try {
     applyWorkItem(item);
-    render(await post(`/${home(item)}/open`, { id }));
+    render(await post(`/${home(item)}/open`, { id: item.id }));
   } catch (e) {
     $('err').textContent = String(e.message || e);
   } finally {
@@ -275,9 +279,7 @@ function setModel(id, name) {
 }
 
 export function initWorkItems() {
-  marks.init();
-  $('wicurrent').addEventListener('click', () => setShelf('workitems'));
-  $('wifavorites').addEventListener('click', () => setShelf('favorites'));
-  // Independent of the model list: the grid is what survived the last restart.
+  for (const g of grids) g.init();
+  // Independent of the model list: the grids are what survived the last restart.
   loadWorkItems();
 }

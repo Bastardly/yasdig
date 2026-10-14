@@ -13,10 +13,6 @@ import { showError } from './memory.js';
 // tabs has to *clear* the pane being left (see showTab), or a picture would sit
 // there looking live while `imageId` addressed a different one.
 //
-// It also means the ids render() writes — refine, hires, saveout, upfactor —
-// exist in at most one pane at a time, which is why IDLE_LABELS and setUpFactor
-// need no second set of them.
-//
 // The sliders and their timing readout are *not* in here, and that is what moving
 // them into the viewer bought: there is one dialog, so there is one pair of
 // sliders, addressed by plain id. A pane is now only the three things that really
@@ -47,7 +43,8 @@ export const S = {
 };
 
 export const PANES = {
-  image:   { result: 'result',   err: 'err',
+  // `result` is the stage the picture sits on, `info` the Info panel.
+  image:   { result: 'result',   info: 'resultinfo',   err: 'err',
              refmodel: 'refmodel',   hiresmodel: 'hiresmodel' },
   // The second row has none of the first row's other three keys. It has no
   // result block because its image only ever exists in the viewer, and no
@@ -67,15 +64,14 @@ export const P = (k) => $(PANES[S.pane][k]);
 export function clearPane(which) {
   const result = $(PANES[which].result);
   if (result) result.innerHTML = '';
+  const info = $(PANES[which].info);
+  if (info) info.innerHTML = '<p class="sub">Nothing generated yet.</p>';
   if ($('lightbox').open) $('lightbox').close();
 }
 
-// Where a failure goes. `#err` lives in the left control column, which on a wide
-// screen is nowhere near the result, so an escalation reports beside the buttons
-// that caused it: `#rerr` is part of render()'s output, and render() only runs on
-// success, so the slot from the last successful render is still there to write
-// into. It is in this module rather than in image.js because it is pane logic —
-// the viewer's sliders report through it too.
+// Where a failure goes: the pane's own error line (the Image tab's status
+// card). In this module rather than in image.js because it is pane logic — the
+// viewer's sliders report through it too.
 // `oom` and `opts` are an out-of-memory failure's, for `memory.js`'s box.
 export const escErr = (msg, oom = null, opts = {}) =>
-  showError($('rerr') || P('err'), msg, oom, opts);
+  showError(P('err'), msg, oom, opts);

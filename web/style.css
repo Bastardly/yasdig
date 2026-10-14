@@ -103,6 +103,8 @@
   --col-items-max: 660px;
   --panel-w: 300px;      /* a floating panel in Refine & adjust */
   --rail-w: 130px;       /* that dialog's rail of panel toggles */
+  --ws-rail-w: 150px;    /* the Image and Video tabs' rail: longer labels */
+  --ws-panel-w: 380px;   /* their panels: forms, wider than the dialog's */
   --thumb-h: 200px;      /* work items, clips, and the img2img sources — one
                             size, because they are the same strip of pictures
                             doing the same job on two tabs */
@@ -583,8 +585,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 #lightbox::backdrop { background: var(--scrim); }
 /* The rail: a narrow column of panel toggles, and at its foot what acts on
    the whole picture. Fixed width; it scrolls on its own on a short window. */
-.lbrail {
-  flex: 0 0 var(--rail-w); display: flex; flex-direction: column; gap: var(--sp-2);
+#lightbox { --railw: var(--rail-w); }
+.lbrail, .wsrail {
+  flex: 0 0 var(--railw); display: flex; flex-direction: column; gap: var(--sp-2);
   overflow-y: auto; padding: var(--sp-3); background: var(--ink-700); border-right: var(--line);
 }
 .railtitle { font-size: var(--fs-sm); color: var(--text-dim); margin-bottom: var(--sp-1); }
@@ -604,7 +607,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* A floating panel (`panels.js`): placed against the dialog, dragged by its
    header, no taller than the room below it — the body scrolls instead. */
 .fpanel {
-  position: absolute; z-index: 10; width: var(--panel-w); max-width: calc(100vw - var(--rail-w) - 2 * var(--sp-3));
+  position: absolute; z-index: 10; width: var(--fpanel-w, var(--panel-w)); max-width: calc(100% - var(--railw) - 2 * var(--sp-3));
   flex-direction: column; background: var(--ink-700); border: var(--line);
   border-radius: var(--r-lg); box-shadow: var(--shadow-pop); overflow: hidden;
 }
@@ -632,16 +635,45 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 
 /* What a pass is doing and what went wrong, in the pane's lower left; gone
    when there is nothing to say. Above the panels, under the colour wheel. */
-.lbstatus {
-  position: absolute; z-index: 1000; left: calc(var(--rail-w) + var(--sp-3)); bottom: var(--sp-3);
-  width: min(360px, calc(100vw - var(--rail-w) - 2 * var(--sp-3)));
+.statuscard {
+  position: absolute; z-index: 1000; left: calc(var(--railw) + var(--sp-3)); bottom: var(--sp-3);
+  width: min(360px, calc(100% - var(--railw) - 2 * var(--sp-3)));
   padding: var(--sp-3); background: var(--ink-700); border: var(--line);
   border-radius: var(--r-lg); box-shadow: var(--shadow-pop);
 }
-.lbstatus:not(:has(#lberr:not(:empty), img.livepreview:not([hidden]), #rdprog:not(:empty), #rdcancel:not([hidden]))) { display: none; }
-.lbstatus > .err { max-height: 40vh; overflow-y: auto; }
-.lbstatus > .err:empty, .lbstatus > .sub:empty { display: none; }
-.lbstatus .livepreview { max-height: min(var(--preview-h), 35vh); }
+.statuscard:not(:has(> .err:not(:empty), img.livepreview:not([hidden]), > .sub:not(:empty), .runstop > button:not([hidden]))) { display: none; }
+.statuscard > .err { max-height: 40vh; overflow-y: auto; }
+.statuscard > .err:empty, .statuscard > .sub:empty { display: none; }
+.statuscard .livepreview { max-height: min(var(--preview-h), 35vh); }
+
+/* The Image and Video tabs as workspaces, the dialog's shape: a rail, the
+   picture on a stage filling the rest of the window, floating panels over it
+   (`panels.js`). The page stops scrolling while one is shown; its panels
+   scroll instead. */
+.app:has(> .workspace:not([hidden])) {
+  height: calc(100vh - 2 * var(--sp-4)); display: flex; flex-direction: column;
+}
+.workspace {
+  --railw: var(--ws-rail-w); --fpanel-w: var(--ws-panel-w);
+  position: relative; flex: 1; min-height: 0; display: flex; overflow: hidden;
+  border: var(--line); border-radius: var(--r-lg); background: var(--ink-900);
+}
+.railfoot > .checks { margin-top: 0; }
+.railfoot .runstop { display: flex; flex-direction: column; gap: var(--sp-2); }
+.railfoot .runstop:not(:has(> :not([hidden]))) { display: none; }
+.stage {
+  flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center;
+  padding: var(--sp-4); overflow: hidden;
+}
+.stage > img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--r-lg); cursor: zoom-in; }
+.stage:empty::after { content: attr(data-empty); color: var(--text-dim); }
+.fpbody > .wihead { margin-top: var(--sp-2); }
+/* The Video stage: the canvas, and the player's row under it. */
+.vstage { flex-direction: column; }
+.vstage:not(:empty) > #vcanvas { max-width: 100%; max-height: calc(100% - 56px); width: auto; }
+.vstage .player { width: min(100%, 640px); }
+/* A panel is narrower than the old column: the picker's smaller strip. */
+.workspace .wigrid img { height: var(--thumb-h-pick); }
 /* min-width:0 because a flex item's default min-width is its content: a 3072 px
    image would otherwise refuse to let its pane shrink and shove the panel off
    the left edge of the screen. */

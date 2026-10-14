@@ -339,8 +339,7 @@ when pressing it spends GPU time, neutral when the click is free, and red when i
 deletes something. Everything else is a neutral grey, because the panel sits beside a
 picture you are judging and chrome with a hue in it biases that judgement.
 
-Quality is escalated *after* the fact, from the result's action row and the Refine
-dialog — so you only
+Quality is escalated *after* the fact, from the Refine & adjust dialog — so you only
 pay for it on images worth keeping. The server retains each result's intermediates, so
 no step ever recomputes the ones below it:
 

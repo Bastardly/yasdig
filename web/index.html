@@ -33,18 +33,50 @@
     <button type="button" id="closeserver" class="btn btn-danger tabs-end">Close server</button>
   </div>
 
-  <div class="layout" id="tab-image">
-  <div class="card col-controls">
-
-    <!-- The panel is folds from here down, so the column is as long as what
-         you are working on and no longer. Every summary carries a line saying
-         what is inside (`syncSummaries` in image.js), so folding one hides
-         nothing — the rule the Models fold set. Open or folded is remembered
-         per browser, per fold. -->
-    <!-- First, because it is what you reach for most: Generation grew tall,
-         and below it the prompt was pushed off the screen. -->
-    <details id="fold-prompt" class="fold" open>
-      <summary>Prompts <span class="foldstate" id="sum-prompt"></span></summary>
+  <!-- The Image tab is a workspace, the Refine & adjust dialog's shape: a
+       rail of panel toggles (with what starts and stops the work at its foot),
+       the picture filling the rest, and floating panels over it that remember
+       where they were left (`panels.js`). Every panel header carries a line
+       saying what is inside (`syncSummaries`), and its rail button a dot when
+       that panel departs from the plain path. -->
+  <div class="workspace" id="tab-image">
+  <nav class="wsrail" aria-label="Image">
+    <button type="button" class="btn btn-choice railbtn" data-panel="img-prompt">Prompts</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="img-models">Models</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="img-gen">Generation</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="img-src">Image to image</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="img-hires">Hi-res pass</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="img-refine">Refine pass</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="img-info">Info</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="img-current">Current</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="img-favorites">Favorites</button>
+    <!-- What starts and stops the work, always in reach: the seed (the one
+         setting reached for between renders), stopping, starting. -->
+    <div class="railfoot">
+      <!-- A run that keeps drawing new seeds until Stop, beside the button
+           that starts it: the count is in the Generation panel. -->
+      <div class="checks">
+        <label><input type="checkbox" id="autorun"> Until stopped</label>
+      </div>
+      <!-- Two halves of stopping, side by side when both show. *Cancel
+           generation* throws away the image in flight (a run goes on to its
+           next); *Stop job* finishes it and ends the run, so it only shows for
+           a run of more than one. Deliberately not in IDLE_LABELS, so setBusy
+           never touches either: a stop button that greys out for the length of
+           the thing it stops is furniture. The Jobs poll shows and hides them. -->
+      <div class="runstop">
+        <button id="cancelgen" class="btn btn-danger btn-block" hidden>Cancel generation</button>
+        <button id="stop" class="btn btn-danger btn-block" hidden>Stop job</button>
+      </div>
+      <button id="go" class="btn btn-run btn-block">Generate</button>
+    </div>
+  </nav>
+  <!-- The picture: the latest result, fitted. A click opens Refine & adjust. -->
+  <div class="stage" id="result" data-empty="Generate to see a picture here"></div>
+  <!-- First, because it is what you reach for most. -->
+  <section class="fpanel" id="fold-prompt" aria-label="Prompts" hidden>
+    <header class="fphead"><b>Prompts</b> <span class="foldstate" id="sum-prompt"></span><button type="button" class="fpclose" aria-label="Close Prompts">&times;</button></header>
+    <div class="fpbody">
       <label for="prompt">Prompt</label>
       <prompt-box>
         <!-- Empty, and filled from user/settings.toml once `/settings` answers.
@@ -65,20 +97,21 @@
         <button type="button" id="pngload" class="btn"
           title="Fill the controls from a PNG made by yasdig, A1111, Forge or Civitai. You can also drop the PNG on the prompt box.">Load settings from a PNG…</button>
         <input type="file" id="pngfile" accept="image/png" hidden>
-      </div>
-      <p class="sub" id="pngnote" hidden></p>
-    </details>
-
-    <!-- What does the work: the diffusion model, then one select per separate
-         file its family runs with (a VAE, a text encoder), drawn by
-         `syncParts` from the slots `/models` serves, then the LoRAs that patch
-         it — adapters from models/loras/, which only fit the family they were
-         trained on, so they sit with the model they are for. Once picked they
-         rarely change, and the summary says what is in it. Refine and Hi-res
-         pick their own model with their own pass. Above Generation: what runs
-         is decided before how it runs. -->
-    <details id="modelsbox" class="fold" open>
-      <summary>Models <span class="foldstate" id="modelsum"></span></summary>
+    </div>
+    <p class="sub" id="pngnote" hidden></p>
+    </div>
+  </section>
+  <!-- What does the work: the diffusion model, then one select per separate
+       file its family runs with (a VAE, a text encoder), drawn by
+       `syncParts` from the slots `/models` serves, then the LoRAs that patch
+       it — adapters from models/loras/, which only fit the family they were
+       trained on, so they sit with the model they are for. Once picked they
+       rarely change, and the summary says what is in it. Refine and Hi-res
+       pick their own model with their own pass. Above Generation: what runs
+       is decided before how it runs. -->
+  <section class="fpanel" id="modelsbox" aria-label="Models" hidden>
+    <header class="fphead"><b>Models</b> <span class="foldstate" id="modelsum"></span><button type="button" class="fpclose" aria-label="Close Models">&times;</button></header>
+    <div class="fpbody">
       <label for="template">Diffusion model</label>
       <select id="template"></select>
       <!-- Filled by loadModels when a model is listed greyed out: the Get
@@ -99,137 +132,155 @@
       <label data-help="loras">LoRAs</label>
       <div id="loras"></div>
       <button type="button" id="loraadd" class="btn spaced">+ Add LoRA</button>
-    </details>
-
-    <details id="fold-gen" class="fold" open>
-      <summary>Generation <span class="foldstate" id="sum-gen"></span></summary>
+    </div>
+    <!-- Writes the panels' boxes to user/model-settings.toml for the selected
+         model, keeping only what differs from where it would start anyway.
+         Neutral, not amber: it spends no GPU time. -->
+    <div class="fpfoot">
+      <button type="button" id="savemodel" class="btn btn-block">Save as defaults for this model</button>
+      <p class="sub" id="savemodelmsg"></p>
+    </div>
+  </section>
+  <section class="fpanel" id="fold-gen" aria-label="Generation" hidden>
+    <header class="fphead"><b>Generation</b> <span class="foldstate" id="sum-gen"></span><button type="button" class="fpclose" aria-label="Close Generation">&times;</button></header>
+    <div class="fpbody">
+      <!-- The seed first: it is the one setting reached for between renders —
+           pinned from a result (Info) to keep a picture, reset to vary it. A
+           pinned seed walks across a batch. -->
+      <div class="genseed">
+        <label for="seed">Seed</label>
+        <!-- The button puts -1 back: a pinned seed is one click from the
+             result's seed, so getting back to random should be one too. -->
+        <div class="withbtn">
+          <input id="seed" type="number" value="-1">
+          <button type="button" id="seedrandom" class="btn" title="Back to -1: a new seed every image"
+                  aria-label="Reset seed to -1">Reset</button>
+        </div>
+      </div>
       <!-- A base size describes a txt2img: a source brings its own size. -->
       <div class="row sizerow" data-when="text">
         <div>
           <label for="w">Base width</label>
           <input id="w" type="number" step="64" min="64">
-        </div>
-        <div class="swapcol">
-          <button type="button" id="swapwh" class="btn" title="Swap width and height"
-                  aria-label="Swap width and height">⇄</button>
-        </div>
-        <div>
-          <label for="h">Base height</label>
-          <input id="h" type="number" step="64" min="64">
-        </div>
       </div>
-      <!-- Both kinds of pass run these: from noise, and over a source image.
-           There used to be a second Steps and an img2img CFG beside the source,
-           which meant two numbers to keep in step for one model. -->
-      <div class="row">
-        <div>
-          <label for="steps">Steps</label>
-          <input id="steps" type="number" min="1" max="100">
-        </div>
-        <div>
-          <label for="cfg">CFG scale</label>
-          <input id="cfg" type="number" step="0.1" min="0">
-        </div>
+      <div class="swapcol">
+        <button type="button" id="swapwh" class="btn" title="Swap width and height"
+                aria-label="Swap width and height">⇄</button>
       </div>
-      <!-- How the noise is walked. The list is sd.cpp's whole set, grouped as
-           the Help tab's Samplers page groups them; `config::SAMPLERS` and
-           `SCHEDULERS` are the server's copy, and a cargo test checks every
-           option here against them. Settings and the Video tab clone these
-           options rather than listing them again. -->
-      <div class="row">
-        <div>
-          <label for="sampler">Sampler</label>
-          <select id="sampler">
-            <optgroup label="Repeatable">
-              <option value="euler">euler</option>
-              <option value="heun">heun</option>
-              <option value="dpm2">dpm2</option>
-              <option value="dpm++2m">dpm++2m</option>
-              <option value="dpm++2mv2">dpm++2mv2</option>
-              <option value="ipndm">ipndm</option>
-              <option value="ipndm_v">ipndm_v</option>
-              <option value="ddim_trailing">ddim_trailing</option>
-              <option value="lms">lms</option>
-              <option value="res_multistep">res_multistep</option>
-              <option value="res_2s">res_2s</option>
-            </optgroup>
-            <optgroup label="Varying">
-              <option value="euler_a">euler_a</option>
-              <option value="dpm++2s_a">dpm++2s_a</option>
-              <option value="dpm++2m_sde">dpm++2m_sde</option>
-              <option value="dpm++2m_sde_bt">dpm++2m_sde_bt</option>
-              <option value="er_sde">er_sde</option>
-            </optgroup>
-            <optgroup label="Few-step">
-              <option value="lcm">lcm</option>
-              <option value="tcd">tcd</option>
-            </optgroup>
-            <optgroup label="Experimental">
-              <option value="euler_cfg_pp">euler_cfg_pp</option>
-              <option value="euler_a_cfg_pp">euler_a_cfg_pp</option>
-              <option value="euler_ge">euler_ge</option>
-            </optgroup>
-          </select>
-        </div>
-        <div>
-          <label for="scheduler">Scheduler</label>
-          <select id="scheduler">
-            <option value="auto">Auto (model default)</option>
-            <optgroup label="Common">
-              <option value="discrete">discrete</option>
-              <option value="karras">karras</option>
-              <option value="exponential">exponential</option>
-              <option value="sgm_uniform">sgm_uniform</option>
-              <option value="simple">simple</option>
-              <option value="ays">ays</option>
-              <option value="lcm">lcm</option>
-            </optgroup>
-            <optgroup label="More">
-              <option value="gits">gits</option>
-              <option value="smoothstep">smoothstep</option>
-              <option value="kl_optimal">kl_optimal</option>
-              <option value="beta">beta</option>
-              <option value="bong_tangent">bong_tangent</option>
-              <option value="flux">flux</option>
-              <option value="flux2">flux2</option>
-            </optgroup>
-          </select>
-        </div>
-      </div>
-      <!-- Three values, valid on every family: `adaptive` is UCache on a UNet and
-           EasyCache on a DiT, picked by the server. See config::CACHE_MODES. -->
       <div>
-        <label for="cachemode">Step cache</label>
-        <select id="cachemode">
-          <option value="off">Off</option>
-          <option value="spectrum">Spectrum</option>
-          <option value="adaptive">Adaptive</option>
+        <label for="h">Base height</label>
+        <input id="h" type="number" step="64" min="64">
+      </div>
+    </div>
+    <!-- Both kinds of pass run these: from noise, and over a source image.
+         There used to be a second Steps and an img2img CFG beside the source,
+         which meant two numbers to keep in step for one model. -->
+    <div class="row">
+      <div>
+        <label for="steps">Steps</label>
+        <input id="steps" type="number" min="1" max="100">
+      </div>
+      <div>
+        <label for="cfg">CFG scale</label>
+        <input id="cfg" type="number" step="0.1" min="0">
+      </div>
+    </div>
+    <!-- How the noise is walked. The list is sd.cpp's whole set, grouped as
+         the Help tab's Samplers page groups them; `config::SAMPLERS` and
+         `SCHEDULERS` are the server's copy, and a cargo test checks every
+         option here against them. Settings and the Video tab clone these
+         options rather than listing them again. -->
+    <div class="row">
+      <div>
+        <label for="sampler">Sampler</label>
+        <select id="sampler">
+          <optgroup label="Repeatable">
+            <option value="euler">euler</option>
+            <option value="heun">heun</option>
+            <option value="dpm2">dpm2</option>
+            <option value="dpm++2m">dpm++2m</option>
+            <option value="dpm++2mv2">dpm++2mv2</option>
+            <option value="ipndm">ipndm</option>
+            <option value="ipndm_v">ipndm_v</option>
+            <option value="ddim_trailing">ddim_trailing</option>
+            <option value="lms">lms</option>
+            <option value="res_multistep">res_multistep</option>
+            <option value="res_2s">res_2s</option>
+          </optgroup>
+          <optgroup label="Varying">
+            <option value="euler_a">euler_a</option>
+            <option value="dpm++2s_a">dpm++2s_a</option>
+            <option value="dpm++2m_sde">dpm++2m_sde</option>
+            <option value="dpm++2m_sde_bt">dpm++2m_sde_bt</option>
+            <option value="er_sde">er_sde</option>
+          </optgroup>
+          <optgroup label="Few-step">
+            <option value="lcm">lcm</option>
+            <option value="tcd">tcd</option>
+          </optgroup>
+          <optgroup label="Experimental">
+            <option value="euler_cfg_pp">euler_cfg_pp</option>
+            <option value="euler_a_cfg_pp">euler_a_cfg_pp</option>
+            <option value="euler_ge">euler_ge</option>
+          </optgroup>
         </select>
       </div>
-      <!-- How many. A run is one queued job however many images it makes; see
-           *## The job queue* in CLAUDE.md. -->
       <div>
-        <label for="count">Images</label>
-        <input id="count" type="number" min="1" step="1" value="1">
+        <label for="scheduler">Scheduler</label>
+        <select id="scheduler">
+          <option value="auto">Auto (model default)</option>
+          <optgroup label="Common">
+            <option value="discrete">discrete</option>
+            <option value="karras">karras</option>
+            <option value="exponential">exponential</option>
+            <option value="sgm_uniform">sgm_uniform</option>
+            <option value="simple">simple</option>
+            <option value="ays">ays</option>
+            <option value="lcm">lcm</option>
+          </optgroup>
+          <optgroup label="More">
+            <option value="gits">gits</option>
+            <option value="smoothstep">smoothstep</option>
+            <option value="kl_optimal">kl_optimal</option>
+            <option value="beta">beta</option>
+            <option value="bong_tangent">bong_tangent</option>
+            <option value="flux">flux</option>
+            <option value="flux2">flux2</option>
+          </optgroup>
+        </select>
       </div>
-      <div class="checks">
-        <label><input type="checkbox" id="autorun"> Keep going until stopped</label>
-      </div>
-      <!-- Pictures the model looks at while it draws ("the person from image 1").
-           Shown only for a model that takes them — the server says which
-           (`references` on /models). The picks live in #refsdlg (refs.js). -->
-      <button type="button" id="refsopen" class="btn btn-block" hidden>References…</button>
-    </details>
-
-    <details id="fold-after" class="fold" open>
-      <summary><label data-help="aftereach">After each generation</label> <span class="foldstate" id="sum-after"></span></summary>
-      <!-- The output upscale describes a txt2img: the pass over a source has no
-           enlarge stage. 1 is not a special case, it is FSR skipped — see the
-           tooltip. -->
-      <div class="row" data-when="text">
-        <div>
-          <label for="upscale">Output upscale</label>
-          <input id="upscale" type="number" step="0.1" min="1" max="4">
+    </div>
+    <!-- Three values, valid on every family: `adaptive` is UCache on a UNet and
+         EasyCache on a DiT, picked by the server. See config::CACHE_MODES. -->
+    <div>
+      <label for="cachemode">Step cache</label>
+      <select id="cachemode">
+        <option value="off">Off</option>
+        <option value="spectrum">Spectrum</option>
+        <option value="adaptive">Adaptive</option>
+      </select>
+    </div>
+    <!-- How many. A run is one queued job however many images it makes; see
+         *## The job queue* in CLAUDE.md. -->
+    <div>
+      <label for="count">Images</label>
+      <input id="count" type="number" min="1" step="1" value="1">
+    </div>
+    <!-- Pictures the model looks at while it draws ("the person from image 1").
+         Shown only for a model that takes them — the server says which
+         (`references` on /models). The picks live in #refsdlg (refs.js). -->
+    <button type="button" id="refsopen" class="btn btn-block" hidden>References…</button>
+      <!-- What happens to each image once it is drawn: part of the run, so in
+           its panel. Its summary is the line the panel used to have. -->
+      <details id="fold-after" class="fold" open>
+        <summary><label data-help="aftereach">After each generation</label> <span class="foldstate" id="sum-after"></span></summary>
+        <!-- The output upscale describes a txt2img: the pass over a source has no
+             enlarge stage. 1 is not a special case, it is FSR skipped — see the
+             tooltip. -->
+        <div class="row" data-when="text">
+          <div>
+            <label for="upscale">Output upscale</label>
+            <input id="upscale" type="number" step="0.1" min="1" max="4">
         </div>
         <!-- Beside the factor because it is the other half of the same step:
              how much, and by what. Filled from GET /upscalers; the empty value
@@ -251,21 +302,23 @@
         <label><input type="checkbox" id="optrefine"> Refine</label>
         <label><input type="checkbox" id="optsave"> Save to output</label>
       </div>
-    </details>
+      </details>
+    </div>
+  </section>
+  <!-- Where the picture begins: noise, or an image. The one thing that used to
+       be a whole second tab — a source image plus the same prompt, model, LoRAs
+       and ladder — so it is a slot here rather than a tab of its own. Nothing
+       picked is text to image; picking something runs /img2img instead of
+       /generate, and the controls that only mean something for one of the two
+       follow (`data-when`, see syncMode in image.js). Wired by source-slot.js,
+       which the Video tab's first frame shares.
 
-    <!-- Where the picture begins: noise, or an image. The one thing that used to
-         be a whole second tab — a source image plus the same prompt, model, LoRAs
-         and ladder — so it is a slot here rather than a tab of its own. Nothing
-         picked is text to image; picking something runs /img2img instead of
-         /generate, and the controls that only mean something for one of the two
-         follow (`data-when`, see syncMode in image.js). Wired by source-slot.js,
-         which the Video tab's first frame shares.
-
-         Folded by default, and opened by a source arriving: the summary says
-         "from …" whenever one is picked, so a folded slot can't quietly turn
-         Generate into a pass over a picture. -->
-    <details id="fold-src" class="fold">
-      <summary><label data-help="source">Image to image</label> <span class="foldstate" id="sum-src"></span></summary>
+       Folded by default, and opened by a source arriving: the summary says
+       "from …" whenever one is picked, so a folded slot can't quietly turn
+       Generate into a pass over a picture. -->
+  <section class="fpanel" id="fold-src" aria-label="Image to image" hidden>
+    <header class="fphead"><b><label data-help="source">Image to image</label></b> <span class="foldstate" id="sum-src"></span><button type="button" class="fpclose" aria-label="Close Image to image">&times;</button></header>
+    <div class="fpbody">
       <div id="srcdrop" class="drop">
         <div class="picked">
           <img id="srcthumb" alt="" hidden>
@@ -274,189 +327,156 @@
             <button type="button" id="srcpick" class="btn">Choose…</button>
             <button type="button" id="srcupload" class="btn">Upload…</button>
             <button type="button" id="srcclear" class="btn" hidden>Clear</button>
-          </div>
-        </div>
-        <!-- Anything the browser can decode. It is re-encoded to PNG in a canvas
-             before upload, which is why this build needs no JPEG decoder. -->
-        <input type="file" id="srcfile" accept="image/*" hidden>
-      </div>
-      <div class="row" data-when="source" hidden>
-        <div>
-          <label for="srcstrength">Strength</label>
-          <!-- The one knob that decides whether this is a re-render or a retouch.
-               Higher redraws more and keeps less of the source. -->
-          <input id="srcstrength" type="number" step="0.05" min="0.05" max="0.95">
-        </div>
-        <div>
-          <label for="srcmaxside">Working size</label>
-          <!-- A ceiling, not a target: a source already smaller than this is left
-               alone. It exists because a phone photo is 4000 px on its long side
-               and diffusing that takes the card out of memory. -->
-          <select id="srcmaxside"></select>
         </div>
       </div>
-      <p class="sub" id="srcnote" data-when="source" hidden></p>
-    </details>
+      <!-- Anything the browser can decode. It is re-encoded to PNG in a canvas
+           before upload, which is why this build needs no JPEG decoder. -->
+      <input type="file" id="srcfile" accept="image/*" hidden>
+    </div>
+    <div class="row" data-when="source" hidden>
+      <div>
+        <label for="srcstrength">Strength</label>
+        <!-- The one knob that decides whether this is a re-render or a retouch.
+             Higher redraws more and keeps less of the source. -->
+        <input id="srcstrength" type="number" step="0.05" min="0.05" max="0.95">
+      </div>
+      <div>
+        <label for="srcmaxside">Working size</label>
+        <!-- A ceiling, not a target: a source already smaller than this is left
+             alone. It exists because a phone photo is 4000 px on its long side
+             and diffusing that takes the card out of memory. -->
+        <select id="srcmaxside"></select>
+      </div>
+    </div>
+    <p class="sub" id="srcnote" data-when="source" hidden></p>
+    </div>
+  </section>
+  <!-- Two passes, two of everything. Hi-res first: it is the pass that
+       enlarges and refine is the finishing touch you run at whatever size you
+       end up at, which is also the order the buttons above a result are in.
 
-
-    <!-- Two passes, two of everything. Hi-res first: it is the pass that
-         enlarges and refine is the finishing touch you run at whatever size you
-         end up at, which is also the order the buttons above a result are in.
-
-         The model comes first in each, because the boxes under it follow it:
-         picking a checkpoint refills its steps, strength and CFG from that
-         model's own settings (`fillPass` in image.js). A checkpoint is a setting
-         of the pass about to run, not of the one that made the image — so unlike
-         Steps or CFG above, changing it after a generate does something. Draft
-         on a Turbo model, finish on a detailed one. -->
-    <details id="fold-hires" class="fold">
-      <summary>Hi-res pass <span class="foldstate" id="sum-hires"></span></summary>
+       The model comes first in each, because the boxes under it follow it:
+       picking a checkpoint refills its steps, strength and CFG from that
+       model's own settings (`fillPass` in image.js). A checkpoint is a setting
+       of the pass about to run, not of the one that made the image — so unlike
+       Steps or CFG above, changing it after a generate does something. Draft
+       on a Turbo model, finish on a detailed one. -->
+  <section class="fpanel" id="fold-hires" aria-label="Hi-res pass" hidden>
+    <header class="fphead"><b>Hi-res pass</b> <span class="foldstate" id="sum-hires"></span><button type="button" class="fpclose" aria-label="Close Hi-res pass">&times;</button></header>
+    <div class="fpbody">
       <label for="hiresmodel">Hi-res model</label>
       <select id="hiresmodel"></select>
       <div class="row">
         <div>
           <label for="hsteps">Hi-res steps</label>
           <input id="hsteps" type="number" min="0" max="100">
-        </div>
-        <div>
-          <!-- Blank = follow the generating CFG. The placeholder shows what that
-               resolves to, so an empty field still says what it does. -->
-          <label for="hcfg">Hi-res CFG</label>
-          <input id="hcfg" type="number" step="0.1" min="0">
-        </div>
       </div>
-      <div class="row">
-        <div>
-          <label for="hstrength">Hi-res strength</label>
-          <input id="hstrength" type="number" step="0.05" min="0.05" max="0.95">
-        </div>
-        <div>
-          <!-- The same factor as the select above a finished image, which is
-               rebuilt by every render and so isn't there before the first one
-               — this is where it is set when there is nothing on screen yet.
-               A number rather than a select, so 2.5 is sayable; the selects
-               that mirror it grow an option for whatever this holds. -->
-          <label for="hiresscale">Hi-res scale</label>
-          <input id="hiresscale" type="number" step="0.1" min="1" max="4">
-        </div>
+      <div>
+        <!-- Blank = follow the generating CFG. The placeholder shows what that
+             resolves to, so an empty field still says what it does. -->
+        <label for="hcfg">Hi-res CFG</label>
+        <input id="hcfg" type="number" step="0.1" min="0">
       </div>
-      <label for="hprompt">Hi-res prompt (optional)</label>
-      <prompt-box>
-        <textarea id="hprompt" rows="2" placeholder="blank uses the image's own prompt"></textarea>
-      </prompt-box>
-    </details>
-
-    <details id="fold-refine" class="fold">
-      <summary>Refine pass <span class="foldstate" id="sum-refine"></span></summary>
+    </div>
+    <div class="row">
+      <div>
+        <label for="hstrength">Hi-res strength</label>
+        <input id="hstrength" type="number" step="0.05" min="0.05" max="0.95">
+      </div>
+      <div>
+        <!-- The same factor as the select above a finished image, which is
+             rebuilt by every render and so isn't there before the first one
+             — this is where it is set when there is nothing on screen yet.
+             A number rather than a select, so 2.5 is sayable; the selects
+             that mirror it grow an option for whatever this holds. -->
+        <label for="hiresscale">Hi-res scale</label>
+        <input id="hiresscale" type="number" step="0.1" min="1" max="4">
+      </div>
+    </div>
+    <label for="hprompt">Hi-res prompt (optional)</label>
+    <prompt-box>
+      <textarea id="hprompt" rows="2" placeholder="blank uses the image's own prompt"></textarea>
+    </prompt-box>
+    </div>
+  </section>
+  <section class="fpanel" id="fold-refine" aria-label="Refine pass" hidden>
+    <header class="fphead"><b>Refine pass</b> <span class="foldstate" id="sum-refine"></span><button type="button" class="fpclose" aria-label="Close Refine pass">&times;</button></header>
+    <div class="fpbody">
       <label for="refmodel">Refine model</label>
       <select id="refmodel"></select>
       <div class="row">
         <div>
           <label for="rsteps">Refine steps</label>
           <input id="rsteps" type="number" min="0" max="100">
-        </div>
-        <div>
-          <label for="rcfg">Refine CFG</label>
-          <input id="rcfg" type="number" step="0.1" min="0">
-        </div>
       </div>
-      <label for="rstrength">Refine strength</label>
-      <input id="rstrength" type="number" step="0.05" min="0.05" max="0.95">
-      <label for="rprompt">Refine prompt (optional)</label>
-      <prompt-box>
-        <textarea id="rprompt" rows="2" placeholder="blank uses the image's own prompt"></textarea>
-      </prompt-box>
-    </details>
-
-    <!-- Writes the boxes above to user/model-settings.toml for the selected
-         model, keeping only what differs from where it would start anyway.
-         Neutral, not amber: it spends no GPU time and is not what this panel
-         is for. -->
-    <button type="button" id="savemodel" class="btn btn-block spaced">Save as defaults for this model</button>
-    <p class="sub" id="savemodelmsg"></p>
-
-    <!-- The dock: what starts and stops the work, at the *foot* of the column
-         and sticky to the bottom of the window (`.dock`). It used to head the
-         column, and everything that comes and goes while a job runs — the
-         progress line, the preview, Cancel and Stop, an error — pushed the
-         Prompts fold up and down mid-edit. Here it grows upward over the folds
-         and nothing above it moves, while the button stays in reach however far
-         down the column you are. Top to bottom: what went wrong, the preview,
-         progress, the seed, stopping, starting. -->
-    <div class="dock">
-      <div id="err" class="err"></div>
-      <!-- The run in flight, step by step. Driven by the Jobs poll (jobs.js);
-           the fold shows only while there is a frame (`.previewfold`). -->
-      <details class="fold previewfold" id="fold-preview" open>
-        <summary>Preview</summary>
-        <img id="livepreview" class="livepreview" alt="Live preview" hidden>
-      </details>
-      <p class="sub" id="prog"></p>
-      <!-- "Loop updated": a running loop took the panel's edits. -->
-      <p class="sub" id="loopnote"></p>
-      <!-- The seed, outside the folds: it is the one setting reached for
-           between renders — pinned from a result to keep a picture, reset to
-           vary it — so it stays beside the button. A pinned seed walks across
-           a batch. -->
-      <div class="dockseed">
-        <label for="seed">Seed</label>
-        <!-- The button puts -1 back: a pinned seed is one click from the
-             result's seed, so getting back to random should be one too. -->
-        <div class="withbtn">
-          <input id="seed" type="number" value="-1">
-          <button type="button" id="seedrandom" class="btn" title="Back to -1: a new seed every image"
-                  aria-label="Reset seed to -1">Reset</button>
-        </div>
+      <div>
+        <label for="rcfg">Refine CFG</label>
+        <input id="rcfg" type="number" step="0.1" min="0">
       </div>
-      <!-- Two halves of stopping, side by side when both show. *Cancel
-           generation* throws away the image in flight (a run goes on to its
-           next); *Stop job* finishes it and ends the run, so it only shows for
-           a run of more than one. Deliberately not in IDLE_LABELS, so setBusy
-           never touches either: a stop button that greys out for the length of
-           the thing it stops is furniture. The Jobs poll shows and hides them. -->
-      <div class="runstop">
-        <button id="cancelgen" class="btn btn-danger btn-block" hidden>Cancel generation</button>
-        <button id="stop" class="btn btn-danger btn-block" hidden>Stop job</button>
-      </div>
-      <button id="go" class="btn btn-run btn-block">Generate</button>
     </div>
-  </div>
-
-  <!-- The passes and sliders that act on this image are in the Refine & adjust
-       dialog (#lightbox, at the bottom of the page), not here: the action row's
-       button or a click on the image opens it. -->
-  <div class="col-result">
-    <div id="result" class="result"></div>
-  </div>
-
+    <label for="rstrength">Refine strength</label>
+    <input id="rstrength" type="number" step="0.05" min="0.05" max="0.95">
+    <label for="rprompt">Refine prompt (optional)</label>
+    <prompt-box>
+      <textarea id="rprompt" rows="2" placeholder="blank uses the image's own prompt"></textarea>
+    </prompt-box>
+    </div>
+  </section>
+  <!-- What sat under the picture: its size, seed, timings and the prompt as
+       it was conditioned (`render`). -->
+  <section class="fpanel" id="panel-img-info" aria-label="Info" hidden>
+    <header class="fphead"><b>Info</b><button type="button" class="fpclose" aria-label="Close Info">&times;</button></header>
+    <div class="fpbody" id="resultinfo"><p class="sub">Nothing generated yet.</p></div>
+  </section>
   <!-- Every generation is kept on disk with the settings that made it, so the
-       image you liked three renders ago is still one click away. Refined and
-       hi-res results are not: those go to work/output/ only when asked.
-
-       A third column of .layout rather than a row beneath it: it wraps under the
-       other two on a narrower screen and rides beside them when there's room. -->
-  <div class="workitems card">
-    <div class="wihead">
-      <b>Work items</b>
-      <!-- Two shelves of the same thing: work/workitems/, which "Delete all"
-           empties, and user/favorite/, which nothing here touches unasked.
-           .btn-choice because this is a set where the highlighted one is where
-           you are — the class the tab row and the viewer's Fit/1:1 wear. -->
-      <span class="wishelf">
-        <button type="button" id="wicurrent" class="btn btn-choice active">Current</button>
-        <button type="button" id="wifavorites" class="btn btn-choice">Favorites</button>
-      </span>
-      <span class="wimodes">
-        <!-- Favouriting is the star on each tile, not a mode. -->
-        <label><input type="radio" name="wimode" value="open" checked> Click to open</label>
-        <label><input type="radio" name="wimode" value="delete"> Click to delete</label>
-      </span>
-      <button id="widelete" class="btn btn-danger" hidden></button>
-      <!-- In every mode, only on Current, and behind a confirm box: marking is
-           visible and reversible, "all" is neither. -->
-      <button id="wideleteall" class="btn btn-danger" hidden></button>
+       image you liked three renders ago is still one click away. Two shelves,
+       two panels: work/workitems/, which "Delete all" empties and which lists
+       starred items too, and user/favorite/, which nothing here touches
+       unasked (`workitems.js`). -->
+  <section class="fpanel" id="panel-img-current" aria-label="Current" hidden>
+    <header class="fphead"><b>Current</b><button type="button" class="fpclose" aria-label="Close Current">&times;</button></header>
+    <div class="fpbody">
+      <div class="wihead">
+        <span class="wimodes">
+          <!-- Favouriting is the star on each tile, not a mode. -->
+          <label><input type="radio" name="wimode" value="open" checked> Click to open</label>
+          <label><input type="radio" name="wimode" value="delete"> Click to delete</label>
+        </span>
+        <button id="widelete" class="btn btn-danger" hidden></button>
+        <!-- In every mode and behind a confirm box: marking is visible and
+             reversible, "all" is neither. -->
+        <button id="wideleteall" class="btn btn-danger" hidden></button>
+      </div>
+      <div id="wigrid" class="wigrid"></div>
     </div>
-    <div id="wigrid" class="wigrid"></div>
+  </section>
+  <section class="fpanel" id="panel-img-favorites" aria-label="Favorites" hidden>
+    <header class="fphead"><b>Favorites</b><button type="button" class="fpclose" aria-label="Close Favorites">&times;</button></header>
+    <div class="fpbody">
+      <div class="wihead">
+        <span class="wimodes">
+          <label><input type="radio" name="fimode" value="open" checked> Click to open</label>
+          <label><input type="radio" name="fimode" value="delete"> Click to delete</label>
+        </span>
+        <button id="fidelete" class="btn btn-danger" hidden></button>
+      </div>
+      <div id="figrid" class="wigrid"></div>
+    </div>
+  </section>
+  <!-- What a run is doing and what went wrong, in the stage's lower left:
+       the error and OOM box, the live preview, progress, "Loop updated".
+       Shown only when it has something to say. -->
+  <div class="statuscard">
+    <div id="err" class="err"></div>
+    <!-- The run in flight, step by step. Driven by the Jobs poll (jobs.js);
+         the fold shows only while there is a frame (`.previewfold`). -->
+    <details class="fold previewfold" id="fold-preview" open>
+      <summary>Preview</summary>
+      <img id="livepreview" class="livepreview" alt="Live preview" hidden>
+    </details>
+    <p class="sub" id="prog"></p>
+    <!-- "Loop updated": a running loop took the panel's edits. -->
+    <p class="sub" id="loopnote"></p>
   </div>
   </div>
 
@@ -498,13 +518,32 @@
   </div>
 
   <!-- ==================== Video ==================== -->
-  <div class="layout" id="tab-video" hidden>
-  <div class="card col-controls">
-    <!-- The Image tab's folds, the same pattern: each summary says what is
-         inside (`syncVideoSummaries`), so a folded section still reads, and each
-         remembers being open per browser (`rememberFolds`). -->
-    <details id="vfold-prompt" class="fold" open>
-      <summary>Prompts <span class="foldstate" id="vsum-prompt"></span></summary>
+  <!-- The Video tab is a workspace like the Image tab: a rail (Stop and
+       Generate clip at its foot), the clip playing on the stage, floating
+       panels over it (`panels.js`). Each panel header says what is inside
+       (`syncVideoSummaries`). -->
+  <div class="workspace" id="tab-video" hidden>
+  <nav class="wsrail" aria-label="Video">
+    <button type="button" class="btn btn-choice railbtn" data-panel="vid-prompt">Prompts</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="vid-gen">Generation</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="vid-adv">Advanced</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="vid-clip">Clip</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="vid-clips">Clips</button>
+    <div class="railfoot">
+      <!-- Not the image tab's Stop, which finishes the image in flight and then
+           ends the run. There is only ever one clip in flight, so stopping it
+           means killing it — POST /cancel. -->
+      <div class="runstop">
+        <button id="vstop" class="btn btn-danger btn-block" hidden>Stop</button>
+      </div>
+      <button id="vgo" class="btn btn-run btn-block">Generate clip</button>
+    </div>
+  </nav>
+  <!-- The clip on screen, as a canvas player (`renderClip`). -->
+  <div class="stage vstage" id="vresult" data-empty="Generate a clip to see it here"></div>
+  <section class="fpanel" id="vfold-prompt" aria-label="Prompts" hidden>
+    <header class="fphead"><b>Prompts</b> <span class="foldstate" id="vsum-prompt"></span><button type="button" class="fpclose" aria-label="Close Prompts">&times;</button></header>
+    <div class="fpbody">
       <label for="vprompt">Prompt</label>
       <prompt-box>
         <textarea id="vprompt" placeholder="the crab lifts a claw, slow camera push in"></textarea>
@@ -517,10 +556,11 @@
       <prompt-box>
         <textarea id="vnegative" class="short"></textarea>
       </prompt-box>
-    </details>
-
-    <details id="vfold-gen" class="fold" open>
-      <summary>Generation <span class="foldstate" id="vsum-gen"></span></summary>
+    </div>
+  </section>
+  <section class="fpanel" id="vfold-gen" aria-label="Generation" hidden>
+    <header class="fphead"><b>Generation</b> <span class="foldstate" id="vsum-gen"></span><button type="button" class="fpclose" aria-label="Close Generation">&times;</button></header>
+    <div class="fpbody">
       <div class="row">
         <div>
           <label for="vmodel">Model</label>
@@ -589,10 +629,11 @@
           <select id="vsampler"></select>
         </div>
       </div>
-    </details>
-
-    <details id="vfold-adv" class="fold">
-      <summary>Advanced <span class="foldstate" id="vsum-adv"></span></summary>
+    </div>
+  </section>
+  <section class="fpanel" id="vfold-adv" aria-label="Advanced" hidden>
+    <header class="fphead"><b>Advanced</b> <span class="foldstate" id="vsum-adv"></span><button type="button" class="fpclose" aria-label="Close Advanced">&times;</button></header>
+    <div class="fpbody">
       <!-- Shown only for the mixture-of-experts pair, which is the only family
            with a second expert for these to describe. -->
       <div class="row" id="vmoe" hidden>
@@ -623,36 +664,29 @@
         <option value="ram">System RAM</option>
         <option value="disk">Stream from SSD (slower)</option>
       </select>
-    </details>
-    <!-- The Image tab's dock, the same order: what went wrong, progress,
-         stopping, starting. -->
-    <div class="dock">
-      <div id="verr" class="err"></div>
-      <p class="sub" id="vprog"></p>
-      <!-- Not the image tab's Stop, which finishes the image in flight and then
-           ends the run. There is only ever one clip in flight, so stopping it
-           means killing it — POST /cancel. -->
-      <div class="runstop">
-        <button id="vstop" class="btn btn-danger btn-block" hidden>Stop</button>
+    </div>
+  </section>
+  <!-- The clip's size, frames and seed, and Enlarge frames (`renderClip`). -->
+  <section class="fpanel" id="panel-vid-clip" aria-label="Clip" hidden>
+    <header class="fphead"><b>Clip</b><button type="button" class="fpclose" aria-label="Close Clip">&times;</button></header>
+    <div class="fpbody" id="vclipinfo"><p class="sub">No clip yet.</p></div>
+  </section>
+  <section class="fpanel" id="panel-vid-clips" aria-label="Clips" hidden>
+    <header class="fphead"><b>Clips</b><button type="button" class="fpclose" aria-label="Close Clips">&times;</button></header>
+    <div class="fpbody">
+      <div class="wihead">
+        <span class="wimodes">
+          <label><input type="radio" name="vmode" value="open" checked> Click to open</label>
+          <label><input type="radio" name="vmode" value="delete"> Click to delete</label>
+        </span>
+        <button id="vdelete" class="btn btn-danger" hidden></button>
       </div>
-      <button id="vgo" class="btn btn-run btn-block">Generate clip</button>
+      <div id="vgrid" class="wigrid"></div>
     </div>
-  </div>
-
-  <div class="col-result">
-    <div id="vresult"></div>
-  </div>
-
-  <div class="workitems card">
-    <div class="wihead">
-      <b>Clips</b>
-      <span class="wimodes">
-        <label><input type="radio" name="vmode" value="open" checked> Click to open</label>
-        <label><input type="radio" name="vmode" value="delete"> Click to delete</label>
-      </span>
-      <button id="vdelete" class="btn btn-danger" hidden></button>
-    </div>
-    <div id="vgrid" class="wigrid"></div>
+  </section>
+  <div class="statuscard">
+    <div id="verr" class="err"></div>
+    <p class="sub" id="vprog"></p>
   </div>
   </div>
 
@@ -859,6 +893,12 @@
            is what most visits end with; neutral. -->
       <button type="button" id="lbdownload" class="btn btn-block"
         title="Save the picture as you see it to your computer, at full size, with its settings in the PNG when Settings says so.">Download</button>
+      <!-- The Image tab's keep-this-one, and the rail's main action there
+           (amber): what is on screen into work/output/, look and all. Only
+           generations are archived on their own. Shown from the start, since
+           the page opens on the Image tab; `showTab` hides it on Outputs. -->
+      <button type="button" id="saveout" class="btn btn-run btn-block"
+        title="Save the picture as you see it to work/output/ — the Outputs tab.">Save to output</button>
       <!-- A copy, beside the original: for keeping both. Neutral, since
            Save changes below is what an edit usually ends with. -->
       <button type="button" id="lbsave" class="btn btn-block" hidden
@@ -921,6 +961,18 @@
           <button type="button" id="rpclear" class="btn">Clear</button>
         </div>
       </details>
+      <!-- Hi-res: enlarge by the shared factor (the Hi-res pass panel's
+           Enlarge box is the same number) and re-draw the whole picture
+           lightly at the new size, with that panel's steps, strength, model
+           and prompt. Before a refine: it would partly undo one made first. -->
+      <details id="rdfold-hires" class="fold">
+        <summary>Hi-res <span class="foldstate" id="rdsum-hires"></span></summary>
+        <div class="rdrow">
+          <label for="upfactor">Enlarge</label>
+          <select id="upfactor" title="Upscale before the hi-res pass"></select>
+        </div>
+        <p class="sub" id="rdhiresnote"></p>
+      </details>
       <!-- Change the whole picture by instruction, with no painting: the image
            itself goes to the model as reference 1, the prompt says what to change.
            The whole fold shows only for a model that takes references
@@ -976,6 +1028,7 @@
          tabs' dock pattern. The mask decides the main one: nothing painted
          is "Refine image", painted is "Refine area". -->
     <div class="fpfoot">
+      <button type="button" id="rdhires" class="btn btn-block">Hi-res</button>
       <button type="button" id="rdedit" class="btn btn-block" hidden>Edit</button>
       <button type="button" id="rdextendgo" class="btn btn-block">Extend</button>
       <button type="button" id="redrawgo" class="btn btn-run btn-block" disabled>Refine image</button>
@@ -1138,7 +1191,7 @@
   <!-- What a pass is doing and what went wrong: the error and OOM box, the
        live preview, progress and Stop. In the pane's lower left, shown only
        when it has something to say. -->
-  <div class="lbstatus">
+  <div class="statuscard">
     <div id="lberr" class="err"></div>
     <details class="fold previewfold" id="rdfold-preview" open>
       <summary>Preview</summary>

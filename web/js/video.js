@@ -1,4 +1,5 @@
 import { $, esc, getJSON, post, numOr, rememberFolds } from './dom.js';
+import { floatPanels } from './panels.js';
 import { MEMORY_LABELS, showError } from './memory.js';
 import { S } from './state.js';
 import { setBusy, setIdle, cancelRun } from './busy.js';
@@ -348,11 +349,36 @@ export const vSource = sourceSlot({
   err: 'verr',
 });
 
+// The tab is a workspace like the Image tab's: its panels kept the folds' ids,
+// and the first time Prompts and Generation are open, Clips in the corner.
+let wsPanels = null;
+const PANEL_DEFS = [
+  { id: 'vid-prompt', el: 'vfold-prompt', open: true },
+  { id: 'vid-gen', el: 'vfold-gen', open: true },
+  { id: 'vid-adv', el: 'vfold-adv' },
+  { id: 'vid-clip' },
+  { id: 'vid-clips', open: true, corner: 'bottom-right' },
+];
+
+// A rail button's dot is its panel header's line in the accent.
+function syncRailDots() {
+  if (!wsPanels) return;
+  for (const d of PANEL_DEFS) {
+    wsPanels.dot(d.id, !!$(d.el ?? `panel-${d.id}`).querySelector('.fphead .foldstate.on'));
+  }
+}
+
+// The tab was shown: its panels can be placed now that it has a size.
+export const layoutVideoTab = () => wsPanels?.layout();
+
 export function initVideo() {
   // The Image tab's sampler list, groups and all: one list in the markup, and
   // `config::SAMPLERS` checks it. First, before anything sets a value on it.
   $('vsampler').innerHTML = $('sampler').innerHTML;
+  wsPanels = floatPanels({ host: $('tab-video'), rail: $('tab-video').querySelector('.wsrail'), defs: PANEL_DEFS });
+  wsPanels.init();
   rememberFolds($('tab-video'));
+  for (const ev of ['input', 'change']) $('tab-video').addEventListener(ev, syncRailDots);
   for (const ev of ['input', 'change']) $('tab-video').addEventListener(ev, syncVideoSummaries);
   $('vgo').addEventListener('click', startClip);
   $('vstop').addEventListener('click', cancelClip);

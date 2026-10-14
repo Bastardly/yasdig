@@ -3,7 +3,8 @@ import { S } from './state.js';
 import { isBusy, onIdle, setBusy, setIdle } from './busy.js';
 import { onJobs, passRunning, runningJob, soonJobs } from './jobs.js';
 import { claimLeft, closeViewer, deliver, onLook, onOpen, passLander, railDot, stepRequest, stepTo } from './viewer.js';
-import { fillReady, oomOptions, passSteps, refine, upscalerOptions, upscalersReady } from './image.js';
+import { fillReady, hiresPass, oomOptions, passSteps, refine, setUpFactor, upOptions, upscalerOptions,
+         upscalersReady } from './image.js';
 import { openGetModels } from './getmodels.js';
 import { showError } from './memory.js';
 import { references } from './refs.js';
@@ -354,6 +355,18 @@ function syncButtons() {
     $('redrawgo').title = !painted && live && noSteps
       ? 'Refine steps is 0 — set it in the Refine pass fold' : '';
   }
+  // Hi-res: on the Hi-res pass panel's steps (a profile can say 0 while the
+  // panel says otherwise), and only while the picture is inside the hi-res
+  // budget (`can_hires`, Settings' hi-res max side).
+  const hf = S.upFactor;
+  if (!isBusy('rdhires')) {
+    const steps = passSteps('hires') > 0;
+    $('rdhires').disabled = !live || !shown.can_hires || !steps;
+    $('rdhires').title = !live ? '' : !shown.can_hires ? 'Already at the hi-res size limit (Settings → Hi-res max side)'
+      : !steps ? 'Hi-res steps is 0 — set it in the Hi-res pass panel' : '';
+  }
+  $('rdhiresnote').textContent = live
+    ? `${shown.width}×${shown.height} → ${Math.round(shown.width * hf)}×${Math.round(shown.height * hf)}` : '';
   // Edit: only for a model that takes references (the image itself is the
   // first), whole-image like Upscale, and it needs an instruction to follow.
   $('rdfold-edit').hidden = !(live && shown.can_edit);
@@ -428,6 +441,7 @@ function syncDialogSummaries() {
   const put = (id, text) => { $(id).textContent = text ? `— ${text}` : ''; };
   const strength = $('rpstrength').value;
   put('rdsum-refine', `${painted ? 'area painted' : 'whole image'} · ${strength}`);
+  put('rdsum-hires', `${S.upFactor}×`);
   const grown = shown ? editSides.note(shown.width, shown.height).split('→ ')[1] : '';
   put('rdsum-edit', grown ? `rescale → ${grown}` : '');
   const f = scaleFactor();
@@ -657,6 +671,8 @@ function syncRedraw(data) {
 // The dialog is opening (viewer.js's `onOpen`), on the state `onLook` handed.
 function prepareOpen() {
   pickModel = S.pane === 'outputs';
+  // The shared factor, as the Hi-res pass panel last set it.
+  $('upfactor').innerHTML = upOptions();
   // The sliders may have moved since: Compare's left side is fetched again.
   beforeKey = null;
   fillUpscalers();
@@ -739,6 +755,11 @@ export function initRedraw() {
   $('redrawgo').addEventListener('click', () => (painted ? redraw() : refineImage()));
   $('rpstrength').addEventListener('input', takeStrength);
   $('rdupscale').addEventListener('click', scale);
+  $('rdhires').addEventListener('click', async () => {
+    await hiresPass(dialogErr, passLander());
+    syncButtons();
+  });
+  $('upfactor').addEventListener('change', (e) => { setUpFactor(parseFloat(e.target.value)); syncButtons(); });
   $('rdedit').addEventListener('click', edit);
   // Edit waits for an instruction; the button follows the box as it's typed.
   $('rpprompt').addEventListener('input', syncButtons);

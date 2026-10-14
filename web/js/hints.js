@@ -447,7 +447,7 @@ export function wireHints(root = document) {
     b.addEventListener('blur', hideTip);
     b.addEventListener('click', (e) => {
       // Inside a <label>, a click anywhere activates the labelled control — so
-      // without this, asking what "Keep going until stopped" means switches it on.
+      // without this, asking what "Until stopped" means switches it on.
       e.preventDefault();
       showTip(b);
     });

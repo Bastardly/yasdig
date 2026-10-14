@@ -9,6 +9,7 @@ import { sourceSlot } from './source-slot.js';
 import { wireHints } from './hints.js';
 import { onRefsChange, references, refsActive, syncRefs } from './refs.js';
 import { openGetModels } from './getmodels.js';
+import { floatPanels } from './panels.js';
 import { showError, MEMORY_LABELS } from './memory.js';
 
 // The checkpoint list the server published. Exported because the work-item
@@ -179,9 +180,45 @@ function syncModelsSummary() {
     bits.push(`LoRA: ${loras.map((l) => baseName(l.name).replace(/\.[^.]+$/, '')).join(', ')}`);
   }
   $('modelsum').textContent = '— ' + [m.name, ...bits].join(' · ');
-  // The line is cut to fit (`.fold > summary`), so the whole of it is the title.
+  // The line is cut to fit, so the whole of it is the title.
   $('modelsum').title = [m.name, ...bits].join('\n');
+  // LoRAs patch what is drawn and a memory mode changes how it fits: a
+  // departure from the plain path, which a closed panel must not hide.
+  $('modelsum').classList.toggle('on', loras.length > 0 || ($('memory').value || 'auto') !== 'auto');
+  syncRailDots();
 }
+
+// ---- The workspace ------------------------------------------------------------
+//
+// The tab is a rail, the picture on a stage, and floating panels over it
+// (`panels.js`), the Refine & adjust dialog's shape. The panels kept the
+// folds' ids, so code that opens one (`$('fold-src').open = true`) still does.
+let wsPanels = null;
+const PANEL_DEFS = [
+  { id: 'img-prompt', el: 'fold-prompt', open: true },
+  { id: 'img-models', el: 'modelsbox' },
+  { id: 'img-gen', el: 'fold-gen', open: true },
+  { id: 'img-src', el: 'fold-src' },
+  { id: 'img-hires', el: 'fold-hires' },
+  { id: 'img-refine', el: 'fold-refine' },
+  { id: 'img-info' },
+  { id: 'img-current', open: true, corner: 'bottom-right' },
+  { id: 'img-favorites' },
+];
+
+// A rail button's dot: a line in its panel is in the accent, so the panel
+// departs from the plain path (a batch, an After-each pass, a source, a LoRA, a
+// pass's own model) — the header's, or a fold's inside it.
+function syncRailDots() {
+  if (!wsPanels) return;
+  for (const d of PANEL_DEFS) {
+    const el = $(d.el ?? `panel-${d.id}`);
+    wsPanels.dot(d.id, !!el.querySelector('.foldstate.on'));
+  }
+}
+
+// The tab was shown: its panels can be placed now that it has a size.
+export const layoutImageTab = () => wsPanels?.layout();
 
 // ---- The folds ---------------------------------------------------------------
 //
@@ -205,24 +242,10 @@ export function passSteps(which) {
   return passModel(which === 'hires' ? 'hiresmodel' : 'refmodel')?.[`${which}_steps`] ?? 0;
 }
 
-// The Hi-res button follows its fold's steps, not the image's profile: a
-// fresh install's profile says 0, and gating on that hid a pass the fold was
-// set to run (and that ran fine as an after-each). The server still says
-// whether the image is inside the hi-res budget — that decides whether the
-// button is drawn at all. A button waiting on its own request is setBusy's.
-function syncPassButtons() {
-  const b = $('hires');
-  if (!b || isBusy('hires')) return;
-  const off = passSteps('hires') <= 0;
-  b.disabled = off;
-  b.title = off ? 'Hi-res steps is 0 — set it in the Hi-res pass fold' : '';
-}
-
 function syncSummaries() {
   // Everything that changes a summary is something a running loop should
   // hear, so this is also where the loop is told.
   syncLoop();
-  syncPassButtons();
   // Before `/models` answers every box is empty, and "× · steps" says nothing.
   if (!currentModel()) return;
   // The line is cut to fit (`.fold > summary`), so the whole of it is the title.
@@ -288,14 +311,23 @@ function syncSummaries() {
     // pick that names the generating model is the same model, and stays dim.
     $(id).classList.toggle('on', !!$(sel).value && $(sel).value !== $('template').value);
   }
+  syncRailDots();
 }
 
-// Open or folded is a per-viewer convenience, so it lives in this browser;
-// storage can be missing or throw, and a fold then simply starts as the markup
-// has it — Generation, After each, Prompts and Models open, the source
-// slot and the two passes folded, since those are reached for rather than used
-// every time.
+// The panels, before anything reads `.open` on one. Open or closed and where
+// each was left is a per-viewer convenience, so it lives in this browser
+// (`panels.js`); the first time, Prompts and Generation are open, and Current
+// sits in the bottom-right corner. The folds still nested in a panel (the
+// preview) remember their own state.
 function initFolds() {
+  wsPanels = floatPanels({
+    host: $('tab-image'),
+    rail: $('tab-image').querySelector('.wsrail'),
+    defs: PANEL_DEFS,
+  });
+  wsPanels.init();
+  // The tab the page opens on, so it has its size already.
+  wsPanels.layout();
   rememberFolds($('tab-image'));
 }
 
@@ -745,26 +777,6 @@ export function render(data) {
   // generate after that silently repeats the same image until you notice and
   // retype -1. The seed used is reported below and is one click from the box,
   // which covers the reason it was ever written back.
-  // Hi-res first: it sets the final size, and refining comes after it — at the
-  // size the image ends up at. Refine itself lives in the Refine & adjust
-  // dialog (redraw.js and viewer.js), with the look, the mask, the live preview
-  // and the history.
-  let actions = '';
-  if (data.can_hires) {
-    // From `upFactor`, not a hardcoded 2: this select is destroyed and rebuilt
-    // on every render, so the choice has to live outside it to survive one.
-    actions += `<select id="upfactor" title="Upscale before the hi-res pass">${upOptions()}</select>
-      <button id="hires" class="btn btn-run">Hi-res pass</button>`;
-  }
-  // The order the work is done in: enlarge (Hi-res, above), finish and grade
-  // (Refine & adjust…, one dialog), keep (Save). Neutral: opening the dialog
-  // spends nothing; its own buttons do. Clicking the image opens it too.
-  actions += '<button id="redrawopen" class="btn">Refine &amp; adjust…</button>';
-  // Always offered, including for a plain generate — a base render can be worth
-  // keeping too. Only generations are archived automatically; this is how a
-  // refined or hi-res image gets kept.
-  actions += '<button id="saveout" class="btn">Save to output</button>';
-
   // The prompt as it was actually conditioned. Shown only when it differs from
   // the box, which happens for exactly three reasons: a `{variable}` was drawn —
   // and the box has to keep the braces for the next image, so this is the only
@@ -781,27 +793,18 @@ export function render(data) {
     + (data.hires_passes ? ` · hi-res${times(data.hires_passes)}` : '');
   S.currentSrc = `data:image/png;base64,${data.image_base64}`;
 
-  P('result').innerHTML = `
-
-    ${actions ? `<div class="actions">${actions}</div>` : ''}
-    <div id="saved" class="meta"></div>
-    <div id="rerr" class="err"></div>
-    <img src="${S.currentSrc}" alt="result" title="Click to refine and adjust">
+  // The picture on the stage; what is known about it in the Info panel. Every
+  // pass on it — Hi-res, Refine, Edit, Extend, Scale — and Save to output are
+  // in the Refine & adjust dialog, which a click on the picture opens.
+  P('result').innerHTML = `<img src="${S.currentSrc}" alt="result" title="Click to refine and adjust">`;
+  P('info').innerHTML = `
     <div class="meta"><b>${data.width}×${data.height}</b> · seed
       <b id="seedval" class="pin" title="Put this seed in the box, to generate it again">${data.seed}</b>
       · total <b>${total} ms</b>${tags}</div>
     ${rolled}
     <div class="bars">${bars}</div>${cached}
     `;
-
-  // The picture opens the Refine & adjust dialog: finishing it is what a click
-  // on it is for.
   P('result').querySelector('img').addEventListener('click', () => showFullSize(S.currentSrc));
-  $('redrawopen').addEventListener('click', () => showFullSize(S.currentSrc));
-  if ($('hires')) $('hires').addEventListener('click', hires);
-  if ($('upfactor')) {
-    $('upfactor').addEventListener('change', (e) => setUpFactor(parseFloat(e.target.value)));
-  }
   // The dialog can already be open when this runs: a pass from it, a step
   // back, or a batch image landing. A new state of the same picture keeps the
   // view where it was; a different picture is re-centred.
@@ -811,7 +814,6 @@ export function render(data) {
   $('seedval').addEventListener('click', () => {
     $('seed').value = data.seed;
   });
-  if ($('saveout')) $('saveout').addEventListener('click', saveOutput);
 
   // Which archived generation this descends from, so the grid can show it.
   // Survives a refine or hi-res: those don't create a work item, they escalate
@@ -831,10 +833,8 @@ export function render(data) {
   // `setLook` also restores the area and what the Crop fold says.
   setLook(data);
   $('postms').textContent = '';
-  // The action row was just rebuilt; a Refine still waiting on its request
-  // keeps saying so.
+  // A pass still waiting on its request keeps saying so.
   redrawBusy();
-  syncPassButtons();
 }
 
 // The Image tab's result as it was last drawn, so coming back from another
@@ -908,14 +908,10 @@ async function escalate(which, path, payload, label, kind, err = escErr, land = 
       ...oomOptions(),
       retry: () => escalate(which, path, { ...payload, memory: $('memory').value || null }, label, kind, err, land),
     });
-    // The image is gone, so the controls are dead; keep the picture on
-    // screen. Any other failure is retryable — the server kept its
-    // intermediates.
-    if (stale(e) && onImage) {
-      S.imageId = null;
-      const row = document.querySelector('.actions');
-      if (row) row.remove();
-    }
+    // The image is gone, so the dialog's buttons go dead (no `imageId`);
+    // the picture stays on screen. Any other failure is retryable — the
+    // server kept its intermediates.
+    if (stale(e) && onImage) S.imageId = null;
   } finally {
     setIdle(which);
   }
@@ -980,11 +976,12 @@ export const refine = (prompt, err, land) => escalate('redrawgo', '/refine', {
   model: P('refmodel')?.value || null, ...escalateSettings(),
   ...(prompt ? { refine_prompt: prompt } : {}),
 }, 'Refining…', 'refine', err, land);
-// Hi-res is the action row's, with the Hi-res fold's prompt.
-const hires = () => escalate('hires', '/hires', {
-  model: P('hiresmodel').value || null, upscale: parseFloat($('upfactor').value),
+// Hi-res, from the dialog's Refine panel: enlarge by the shared factor and
+// re-diffuse at the new size, with the Hi-res pass panel's settings and model.
+export const hiresPass = (err, land) => escalate('rdhires', '/hires', {
+  model: P('hiresmodel')?.value || null, upscale: S.upFactor,
   ...escalateSettings(),
-}, 'Hi-res pass…', 'hires');
+}, 'Hi-res pass…', 'hires', err, land);
 
 // ---- Runs -------------------------------------------------------------------
 //
@@ -1127,7 +1124,7 @@ async function startRun() {
 
 // ---- The loop follows the panel ---------------------------------------------
 //
-// "Keep going until stopped" draws each image from the Image tab as it is
+// "Until stopped" draws each image from the Image tab as it is
 // *now*: change the prompt to "lovely cat" and the next image is a cat. A batch
 // keeps what it was queued with; the loop is the one run that listens, and
 // there is only ever one (`Queue::push_loop`). The image in flight finishes as
@@ -1248,15 +1245,17 @@ function syncStopButton() {
 // Keep the image on screen. Everything generated is archived automatically, but
 // a refine or hi-res is not — escalations are the expensive rungs, and most of
 // them are experiments. This is how one stops being an experiment.
-async function saveOutput() {
+// The Refine & adjust dialog's *Save to output* (its rail, on the Image tab):
+// what is on screen, look and all.
+export async function saveOutput() {
   if (S.imageId === null) return;
   setBusy('saveout', 'Saving…');
-  escErr('');
+  $('lberr').textContent = '';
   try {
     const data = await post('/save-output', { image_id: S.imageId });
-    $('saved').textContent = `saved → ${data.path}`;
+    $('lbsaved').textContent = `saved → ${data.path}`;
   } catch (e) {
-    escErr(String(e.message || e));
+    $('lberr').textContent = String(e.message || e);
   } finally {
     setIdle('saveout');
   }
@@ -1345,6 +1344,7 @@ export function initImage() {
   onRefsChange(syncSummaries);
   initFolds();
   $('go').addEventListener('click', startRun);
+  $('saveout').addEventListener('click', saveOutput);
   $('stop').addEventListener('click', stopRun);
   $('cancelgen').addEventListener('click', cancelImage);
   // The Hi-res fold's view of the shared upscale factor.
@@ -1362,9 +1362,9 @@ export function initImage() {
     $('seed').value = -1;
     $('seed').dispatchEvent(new Event('input', { bubbles: true }));
   });
-  // Every fold's summary follows its boxes, from one listener on the column.
+  // Every panel's summary follows its boxes, from one listener on the tab.
   for (const ev of ['input', 'change']) {
-    $('tab-image').querySelector('.col-controls').addEventListener(ev, syncSummaries);
+    $('tab-image').addEventListener(ev, syncSummaries);
   }
   // Each pass's boxes follow the checkpoint picked for it.
   for (const [sel, which] of [['hiresmodel', 'hires'], ['refmodel', 'refine']]) {
@@ -1399,8 +1399,6 @@ export function initImage() {
   // `IDLE_LABELS.go` is only a fallback: what the button says at rest depends on
   // the run panel, which that map can't know.
   onIdle(syncGoLabel);
-  // `setIdle` re-enables a button blindly; a Hi-res with no steps stays off.
-  onIdle(syncPassButtons);
   onResult(takeResult);
   onJobs(syncStopButton);
   // A crop, a scale or a step back in the dialog is a new state of this image;

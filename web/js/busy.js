@@ -3,7 +3,7 @@ import { onJobs, runningKind, stopKind } from './jobs.js';
 
 // What each button says at rest, so a button that was waiting can be put back.
 export const IDLE_LABELS = {
-  go: 'Generate', redrawgo: 'Refine image', rdedit: 'Edit', rdupscale: 'Scale', rdextendgo: 'Extend', hires: 'Hi-res pass',
+  go: 'Generate', redrawgo: 'Refine image', rdedit: 'Edit', rdupscale: 'Scale', rdextendgo: 'Extend', rdhires: 'Hi-res',
   saveout: 'Save to output', lbsave: 'Save as new output', lbsavechanges: 'Save changes',
   vgo: 'Generate clip', venlarge: 'Enlarge frames',
   cgo: 'Convert',

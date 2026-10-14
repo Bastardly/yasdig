@@ -12,12 +12,12 @@ import { initViewer } from './viewer.js';
 import { initRedraw } from './redraw.js';
 import { initRefs } from './refs.js';
 import { initHints } from './hints.js';
-import { initImage, restoreImage } from './image.js';
+import { initImage, layoutImageTab, restoreImage } from './image.js';
 import { initJobs, jobCount } from './jobs.js';
 import { initBusy } from './busy.js';
 import { initWorkItems, markGrid } from './workitems.js';
 import { initOutputs, loadOutputs } from './outputs.js';
-import { initVideo } from './video.js';
+import { initVideo, layoutVideoTab } from './video.js';
 import { initConvert } from './convert.js';
 import { initSettings } from './settings.js';
 import { initHelp, openHelp } from './help.js';
@@ -39,17 +39,19 @@ function showTab(name) {
   $('tab-getmodels').hidden = name !== 'getmodels';
   $('tab-help').hidden = name !== 'help';
   $('tab-settings').hidden = name !== 'settings';
+  // A hidden workspace has no size: its panels are placed once it shows.
+  if (name === 'image') layoutImageTab();
+  if (name === 'video') layoutVideoTab();
   // Nothing is playing on a tab nobody is looking at. A 24 fps canvas timer is
   // cheap but it is not free, and it would go on redrawing all night.
   if (name !== 'video') stopPlayback();
 
-  // Save lives in the viewer's panel for the Outputs tab, because that tab has
-  // no result column to put it above. It is hidden elsewhere rather than being
-  // a second copy of `#saveout`: the other two panes already have that button
-  // in their action row, and two ids doing one job is two things to keep in
-  // step.
+  // The Refine & adjust dialog's saves, in its rail: the Image tab keeps a
+  // picture with Save to output, the Outputs tab saves over the file or beside
+  // it.
   $('lbsave').hidden = name !== 'outputs';
   $('lbsavechanges').hidden = name !== 'outputs';
+  $('saveout').hidden = name !== 'image';
 
   // The two image panes share one `imageId`, so leaving one has to empty it.
   // Otherwise the picture stays on screen beside Refine and Hi-res buttons that

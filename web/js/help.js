@@ -308,15 +308,16 @@ export const TOPICS = [
     title: 'Refine & adjust',
     html: `
       <h2>Refine &amp; adjust</h2>
-      <p>The one place an image is finished. Press <b>Refine &amp; adjust…</b> beside the
-      image, click the image, or open a picture on the Outputs tab. The picture fills
-      the screen; the rail on the left opens floating panels over it —
-      <b>Refine</b> (prompt, Refine, Edit, Extend), <b>Scale</b> (Scale, Crop),
+      <p>The one place an image is finished. Click the picture on the Image tab, or
+      open one on the Outputs tab. The picture fills the screen; the rail on the
+      left opens floating panels over it — <b>Refine</b> (prompt, Refine, Hi-res,
+      Edit, Extend), <b>Scale</b> (Scale, Crop),
       <b>Adjust</b> (Tone, Colour, Detail), <b>Brushes</b>, <b>Selection</b> and
       <b>History</b>. Drag a panel by its title bar to put it anywhere; it stays
       there next time, and a double-click on the title bar puts it back. A dot on a
       rail button means its panel has something in effect. Fit, <b>1:1</b> and
-      Download are at the rail's foot, Apply at History's; progress and errors appear at the
+      Download (and Save to output, from the Image tab) are at the rail's foot,
+      Apply at History's; progress and errors appear at the
       lower left.</p>
       <p>The picture under the pointer belongs to whichever of the Refine fold,
       Crop, Selection or Brushes is open — opening one closes the others. With none
@@ -334,9 +335,10 @@ export const TOPICS = [
       lets a large picture fit in memory. A painted mask scales with the picture,
       and it is a History step like the rest. When a pass runs out of memory, the
       box offers <b>Scale down to 0.75× and try again</b>.</p>
-      <p><b>Hi-res comes first</b>, from the button above the image: it sets the
-      final size and re-draws the whole picture lightly on the way, which would
-      partly undo a refine done before it. Enlarge, then refine.</p>
+      <p><b>Hi-res comes first</b> (the Refine panel's Hi-res fold and button, with
+      the Hi-res pass panel's settings): it sets the final size and re-draws the
+      whole picture lightly on the way, which would partly undo a refine done
+      before it. Enlarge, then refine.</p>
       <p>Drag to paint, right-drag or the <b>Eraser</b> to take paint away. The mask
       shows only while the pointer is over the picture, so moving off it shows the
       result clean. <b>Edge softness</b> is how far past the paint the new pixels

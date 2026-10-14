@@ -76,6 +76,21 @@ Five things break silently:
   **`build_id` is read once, first thing in `run`** (re-read, a rebuilt binary hands
   over to a stale server). **Takeover must send `clear:false`**.
 
+**Releasing** (`v*` tag → `release.yml`, ~9 min; pushing `master` also deploys the
+site when `site/` changed):
+
+1. Commit the work. In `CHANGELOG.md` turn `## Unreleased` into `## X.Y.Z — date`;
+   bump `version` in `Cargo.toml` and `yasdig`'s entry in `Cargo.lock`; `cargo build`;
+   commit "Release vX.Y.Z"; `git tag -a vX.Y.Z -m "yasdig vX.Y.Z"`.
+2. `git push origin master vX.Y.Z`.
+3. **Write the release page's notes** — never leave only GitHub's generated
+   "Full Changelog" link. The version's CHANGELOG section, plus a link to the full
+   changelog, into a file, then **right after the push**
+   `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file <file>`: the
+   workflow's publish job finds the release and only uploads the archives to it,
+   keeping title and notes. If it already ran, `gh release edit vX.Y.Z --notes-file`.
+4. Watch it (`gh run watch`); check both archives are on the release.
+
 sd.cpp flags in `build.rs` (`GGML_NATIVE=OFF`, `GGML_OPENMP=OFF`, `/MT`) make it
 portable; the workflow fails if sd-cli links anything but the Vulkan loader and libc.
 Static libstdc++ is a workflow `LDFLAGS` (Fedora lacks `libstdc++.a`; CI's Ubuntu 22.04
@@ -168,23 +183,36 @@ slot, emptied as `null`. `applyWorkItem` sets the model without `change`, so cal
 `syncParts` then `setParts` matched on `data-path` (sidecars record paths, the wire
 carries names).
 
-## The Image tab's folds
+## The Image tab's panels
 
-The controls column is `<details class="fold">`: Prompts, Models (LoRAs included),
-Generation, After each generation, Image to image, Hi-res pass, Refine pass — then the
-dock. Other tabs use folds too; Settings sections follow the Image tab's order. Seed is
-in the dock.
+The Image and Video tabs are **workspaces**, the Refine & adjust dialog's shape
+(`.workspace`): a rail (`.wsrail`) of panel toggles, the picture on a **stage**
+(`.stage`, `#result`; a click opens Refine & adjust), floating panels
+(`panels.js`, `--ws-panel-w`), and a **status card** (`.statuscard`: `#err`/OOM, the
+preview, `#prog`, `#loopnote`). Image panels: Prompts, Models (LoRAs included, *Save
+as defaults* in its footer), Generation (the seed first, the *After each generation*
+fold last), Image to image, Hi-res pass, Refine pass, **Info** (`#resultinfo`: size,
+seed pin, timings, the rolled prompt), **Current** and **Favorites**. The rail's foot:
+*Until stopped* (`#autorun`), Cancel/Stop, Generate. **No action row**: Hi-res, Refine, Save to output are in the dialog.
 
-**Every summary says what is inside** (`syncSummaries`, `syncModelsSummary`). A summary
-turns `.foldstate.on` when the fold departs from the plain path (>1 image or loop,
-source picked, any After-each box, a separate Hi-res/Refine model). Driven by a
-delegated `input`/`change` listener on the column; a redraw that fires no event must
-call it (hence `loraPicker`'s `onChange`).
+**Every panel header says what is inside** (`syncSummaries`, `syncModelsSummary`). A
+line turns `.foldstate.on` when the panel departs from the plain path (>1 image or
+loop, source picked, any After-each box, a separate Hi-res/Refine model, LoRAs or a
+memory mode), and **the rail button's dot mirrors any such line in the panel**,
+header or nested fold (`syncRailDots`). Driven by a
+delegated `input`/`change` listener on the tab; a redraw that fires no event must call
+it (hence `loraPicker`'s `onChange`).
 
 Break silently:
 
-- **Open state per fold per browser** (`rememberFolds`, key `yasdig.fold.<id>`,
-  try/catch). `open` in `index.html` is the default.
+- **The panels kept the folds' ids** (`fold-src`, `modelsbox`, …; `PANEL_DEFS`'s
+  `el`), and an element's `open` property opens its panel — so `$('fold-src').open =
+  true` on a source pick still works. Open state and position are per browser
+  (`yasdig.panel.<id>`); the first time, Prompts and Generation are open and Current
+  sits bottom-right.
+- **A hidden tab has no size**: `showTab` calls `layoutImageTab`/`layoutVideoTab`.
+- **The page stops scrolling on a workspace tab** (`.app:has(> .workspace…)` is the
+  window's height); panels scroll their own bodies.
 - **Picking a hi-res/refine model refills that fold** (`fillPass` from `passModel`),
   since `swap_model` is wholesale. Blank pass-CFG placeholder follows the picked model.
 - **Save as defaults skips a fold holding another model's numbers** (`foreign` in
@@ -194,9 +222,10 @@ Break silently:
 
 ## The dock
 
-Every tab panel with a main action ends in `<div class="dock">` (`position: sticky;
-bottom: 0`) — the Refine & adjust dialog instead has its rail and a status card: error/OOM box, preview fold, progress, seed (Image), `.runstop`, amber
-button. A dock with nothing showing hides itself by CSS.
+Convert's and Settings' columns end in `<div class="dock">` (`position: sticky;
+bottom: 0`): error box, progress, `.runstop`, amber button. A dock with nothing
+showing hides itself by CSS. The workspaces and the Refine & adjust dialog have a
+rail foot and a status card instead (same rules for the preview and the caps).
 
 - **It must stay the column's last child, opaque.** Page scrolls, card is the
   containing block.
@@ -341,9 +370,10 @@ nothing sweeps it.
 - **Reopening a favourite is copy-in/copy-out** (`Display::open` takes a `Shelf`).
 - **`list`/`list_outputs` stay one directory**; only the routes' listings merge.
 
-Page: one module-level shelf string in `workitems.js`; `setShelf` lights the button,
-reloads. `loadWorkItems` drops responses that lost a race. A generate doesn't switch
-shelves. **Favouriting is the tile's star** (`star`/`wireStars` in `gridmark.js`):
+Page: **two grids, two panels** — `shelfGrid` instances in `workitems.js`, Current
+(`/workitems`, which lists starred items too) and Favorites (`/favorites`), each with
+its own mode radios, marks and Delete; *Delete all* is Current's only.
+`loadWorkItems`/`markGrid` drive both; each drops responses that lost a race. **Favouriting is the tile's star** (`star`/`wireStars` in `gridmark.js`):
 
 - **The star is a sibling of the tile's button inside `.tile`**, never a child
   (nested buttons, and the click would open the picture); handler stops the event
@@ -559,10 +589,11 @@ panel's main button (empty → `/refine`, painted → `/redraw`). **A panel with
 pins them in a footer** (`.fpfoot`, under the scrolling body): the others above, the
 main one last and amber — Refine: Edit (hidden without `can_edit`), Extend, *Refine*;
 Scale: *Apply crop* (live only while the Crop fold's box is up), *Scale*; History:
-*Apply adjustments* (it adds a step). **Hi-res stays in the action row** (it re-diffuses the
-whole picture, so it comes before finishing). Row order: Hi-res, Refine & adjust…,
-Save. Whole-image pass goes through `image.js`'s `refine` → `escalate` (an error sink
-and a `land`). Strength box: whole-image value *is* `#rstrength`; area has its own
+*Apply adjustments* (it adds a step). **Hi-res is a fold in the Refine panel**
+(`#upfactor`, the shared `S.upFactor`; `hiresPass` in image.js; gated on `can_hires`
+and the Hi-res pass panel's steps) and works on Outputs too. *Save to output* is in
+the dialog's rail on the Image pane (`saveOutput`). Whole-image passes go through
+`image.js`'s `escalate` (an error sink and a `land`). Strength box: whole-image value *is* `#rstrength`; area has its own
 (`syncStrength`).
 
 - **Scale** (the fold `#rdfold-upscale`): down is `Display::resize`, `POST /resize
@@ -629,7 +660,7 @@ Brushes, Selection, History — with Fit/1:1, Download and Outputs' saves at its
 foot; the pane; and **floating panels** (`web/js/panels.js`, `.fpanel`) over it.
 Refine: *Refine with*, prompt, folds Refine / Edit (`can_edit`) / Extend. Scale: folds
 Scale and Crop. Adjust: Reset, Tone/Colour/Detail. Brushes. Selection (the area).
-History with Compare. A **status card** (`.lbstatus`, pane's lower left, hidden by
+History with Compare. A **status card** (`.statuscard`, pane's lower left, hidden by
 CSS when empty) holds `#lberr`/OOM, the preview, progress and Stop.
 
 - **A panel element has an `open` property that fires `toggle`** (`panels.js`), as a
@@ -752,7 +783,8 @@ a hex elsewhere means a missing token. Ink ramp and state colour are neutral (bo
 because they sit beside a graded image. `--fold-title`/`--fold-on` for fold headings.
 **Amber (`.btn-run`) is the dock's main button only** (plus Hi-res above a result,
 and the thumbnails' favourite star as a glyph colour) — in Refine & adjust that is
-each panel footer's main action (History's is *Apply adjustments*);
+each panel footer's main action (History's is *Apply adjustments*) and, from the
+Image tab, the rail's *Save to output*;
 `.btn` neutral, `.btn-danger` red, `.btn-choice` for "where you are" sets.
 
 - **A bare `<button>` is unstyled**: every button carries `.btn` or `.hint`, except
@@ -776,9 +808,9 @@ only `js/app.js`.
 | `jobs.js` | the `/jobs` poll: Jobs button/dialog, progress lines, `onResult`, `onNotice` |
 | `hints.js` | `HELP`, `HINTS`, `wireHints`, the tooltip bubble |
 | `viewer.js` | the Refine & adjust dialog: open/close, `FILTERS`, sliders, `/adjust`, History, `zoomPane` |
-| `panels.js` | that dialog's floating panels: open, drag, remember, rail dots |
-| `image.js` | Image tab: models, folds, `render`, escalations, runs, Save |
-| `workitems.js` | work-item grid, reopening |
+| `panels.js` | floating panels (the dialog's and the workspaces'): open, drag, remember, rail dots |
+| `image.js` | Image tab: its panels, models, `render` (stage + Info), escalations, runs, Save |
+| `workitems.js` | the Current and Favorites grids, reopening |
 | `gridmark.js` | click-to-mark actions |
 | `source-slot.js` | source-image slot factory, upload/drop/paste |
 | `loras.js` | LoRA picker factory |
@@ -926,9 +958,9 @@ selection is the group's inner text, so a held key stays idempotent.
 
 ## Viewer, panes and tooltips
 
-**Panes**: Image and Outputs share the action row/Save/viewer via `PANES` and `P(k)`.
-The `outputs` row has only `err`; `setResultImage` and `clearPane` use `?.` for
-`result`. Module state (`imageId`, `currentSrc`, `workId`) is single, so **`showTab`
+**Panes**: Image and Outputs share the dialog via `PANES` and `P(k)`. Image's
+`result` is the stage, `info` the Info panel; the `outputs` row has only `err`;
+`setResultImage` and `clearPane` use `?.` for `result`. Module state (`imageId`, `currentSrc`, `workId`) is single, so **`showTab`
 must `clearPane` the tab it leaves**; returning to Image calls `restoreImage`
 (`lastImage`; Outputs has its own `Slot::Output`). A pane's keys: `result`, `err`,
 `refmodel`, `hiresmodel`; sliders are addressed by plain id.

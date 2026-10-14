@@ -62,7 +62,7 @@ Only what differs from where the model would start anyway is kept, in
 that has no opinion of its own about it — the tuned turbo keeps its 6 steps, and
 picks up your new refine strength. This is also the place for a model's own
 **Extra sd-cli arguments**, such as `--offload-to-cpu` for a model that doesn't fit,
-and for the files it runs with — a VAE picked in the **Models** fold is saved with the
+and for the files it runs with — a VAE picked in the **Models** panel is saved with the
 rest, under a table of its own:
 
 ```toml
@@ -189,16 +189,34 @@ settings, so it loads nothing and says so.
 Settings → *Saved images* turns the writing off, if you share pictures and would
 rather your prompts didn't travel with them.
 
+## The Image tab
+
+The Image tab is a workspace: a rail down the left, the latest picture filling the rest,
+and **panels** that float over it. Each rail button opens one — **Prompts**, **Models**,
+**Generation** (with the seed at its top and *After each generation* at its foot),
+**Image to image**, **Hi-res pass**, **Refine pass**,
+**Info** (the picture's size, seed, timings and the prompt as it was drawn), **Current**
+and **Favorites** (the work items). Open as many as you like and drag each by its title
+bar to where you want it; it stays there next time, and a double-click on the title bar
+puts it back. Each panel's title bar says what is inside, in amber when it departs from
+a plain generate (a batch, a source, a LoRA, an extra pass), and the rail button then
+carries a dot so a closed panel still says so. **Until stopped**, Stop and **Generate**
+are at the rail's foot; progress, the live preview and any error appear in a card at the lower
+left of the picture.
+
+Click the picture to open **Refine & adjust** — Hi-res, Refine, Edit, Extend, Scale,
+the sliders, and *Save to output* are all there (see *Refine*). The Video tab is laid
+out the same way.
+
 ## Work items
 
 Every image you generate is kept, in `work/workitems/`: the unsharpened
 output-resolution PNG, a thumbnail, and a JSON sidecar with the settings that produced
-it. They survive a restart, and they show up as a panel of thumbnails — a third column
-beside the controls and the result on a wide screen, wrapping underneath them when
-there isn't room.
+it. They survive a restart, and they show up as thumbnails in the **Current** panel;
+starred ones are also in **Favorites** (see below), each panel a rail button away.
 
 Click one and it comes back **live** — the controls repopulate with that image's
-settings, the picture goes back on screen, and Refine, Hi-res and the viewer's sliders work on
+settings, the picture goes back on screen, and Refine, Hi-res and the sliders work on
 it again. Because the panel has been restored to what made the image, an escalation runs
 with those settings unless you change them first, in which case it runs with what the
 boxes say. That is the point: render a batch, pick the one worth the money, and escalate that
@@ -244,7 +262,7 @@ Un-starring a tile moves it back among the ordinary work items. **Click to delet
 on this shelf deletes a favourite outright.
 
 Refined and hi-res results are deliberately **not** archived: those are the expensive
-rungs and most of them are experiments. **Save to output**, above the image, writes the
+rungs and most of them are experiments. **Save to output**, in Refine & adjust's rail, writes the
 picture currently on screen — filters and all — to `work/output/`, with its own sidecar.
 It is available for a plain generate too, and you can press it after each of several
 refines to keep every step.
@@ -265,7 +283,7 @@ to a model that doesn't use them, and a reopened work item puts its references b
 ## Image to image
 
 The Image tab can start from a picture instead of from noise. The **Image to image**
-fold holds the slot: **Choose…** picks one of your outputs (everything in
+panel holds the slot: **Choose…** picks one of your outputs (everything in
 `work/output/` — what you have saved, and what you have uploaded), **Upload…** takes
 a file, and dropping or pasting an image onto the tab does the same. An upload lands
 in `work/output/` beside your saves, so it is in the picker next time, in the Outputs
@@ -275,11 +293,11 @@ Anything the browser can open works — JPEG, WebP, AVIF — because the page
 re-encodes it to PNG in a canvas before uploading. Nothing in the binary decodes
 anything but PNG, and that stays true.
 
-With a picture picked, the fold opens and the panel changes to match: base size and
+With a picture picked, the panel opens and changes to match: base size and
 Output upscale hide, because they describe a render from noise, and two boxes appear
-under the picture. The pass runs the Generation fold's **Steps** and **CFG scale** —
+under the picture. The pass runs the Generation panel's **Steps** and **CFG scale** —
 all of the steps, with Strength deciding how far up the schedule they start — so a
-model's own numbers apply with no second set to keep in step. The fold's summary says
+model's own numbers apply with no second set to keep in step. The panel's header says
 *from …* whenever a picture is picked, so a folded slot never quietly turns Generate
 into a pass over a picture.
 
@@ -351,7 +369,7 @@ nothing on this side is looking at it.
 ## Upscalers
 
 Every render is enlarged on its way to the output size, and the **Upscaler** select
-beside *Output upscale* in the *After each generation* fold picks what does it. **FSR (EASU)** is the
+beside *Output upscale* in the *After each generation* fold (Generation panel) picks what does it. **FSR (EASU)** is the
 default: milliseconds, no file, and it only redistributes the pixels the checkpoint
 drew. A **model** draws new fine texture instead — hair, fabric, skin — at the cost of
 seconds. **Get models → Upscalers** downloads four that run here — 4x-UltraSharp and
@@ -442,26 +460,28 @@ it is a choice you make, like picking it as a source. **Refine with**, at the to
 panel, is the model the passes run on, starting at the one that made the picture (or,
 for an upload, the one picked on the Image tab). Hi-res stays on the Image tab; to
 start a real pass from a saved picture at a strength you choose, pick it in the
-**Image to image** fold.
+**Image to image** panel.
 
 ## Refine
 
-**Hi-res pass** in the result's action row enlarges it and adds detail at the new size — do that
-first, since it re-draws the whole picture lightly and would partly undo a refine made
-before it. **Refine & adjust…** beside it — or a click on the picture, or a picture
-opened on the Outputs tab — opens the one place an image is finished: the picture,
-nearly full screen, with a narrow **rail** down the left. Each rail button opens a
-floating panel over the picture: **Refine** (the pass prompt, Refine, Edit, Extend),
-**Scale** (Scale and Crop), **Adjust** (Tone, Colour, Detail — see *Postprocessing*),
-**Brushes**, **Selection** (the area and its colours) and **History**. A panel's
-buttons stay at its foot however far you scroll it, the main one in amber. Open as many as
-you like; drag one by its title bar to put it anywhere, and it stays there next time
+A click on the picture — or a picture opened on the Outputs tab — opens **Refine &
+adjust**, the one place an image is finished: the picture, nearly full screen, with a
+narrow **rail** down the left. Each rail button opens a floating panel over the
+picture: **Refine** (the pass prompt, Refine, Hi-res, Edit, Extend), **Scale** (Scale
+and Crop), **Adjust** (Tone, Colour, Detail — see *Postprocessing*), **Brushes**,
+**Selection** (the area and its colours) and **History**. A panel's buttons stay at
+its foot however far you scroll it, the main one in amber. Open as many as you like;
+drag one by its title bar to put it anywhere, and it stays there next time
 (double-click the title bar to put it back). A dot on a rail button says its panel has
-something in effect — a painted mask, a moved slider, brush strokes — even while it
-is closed. The rail's foot has Fit / **1:1** and **Download**; **Apply adjustments** is
-History's main button.
-Progress, the live preview, Stop and any error appear in a card at the lower left.
-The action row reads Hi-res · Refine & adjust… · Save, the order you'd use them.
+something in effect — a painted mask, a moved slider, brush strokes — even while it is
+closed. The rail's foot has Fit / **1:1**, **Download** and, from the Image tab, **Save
+to output**; **Apply adjustments** is History's main button. Progress, the live
+preview, Stop and any error appear in a card at the lower left.
+
+**Hi-res** (the Refine panel's *Hi-res* fold and button) enlarges the picture and adds
+detail at the new size, with the Hi-res pass panel's steps, strength and model — do
+that first, since it re-draws the whole picture lightly and would partly undo a refine
+made before it.
 
 The picture under the pointer belongs to whichever of the Refine fold, Crop, Selection
 or Brushes is open — opening one closes the others. With none open, a drag pans at
@@ -538,7 +558,7 @@ rolls per image.
 
 ## Escalating with a different model
 
-**Hi-res model** and **Refine model**, at the head of the Hi-res and Refine folds, run
+**Hi-res model** and **Refine model**, at the head of the Hi-res pass and Refine pass panels, run
 that one pass on a checkpoint other than the one the image was made with. Leave
 either on *same as generated* and that pass doesn't change. Picking one fills its
 fold's steps, strength and CFG from that model's own settings, since the pass runs
@@ -572,14 +592,14 @@ past its budget.
 
 ## Batch and loop
 
-The Generation fold is about the *run* rather than the image. The Generate button is
+The Generation panel is about the *run* rather than the image. The Generate button is
 in the bar pinned to the bottom of the window — with the seed, Cancel and Stop, the
 progress line and the live preview above it — so it is in reach however far you have
 scrolled the settings, and a job starting or finishing never moves the prompt you are
 typing in. Set **Images** to a number and
 the button says `Generate 4`; the images are produced one at a time and each
 appears as it lands, so you can watch the batch fill the work items strip rather
-than waiting for the lot. Tick **Keep going until stopped** and the button
+than waiting for the lot. Tick **Until stopped** (at the rail's foot) and the button
 becomes `Start loop generation`: it ignores the count and keeps going until you press
 **Stop job**, which finishes the image in flight and then ends the run (it only shows
 for more than one image). A loop **follows the panel**: change the prompt, the model or
@@ -619,10 +639,10 @@ A pinned seed **advances by one per image**, so a batch of eight isn't eight cop
 the same picture; the first image is exactly the seed you pinned. `-1` keeps drawing a
 fresh seed per image, as always.
 
-The **After each generation** fold adds three optional steps, all off by default, run in
+The **After each generation** fold, at the foot of the Generation panel, adds three optional steps, all off by default, run in
 this order:
 
-- **Hi-res pass** — at the factor in the Hi-res fold's **Hi-res scale** (1 to 4, so
+- **Hi-res pass** — at the factor in the Hi-res pass panel's **Hi-res scale** (1 to 4, so
   2.5 is fine), which is the same value as the select above the image.
 - **Refine** — after the hi-res pass, for the reason the buttons are in that order.
 - **Save to output** — writes the finished image to `work/output/`, so a run can fill a
@@ -701,8 +721,8 @@ is measured: 254 MB of VAE takes 2.07 s serialized against 0.53 s at four thread
 
 ## Postprocessing
 
-Eleven sliders live in the **Adjust** half of the **Refine & adjust** dialog — press
-**Refine & adjust…** or click the picture.
+Eleven sliders live in the **Adjust** panel of the **Refine & adjust** dialog — click
+the picture.
 They work like a photo editor rather than a generation setting: drag one and the image
 re-filters under the cursor. There is no diffusion involved — the server re-runs the GPU
 filters on the unfiltered image it already retained — so a re-tune costs milliseconds
@@ -725,7 +745,7 @@ while you are working can't dismiss the thing you are working on. **Reset** puts
 slider back to where this image started (and removes an area), and a double-click does
 the same for one.
 
-The panel is folds, like the Image tab: **Tone**, **Colour** and **Detail** hold the
+The **Adjust** panel holds folds: **Tone**, **Colour** and **Detail** hold the
 sliders, then **Crop** and **Area**. Folded, each says what is set inside it.
 
 The nine colour knobs are one GPU pass between the upscale and the detail filters, so
@@ -821,7 +841,7 @@ The shape's own soft edge is **Shape feather**.
 
 ### Crop
 
-Open the **Crop** fold and a box appears over the picture: drag its corners or edges,
+Open the **Crop** fold (in the Scale panel) and a box appears over the picture: drag its corners or edges,
 drag inside it to move it, or drag anywhere else on the picture to draw a new one.
 **Aspect** locks it to a shape (Original keeps the picture's own), and the
 **⟲** button beside it turns that shape between landscape and portrait; the size under it
@@ -836,7 +856,7 @@ their values. On the Outputs tab, **Save changes** writes the crop over the file
 
 ### Area
 
-**Area** gives one part of the picture a look of its own. In the **Area** fold, press
+**Area** gives one part of the picture a look of its own. In the **Selection** panel, press
 **Area**: an ellipse appears, and the sliders now adjust only inside it — on top of the
 whole picture's look, so 0 means "as the rest". **Whole image** points the sliders back.
 Drag the shape like a crop box; choose **Rectangle** or **Ellipse**, set **Feather**
@@ -849,7 +869,7 @@ resets its detail ones, as the whole picture's do. A crop moves it with the pict
 
 ### Brushes
 
-The **Brushes** fold paints an effect exactly where you want it: **Dodge** lightens,
+The **Brushes** panel paints an effect exactly where you want it: **Dodge** lightens,
 **Burn** darkens, **Saturate** and **Desaturate** add and take away colour, **Blur**
 softens, **Sharpen** crisps edges. Pick a tool and paint on the picture; the effect
 appears when you let go. **Amount** sets how strong the chosen tool is, and moving it
@@ -888,7 +908,7 @@ The sliders, the area and a crop are all live until you decide otherwise.
 **Apply adjustments**, at the foot of the History panel, makes the look part of the
 picture: the picture doesn't change on screen, but every slider goes back to 0 and the
 next change starts from the adjusted picture. Each Apply, like each crop, is a step in
-**History** (the last fold), labelled with what it changed — *Adjust: Lightness +0.30,
+**History**, labelled with what it changed — *Adjust: Lightness +0.30,
 Vibrance +0.20*. Click any step to go back to it, or forward again; adjusting and
 applying from an earlier step starts a new branch from there, as an undo does.
 

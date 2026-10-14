@@ -22,6 +22,15 @@ What changed in each release of yasdig. Each release's executables are on the
   adds a step. The action row reads Hi-res ·
   Refine & adjust… · Save. Whichever of Refine, Crop, Selection or Brushes is open owns
   the pointer; with none open, a drag pans.
+- **The Image and Video tabs are workspaces** like the editor: a rail, the picture
+  filling the window, and floating panels for every section (Prompts, Models,
+  Generation, …), each remembering where you left it. Work items are two panels,
+  **Current** and **Favorites**; the picture's size, seed and timings are an **Info**
+  panel; *After each generation* is part of the Generation panel, which starts with the
+  seed. Generate, Stop and *Until stopped* (was "Keep going until stopped") are at the
+  rail's foot. The action row is gone:
+  **Hi-res** is in Refine & adjust's Refine panel (and works on Outputs too), and
+  **Save to output** in its rail.
 - **Outputs open in the same dialog**, and Refine, Edit, Extend and Scale work there:
   *Save changes* writes the result over the file. *Refine & extend…* is gone.
 

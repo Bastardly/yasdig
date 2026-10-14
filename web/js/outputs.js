@@ -124,10 +124,9 @@ const del = gridMarks({
   }],
 });
 
-// Flip which gallery the grid reads — `setShelf` in workitems.js, and for the
-// same reasons: the mode goes back to open (marks belong to the gallery they
-// were made on), and the image open in the viewer stays open, since it is a
-// copy in scratch either way.
+// Flip which gallery the grid reads. The mode goes back to open (marks belong
+// to the gallery they were made on), and the image open in the viewer stays
+// open, since it is a copy in scratch either way.
 function setGallery(next) {
   gallery = next;
   $('ocurrent').classList.toggle('active', !onFavorites());

@@ -83,7 +83,8 @@ async function loadFrames(c) {
   }
 }
 
-// The result block, rebuilt per clip. `ms` is only there for a clip that was
+// The clip, rebuilt per clip: the player on the stage, what is known about it
+// and Enlarge frames in the Clip panel. `ms` is only there for a clip that was
 // just generated — opening one from the grid has no timing to report, and
 // inventing one would be worse than leaving it out.
 export function renderClip(c, ms) {
@@ -96,7 +97,8 @@ export function renderClip(c, ms) {
       <button type="button" id="vplay" class="btn">Play</button>
       <input id="vscrub" type="range" min="0" max="0" step="1" value="0">
       <span class="val" id="vat"></span>
-    </div>
+    </div>`;
+  $('vclipinfo').innerHTML = `
     <div class="meta spaced">
       <b>${c.width}×${c.height}</b> · ${c.frames} frames @ ${c.fps} fps · ${secs}s
       · seed <b>${c.seed}</b> · ${esc(c.model)}${took}
@@ -134,7 +136,7 @@ export function renderClip(c, ms) {
   $('venlarge').addEventListener('click', enlargeClip);
   // The only labelled controls on the page built after load, so the only place
   // that has to ask for its (i) icons itself.
-  wireHints($('vresult'));
+  wireHints($('vclipinfo'));
   loadFrames(c);
 }
 
