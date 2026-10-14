@@ -815,6 +815,18 @@ Space+drag.
 Strokes stay live until you apply: a crop keeps them on the same pixels, a Hi-res
 carries them to the bigger picture, and Reset clears them with the rest of the look.
 
+**Restore** paints an earlier step back in — refine the whole picture, then take back
+the parts you liked better before. Pick **Restore**, choose the step under **Restore
+from** (the step before, unless you say otherwise), and paint: those pixels return
+from that step, with the brush's soft edge, and **Amount** is how much. Your sliders
+apply to the combined picture, so there is no seam in the grade. **Apply adjustments**
+makes the combination a new step. Restore strokes belong to the history they were
+painted against, so a new step (a refine, a crop, an Apply) drops them; jumping
+through History keeps them. A step of another size — before a Hi-res — is scaled to
+fit, so it comes back softer; it works best between refines. If you know *before*
+refining which part should change, **Refine area** in the Refine dialog redraws only
+what you paint instead.
+
 ### Apply and History
 
 The sliders, the area and a crop are all live until you decide otherwise.

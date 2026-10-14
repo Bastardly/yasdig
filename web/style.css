@@ -739,6 +739,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    pushed the row under the scrollbar), and the choice set's wide padding
    trimmed to fit. */
 .lbtools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-1); margin-top: var(--sp-1); }
+/* Restore is a different kind of tool — a step back in, not an effect — so it
+   takes the row under the six. */
+.lbtools [data-tool="restore"] { grid-column: 1 / -1; }
 .lbtools .btn-choice {
   display: block; min-width: 0; padding: var(--sp-2) var(--sp-1); text-align: center;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

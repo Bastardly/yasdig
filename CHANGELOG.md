@@ -3,6 +3,14 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### New
+
+- **Restore brush.** Paint an earlier History step back in: refine the whole picture,
+  then take back the parts you liked better before. Your sliders apply to the
+  combined picture, and *Apply adjustments* makes it a new step.
+
 ## 0.1.6 — 2026-10-14
 
 ### Changed

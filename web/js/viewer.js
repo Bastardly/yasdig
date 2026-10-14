@@ -176,8 +176,9 @@ function viewerSummaries() {
   const cropped = isCrop();
   say('sum-lb-crop', cropped ? `${shown.width}×${shown.height}` : 'whole picture', cropped);
   const painted = Object.entries(strokes());
-  say('sum-lb-brush', painted.map(([t, a]) => `${TOOL_LABELS[t] ?? t} ${a.toFixed(2)}`).join(' · ') || 'none',
-    painted.length > 0);
+  say('sum-lb-brush', painted.map(([t, a]) => `${TOOL_LABELS[t] ?? t} ${a.toFixed(2)}${
+    t === 'restore' && shown.restore_from != null ? ` from ${shown.restore_from + 1}` : ''}`).join(' · ') || 'none',
+  painted.length > 0);
   syncApply();
 }
 
@@ -284,6 +285,7 @@ function syncApply() {
 // stroke never re-centres the view.
 const TOOL_LABELS = {
   dodge: 'Dodge', burn: 'Burn', saturate: 'Saturate', desaturate: 'Desaturate', blur: 'Blur', sharpen: 'Sharpen',
+  restore: 'Restore',
 };
 let paint = null;
 let brushTool = 'dodge';
@@ -307,7 +309,7 @@ function brushSend(make) {
       const data = await post('/brush', { image_id: S.imageId, ...make() });
       if (epoch !== postEpoch) return;
       setResultImage(`data:image/png;base64,${data.image_base64}`);
-      shown = { ...shown, brushes: data.brushes };
+      shown = { ...shown, brushes: data.brushes, restore_from: data.restore_from };
       $('postms').textContent =
         `${Math.round(performance.now() - t0)} ms · gpu ${data.timings.fsr_ms} ms`;
       $('lberr').textContent = '';
@@ -326,7 +328,7 @@ function queueStroke(t) {
   strokeQueued.add(t);
   brushSend(() => {
     strokeQueued.delete(t);
-    return { tool: t, amount: amountFor(t), mask: paint.dataUrl(t) };
+    return { tool: t, amount: amountFor(t), mask: paint.dataUrl(t), ...fromFor(t) };
   });
 }
 
@@ -341,8 +343,33 @@ function chooseTool(t) {
   for (const b of document.querySelectorAll('.lbtools [data-tool]')) {
     b.classList.toggle('active', b.dataset.tool === t);
   }
+  // A fresh Restore starts at full strength: half a restore is rarely what
+  // "take that part back" means.
   if (t in strokes()) $('lbbamount').value = strokes()[t];
+  else if (t === 'restore') $('lbbamount').value = 1;
   $('lbbamountval').textContent = Number($('lbbamount').value).toFixed(2);
+  $('lbbfromrow').hidden = t !== 'restore';
+}
+
+// ---- Restore -------------------------------------------------------------------
+//
+// The Restore brush paints a History step back in: its source is any step but
+// the one on screen, by default the one before (the one after, on the first).
+// The server keys the strokes to that step and drops them on a new one.
+const fromFor = (t) => (t === 'restore' ? { from: Number($('lbbfrom').value) } : {});
+
+function syncRestoreFrom() {
+  const steps = shown?.history ?? [];
+  const at = shown?.at ?? 0;
+  const btn = document.querySelector('.lbtools [data-tool="restore"]');
+  const none = steps.length < 2;
+  btn.disabled = none;
+  btn.title = none ? 'Restore needs an earlier step: refine, upscale or crop first'
+    : 'Paint an earlier step back in — refine, then take back the parts you liked better before';
+  if (none && brushTool === 'restore') chooseTool('dodge');
+  const keep = shown?.restore_from ?? (at > 0 ? at - 1 : 1);
+  $('lbbfrom').innerHTML = steps.map((label, i) => (i === at ? ''
+    : `<option value="${i}"${i === keep ? ' selected' : ''}>${i + 1}. ${esc(label)}</option>`)).join('');
 }
 
 // After a result: drop the page's masks for tools the picture no longer has,
@@ -351,6 +378,7 @@ function chooseTool(t) {
 function syncBrushes() {
   if (!paint) return;
   for (const t of Object.keys(TOOL_LABELS)) if (!(t in strokes())) paint.clear(t);
+  syncRestoreFrom();
   if ($('fold-lb-brush').open) loadMasks();
   if (brushTool in strokes()) $('lbbamount').value = strokes()[brushTool];
   $('lbbamountval').textContent = Number($('lbbamount').value).toFixed(2);
@@ -826,6 +854,10 @@ export function initViewer() {
     if (!(t in strokes())) return;
     clearTimeout(amountTimer);
     amountTimer = setTimeout(() => brushSend(() => ({ tool: t, amount: amountFor(t) })), 120);
+  });
+  // Re-pointing Restore moves the strokes already painted to the new step.
+  $('lbbfrom').addEventListener('change', () => {
+    if ('restore' in strokes()) brushSend(() => ({ tool: 'restore', amount: amountFor('restore'), ...fromFor('restore') }));
   });
   $('lbbclear').addEventListener('click', () => clearTool(brushTool));
   $('lbbclearall').addEventListener('click', () => {

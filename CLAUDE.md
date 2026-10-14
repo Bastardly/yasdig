@@ -932,6 +932,11 @@ Label above the track; panel fixed 300 px and scrolls. **The panel is folds** (a
   body limit; its answer lands like a slider's (`setResultImage`, never re-centres),
   serialized on `brushChain`, which `stepRequest` also waits for. Crop, Area and
   Brushes folds exclude each other (one owns the pointer).
+- **Restore is the brush that isn't a look**: it paints History step `from` back in,
+  raw into raw, **before** the filters (`brush::restore`, `Pending::restore_source`,
+  `publish`'s `restore`), so a grade has no seam. `brush::apply` skips it. Keyed to a
+  step, so **`advance` drops it** (Apply bakes first); a jump keeps it, and standing on
+  `from` restores nothing. Another-size step is Lanczos-scaled.
 - **Crop, Apply and History jumps go through `stepRequest`** (one at a time, after
   `settlePost` lets a pending `/adjust` land) and answer through the pane's handler
   (`onViewerResult`: `render` on Image, the Outputs viewer's own). All three are

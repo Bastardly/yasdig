@@ -908,6 +908,12 @@
         <button type="button" data-tool="desaturate" class="btn btn-choice" title="Less colour where you paint">Desaturate</button>
         <button type="button" data-tool="blur" class="btn btn-choice" title="Soften where you paint">Blur</button>
         <button type="button" data-tool="sharpen" class="btn btn-choice" title="Crisper edges where you paint">Sharpen</button>
+        <button type="button" data-tool="restore" class="btn btn-choice" title="Paint an earlier step back in — refine, then take back the parts you liked better before">Restore</button>
+      </div>
+      <!-- Restore's source: any History step but the one on screen. -->
+      <div class="rdrow" id="lbbfromrow" hidden>
+        <label for="lbbfrom">Restore from</label>
+        <select id="lbbfrom"></select>
       </div>
       <div class="slider">
         <div class="head"><label for="lbbamount">Amount</label><span class="val" id="lbbamountval"></span></div>

@@ -750,6 +750,8 @@ pub struct GenResult {
     pub area: Option<Area>,
     /// Which brush tools hold strokes, and at what amount.
     pub brushes: BTreeMap<Tool, f32>,
+    /// The step the Restore brush paints back in, when it holds strokes.
+    pub restore_from: Option<usize>,
     /// The prompt as it was actually conditioned — with every `{variable}`
     /// already drawn. It is the retained one, so a refine or a hi-res reports
     /// the sentence that made the image rather than whatever is in the box now,
@@ -924,6 +926,11 @@ fn step_label(what: &str, own: Option<&str>) -> String {
 /// any undo stack — and `next` goes on top. The image `prev` showed stays, as
 /// a step; only its `display`, which `publish` can make again, is deleted.
 fn advance(prev: &Pending, mut next: Pending, label: String) -> Pending {
+    // Restore strokes name a step of the history they were painted against;
+    // a new step is a new picture to paint on. (Apply baked them first.) The
+    // mask file goes with scratch, which is safer than deleting it here, ahead
+    // of a write-back that may yet be refused.
+    next.brushes.remove(&Tool::Restore);
     let mut h = prev.steps();
     let at = prev.at.min(h.len() - 1);
     for s in h.drain(at + 1..) {
@@ -988,6 +995,16 @@ impl Pending {
     /// about what index 2 is.
     fn step(&self, index: usize) -> Option<Snapshot> {
         self.steps().into_iter().nth(index)
+    }
+
+    /// What the Restore brush paints back, for the picture standing at step
+    /// `at`: that stroke's step's raw, its mask and amount — or `None` with no
+    /// stroke, when it would restore the step it is on, or when the step has
+    /// gone (`MAX_HISTORY` dropped it).
+    fn restore_source(&self, at: usize) -> Option<(PathBuf, PathBuf, f32)> {
+        let b = self.brushes.get(&Tool::Restore)?;
+        let from = b.from.filter(|&f| f != at)?;
+        Some((self.step(from)?.raw, b.mask.clone(), b.amount))
     }
 
     /// Everything this image owns: the display, and every step's raw and
@@ -1438,7 +1455,7 @@ impl Engine {
 
         // 3) Sharpen for display.
         let filters = Filters::starting_at(tpl.sharpness, tpl.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None, &NO_BRUSHES)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None, &NO_BRUSHES, None)?;
         let fsr_ms = t.elapsed().as_millis() - upscale_ms;
 
         // Past every `?`: these two are the result, and the `Pending` below owns
@@ -1697,7 +1714,7 @@ impl Engine {
         //    sd.cpp rounds an init image to the latent grid and only warns.
         let t = Instant::now();
         let filters = Filters::starting_at(profile.sharpness, profile.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None, &NO_BRUSHES)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None, &NO_BRUSHES, None)?;
         let fsr_ms = fsr_ms_in + t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2051,7 +2068,7 @@ impl Engine {
         // return a slightly different size than it was given.
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
         let area = p.area.as_ref().map(Area::restart);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes, None)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2185,7 +2202,7 @@ impl Engine {
         base.save(&raw).with_context(|| format!("writing {}", raw.display()))?;
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
         let area = p.area.as_ref().map(Area::restart);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes, None)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2301,7 +2318,7 @@ impl Engine {
         // A new size, so the detail filters restart for it; the grade carries.
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
         let area = p.area.as_ref().map(Area::restart);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes, None)?;
         let fsr_ms = t.elapsed().as_millis();
         scratch.keep(&raw);
         scratch.keep(&display);
@@ -2403,7 +2420,7 @@ impl Engine {
         img.to_rgb8().save(&raw).with_context(|| format!("writing {}", raw.display()))?;
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
         let area = p.area.as_ref().map(Area::restart);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes, None)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2463,7 +2480,7 @@ impl Engine {
         let t = Instant::now();
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
         let area = p.area.as_ref().map(Area::restart);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes, None)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2607,7 +2624,7 @@ impl Engine {
         // 4) Sharpen for display.
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
         let area = p.area.as_ref().map(Area::restart);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes, None)?;
         fsr_ms += t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2722,7 +2739,7 @@ impl Display {
         // Deliberately no `Scratch` here, unlike the three passes above. This
         // writes over a file the retained `Pending` already owns, so putting it
         // under the guard would mean a failed drag deleting a live image.
-        let (png, w, h) = publish(&self.fsr, &p.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes)?;
+        let (png, w, h) = publish(&self.fsr, &p.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes, p.restore_source(p.at))?;
         let fsr_ms = t.elapsed().as_millis();
 
         let entry = Pending {
@@ -2749,7 +2766,7 @@ impl Display {
         let history = p.steps();
         let s = p.step(index).with_context(|| format!("this image has no step {index}"))?;
         let t = Instant::now();
-        let (png, w, h) = publish(&self.fsr, &s.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes)?;
+        let (png, w, h) = publish(&self.fsr, &s.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes, p.restore_source(index))?;
         let fsr_ms = t.elapsed().as_millis();
         let was = p.raw.clone();
         let entry = Pending {
@@ -2803,14 +2820,14 @@ impl Display {
             let mask = scratch.path(self.scratch.join(format!("{id}-brush-{}-{n}.png", tool.as_str())));
             match brush::crop_mask(&b.mask, &mask, (x, y, w, h), p.raw_w, p.raw_h) {
                 Ok(()) => {
-                    brushes.insert(*tool, Stroke { mask, amount: b.amount });
+                    brushes.insert(*tool, Stroke { mask, amount: b.amount, from: b.from });
                 }
                 Err(e) => eprintln!("[yasdig] dropping the {} strokes in the crop: {e:#}", tool.as_str()),
             }
         }
 
         let t = Instant::now();
-        let (png, out_w, out_h) = publish(&self.fsr, &raw, &display, &p.filters, area.as_ref(), &brushes)?;
+        let (png, out_w, out_h) = publish(&self.fsr, &raw, &display, &p.filters, area.as_ref(), &brushes, None)?;
         let fsr_ms = t.elapsed().as_millis();
 
         let was = p.raw.clone();
@@ -2850,15 +2867,44 @@ impl Display {
     /// clears the tool, PNG bytes replace its strokes — the whole mask, as the
     /// page's canvas holds it, at the picture's size. Display lane, written
     /// back only over the image it read, like `adjust`.
-    pub fn brush(&mut self, id: u64, tool: Tool, amount: Option<f32>, mask: Option<Option<Vec<u8>>>) -> Result<GenResult> {
+    ///
+    /// `from` is Restore's: the History step it paints back in. It defaults to
+    /// the step before (the one after, on the first), must be a step other
+    /// than the one on screen, and may re-point strokes already painted.
+    pub fn brush(
+        &mut self,
+        id: u64,
+        tool: Tool,
+        amount: Option<f32>,
+        mask: Option<Option<Vec<u8>>>,
+        from: Option<usize>,
+    ) -> Result<GenResult> {
         let mut p = lock(&self.retained).get(id, "paint on")?;
         let old = p.brushes.get(&tool).cloned();
-        let amount = amount.or(old.as_ref().map(|b| b.amount)).unwrap_or(0.5);
+        let fallback = if tool == Tool::Restore { 1.0 } else { 0.5 };
+        let amount = amount.or(old.as_ref().map(|b| b.amount)).unwrap_or(fallback);
         brush::validate_amount(amount)?;
+        let from = if tool == Tool::Restore {
+            let steps = p.steps().len();
+            if steps < 2 {
+                bail!("nothing to restore from yet — this picture has no other step");
+            }
+            let default = if p.at > 0 { p.at - 1 } else { 1 };
+            let f = from.or(old.as_ref().and_then(|b| b.from)).unwrap_or(default);
+            if f >= steps || f == p.at {
+                bail!("step {} isn't one to restore from", f + 1);
+            }
+            Some(f)
+        } else {
+            None
+        };
         let mut fresh = None;
         match &mask {
             None => match p.brushes.get_mut(&tool) {
-                Some(b) => b.amount = amount,
+                Some(b) => {
+                    b.amount = amount;
+                    b.from = from;
+                }
                 None => bail!("there are no {} strokes to change", tool.as_str()),
             },
             Some(None) => {
@@ -2874,7 +2920,7 @@ impl Display {
                 let path = self.scratch.join(format!("{id}-brush-{}-{n}.png", tool.as_str()));
                 std::fs::write(&path, png).with_context(|| format!("writing {}", path.display()))?;
                 fresh = Some(path.clone());
-                p.brushes.insert(tool, Stroke { mask: path, amount });
+                p.brushes.insert(tool, Stroke { mask: path, amount, from });
             }
         }
         let forget = |f: &Option<PathBuf>| {
@@ -2886,7 +2932,7 @@ impl Display {
         let t = Instant::now();
         // Over the display the image owns, as `adjust` does: a drag of the
         // amount is the same kind of re-filter as a slider's.
-        let published = publish(&self.fsr, &p.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes);
+        let published = publish(&self.fsr, &p.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes, p.restore_source(p.at));
         let (png, w, h) = match published {
             Ok(v) => v,
             Err(e) => {
@@ -2935,7 +2981,7 @@ impl Display {
 
         let t = Instant::now();
         // Neutral, so the published picture is the applied one to the byte.
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &Filters::NONE, None, &NO_BRUSHES)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &Filters::NONE, None, &NO_BRUSHES, None)?;
         let fsr_ms = t.elapsed().as_millis();
 
         let was = p.raw.clone();
@@ -3015,7 +3061,7 @@ impl Display {
         let tmp = self
             .scratch
             .join(format!("{id}-view-{}.png", N.fetch_add(1, Ordering::Relaxed)));
-        let shown = publish(&self.fsr, &s.raw, &tmp, &p.filters, p.area.as_ref(), &p.brushes);
+        let shown = publish(&self.fsr, &s.raw, &tmp, &p.filters, p.area.as_ref(), &p.brushes, None);
         let _ = std::fs::remove_file(&tmp);
         shown
     }
@@ -3050,7 +3096,7 @@ impl Display {
         // Filters start where the model says again, exactly as a fresh generate
         // does — the archived image is unsharpened, so there is nothing to undo.
         let filters = Filters::starting_at(item.profile.sharpness, item.profile.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None, &NO_BRUSHES)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None, &NO_BRUSHES, None)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -3139,7 +3185,7 @@ impl Display {
         std::fs::copy(&stored, &raw)
             .with_context(|| format!("opening {}", stored.display()))?;
         let filters = Filters::NONE;
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None, &NO_BRUSHES)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None, &NO_BRUSHES, None)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -3280,19 +3326,29 @@ fn publish(
     filters: &Filters,
     area: Option<&Area>,
     brushes: &Brushes,
+    restore: Option<(PathBuf, PathBuf, f32)>,
 ) -> Result<(Vec<u8>, u32, u32)> {
     let area = area.filter(|a| a.acts());
-    let stroked = brushes.values().any(|b| b.amount > 0.0);
-    let (w, h) = if area.is_none() && !stroked {
+    let stroked = brushes.iter().any(|(t, b)| *t != Tool::Restore && b.amount > 0.0);
+    let (w, h) = if area.is_none() && !stroked && restore.is_none() {
         lock(fsr).process(raw, display, 1.0, filters)?
     } else {
         // The whole picture's look, then the area's on top of it mixed by the
         // area's weight (`area::composite`), then each brush's by its mask
         // (`brush::apply`). In memory, so no look round-trips through a PNG;
         // only the result is written.
-        let img = image::open(raw)
+        let mut img = image::open(raw)
             .with_context(|| format!("loading {}", raw.display()))?
             .to_rgba8();
+        // The Restore brush first, unadjusted into unadjusted, so the look
+        // below runs over the combined picture with no seam in the grade. A
+        // step or mask that can't be read is skipped, as a brush's is.
+        if let Some((from, mask, amount)) = &restore {
+            match (image::open(from), image::open(mask)) {
+                (Ok(f), Ok(m)) => brush::restore(&mut img, &f.to_rgba8(), &m.to_rgba8(), *amount),
+                _ => eprintln!("[yasdig] skipping the restore strokes: their step or mask is gone"),
+            }
+        }
         let fsr = lock(fsr);
         let mut base = fsr.filter(&img, filters)?;
         if let Some(a) = area {
@@ -3332,6 +3388,7 @@ impl Pending {
             start: Filters::starting_at(self.profile.sharpness, self.profile.clarity),
             area: self.area,
             brushes: self.brushes.iter().map(|(t, b)| (*t, b.amount)).collect(),
+            restore_from: self.brushes.get(&Tool::Restore).and_then(|b| b.from),
             prompt: self.prompt.clone(),
         }
     }
@@ -3797,6 +3854,25 @@ mod tests {
     fn pass(dir: &Path, prev: &Pending, name: &str) -> Pending {
         let next = Pending { step: prev.step + 1, ..live(dir, name) };
         advance(prev, next, name.into())
+    }
+
+    /// Restore strokes name a step of the history they were painted against,
+    /// so a new step leaves them behind; the other brushes carry on.
+    #[test]
+    fn a_new_step_drops_the_restore_strokes_and_keeps_the_rest() {
+        use crate::brush::{Stroke, Tool};
+        let dir = scratch("restore");
+        let mut first = live(&dir, "a");
+        for (tool, from) in [(Tool::Restore, Some(0)), (Tool::Dodge, None)] {
+            first.brushes.insert(tool, Stroke { mask: dir.join(format!("{}.png", tool.as_str())), amount: 1.0, from });
+        }
+        let next = Pending { step: first.step + 1, brushes: first.brushes.clone(), ..live(&dir, "b") };
+        let next = advance(&first, next, "Refine".into());
+        assert!(!next.brushes.contains_key(&Tool::Restore));
+        assert!(next.brushes.contains_key(&Tool::Dodge));
+        // Standing on the step it would restore from, it restores nothing.
+        assert!(first.restore_source(0).is_none());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn scratch(tag: &str) -> std::path::PathBuf {

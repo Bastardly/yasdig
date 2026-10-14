@@ -13,6 +13,12 @@
 //!
 //! Unsigned, named tools rather than one signed "light" brush, as photo
 //! editors have them: what a stroke does shouldn't flip with a slider.
+//!
+//! **Restore is the odd one out**: it paints an earlier History step back in
+//! (Photoshop's History Brush) — refine, then take back the parts the refine
+//! got wrong. It works on the *unadjusted* pictures, raw into raw ([`restore`]),
+//! before the look runs, so a grade sits evenly across the seam; and it is
+//! keyed to a step, so a new step drops it (`pipeline::advance`).
 
 use crate::config::Filters;
 use anyhow::{bail, Context, Result};
@@ -30,14 +36,24 @@ pub enum Tool {
     Burn,
     Saturate,
     Desaturate,
+    Restore,
 }
 
 impl Tool {
-    /// The order they run in, which is also the map's (`Ord` follows the
-    /// declaration). Blur before Sharpen, so a sharpened stroke beside a
-    /// blurred one isn't softened afterwards; tone before colour, as the grade.
-    pub const ORDER: [Tool; 6] =
-        [Tool::Blur, Tool::Sharpen, Tool::Dodge, Tool::Burn, Tool::Saturate, Tool::Desaturate];
+    /// Every tool, in the order they run — which is also the map's, since
+    /// `Ord` follows the declaration: Blur before Sharpen, so a sharpened
+    /// stroke beside a blurred one isn't softened afterwards; tone before
+    /// colour, as the grade. Restore is last here but runs first of all,
+    /// before the look (`restore`), and `apply` skips it.
+    pub const ALL: [Tool; 7] = [
+        Tool::Blur,
+        Tool::Sharpen,
+        Tool::Dodge,
+        Tool::Burn,
+        Tool::Saturate,
+        Tool::Desaturate,
+        Tool::Restore,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -47,19 +63,21 @@ impl Tool {
             Tool::Burn => "burn",
             Tool::Saturate => "saturate",
             Tool::Desaturate => "desaturate",
+            Tool::Restore => "restore",
         }
     }
 
     pub fn parse(s: &str) -> Option<Tool> {
-        Tool::ORDER.into_iter().find(|t| t.as_str() == s)
+        Tool::ALL.into_iter().find(|t| t.as_str() == s)
     }
 
     /// The filters that make this tool's effect at `amount`, or `None` for
-    /// Blur, which is not one of the FSR passes and runs here ([`blur`]).
+    /// Blur, which is not one of the FSR passes and runs here ([`blur`]), and
+    /// Restore, which is no effect at all ([`restore`]).
     pub fn filters(self, amount: f32) -> Option<Filters> {
         let f = Filters::NONE;
         Some(match self {
-            Tool::Blur => return None,
+            Tool::Blur | Tool::Restore => return None,
             Tool::Sharpen => Filters { sharpness: amount, ..f },
             Tool::Dodge => Filters { lightness: amount, ..f },
             Tool::Burn => Filters { lightness: -amount, ..f },
@@ -75,6 +93,8 @@ impl Tool {
 pub struct Stroke {
     pub mask: PathBuf,
     pub amount: f32,
+    /// Restore only: the History step it paints back in.
+    pub from: Option<usize>,
 }
 
 pub type Brushes = BTreeMap<Tool, Stroke>;
@@ -146,7 +166,7 @@ pub fn weights(mask: &RgbaImage, w: u32, h: u32) -> Vec<f32> {
     m.pixels().map(|p| p.0[3] as f32 / 255.0).collect()
 }
 
-/// Run every tool with strokes over `img`, in [`Tool::ORDER`]. `filter` is
+/// Run every tool with strokes over `img`, in [`Tool::ALL`]'s order. `filter` is
 /// the FSR pass (`Fsr::filter`); Blur runs here. A mask that can't be read is
 /// skipped with a log line: a stroke lost is better than an image that can no
 /// longer be adjusted.
@@ -157,7 +177,8 @@ pub fn apply(
 ) -> Result<()> {
     let (w, h) = img.dimensions();
     for (tool, stroke) in brushes {
-        if stroke.amount <= 0.0 {
+        // Restore ran before the look, on the raw picture (`restore`).
+        if *tool == Tool::Restore || stroke.amount <= 0.0 {
             continue;
         }
         let mask = match image::open(&stroke.mask) {
@@ -174,6 +195,23 @@ pub fn apply(
         crate::area::composite_by(img, &local, &weights(&mask, w, h));
     }
     Ok(())
+}
+
+/// Paint `from` — an earlier state of the picture — back into `img` where
+/// `mask` says, at `amount` (0..1, the restore's opacity). Either may be
+/// another size than `img` (a step before a Hi-res): each is scaled to fit,
+/// `from` with Lanczos3 since it is a picture, the mask like any other.
+pub fn restore(img: &mut RgbaImage, from: &RgbaImage, mask: &RgbaImage, amount: f32) {
+    let (w, h) = img.dimensions();
+    let scaled;
+    let from = if from.dimensions() == (w, h) {
+        from
+    } else {
+        scaled = image::imageops::resize(from, w, h, image::imageops::FilterType::Lanczos3);
+        &scaled
+    };
+    let k: Vec<f32> = weights(mask, w, h).into_iter().map(|v| v * amount).collect();
+    crate::area::composite_by(img, from, &k);
 }
 
 /// A mask cropped as the picture was: `(x, y, w, h)` of a picture `full_w ×
@@ -217,14 +255,30 @@ mod tests {
     }
 
     #[test]
-    fn every_tool_but_blur_is_a_filter_and_names_round_trip() {
-        for t in Tool::ORDER {
+    fn every_tool_but_blur_and_restore_is_a_filter_and_names_round_trip() {
+        for t in Tool::ALL {
             assert_eq!(Tool::parse(t.as_str()), Some(t));
-            assert_eq!(t.filters(0.5).is_none(), t == Tool::Blur);
+            assert_eq!(t.filters(0.5).is_none(), matches!(t, Tool::Blur | Tool::Restore));
         }
         assert_eq!(Tool::Burn.filters(0.3).unwrap().lightness, -0.3);
         assert_eq!(Tool::Desaturate.filters(0.3).unwrap().saturation, -0.3);
         assert!(validate_amount(1.5).is_err() && validate_amount(f32::NAN).is_err());
+    }
+
+    #[test]
+    fn restore_paints_the_earlier_picture_back_by_the_mask() {
+        let mut now = RgbaImage::from_pixel(8, 8, image::Rgba([200, 200, 200, 255]));
+        let was = RgbaImage::from_pixel(8, 8, image::Rgba([0, 0, 0, 255]));
+        let mut mask = RgbaImage::from_pixel(8, 8, image::Rgba([255, 255, 255, 0]));
+        mask.put_pixel(1, 1, image::Rgba([255, 255, 255, 255]));
+        restore(&mut now, &was, &mask, 0.5);
+        assert_eq!(now.get_pixel(1, 1).0[0], 100, "half way at amount 0.5");
+        assert_eq!(now.get_pixel(5, 5).0[0], 200, "unpainted is untouched");
+        // A smaller earlier step (before a Hi-res) is scaled to fit.
+        let mut big = RgbaImage::from_pixel(16, 16, image::Rgba([200, 200, 200, 255]));
+        let all = RgbaImage::from_pixel(8, 8, image::Rgba([255, 255, 255, 255]));
+        restore(&mut big, &was, &all, 1.0);
+        assert_eq!(big.get_pixel(15, 15).0[0], 0);
     }
 
     /// Strokes touch only what they cover: outside the mask, the picture is
@@ -241,14 +295,19 @@ mod tests {
         m.save(&mask).unwrap();
         let src = RgbaImage::from_fn(16, 16, |x, y| image::Rgba([x as u8 * 9, y as u8 * 9, 40, 255]));
         let mut img = src.clone();
-        let brushes = Brushes::from([(Tool::Dodge, Stroke { mask, amount: 0.5 })]);
+        let brushes = Brushes::from([(Tool::Dodge, Stroke { mask: mask.clone(), amount: 0.5, from: None })]);
         let white = |i: &RgbaImage, _: &Filters| Ok(RgbaImage::from_pixel(i.width(), i.height(), image::Rgba([255; 4])));
         apply(&mut img, &brushes, white).unwrap();
         assert_eq!(img.get_pixel(0, 0).0, [255; 4]);
         assert_eq!(img.get_pixel(5, 5), src.get_pixel(5, 5));
         // A mask that has gone is skipped, not an error.
-        let gone = Brushes::from([(Tool::Burn, Stroke { mask: dir.join("nope.png"), amount: 0.5 })]);
+        let gone = Brushes::from([(Tool::Burn, Stroke { mask: dir.join("nope.png"), amount: 0.5, from: None })]);
         assert!(apply(&mut img, &gone, white).is_ok());
+        // Restore is not a look: `apply` leaves it to `restore`, before.
+        let before = img.clone();
+        let restore = Brushes::from([(Tool::Restore, Stroke { mask, amount: 1.0, from: Some(0) })]);
+        apply(&mut img, &restore, white).unwrap();
+        assert_eq!(img, before);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

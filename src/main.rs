@@ -170,7 +170,7 @@ enum JobKind {
     /// (`Display::apply_look`).
     Apply(u64),
     /// Paint with a brush tool or change its amount (`Display::brush`).
-    Brush { id: u64, tool: brush::Tool, amount: Option<f32>, mask: Option<Option<Vec<u8>>> },
+    Brush { id: u64, tool: brush::Tool, amount: Option<f32>, mask: Option<Option<Vec<u8>>>, from: Option<usize> },
     /// Reopen an archived generation as a live result. Needs a worker because
     /// it ends in a `publish`, and because the new `Pending` lives there. The
     /// shelf rides along because the two grids — Current and Favorites — hold
@@ -507,8 +507,8 @@ fn run(args: &[String]) -> Result<()> {
                     }
                     JobKind::Crop { id, rect } => display.crop(id, rect).map(|r| result_json(&r)),
                     JobKind::Apply(id) => display.apply_look(id).map(|r| result_json(&r)),
-                    JobKind::Brush { id, tool, amount, mask } => {
-                        display.brush(id, tool, amount, mask).map(|r| result_json(&r))
+                    JobKind::Brush { id, tool, amount, mask, from } => {
+                        display.brush(id, tool, amount, mask, from).map(|r| result_json(&r))
                     }
                     JobKind::Open { id, shelf } => {
                         display.open(&id, shelf).map(|r| result_json(&r))
@@ -2689,6 +2689,9 @@ fn handle_brush(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         amount: Option<f32>,
         #[serde(default, deserialize_with = "double_option")]
         mask: Option<Option<String>>,
+        /// Restore's: the History step it paints back in.
+        #[serde(default)]
+        from: Option<usize>,
     }
     let Some(d) = parse_json::<Dto>(conn, body)? else {
         return Ok(());
@@ -2704,7 +2707,7 @@ fn handle_brush(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
             Err(e) => return conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
         },
     };
-    submit(conn, &lanes.display, JobKind::Brush { id: d.image_id, tool, amount: d.amount, mask }, 400)
+    submit(conn, &lanes.display, JobKind::Brush { id: d.image_id, tool, amount: d.amount, mask, from: d.from }, 400)
 }
 
 /// `/brush/{image_id}/{tool}.png` → the id and the tool, or `None`.
@@ -2968,10 +2971,11 @@ fn result_json(res: &GenResult) -> String {
     let start = serde_json::to_string(&res.start).unwrap_or_else(|_| "{}".to_string());
     let area = serde_json::to_string(&res.area).unwrap_or_else(|_| "null".to_string());
     let brushes = serde_json::to_string(&res.brushes).unwrap_or_else(|_| "{}".to_string());
+    let restore_from = res.restore_from.map_or("null".to_string(), |f| f.to_string());
     format!(
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
          \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_hires\":{},\"model\":{},\"can_edit\":{},\
-         \"filters\":{},\"filters_start\":{},\"area\":{},\"brushes\":{},\"prompt\":{},\
+         \"filters\":{},\"filters_start\":{},\"area\":{},\"brushes\":{},\"restore_from\":{},\"prompt\":{},\
          \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{},\"weights\":{},\"load_ms\":{},\"stages\":{}}}}}",
         b64,
         res.width,
@@ -2996,6 +3000,7 @@ fn result_json(res: &GenResult) -> String {
         start,
         area,
         brushes,
+        restore_from,
         // What was actually conditioned, so the page can show a `{variable}`
         // prompt's roll under the image.
         json_str(&res.prompt),
@@ -3887,6 +3892,7 @@ mod tests {
     #[test]
     fn a_brush_mask_path_is_an_id_and_a_tool() {
         assert_eq!(super::brush_path("/brush/3/dodge.png"), Some((3, crate::brush::Tool::Dodge)));
+        assert_eq!(super::brush_path("/brush/3/restore.png"), Some((3, crate::brush::Tool::Restore)));
         for bad in ["/brush/3/smudge.png", "/brush/a/blur.png", "/brush//blur.png", "/brush/3/../blur.png", "/brush/3.png"] {
             assert_eq!(super::brush_path(bad), None, "{bad}");
         }
