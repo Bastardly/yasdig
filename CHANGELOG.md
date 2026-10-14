@@ -3,6 +3,32 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### New
+
+- **Scale** replaces Upscale in the editor: smaller (0.25×–0.75×, or an exact width)
+  is instant, bigger is FSR or an upscaler model as before. When a pass runs out of
+  memory, its box offers **Scale down to 0.75× and try again**.
+
+### Changed
+
+- **One dialog, Refine & adjust.** Post-processing and Refine are now one dialog with
+  one History — and Compare now works on adjustments too. A narrow rail opens
+  floating panels over the picture — Refine, Scale, Adjust, Brushes, Selection,
+  History — that you can drag anywhere and that stay where you put them; a dot on a
+  rail button shows its panel has something in effect, and a panel's actions stay
+  at its foot, the main one in amber — *Apply adjustments* is History's, since it
+  adds a step. The action row reads Hi-res ·
+  Refine & adjust… · Save. Whichever of Refine, Crop, Selection or Brushes is open owns
+  the pointer; with none open, a drag pans.
+- **Outputs open in the same dialog**, and Refine, Edit, Extend and Scale work there:
+  *Save changes* writes the result over the file. *Refine & extend…* is gone.
+
+### Fixed
+
+- The Refine dialog's *Cancel generation* button did nothing.
+
 ## 0.1.8 — 2026-10-14
 
 ### New

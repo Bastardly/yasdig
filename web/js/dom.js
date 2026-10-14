@@ -72,3 +72,23 @@ export function rememberFolds(root) {
   }
 }
 
+
+// Track a press to its end, for a drag that must always finish: the button let
+// go (on `el`, which holds the capture, or anywhere on the page should the
+// capture have been lost), a cancelled pointer, or the capture taken away —
+// say by `el` hiding under the pointer. `end` runs once, whichever came first.
+export function followPointer(el, e, move, end) {
+  let done = false;
+  const off = () => {
+    if (done) return;
+    done = true;
+    el.removeEventListener('pointermove', move);
+    el.removeEventListener('lostpointercapture', off);
+    for (const t of ['pointerup', 'pointercancel']) window.removeEventListener(t, off, true);
+    end();
+  };
+  el.addEventListener('pointermove', move);
+  el.addEventListener('lostpointercapture', off);
+  for (const t of ['pointerup', 'pointercancel']) window.addEventListener(t, off, true);
+  try { el.setPointerCapture(e.pointerId); } catch { /* the window listeners still end it */ }
+}

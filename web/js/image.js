@@ -1,13 +1,12 @@
 import { $, bar, esc, getJSON, post, numOr, rememberFolds } from './dom.js';
 import { S, P, escErr } from './state.js';
 import { isBusy, setBusy, setIdle, onIdle, redrawBusy } from './busy.js';
-import { cancelPost, onViewerResult, setLook, setPost, setViewerImage, showFullSize } from './viewer.js';
+import { cancelPost, onPassResult, onViewerResult, setLook, setPost, setViewerImage, showFullSize } from './viewer.js';
 import { activeLoop, onJobs, onNotice, onResult, runningJob, soonJobs, stopJob } from './jobs.js';
 import { applyWorkItem, loadWorkItems, markGrid } from './workitems.js';
 import { loraPicker } from './loras.js';
 import { sourceSlot } from './source-slot.js';
 import { wireHints } from './hints.js';
-import { openRedraw, syncRedraw } from './redraw.js';
 import { onRefsChange, references, refsActive, syncRefs } from './refs.js';
 import { openGetModels } from './getmodels.js';
 import { showError, MEMORY_LABELS } from './memory.js';
@@ -720,6 +719,9 @@ export function render(data) {
   // old one still in flight must not land on top of it. A run's image can
   // arrive mid-drag now that the sliders stay live during one.
   if (data.image_id !== S.imageId) cancelPost();
+  // The same picture at the same size (a refine, an adjustment baked, a step
+  // back) keeps the dialog's view; anything else is re-centred.
+  const same = data.image_id === S.imageId && lastImage?.width === data.width && lastImage?.height === data.height;
   lastImage = data;
   const t = data.timings;
   const stages = [['generate', t.gen_ms], ['upscale', t.upscale_ms ?? 0], ['fsr', t.fsr_ms],
@@ -743,11 +745,10 @@ export function render(data) {
   // generate after that silently repeats the same image until you notice and
   // retype -1. The seed used is reported below and is one click from the box,
   // which covers the reason it was ever written back.
-  // Hi-res first: it's the pass that enlarges, and refine is the finishing
-  // touch you run on whatever size you ended up at.
   // Hi-res first: it sets the final size, and refining comes after it — at the
-  // size the image ends up at. Refine itself lives in the Refine dialog
-  // (redraw.js), with the prompt, the mask, the live preview and the history.
+  // size the image ends up at. Refine itself lives in the Refine & adjust
+  // dialog (redraw.js and viewer.js), with the look, the mask, the live preview
+  // and the history.
   let actions = '';
   if (data.can_hires) {
     // From `upFactor`, not a hardcoded 2: this select is destroyed and rebuilt
@@ -755,14 +756,10 @@ export function render(data) {
     actions += `<select id="upfactor" title="Upscale before the hi-res pass">${upOptions()}</select>
       <button id="hires" class="btn btn-run">Hi-res pass</button>`;
   }
-  // The order the work is done in: enlarge (Hi-res, above), finish (Refine…),
-  // grade (View & adjust), keep (Save). Neutral: opening the dialog spends
-  // nothing; its own buttons do. Clicking the image opens it too.
-  actions += '<button id="redrawopen" class="btn">Refine…</button>';
-  // The sliders are behind this button, and it is the only *lossless* grade:
-  // it re-filters the retained raw, where the Outputs viewer's sliders stack on
-  // pixels that already carry one.
-  actions += '<button id="viewadjust" class="btn">View &amp; adjust</button>';
+  // The order the work is done in: enlarge (Hi-res, above), finish and grade
+  // (Refine & adjust…, one dialog), keep (Save). Neutral: opening the dialog
+  // spends nothing; its own buttons do. Clicking the image opens it too.
+  actions += '<button id="redrawopen" class="btn">Refine &amp; adjust…</button>';
   // Always offered, including for a plain generate — a base render can be worth
   // keeping too. Only generations are archived automatically; this is how a
   // refined or hi-res image gets kept.
@@ -789,7 +786,7 @@ export function render(data) {
     ${actions ? `<div class="actions">${actions}</div>` : ''}
     <div id="saved" class="meta"></div>
     <div id="rerr" class="err"></div>
-    <img src="${S.currentSrc}" alt="result" title="Click to refine, edit, extend or upscale">
+    <img src="${S.currentSrc}" alt="result" title="Click to refine and adjust">
     <div class="meta"><b>${data.width}×${data.height}</b> · seed
       <b id="seedval" class="pin" title="Put this seed in the box, to generate it again">${data.seed}</b>
       · total <b>${total} ms</b>${tags}</div>
@@ -797,22 +794,18 @@ export function render(data) {
     <div class="bars">${bars}</div>${cached}
     `;
 
-  // The picture opens the Refine dialog: finishing it is what a click on it is
-  // for. Grading is View & adjust's.
-  P('result').querySelector('img').addEventListener('click', () => openRedraw(data));
-  $('redrawopen').addEventListener('click', () => openRedraw(data));
+  // The picture opens the Refine & adjust dialog: finishing it is what a click
+  // on it is for.
+  P('result').querySelector('img').addEventListener('click', () => showFullSize(S.currentSrc));
+  $('redrawopen').addEventListener('click', () => showFullSize(S.currentSrc));
   if ($('hires')) $('hires').addEventListener('click', hires);
   if ($('upfactor')) {
     $('upfactor').addEventListener('change', (e) => setUpFactor(parseFloat(e.target.value)));
   }
-  // The Redraw dialog follows the image on screen while it is open: a redraw,
-  // a step back, or a batch image landing.
-  syncRedraw(data);
-  $('viewadjust').addEventListener('click', () => showFullSize(S.currentSrc));
-  // The viewer can already be open when this runs: a modal dialog stops clicks,
-  // not a batch that was started before it was opened. So the big copy is kept in
-  // step here too, and re-centred, since it is a different image.
-  setViewerImage(S.currentSrc);
+  // The dialog can already be open when this runs: a pass from it, a step
+  // back, or a batch image landing. A new state of the same picture keeps the
+  // view where it was; a different picture is re-centred.
+  setViewerImage(S.currentSrc, same);
   // Opt-in reproducibility: pinning the seed is a thing you choose, not
   // something that happens to the box you just typed in.
   $('seedval').addEventListener('click', () => {
@@ -886,20 +879,24 @@ async function reopen(workId) {
   return null;
 }
 
-async function escalate(which, path, payload, label, kind, err = escErr) {
+// `land` is where the answer goes: `takeResult` for the Image tab's own
+// picture, the dialog's `passLander()` for one opened from Outputs.
+async function escalate(which, path, payload, label, kind, err = escErr, land = takeResult) {
   if (S.imageId === null) return;
+  const onImage = S.pane === 'image';
   setBusy(which, label, kind);
   err('');
   soonJobs();
   try {
     try {
-      takeResult(await post(path, { image_id: S.imageId, ...payload }));
+      land(await post(path, { image_id: S.imageId, ...payload }));
     } catch (e) {
-      const base = lastImage && !lastImage.refine_passes && !lastImage.hires_passes;
+      // Only the Image tab's picture has a work item to reopen.
+      const base = onImage && lastImage && !lastImage.refine_passes && !lastImage.hires_passes;
       const again = stale(e) && base && S.workId ? await reopen(S.workId) : null;
       if (!again) throw e;
       render(again);
-      takeResult(await post(path, { image_id: S.imageId, ...payload }));
+      land(await post(path, { image_id: S.imageId, ...payload }));
     }
   } catch (e) {
     const msg = String(e.message || e);
@@ -909,12 +906,12 @@ async function escalate(which, path, payload, label, kind, err = escErr) {
     // it stands by then — which is what the box's buttons change.
     err(/cancelled by request/.test(msg) ? 'Cancelled. The image is as it was.' : msg, e.oom, {
       ...oomOptions(),
-      retry: () => escalate(which, path, { ...payload, memory: $('memory').value || null }, label, kind, err),
+      retry: () => escalate(which, path, { ...payload, memory: $('memory').value || null }, label, kind, err, land),
     });
     // The image is gone, so the controls are dead; keep the picture on
     // screen. Any other failure is retryable — the server kept its
     // intermediates.
-    if (stale(e)) {
+    if (stale(e) && onImage) {
       S.imageId = null;
       const row = document.querySelector('.actions');
       if (row) row.remove();
@@ -974,14 +971,15 @@ export const escalateModels = () => ({
 // Each pass sends its own checkpoint: empty means "the one that made the
 // image", which is what an unchosen select sends.
 //
-// Refine is the Refine dialog's whole-image pass. The dialog's prompt wins over
-// the fold's when typed (the fold's is already in `escalateSettings()`), and
-// `err` is where a failure goes: the dialog is modal, so `#rerr` behind it is a
-// line nobody reads.
-export const refine = (prompt, err) => escalate('redrawgo', '/refine', {
-  model: P('refmodel').value || null, ...escalateSettings(),
+// Refine is the dialog's whole-image pass. The dialog's prompt wins over the
+// fold's when typed (the fold's is already in `escalateSettings()`), and `err`
+// is where a failure goes: the dialog is modal, so `#rerr` behind it is a line
+// nobody reads. On Outputs there is no Refine pass fold's model: the dialog's
+// *Refine with* has already set the image's.
+export const refine = (prompt, err, land) => escalate('redrawgo', '/refine', {
+  model: P('refmodel')?.value || null, ...escalateSettings(),
   ...(prompt ? { refine_prompt: prompt } : {}),
-}, 'Refining…', 'refine', err);
+}, 'Refining…', 'refine', err, land);
 // Hi-res is the action row's, with the Hi-res fold's prompt.
 const hires = () => escalate('hires', '/hires', {
   model: P('hiresmodel').value || null, upscale: parseFloat($('upfactor').value),
@@ -1405,8 +1403,10 @@ export function initImage() {
   onIdle(syncPassButtons);
   onResult(takeResult);
   onJobs(syncStopButton);
-  // A crop (or its undo) in the viewer is a new state of this image.
+  // A crop, a scale or a step back in the dialog is a new state of this image;
+  // a pass's answer goes through `takeResult`, as a run's does.
   onViewerResult('image', render);
+  onPassResult('image', takeResult);
   onJobs(syncLoopNote);
   // A run that failed has no request waiting on it; its message comes here.
   onNotice((msg, oom) => {

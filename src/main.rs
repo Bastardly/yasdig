@@ -68,10 +68,10 @@
 //!                        `upscaler: "<name>"`; `""` is FSR
 //!   GET  /outputs     -> every image in work/output/ and the favourites,
 //!                        newest first, each with `favorite`
-//!   POST /outputs/open -> {stem}     open a saved image as a live image_id,
-//!                        so the viewer's sliders can work on it
-//!   POST /outputs/to-image -> {stem, model?} open it as the Image tab's
-//!                        result instead, for the Refine dialog
+//!   POST /outputs/open -> {stem, model?} open a saved image as a live
+//!                        image_id, to adjust and refine; `model` stands in
+//!                        when its sidecar names none installed
+//!   POST /resize      -> {image_id, factor}  scale it down, a History step
 //!   POST /image/model -> {image_id, model}  the model an image's passes run on
 //!   POST /outputs/delete -> {stems:[..]} remove them from work/output/
 //!   POST /favorite-outputs/add -> {stems:[..]} move them to user/favorite_outputs/
@@ -167,6 +167,8 @@ enum JobKind {
     Adjust { id: u64, patch: FiltersPatch, area: Option<Option<area::Area>> },
     /// Crop the image to a rectangle, as a history step (`Display::crop`).
     Crop { id: u64, rect: (u32, u32, u32, u32) },
+    /// Scale the image down (`Display::resize`): Scale's "down" half.
+    Resize { id: u64, factor: f32 },
     /// Make the look part of the picture, as a history step
     /// (`Display::apply_look`).
     Apply(u64),
@@ -180,13 +182,12 @@ enum JobKind {
         id: String,
         shelf: Shelf,
     },
-    /// Reopen a finished image from `work/output/` as a live result: in the
-    /// Outputs viewer (`Slot::Output`), or as the Image tab's result
-    /// (`Slot::Image`, `fallback` the model to refine it with when its sidecar
-    /// names none installed). Through a worker for the same two reasons as
-    /// `Open`, and unlike every other `/outputs` route, which only reads the
-    /// filesystem.
-    OpenOutput { stem: String, slot: pipeline::Slot, fallback: Option<String> },
+    /// Reopen a finished image from `work/output/` as a live result in the
+    /// Outputs tab's slot (`Slot::Output`; `fallback` the model to refine it
+    /// with when its sidecar names none installed). Through a worker for the
+    /// same two reasons as `Open`, and unlike every other `/outputs` route,
+    /// which only reads the filesystem.
+    OpenOutput { stem: String, fallback: Option<String> },
     /// Copy the image on screen into `work/output/`. No GPU, but the only copy
     /// of which file that is lives in the retained images.
     SaveOutput(u64),
@@ -510,6 +511,7 @@ fn run(args: &[String]) -> Result<()> {
                         display.adjust(id, &patch, area).map(|r| result_json(&r))
                     }
                     JobKind::Crop { id, rect } => display.crop(id, rect).map(|r| result_json(&r)),
+                    JobKind::Resize { id, factor } => display.resize(id, factor).map(|r| result_json(&r)),
                     JobKind::Apply(id) => display.apply_look(id).map(|r| result_json(&r)),
                     JobKind::Brush { id, tool, amount, mask, from } => {
                         display.brush(id, tool, amount, mask, from).map(|r| result_json(&r))
@@ -517,8 +519,8 @@ fn run(args: &[String]) -> Result<()> {
                     JobKind::Open { id, shelf } => {
                         display.open(&id, shelf).map(|r| result_json(&r))
                     }
-                    JobKind::OpenOutput { stem, slot, fallback } => {
-                        display.open_output(&stem, slot, fallback.as_deref()).map(|r| result_json(&r))
+                    JobKind::OpenOutput { stem, fallback } => {
+                        display.open_output(&stem, fallback.as_deref()).map(|r| result_json(&r))
                     }
                     JobKind::SaveOutput(id) => display.save_output(id).map(|p| saved_json(&p)),
                     JobKind::OverwriteOutput(id) => display.overwrite_output(id).map(|p| saved_json(&p)),
@@ -583,7 +585,13 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
     let pinned = t.work.pinned();
     let retained = engine.retained();
     let finish = |r: Result<GenResult>| {
-        let r = r.map(|r| latest(queue, &r));
+        // Only the Image tab's picture is "the latest result": a pass on one
+        // opened from Outputs answers its own request and nothing else, or
+        // the Image tab would pick it up as its own.
+        let r = r.map(|r| match lock(&retained).slot_of(r.image_id) {
+            pipeline::Slot::Image => latest(queue, &r),
+            _ => result_json(&r),
+        });
         if let Some(id) = pinned {
             lock(&retained).unpin(id);
         }
@@ -805,6 +813,7 @@ fn route(
         ("POST", "/extend") => handle_extend(conn, lanes, &req.body),
         ("POST", "/history/goto") => handle_goto(conn, lanes, &req.body),
         ("POST", "/crop") => handle_crop(conn, lanes, &req.body),
+        ("POST", "/resize") => handle_resize(conn, lanes, &req.body),
         ("POST", "/apply") => handle_apply(conn, lanes, &req.body),
         ("POST", "/brush") => handle_brush(conn, lanes, &req.body),
         // A brush tool's mask, for the page to paint on again.
@@ -975,7 +984,6 @@ fn route(
         ("POST", "/videos/delete") => handle_delete_clips(conn, cfg, &req.body),
         ("GET", "/outputs") => handle_list_outputs(conn, cfg, Gallery::Output),
         ("POST", "/outputs/open") => handle_open_output(conn, lanes, &req.body),
-        ("POST", "/outputs/to-image") => handle_output_to_image(conn, lanes, &req.body),
         ("POST", "/image/model") => handle_set_model(conn, lanes, &req.body),
         ("POST", "/outputs/delete") => {
             handle_delete_outputs(conn, cfg, Gallery::Output, &req.body)
@@ -1656,35 +1664,17 @@ fn handle_open_output(
     #[derive(serde::Deserialize)]
     struct Dto {
         stem: String,
-    }
-
-    match parse_json::<Dto>(conn, body)? {
-        Some(dto) => submit(
-            conn,
-            &lanes.display,
-            JobKind::OpenOutput { stem: dto.stem, slot: pipeline::Slot::Output, fallback: None },
-            400,
-        ),
-        None => Ok(()),
-    }
-}
-
-/// `POST /outputs/to-image {stem, model?}`: open a saved output as the Image
-/// tab's result, so the Refine dialog can refine, extend or edit it. `model`
-/// is the Image tab's selected one, used when the output's sidecar names no
-/// installed model (an upload has none). The display lane's, like an open.
-fn handle_output_to_image(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
-    #[derive(serde::Deserialize)]
-    struct Dto {
-        stem: String,
+        /// The Image tab's model, for a picture whose sidecar names none
+        /// installed (`Display::open_output`).
         #[serde(default)]
         model: Option<String>,
     }
+
     match parse_json::<Dto>(conn, body)? {
         Some(dto) => submit(
             conn,
             &lanes.display,
-            JobKind::OpenOutput { stem: dto.stem, slot: pipeline::Slot::Image, fallback: dto.model },
+            JobKind::OpenOutput { stem: dto.stem, fallback: dto.model },
             400,
         ),
         None => Ok(()),
@@ -2778,6 +2768,18 @@ fn handle_crop(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resul
             JobKind::Crop { id: d.image_id, rect: (d.x, d.y, d.width, d.height) },
             400,
         ),
+        None => Ok(()),
+    }
+}
+
+fn handle_resize(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+        factor: f32,
+    }
+    match parse_json::<Dto>(conn, body)? {
+        Some(d) => submit(conn, &lanes.display, JobKind::Resize { id: d.image_id, factor: d.factor }, 400),
         None => Ok(()),
     }
 }

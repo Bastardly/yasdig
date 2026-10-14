@@ -140,6 +140,12 @@ export function options(o, opts) {
   if (o.kind === 'gpu' && opts.smaller) {
     out.push(['Smaller size', 'Memory grows with the picture’s area.', opts.smaller]);
   }
+  // A pass on a picture that already exists: its size is the picture's, so
+  // the way to a smaller one is scaling the picture (a History step).
+  if (o.kind === 'gpu' && opts.scaleDown) {
+    out.push(['Scale down to 0.75× and try again',
+      'Memory grows with the picture’s area. A History step, so it can be undone.', opts.scaleDown]);
+  }
   if (opts.smallerFile) {
     out.push(['Get a smaller file…',
       'A Q8 or Q4 GGUF needs far less. The lasting fix.', opts.smallerFile]);
@@ -148,7 +154,7 @@ export function options(o, opts) {
 }
 
 // Show `msg` in `el` — as plain text, or as the box when `oom` is set.
-// `opts`: { memory: id of the Memory select, retry, smaller, smallerFile, references }.
+// `opts`: { memory: id of the Memory select, retry, smaller, scaleDown, smallerFile, references }.
 export function showError(el, msg, oom, opts = {}) {
   if (!el) return;
   if (!oom) {

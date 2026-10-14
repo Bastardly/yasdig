@@ -295,7 +295,7 @@ full size is an out-of-memory, not a better picture.
 Everything else is the Image tab as usual: the same prompt, model, LoRAs and
 escalation settings, and the same run panel — *Generate 8* over one picture is eight
 seeds of the same transform, a good way to pick the best of several. The result joins
-the ordinary ladder (Refine, Hi-res, the viewer, Save), and is archived as a work item
+the ordinary ladder (Hi-res, Refine & adjust, Save), and is archived as a work item
 with its source, so reopening it puts the picture back in the slot. Reopening one
 made from noise clears the slot.
 
@@ -406,19 +406,20 @@ how fast the GPU runs them.
 
 The third tab is `work/output/` as a gallery: everything you have saved, and everything
 you have dropped in, at whatever size it was saved at. It is the one tab with no
-controls — click a thumbnail and the **viewer** opens on it full size with the ten
-sliders live, and **←** / **→** step to the previous and next image with the dialog
+controls — click a thumbnail and the **Refine & adjust** dialog (see *Refine*) opens on
+it full size, and **←** / **→** step to the previous and next image with the dialog
 left up. A focused slider keeps its own arrow keys, so click the picture to hand them
 back to the gallery.
 
-**Save changes**, at the bottom of the viewer's panel, writes the edit back over the
-picture, and the tile stays where it was
-in the grid. The viewer holds the picture as it was when you opened it and the sliders
+**Save changes**, at the bottom of the panel, writes what is on screen back over the
+picture — the sliders, a crop, a Refine or an Extend alike — and the tile stays where it
+was in the grid. The viewer holds the picture as it was when you opened it and the sliders
 work on that, so saving twice doesn't grade on top of the first save, and **Reset**
 then **Save changes** puts the original back — until you open another picture.
 **Save as new output**, above it, keeps the original and saves the edit as a new file
-beside it. Closing the viewer, stepping with **←** / **→** or pressing **Refine &
-extend…** with an edit that isn't saved asks first, so an edit isn't lost by accident.
+beside it. Closing the dialog or stepping with **←** / **→** with an edit that isn't
+saved asks first, so an edit isn't lost by accident. While a pass runs on the picture,
+**←** / **→** wait for it.
 
 The same **Click to open / Click to delete** toggle and stars the work-item grid has
 are on this one, and behave identically: a click marks, `Delete N
@@ -430,35 +431,43 @@ nothing to go back to.
 **Current** and **Favorites** flip the gallery, as they do for work items. The star
 **moves** an image to `user/favorite_outputs/`, so `Delete all` and the clear-on-close
 settings can't reach it, and it stays in Current's grid; un-starring moves it back.
-On Favorites, *Delete all* is gone. A favourite opens in the viewer,
+On Favorites, *Delete all* is gone. A favourite opens in the same dialog,
 and can be picked as an *Image to image* source — the picker
 behind **Choose…** has the same Current / Favorites toggle. A new save never takes
 the name of a favourite, so one name always means one picture.
 
-There is no Refine and no Hi-res in this tab, on purpose. A saved image already has its
-grade and its sharpening in the pixels, and everything else in this program is built so
-that nothing diffuses over filtered pixels *by accident*. Taking one further is a choice
-made in the Image tab, two ways: **Refine & extend…** in the viewer's panel opens the
-saved file there as the current image with the Refine dialog up — refine, extend, edit
-or upscale it like a fresh one, the sliders starting at zero because the file already
-carries its look (it opens the file, so save slider changes first). There the dialog
-has a **Refine with** select: the model its Refine, Refine area, Hi-res and Edit run on,
-starting at the one that made it (or, for an upload, the one picked on the Image tab) —
-or pick it in the
-**Image to image** fold to start a real pass from it at a strength you choose. A picture
-that names no installed model, such as an upload, is refined with the model picked on
-the Image tab.
+Refine, Edit, Extend and Scale work here too, on the opened file: it already has its
+grade and its sharpening in the pixels, so the sliders start at zero, and a pass over
+it is a choice you make, like picking it as a source. **Refine with**, at the top of the
+panel, is the model the passes run on, starting at the one that made the picture (or,
+for an upload, the one picked on the Image tab). Hi-res stays on the Image tab; to
+start a real pass from a saved picture at a strength you choose, pick it in the
+**Image to image** fold.
 
 ## Refine
 
 **Hi-res pass** in the result's action row enlarges it and adds detail at the new size — do that
 first, since it re-draws the whole picture lightly and would partly undo a refine made
-before it. **Refine…** beside it — or a click on the picture — opens the one place an
-image is finished: a dialog laid out like a tab, with Fit and **1:1** (Space+drag pans)
-and a prompt box at the top, a fold per tool (Refine, Edit, Upscale, Extend, History),
-and the live preview and the main button at the bottom. The action row reads Hi-res ·
-Refine… · View & adjust · Save, the order you'd use them. What the main button does
-depends on the mask:
+before it. **Refine & adjust…** beside it — or a click on the picture, or a picture
+opened on the Outputs tab — opens the one place an image is finished: the picture,
+nearly full screen, with a narrow **rail** down the left. Each rail button opens a
+floating panel over the picture: **Refine** (the pass prompt, Refine, Edit, Extend),
+**Scale** (Scale and Crop), **Adjust** (Tone, Colour, Detail — see *Postprocessing*),
+**Brushes**, **Selection** (the area and its colours) and **History**. A panel's
+buttons stay at its foot however far you scroll it, the main one in amber. Open as many as
+you like; drag one by its title bar to put it anywhere, and it stays there next time
+(double-click the title bar to put it back). A dot on a rail button says its panel has
+something in effect — a painted mask, a moved slider, brush strokes — even while it
+is closed. The rail's foot has Fit / **1:1** and **Download**; **Apply adjustments** is
+History's main button.
+Progress, the live preview, Stop and any error appear in a card at the lower left.
+The action row reads Hi-res · Refine & adjust… · Save, the order you'd use them.
+
+The picture under the pointer belongs to whichever of the Refine fold, Crop, Selection
+or Brushes is open — opening one closes the others. With none open, a drag pans at
+1:1; the middle button or Space+drag always pans.
+
+What the Refine fold's button does depends on the mask:
 
 - **Nothing painted — Refine image.** A light img2img pass over the whole picture, at
   the Refine pass's steps and strength: detail and texture rather than new content.
@@ -470,10 +479,13 @@ depends on the mask:
   starts over), and **Edge softness** is how far past the paint the new pixels fade
   into the old.
 
-- **Upscale** makes it bigger with no diffusion: FSR, or any runnable model from
-  `models/upscalers/` (the same choice as *Output upscale*), at 1.5× to 4×. It draws
-  nothing new, so unlike Hi-res it can't undo a refine — make it the last step for a
-  bigger file, or upscale and then refine to add detail at the new size.
+- **Scale** makes it smaller or bigger with no diffusion. Smaller (0.25×–0.75×, or
+  **Width…** for an exact width) is instant, rounded down to a multiple of 8 pixels.
+  Bigger (1.5×–4×) is FSR or any runnable model from `models/upscalers/` (the same
+  choice as *Output upscale*). It draws nothing new, so unlike Hi-res it can't undo a
+  refine — make it the last step for a bigger file, or scale and then refine to add
+  detail at the new size. A painted mask scales with the picture. When a pass runs
+  out of memory, the box offers **Scale down to 0.75× and try again**.
 
 Each pass can be given its own prompt ("sharper fabric texture", "an open hand").
 Blank uses the Refine pass prompt from the panel on the left, then the image's own
@@ -513,7 +525,7 @@ strip, so type one only to put something particular there. The image keeps its o
 model for any Refine afterwards. FLUX.1 Fill dev is under the FLUX.1 [dev] non-commercial
 licence; check the card's link.
 
-Every pass — Refine, Refine area, Hi-res, Edit, Extend, Upscale — is a step in the History, with a thumbnail
+Every pass — Refine, Refine area, Hi-res, Edit, Extend, Scale — is a step in the History, as are a crop and an Apply, with a thumbnail
 each. Click one to go back (or Ctrl+Z / Ctrl+Shift+Z): fixed the fingers, ruined the
 hat, step back to the fingers and try the hat again. A new pass from an earlier step
 replaces the ones after it. An image keeps its last twelve steps and always its
@@ -689,8 +701,8 @@ is measured: 254 MB of VAE takes 2.07 s serialized against 0.53 s at four thread
 
 ## Postprocessing
 
-Eleven sliders live in the **viewer** — press **View & adjust** (clicking the picture
-opens the Refine dialog instead).
+Eleven sliders live in the **Adjust** half of the **Refine & adjust** dialog — press
+**Refine & adjust…** or click the picture.
 They work like a photo editor rather than a generation setting: drag one and the image
 re-filters under the cursor. There is no diffusion involved — the server re-runs the GPU
 filters on the unfiltered image it already retained — so a re-tune costs milliseconds
@@ -703,10 +715,10 @@ it.
 | **Colour** | **Saturation** (-1 is exactly greyscale, +1 is double). **Vibrance** is saturation for the dull colours only: muted ones gain most, vivid ones barely move. **Temperature** blue↔yellow and **Tint** green↔magenta, scaled so black stays black. **Hue** rotates every colour, ±180°. |
 | **Detail** | **Clarity** and **Sharpness**, described below. |
 
-They are in the viewer because that is the only place you can see what they do. The two
+They are in the dialog because that is the only place you can see what they do. The two
 detail filters work at or near the pixel level, and the result column shows a fitted
 preview a few hundred pixels across; a sharpness setting chosen there is a guess. The
-viewer opens with the whole frame fitted, which is the right view for a grade and for
+dialog opens with the whole frame fitted, which is the right view for a grade and for
 clarity, and **1:1** switches to true pixels, which is the right view for sharpness —
 drag the image to move around it. Only the **×** and Escape close it, so a stray click
 while you are working can't dismiss the thing you are working on. **Reset** puts every
@@ -817,8 +829,8 @@ is what you will get, rounded down to a multiple of 8 pixels. **Apply crop** cro
 closing the fold or **Cancel** leaves the picture alone. At 1:1, pan with the middle
 button or Space+drag while the box is up.
 
-A crop is a step in the image's history, not a filter: it shows in the Refine
-dialog's and the viewer's **History**, which step back from it, and a Refine or Hi-res after it
+A crop is a step in the image's history, not a filter: it shows in **History**, which
+steps back from it, and a Refine or Hi-res after it
 works on the cropped picture — crop to the face, then Hi-res it. The sliders keep
 their values. On the Outputs tab, **Save changes** writes the crop over the file.
 
@@ -859,12 +871,12 @@ makes the combination a new step. Restore strokes belong to the history they wer
 painted against, so a new step (a refine, a crop, an Apply) drops them; jumping
 through History keeps them. A step of another size — before a Hi-res — is scaled to
 fit, so it comes back softer; it works best between refines. If you know *before*
-refining which part should change, **Refine area** in the Refine dialog redraws only
+refining which part should change, **Refine area** in the Refine fold redraws only
 what you paint instead.
 
 ### Download
 
-**Download**, at the foot of the viewer's panel, saves the picture as you see it —
+**Download**, at the foot of the panel, saves the picture as you see it —
 full size, every slider, area, brush and crop included — to your browser's downloads
 folder, as `yasdig-….png`. Like *Save to output*, it carries the settings it was made
 with when *Settings in the PNG* is on, so dropping it back on yasdig restores them.
@@ -873,7 +885,7 @@ Nothing is written to `work/output/`.
 ### Apply and History
 
 The sliders, the area and a crop are all live until you decide otherwise.
-**Apply adjustments**, at the foot of the viewer's panel, makes the look part of the
+**Apply adjustments**, at the foot of the History panel, makes the look part of the
 picture: the picture doesn't change on screen, but every slider goes back to 0 and the
 next change starts from the adjusted picture. Each Apply, like each crop, is a step in
 **History** (the last fold), labelled with what it changed — *Adjust: Lightness +0.30,
@@ -883,4 +895,4 @@ applying from an earlier step starts a new branch from there, as an undo does.
 Until you apply, a Refine or Hi-res works on the picture as generated and your sliders
 carry over to the result, as they always have. After you apply, they work on the
 adjusted picture — that is the point of applying — and the step before the Apply in
-History is the untouched one to go back to. The Refine dialog shows the same History.
+History is the untouched one to go back to.

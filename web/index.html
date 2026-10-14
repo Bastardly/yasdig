@@ -422,9 +422,9 @@
     </div>
   </div>
 
-  <!-- The sliders that act on this image are in the viewer, not here: see the
-       lightbox dialog at the bottom of the page. "View & adjust" in the action
-       row opens it; clicking the image opens the Refine dialog. -->
+  <!-- The passes and sliders that act on this image are in the Refine & adjust
+       dialog (#lightbox, at the bottom of the page), not here: the action row's
+       button or a click on the image opens it. -->
   <div class="col-result">
     <div id="result" class="result"></div>
   </div>
@@ -822,94 +822,231 @@
     · <a href="#" id="licenceslink">Licences</a>
   </footer>
 
-<!-- The viewer, and the only place the display filters can be judged: a
-     sharpness setting read off a 400 px preview is a guess. Panel on the left,
-     viewport on the right, and the image the sliders act on is the big one.
+<!-- Refine & adjust: the one place a picture is finished — passes that draw
+     on it (Refine, Edit, Extend, Scale) and the look over it (the sliders,
+     Crop, Area, Brushes), one History for both. It is also the only place the
+     display filters can be judged: a sharpness setting read off a 400 px
+     preview is a guess. A narrow rail on the left toggles floating panels the
+     user can drag anywhere (`panels.js`), so the picture stays the biggest
+     thing on screen and History can sit where it is wanted. Hi-res stays
+     above the result on the Image tab: it sets the final size, so it comes
+     before finishing. Opened by clicking the result, Refine & adjust…, or an
+     Outputs tile.
 
      The close button is the point of the layout, not decoration. The old viewer
      dismissed on any click, which is fine for something you only look at and
      hostile for something you edit in — one stray click on the picture and the
      picture is gone. So: an explicit x, plus Escape, which <dialog> gives free. -->
 <dialog id="lightbox">
-  <div class="lbside">
-    <div class="posthead">
-      <b>Postprocessing</b><span id="postms" class="meta"></span>
-    </div>
-    <!-- Two views, because the filters ask different questions: a grade and
-         clarity are a look you judge on the whole frame, sharpness is a pixel
-         you have to see. Reset is here because ten knobs with no way home is a
-         trap — and "home" is not zero for two of them. -->
-    <div class="lbzoom">
-      <button type="button" id="lbfit" class="btn btn-choice">Fit</button>
-      <button type="button" id="lbfull" class="btn btn-choice">1:1</button>
-      <button type="button" id="lbreset" class="btn btn-choice">Reset</button>
-    </div>
-    <!-- The sliders are built from the FILTERS table below rather than written
-         out here: adding one is meant to be a row in a list, not a block of
-         markup plus a matching entry in five functions. -->
-    <div id="lbsaved" class="meta"></div>
-    <!-- Tone, Colour and Detail: a fold per `group` of FILTERS, built by
-         initViewer. Each summary says what has moved (`viewerSummaries`). -->
-    <div id="lbsliders"></div>
-    <!-- A history step on the retained image, not a filter: a pass after it
-         runs on the crop. Opening the fold puts the box up; closing it drops
-         an unapplied one (`regiontool.js`). -->
-    <details id="fold-lb-crop" class="fold">
-      <summary>Crop <span class="foldstate" id="sum-lb-crop"></span></summary>
-      <div class="rdrow">
-        <label for="lbaspect">Aspect</label>
-        <!-- Landscape ratios only: the button beside turns one portrait. -->
-        <select id="lbaspect">
-          <option value="">Free</option>
-          <option value="orig">Original</option>
-          <option value="1">1:1</option>
-          <option value="1.25">5:4</option>
-          <option value="1.3333">4:3</option>
-          <option value="1.5">3:2</option>
-          <option value="1.7778">16:9</option>
-        </select>
-        <button type="button" id="lbaspectturn" class="btn" title="Turn the aspect: landscape ↔ portrait">⟲</button>
-      </div>
-      <p class="sub" id="lbcropsize"></p>
-      <div class="row spaced">
-        <div><button type="button" id="lbcropapply" class="btn btn-block">Apply crop</button></div>
-        <div><button type="button" id="lbcropcancel" class="btn btn-block">Cancel</button></div>
-      </div>
-    </details>
-    <!-- One shape with a look of its own, over the whole-image look. "Area"
-         points the sliders above at it; "Whole image" points them back. -->
-    <details id="fold-lb-area" class="fold">
-      <summary>Area <span class="foldstate" id="sum-lb-area"></span></summary>
+  <!-- The rail: a toggle per panel, and what acts on the whole picture —
+       the view, Download and the Outputs saves. A toggle carries a
+       dot when its panel has something in effect (`railDot`). -->
+  <nav class="lbrail" aria-label="Refine and adjust">
+    <b class="railtitle">Refine &amp; adjust</b>
+    <button type="button" class="btn btn-choice railbtn" data-panel="refine">Refine</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="scale">Scale</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="adjust">Adjust</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="brush">Brushes</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="select">Selection</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="history">History</button>
+    <div class="railfoot">
       <div class="lbzoom">
-        <button type="button" id="lbtargetall" class="btn btn-choice active">Whole image</button>
-        <button type="button" id="lbtargetarea" class="btn btn-choice">Area</button>
-        <button type="button" id="lbcolors" class="btn" title="Pick the hues, lightness and saturation the area selects">Colours…</button>
+        <button type="button" id="lbfit" class="btn btn-choice">Fit</button>
+        <button type="button" id="lbfull" class="btn btn-choice">1:1</button>
       </div>
-      <p class="sub" id="lbcolorsline" hidden></p>
-      <div class="slider" id="lbcfeatherrow" hidden>
-        <div class="head"><label for="lbcfeather">Colour feather</label><span class="val" id="lbcfeatherval"></span></div>
-        <input id="lbcfeather" type="range" min="0" max="1" step="0.01" value="0">
+      <!-- The picture as shown, to the browser's downloads (`/download-image`):
+           nothing is written here. First, since it
+           is what most visits end with; neutral. -->
+      <button type="button" id="lbdownload" class="btn btn-block"
+        title="Save the picture as you see it to your computer, at full size, with its settings in the PNG when Settings says so.">Download</button>
+      <!-- A copy, beside the original: for keeping both. Neutral, since
+           Save changes below is what an edit usually ends with. -->
+      <button type="button" id="lbsave" class="btn btn-block" hidden
+        title="Keep the original and save this as a new picture beside it.">Save as new output</button>
+      <!-- The Outputs tab's Save: the edit written back over the picture it
+           was opened from. Neutral, beside Apply's amber; closing with an
+           edit not saved asks first (`outputs.js`). -->
+      <button type="button" id="lbsavechanges" class="btn btn-block" hidden
+        title="Write the edit over this picture (and its favourite copy, if it has one). Until you move on, Reset and Save changes again puts the original back.">Save changes</button>
+      <div id="postms" class="meta"></div>
+      <div id="lbsaved" class="meta"></div>
+    </div>
+  </nav>
+  <div class="lbview fit" id="lbview">
+    <img id="lbimg" alt="full size result" draggable="false">
+    <canvas id="rdmask" class="maskview"></canvas>
+    <!-- Compare: an earlier step laid over the image, clipped at the split.
+         Placed by the same `lay()` as the mask, so the three never drift. -->
+    <img id="rdbefore" class="rdbefore" alt="" draggable="false" hidden>
+    <div id="rdsplit" class="rdsplit" hidden></div>
+    <span id="rdtagbefore" class="rdtag rdtag-before" hidden></span>
+    <span id="rdtagnow" class="rdtag rdtag-now" hidden></span>
+  </div>
+  <section class="fpanel" id="panel-refine" aria-label="Refine" hidden>
+    <header class="fphead"><b>Refine</b><button type="button" class="fpclose" aria-label="Close Refine">&times;</button></header>
+    <div class="fpbody">
+      <!-- Only for a picture opened from Outputs, whose maker is unknown — an
+           upload — or may not be the one to finish with. Sets the model every
+           pass below runs on (`/image/model`). -->
+      <div class="rdrow" id="rdmodelrow" hidden>
+        <label for="rdmodel">Refine with</label>
+        <select id="rdmodel"></select>
       </div>
-      <div id="lbareabox" hidden>
-        <!-- What it selects: a shape, colours, or both (`crate::area`). -->
-        <div class="lbzoom">
-          <button type="button" id="lbshapewhole" class="btn btn-choice" title="No shape: select by colour alone">Whole</button>
-          <button type="button" id="lbshaperect" class="btn btn-choice">Rectangle</button>
-          <button type="button" id="lbshapeellipse" class="btn btn-choice">Ellipse</button>
+      <!-- Outside the folds: Refine, Edit and Extend all read it. -->
+      <label for="rpprompt">Prompt for this pass</label>
+      <prompt-box>
+        <textarea id="rpprompt" rows="3" placeholder="blank uses this image's own prompt"></textarea>
+      </prompt-box>
+      <details id="rdfold-refine" class="fold" open>
+        <summary>Refine <span class="foldstate" id="rdsum-refine"></span></summary>
+        <p class="sub">With nothing painted, Refine works on the whole image. Paint
+          over an area to refine just that — while this fold is open, a drag on the
+          picture paints. Right-drag erases; Space+drag pans at 1:1.</p>
+        <!-- One box, two numbers: the label says which. Whole image mirrors the
+             Refine pass fold's strength; area keeps its own (redraw.js). -->
+        <div class="rdrow">
+          <label for="rpstrength" id="rpstrengthlabel">Strength (whole image)</label>
+          <input id="rpstrength" type="number" step="0.05" min="0.05" max="0.95" value="0.5">
         </div>
-        <div class="slider" id="lbfeatherrow">
-          <div class="head"><label for="lbfeather">Shape feather</label><span class="val" id="lbfeatherval"></span></div>
-          <input id="lbfeather" type="range" min="0" max="0.5" step="0.01" value="0.1">
+        <div class="slider">
+          <div class="head"><label for="rpsoft">Edge softness</label><span class="val" id="rpsoftval"></span></div>
+          <input id="rpsoft" type="range" min="0" max="64" step="1" value="16">
         </div>
-        <div class="checks"><label><input type="checkbox" id="lbinvert"> Invert — everything but the selection</label></div>
-        <div class="checks"><label><input type="checkbox" id="lbareabrushes"> Brushes only paint inside the selection</label></div>
-        <button type="button" id="lbarearemove" class="btn btn-block">Remove area</button>
-      </div>
-    </details>
-    <!-- Paint an effect where you want it. One mask and one amount per tool
-         (`crate::brush`); live until Apply bakes them in (`brushpaint.js`). -->
-    <details id="fold-lb-brush" class="fold">
-      <summary>Brushes <span class="foldstate" id="sum-lb-brush"></span></summary>
+        <div class="slider">
+          <div class="head"><label for="rpbrush">Brush</label><span class="val" id="rpbrushval"></span></div>
+          <input id="rpbrush" type="range" min="4" max="200" step="1" value="40">
+        </div>
+        <div class="redrawtools">
+          <button type="button" id="rperase" class="btn btn-choice">Eraser</button>
+          <button type="button" id="rpclear" class="btn">Clear</button>
+        </div>
+      </details>
+      <!-- Change the whole picture by instruction, with no painting: the image
+           itself goes to the model as reference 1, the prompt says what to change.
+           The whole fold shows only for a model that takes references
+           (`can_edit`), and its button in the footer with it. -->
+      <details id="rdfold-edit" class="fold" hidden>
+        <summary>Edit <span class="foldstate" id="rdsum-edit"></span></summary>
+        <!-- Edit's own sides, apart from Extend's: the model redraws the whole
+             picture in the grown shape, nothing pasted back. Picking one turns
+             the button into "Edit and rescale". The same markup and code as
+             Extend's set (`sideSet` in redraw.js), so the two can't drift. -->
+        <p class="sub rdsideshead"><label data-help="rescale">Rescale with Edit</label> — redraws the
+          whole picture in the new shape</p>
+        <div class="rdsides" id="rdeditsides">
+          <button type="button" class="btn btn-choice" data-side="left" title="Rescale left">←</button>
+          <button type="button" class="btn btn-choice" data-side="top" title="Rescale up">↑</button>
+          <button type="button" class="btn btn-choice" data-side="bottom" title="Rescale down">↓</button>
+          <button type="button" class="btn btn-choice" data-side="right" title="Rescale right">→</button>
+          <select data-amount title="How far each chosen side grows">
+            <option value="128">128 px</option>
+            <option value="256" selected>256 px</option>
+            <option value="384">384 px</option>
+            <option value="512">512 px</option>
+          </select>
+        </div>
+        <p class="sub" id="rdeditnote"></p>
+      </details>
+      <!-- Extend: grow the canvas on the chosen sides and draw what's beyond them
+           with FLUX.1 Fill, on any image — it turns on by itself once a Fill
+           model is installed. Uses this dialog's prompt (blank continues the
+           background) and the Refine fold's edge softness. Whole-image. -->
+      <details id="rdfold-extend" class="fold">
+        <summary><label data-help="extend">Extend</label> <span class="foldstate" id="rdsum-extend"></span></summary>
+        <p class="sub" id="rdneedsfill" hidden>Needs FLUX.1 Fill, a model trained to
+          continue a picture past its edges.
+          <button type="button" id="rdgetfill" class="btn">Get models…</button></p>
+        <div class="rdsides" id="rdextendsides">
+          <button type="button" class="btn btn-choice" data-side="left" title="Extend left">←</button>
+          <button type="button" class="btn btn-choice" data-side="top" title="Extend up">↑</button>
+          <button type="button" class="btn btn-choice" data-side="bottom" title="Extend down">↓</button>
+          <button type="button" class="btn btn-choice" data-side="right" title="Extend right">→</button>
+          <select data-amount title="How far each chosen side grows">
+            <option value="128">128 px</option>
+            <option value="256" selected>256 px</option>
+            <option value="384">384 px</option>
+            <option value="512">512 px</option>
+          </select>
+        </div>
+        <p class="sub" id="rdextendnote"></p>
+      </details>
+    </div>
+    <!-- The panel's actions, pinned under its body so they show however far
+         it is scrolled: the others above, the main one last, amber — the
+         tabs' dock pattern. The mask decides the main one: nothing painted
+         is "Refine image", painted is "Refine area". -->
+    <div class="fpfoot">
+      <button type="button" id="rdedit" class="btn btn-block" hidden>Edit</button>
+      <button type="button" id="rdextendgo" class="btn btn-block">Extend</button>
+      <button type="button" id="redrawgo" class="btn btn-run btn-block" disabled>Refine image</button>
+    </div>
+  </section>
+  <section class="fpanel" id="panel-scale" aria-label="Scale" hidden>
+    <header class="fphead"><b>Scale</b><button type="button" class="fpclose" aria-label="Close Scale">&times;</button></header>
+    <div class="fpbody">
+      <!-- Scale: the picture smaller or bigger, with no diffusion. Down is
+           Lanczos on the display lane (`/resize`), instant; up is FSR or an
+           upscaler model through the queue (`/upscale`). Unlike Hi-res it
+           re-draws nothing. Whole-image, so it waits while something is
+           painted. -->
+      <details id="rdfold-upscale" class="fold">
+        <summary>Scale <span class="foldstate" id="rdsum-upscale"></span></summary>
+        <div class="rdupscale">
+          <select id="rdfactor" title="How much smaller or bigger">
+            <option value="0.25">0.25×</option>
+            <option value="0.5">0.5×</option>
+            <option value="0.75">0.75×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2" selected>2×</option>
+            <option value="3">3×</option>
+            <option value="4">4×</option>
+            <option value="width">Width…</option>
+          </select>
+          <input id="rdwidth" type="number" min="64" step="8" title="The new width; the height follows the picture's shape" hidden>
+          <select id="rdupscaler" title="FSR is instant; a model is slower and sharper"></select>
+        </div>
+        <p class="sub" id="rdupnote"></p>
+      </details>
+      <!-- A history step on the retained image, not a filter: a pass after it
+           runs on the crop. Opening the fold puts the box up; closing it drops
+           an unapplied one (`regiontool.js`). -->
+      <details id="fold-lb-crop" class="fold">
+        <summary>Crop <span class="foldstate" id="sum-lb-crop"></span></summary>
+        <div class="rdrow">
+          <label for="lbaspect">Aspect</label>
+          <!-- Landscape ratios only: the button beside turns one portrait. -->
+          <select id="lbaspect">
+            <option value="">Free</option>
+            <option value="orig">Original</option>
+            <option value="1">1:1</option>
+            <option value="1.25">5:4</option>
+            <option value="1.3333">4:3</option>
+            <option value="1.5">3:2</option>
+            <option value="1.7778">16:9</option>
+          </select>
+          <button type="button" id="lbaspectturn" class="btn" title="Turn the aspect: landscape ↔ portrait">⟲</button>
+        </div>
+        <p class="sub" id="lbcropsize"></p>
+        <button type="button" id="lbcropcancel" class="btn btn-block">Cancel crop</button>
+      </details>
+    </div>
+    <!-- Apply crop is pressable while the Crop fold has its box up. -->
+    <div class="fpfoot">
+      <button type="button" id="lbcropapply" class="btn btn-block" disabled>Apply crop</button>
+      <button type="button" id="rdupscale" class="btn btn-run btn-block">Scale</button>
+    </div>
+  </section>
+  <section class="fpanel" id="panel-adjust" aria-label="Adjust" hidden>
+    <header class="fphead"><b>Adjust</b><button type="button" id="lbreset" class="btn btn-choice fpreset" title="Every slider home, the selection and the brush strokes gone">Reset</button><button type="button" class="fpclose" aria-label="Close Adjust">&times;</button></header>
+    <div class="fpbody">
+      <!-- Tone, Colour and Detail: built from the FILTERS table rather than
+           written out here, so adding a slider is a row in a list. -->
+      <div id="lbsliders"></div>
+    </div>
+  </section>
+  <section class="fpanel" id="panel-brush" aria-label="Brushes" hidden>
+    <header class="fphead"><b>Brushes</b> <span class="foldstate" id="sum-lb-brush"></span><button type="button" class="fpclose" aria-label="Close Brushes">&times;</button></header>
+    <div class="fpbody">
       <div class="lbtools">
         <button type="button" data-tool="dodge" class="btn btn-choice active" title="Lighten where you paint">Dodge</button>
         <button type="button" data-tool="burn" class="btn btn-choice" title="Darken where you paint">Burn</button>
@@ -941,184 +1078,42 @@
         <div><button type="button" id="lbbclear" class="btn btn-block">Clear this tool</button></div>
         <div><button type="button" id="lbbclearall" class="btn btn-block">Clear all</button></div>
       </div>
-    </details>
-    <!-- Every state of this picture — Apply and Crop each add one, as the
-         Refine dialog's passes do. The same list as that dialog's History
-         (`historyMarkup`); click one to go back or forward to it. -->
-    <details id="fold-lb-history" class="fold">
-      <summary>History <span class="foldstate" id="sum-lb-history"></span></summary>
-      <ol id="lbhistory" class="rdhistory"></ol>
-    </details>
-    <!-- The dock, as on every panel with a main action — here only the
-         Outputs tab's, since the Image tab's Save is in its action row (both
-         buttons are hidden there, and an empty dock hides itself). -->
-    <div class="dock">
-      <!-- In the panel rather than in the result block, because while this
-           dialog is modal the result block is behind it and an error written
-           there is an error nobody reads. -->
-      <div id="lberr" class="err"></div>
-      <!-- The picture as shown, to the browser's downloads (`/download-image`):
-           nothing is written here. First, since it
-           is what most visits end with; neutral. -->
-      <button type="button" id="lbdownload" class="btn btn-block"
-        title="Save the picture as you see it to your computer, at full size, with its settings in the PNG when Settings says so.">Download</button>
-      <!-- The breakpoint: the look becomes the picture, as a History step,
-           and the sliders start from zero on it. The panel's amber button:
-           it is what the sliders above lead to. -->
-      <button type="button" id="lbapply" class="btn btn-run btn-block" disabled
-        title="Make these adjustments part of the picture and start the sliders from zero on it. Refine and Hi-res afterwards work on the adjusted picture; History steps back.">Apply adjustments</button>
-      <!-- The Outputs tab's way into the Refine dialog: the saved file becomes
-           the Image tab's result (`/outputs/to-image`), to refine, extend or
-           edit. Neutral: opening it spends nothing; the dialog's buttons do. -->
-      <button type="button" id="lbrefine" class="btn btn-block" hidden
-        title="Open this picture on the Image tab, in the Refine dialog. It opens the saved file — save slider changes first to keep them.">Refine &amp; extend…</button>
-      <!-- A copy, beside the original: for keeping both. Neutral, since
-           Save changes below is what an edit usually ends with. -->
-      <button type="button" id="lbsave" class="btn btn-block" hidden
-        title="Keep the original and save this as a new picture beside it.">Save as new output</button>
-      <!-- The Outputs tab's Save: the edit written back over the picture it
-           was opened from. Neutral, beside Apply's amber; closing with an
-           edit not saved asks first (`outputs.js`). -->
-      <button type="button" id="lbsavechanges" class="btn btn-block" hidden
-        title="Write the edit over this picture (and its favourite copy, if it has one). Until you move on, Reset and Save changes again puts the original back.">Save changes</button>
     </div>
-  </div>
-  <div class="lbview fit" id="lbview">
-    <img id="lbimg" alt="full size result" draggable="false">
-  </div>
-  <button type="button" id="lbclose" aria-label="Close viewer">&times;</button>
-</dialog>
-<!-- Refine: the one place an image is finished. Nothing painted refines the
-     whole picture; something painted redraws just that area (the code calls that
-     pass Redraw: redraw.js, /redraw). Hi-res stays above the image: it sets the
-     final size, so it comes before refining, not inside it. The viewer's layout —
-     a fixed panel beside a zoomable, pannable picture — because large images
-     want 1:1, and the live preview is in the panel because watching the pass
-     form is how you know to cancel. Opened from Refine… in the result's action
-     row. -->
-<dialog id="redraw">
-  <!-- The Image tab's shape: what every pass shares at the top, a fold per
-       tool, and the dock — the main button, Cancel, progress, the preview and
-       errors — at the foot. Each summary says what is inside
-       (`syncDialogSummaries`), so a folded tool still reads. -->
-  <div class="lbside">
-    <div class="posthead"><b>Refine</b></div>
-    <div class="lbzoom">
-      <button type="button" id="rdfit" class="btn btn-choice">Fit</button>
-      <button type="button" id="rdfull" class="btn btn-choice">1:1</button>
+  </section>
+  <section class="fpanel" id="panel-select" aria-label="Selection" hidden>
+    <header class="fphead"><b>Selection</b> <span class="foldstate" id="sum-lb-area"></span><button type="button" class="fpclose" aria-label="Close Selection">&times;</button></header>
+    <div class="fpbody">
+      <div class="lbzoom">
+        <button type="button" id="lbtargetall" class="btn btn-choice active">Whole image</button>
+        <button type="button" id="lbtargetarea" class="btn btn-choice">Area</button>
+        <button type="button" id="lbcolors" class="btn" title="Pick the hues, lightness and saturation the area selects">Colours…</button>
+      </div>
+      <p class="sub" id="lbcolorsline" hidden></p>
+      <div class="slider" id="lbcfeatherrow" hidden>
+        <div class="head"><label for="lbcfeather">Colour feather</label><span class="val" id="lbcfeatherval"></span></div>
+        <input id="lbcfeather" type="range" min="0" max="1" step="0.01" value="0">
+      </div>
+      <div id="lbareabox" hidden>
+        <!-- What it selects: a shape, colours, or both (`crate::area`). -->
+        <div class="lbzoom">
+          <button type="button" id="lbshapewhole" class="btn btn-choice" title="No shape: select by colour alone">Whole</button>
+          <button type="button" id="lbshaperect" class="btn btn-choice">Rectangle</button>
+          <button type="button" id="lbshapeellipse" class="btn btn-choice">Ellipse</button>
+        </div>
+        <div class="slider" id="lbfeatherrow">
+          <div class="head"><label for="lbfeather">Shape feather</label><span class="val" id="lbfeatherval"></span></div>
+          <input id="lbfeather" type="range" min="0" max="0.5" step="0.01" value="0.1">
+        </div>
+        <div class="checks"><label><input type="checkbox" id="lbinvert"> Invert — everything but the selection</label></div>
+        <div class="checks"><label><input type="checkbox" id="lbareabrushes"> Brushes only paint inside the selection</label></div>
+        <button type="button" id="lbarearemove" class="btn btn-block">Remove area</button>
+      </div>
     </div>
-    <!-- Only for a picture opened from Outputs (Refine & extend…), whose
-         maker is unknown — an upload — or may not be the one to finish with.
-         Sets the model every pass below runs on (`/image/model`). -->
-    <div class="rdrow" id="rdmodelrow" hidden>
-      <label for="rdmodel">Refine with</label>
-      <select id="rdmodel"></select>
-    </div>
-    <!-- Outside the folds: Refine, Edit and Extend all read it. -->
-    <label for="rpprompt">Prompt for this pass</label>
-    <prompt-box>
-      <textarea id="rpprompt" rows="3" placeholder="blank uses this image's own prompt"></textarea>
-    </prompt-box>
-
-    <details id="rdfold-refine" class="fold" open>
-      <summary>Refine <span class="foldstate" id="rdsum-refine"></span></summary>
-      <p class="sub">With nothing painted, Refine works on the whole image. Paint
-        over an area to refine just that. Right-drag erases; Space+drag pans at 1:1.</p>
-      <!-- One box, two numbers: the label says which. Whole image mirrors the
-           Refine pass fold's strength; area keeps its own (redraw.js). -->
-      <div class="rdrow">
-        <label for="rpstrength" id="rpstrengthlabel">Strength (whole image)</label>
-        <input id="rpstrength" type="number" step="0.05" min="0.05" max="0.95" value="0.5">
-      </div>
-      <div class="slider">
-        <div class="head"><label for="rpsoft">Edge softness</label><span class="val" id="rpsoftval"></span></div>
-        <input id="rpsoft" type="range" min="0" max="64" step="1" value="16">
-      </div>
-      <div class="slider">
-        <div class="head"><label for="rpbrush">Brush</label><span class="val" id="rpbrushval"></span></div>
-        <input id="rpbrush" type="range" min="4" max="200" step="1" value="40">
-      </div>
-      <div class="redrawtools">
-        <button type="button" id="rperase" class="btn btn-choice">Eraser</button>
-        <button type="button" id="rpclear" class="btn">Clear</button>
-      </div>
-    </details>
-
-    <!-- Change the whole picture by instruction, with no painting: the image
-         itself goes to the model as reference 1, the prompt says what to change.
-         The whole fold shows only for a model that takes references
-         (`can_edit`). Neutral, not amber: the amber is the docked Refine. -->
-    <details id="rdfold-edit" class="fold" hidden>
-      <summary>Edit <span class="foldstate" id="rdsum-edit"></span></summary>
-      <button type="button" id="rdedit" class="btn btn-block">Edit</button>
-      <!-- Edit's own sides, apart from Extend's: the model redraws the whole
-           picture in the grown shape, nothing pasted back. Picking one turns
-           the button into "Edit and rescale". The same markup and code as
-           Extend's set (`sideSet` in redraw.js), so the two can't drift. -->
-      <p class="sub rdsideshead"><label data-help="rescale">Rescale with Edit</label> — redraws the
-        whole picture in the new shape</p>
-      <div class="rdsides" id="rdeditsides">
-        <button type="button" class="btn btn-choice" data-side="left" title="Rescale left">←</button>
-        <button type="button" class="btn btn-choice" data-side="top" title="Rescale up">↑</button>
-        <button type="button" class="btn btn-choice" data-side="bottom" title="Rescale down">↓</button>
-        <button type="button" class="btn btn-choice" data-side="right" title="Rescale right">→</button>
-        <select data-amount title="How far each chosen side grows">
-          <option value="128">128 px</option>
-          <option value="256" selected>256 px</option>
-          <option value="384">384 px</option>
-          <option value="512">512 px</option>
-        </select>
-      </div>
-      <p class="sub" id="rdeditnote"></p>
-    </details>
-
-    <!-- Upscale: bigger with no diffusion — FSR or an upscaler model. Unlike
-         Hi-res it re-draws nothing, so it can't undo a refine: last for a bigger
-         file, or first for a refine at the new size. Whole-image, so it waits
-         while something is painted. -->
-    <details id="rdfold-upscale" class="fold">
-      <summary>Upscale <span class="foldstate" id="rdsum-upscale"></span></summary>
-      <div class="rdupscale">
-        <select id="rdfactor" title="How much bigger">
-          <option value="1.5">1.5×</option>
-          <option value="2" selected>2×</option>
-          <option value="3">3×</option>
-          <option value="4">4×</option>
-        </select>
-        <select id="rdupscaler" title="FSR is instant; a model is slower and sharper"></select>
-      </div>
-      <button type="button" id="rdupscale" class="btn btn-block">Upscale</button>
-      <p class="sub" id="rdupnote"></p>
-    </details>
-
-    <!-- Extend: grow the canvas on the chosen sides and draw what's beyond them
-         with FLUX.1 Fill, on any image — it turns on by itself once a Fill
-         model is installed. Uses this dialog's prompt (blank continues the
-         background) and the Refine fold's edge softness. Whole-image. -->
-    <details id="rdfold-extend" class="fold">
-      <summary><label data-help="extend">Extend</label> <span class="foldstate" id="rdsum-extend"></span></summary>
-      <p class="sub" id="rdneedsfill" hidden>Needs FLUX.1 Fill, a model trained to
-        continue a picture past its edges.
-        <button type="button" id="rdgetfill" class="btn">Get models…</button></p>
-      <div class="rdsides" id="rdextendsides">
-        <button type="button" class="btn btn-choice" data-side="left" title="Extend left">←</button>
-        <button type="button" class="btn btn-choice" data-side="top" title="Extend up">↑</button>
-        <button type="button" class="btn btn-choice" data-side="bottom" title="Extend down">↓</button>
-        <button type="button" class="btn btn-choice" data-side="right" title="Extend right">→</button>
-        <select data-amount title="How far each chosen side grows">
-          <option value="128">128 px</option>
-          <option value="256" selected>256 px</option>
-          <option value="384">384 px</option>
-          <option value="512">512 px</option>
-        </select>
-      </div>
-      <button type="button" id="rdextendgo" class="btn btn-block">Extend</button>
-      <p class="sub" id="rdextendnote"></p>
-    </details>
-
-    <details id="rdfold-history" class="fold" open>
-      <summary>History <span class="foldstate" id="rdsum-history"></span></summary>
-      <p class="sub">Every pass is a step. Click one to go back to it; Ctrl+Z and
+  </section>
+  <section class="fpanel" id="panel-history" aria-label="History" hidden>
+    <header class="fphead"><b>History</b> <span class="foldstate" id="sum-lb-history"></span><button type="button" class="fpclose" aria-label="Close History">&times;</button></header>
+    <div class="fpbody">
+      <p class="sub">Every pass, crop, scale and Apply is a step. Click one to go back to it; Ctrl+Z and
         Ctrl+Shift+Z step through. A new pass from an earlier step replaces the
         ones after it.</p>
       <!-- Compare, beside the step it puts on the left. The whole row is hidden
@@ -1130,35 +1125,31 @@
           <button type="button" id="rdcompare" class="btn btn-choice" title="Before and after, split by a line you drag (C)">Compare</button>
         </div>
       </div>
-      <ol id="rdhistory" class="rdhistory"></ol>
+      <ol id="lbhistory" class="rdhistory"></ol>
+    </div>
+    <!-- History's main action: Apply makes the look a step of its own (the
+         breakpoint — the sliders start from zero on it), so it belongs with
+         the list it adds to. -->
+    <div class="fpfoot">
+      <button type="button" id="lbapply" class="btn btn-run btn-block" disabled
+        title="Make these adjustments part of the picture and start the sliders from zero on it. Refine and Hi-res afterwards work on the adjusted picture; History steps back.">Apply adjustments</button>
+    </div>
+  </section>
+  <!-- What a pass is doing and what went wrong: the error and OOM box, the
+       live preview, progress and Stop. In the pane's lower left, shown only
+       when it has something to say. -->
+  <div class="lbstatus">
+    <div id="lberr" class="err"></div>
+    <details class="fold previewfold" id="rdfold-preview" open>
+      <summary>Preview</summary>
+      <img class="livepreview" alt="Live preview" hidden>
     </details>
-
-    <!-- The Image tab's dock, in its order. The main button is the mask's:
-         nothing painted is "Refine image", painted is "Refine area". -->
-    <div class="dock">
-      <div id="rperr" class="err"></div>
-      <details class="fold previewfold" id="rdfold-preview" open>
-        <summary>Preview</summary>
-        <img class="livepreview" alt="Live preview" hidden>
-      </details>
-      <p class="sub" id="rdprog"></p>
-      <div class="runstop">
-        <button type="button" id="rdcancel" class="btn btn-danger btn-block" hidden>Cancel generation</button>
-      </div>
-      <button type="button" id="redrawgo" class="btn btn-run btn-block" disabled>Refine image</button>
+    <p class="sub" id="rdprog"></p>
+    <div class="runstop">
+      <button type="button" id="rdcancel" class="btn btn-danger btn-block" hidden>Cancel generation</button>
     </div>
   </div>
-  <div class="lbview fit rdview" id="rdview">
-    <img id="rdimg" alt="image being redrawn" draggable="false">
-    <canvas id="rdmask" class="maskview"></canvas>
-    <!-- Compare: an earlier step laid over the image, clipped at the split.
-         Placed by the same `lay()` as the mask, so the three never drift. -->
-    <img id="rdbefore" class="rdbefore" alt="" draggable="false" hidden>
-    <div id="rdsplit" class="rdsplit" hidden></div>
-    <span id="rdtagbefore" class="rdtag rdtag-before" hidden></span>
-    <span id="rdtagnow" class="rdtag rdtag-now" hidden></span>
-  </div>
-  <button type="button" id="rdclose" class="lbclose" aria-label="Close Redraw">&times;</button>
+  <button type="button" id="lbclose" aria-label="Close">&times;</button>
 </dialog>
 <!-- Reference images for the next generation: up to four, numbered as the
      prompt names them. Each is a source slot (pick, upload, drop); a paste goes

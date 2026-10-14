@@ -54,8 +54,8 @@ export const onNotice = (fn) => noticeHooks.push(fn);
 
 export const jobCount = () => snap.jobs.length;
 export const runningJob = () => snap.jobs.find((j) => j.state !== 'queued') ?? null;
-// Whether a pass on some image is running. The Refine dialog's history and the
-// viewer's Crop are locked meanwhile: a step back (or a crop) and a pass that
+// Whether a pass on some image is running. The dialog's History, Crop and Scale
+// down are locked meanwhile: a step back (or a crop) and a pass that
 // lands afterwards would disagree about which state is current, and the pass
 // would win without saying so.
 const PASSES = ['refine', 'hires', 'redraw', 'upscale', 'edit', 'extend'];

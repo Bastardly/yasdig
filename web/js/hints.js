@@ -106,7 +106,7 @@ const HELP = [
   { ids: ['rprompt', 'hprompt'],
     text: 'Optional: what this pass is asked for, instead of the image\u2019s own '
         + 'prompt. Used by After each generation and, when its own box is blank, by '
-        + 'the Refine dialog. A refine is a light pass, so it suits detail ("sharper '
+        + 'the Refine & adjust dialog. A refine is a light pass, so it suits detail ("sharper '
         + 'fabric") more than a different object — that is a painted area.' },
   { ids: ['rpstrength'],
     text: 'How much of the picture the pass may change. The whole image follows the '
@@ -458,7 +458,7 @@ export function wireHints(root = document) {
 // The bubble is a `popover`, which is what puts it in the browser's top layer,
 // and that is the only reason it works in the two places it must: the viewer is
 // a modal <dialog>, so an ordinary fixed element renders *behind* the backdrop,
-// and `.lbside` is `overflow-y: auto`, so an ordinary absolute one is clipped by
+// and a panel's `.fpbody` is `overflow-y: auto`, so an ordinary absolute one is clipped by
 // the panel the sliders live in. Plain `popover` rather than `popover="manual"`
 // also buys Escape and click-outside dismissal, and makes a second icon's text
 // replace the first rather than stack on top of it.

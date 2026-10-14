@@ -6,7 +6,7 @@
 // pixels, dragged by eight handles, moved by its middle, and redrawn by a drag
 // anywhere else on the picture.
 //
-// The overlay lies over the image the way the Refine dialog's mask does
+// The overlay lies over the image the way the Refine fold's mask does
 // (`lay()` in redraw.js): the image's own box, in the scrolling pane's
 // coordinates, so it zooms and pans with the picture and needs no maths of its
 // own for either. Positions inside it are percentages of that box, so a fit
@@ -150,7 +150,7 @@ export function regionTool({ view, img, onChange }) {
       el.addEventListener('pointerdown', down);
       img.addEventListener('load', lay);
       new ResizeObserver(lay).observe(img);
-      // Space held: the pane's pan, as in the Refine dialog.
+      // Space held: the pane's pan, as for the Refine fold's mask.
       document.addEventListener('keydown', (e) => { if (e.code === 'Space') space = true; });
       document.addEventListener('keyup', (e) => { if (e.code === 'Space') space = false; });
     },

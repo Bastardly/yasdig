@@ -91,7 +91,7 @@ function card(e, i) {
   // The upscalers share one anchor, on the first of them.
   const anchor = upscaler ? (i === 0 ? 'id="gm-upscaler"' : '') : `id="gm-${e.family}"`;
   const where = upscaler
-    ? 'Everything is here. Pick it under Output upscale, or in the Refine dialog’s Upscale.'
+    ? 'Everything is here. Pick it under Output upscale, or in Refine & adjust’s Scale.'
     : 'Everything is here. Pick it in the Image tab’s model list.';
   return `<div class="card gmcard" ${anchor} data-entry="${esc(e.id)}">
     <div class="gmhead"><b>${esc(e.label)}</b><span class="sub">${esc(e.family_label)} · ${gb(e.bytes)}</span></div>

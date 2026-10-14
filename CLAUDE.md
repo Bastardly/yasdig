@@ -194,13 +194,12 @@ Break silently:
 
 ## The dock
 
-Every panel with a main action ends in `<div class="dock">` (`position: sticky;
-bottom: 0`): error/OOM box, preview fold, progress, seed (Image), `.runstop`, amber
-button. The viewer has one for Outputs. A dock with nothing showing hides itself by CSS.
+Every tab panel with a main action ends in `<div class="dock">` (`position: sticky;
+bottom: 0`) — the Refine & adjust dialog instead has its rail and a status card: error/OOM box, preview fold, progress, seed (Image), `.runstop`, amber
+button. A dock with nothing showing hides itself by CSS.
 
 - **It must stay the column's last child, opaque.** Page scrolls, card is the
-  containing block. In dialogs `.lbside` scrolls itself, so `.lbside > .dock` sticks
-  at minus its padding.
+  containing block.
 - **Preview fold hides by CSS** (`.previewfold:not(:has(img:not([hidden])))`);
   `jobs.js` only toggles `img.livepreview`.
 - **Growth is capped**: error box 40vh, preview `min(--preview-h, 35vh)` — or an OOM
@@ -450,7 +449,8 @@ Break silently:
 - **`ram` is `*=cpu,te=disk`** (encoder released after use). `run_tail` reads the mode
   off the default part.
 - **Phase is `run_tail`'s own last progress** (`end()` clears the monitor first). On
-  decode sd.cpp already tiled, so only a smaller size is offered. `oom_phase` reads
+  decode sd.cpp already tiled, so only a smaller size is offered (a pass in the
+  dialog: *Scale down to 0.75× and try again*). `oom_phase` reads
   failure lines before progress bars.
 - **Load and stage times are parsed** (`parse_load_ms` → `Timings::load_ms`,
   `parse_stage` → `sd::Stages`), reset by `begin`, read straight after the pass. Don't
@@ -549,15 +549,31 @@ served as `GET /preview/{n}.png`. `Monitor::with_preview` holds the dir. Video e
 
 ## Redraw
 
-The Refine dialog (`#redraw`, `web/js/redraw.js`); code says `redraw` for the area pass:
-`src/redraw.rs` (pure geometry/compositing), `Engine::redraw`, `POST /redraw`,
-`SdRunner::redraw` (`img2img_cmd` + `--mask`). Mask decides the main button (empty →
-`/refine`, painted → `/redraw`). **Hi-res stays in the action row** (it re-diffuses
-the whole picture, so it comes before finishing). Row order: Hi-res, Refine…, View &
-adjust, Save. **Upscale is in the dialog** (`Engine::upscale`, `POST /upscale`) — no
-diffusion, a history step, publishes with detail filters restarted. Whole-image pass
-goes through `image.js`'s `refine` → `escalate` (takes an error sink). Strength box:
-whole-image value *is* `#rstrength`; area has its own (`syncStrength`).
+**One dialog, *Refine & adjust*** (`#lightbox`): `viewer.js` owns it (open/close,
+pane, History, the look) and `web/js/redraw.js` is its passes (Refine,
+Edit, Extend, Scale, the pass prompt, *Refine with*, Compare), hooked in through
+`onLook`/`onOpen`/`claimLeft` so viewer.js never imports it. Code says `redraw` for the
+area pass: `src/redraw.rs` (pure geometry/compositing), `Engine::redraw`, `POST
+/redraw`, `SdRunner::redraw` (`img2img_cmd` + `--mask`). The mask decides the Refine
+panel's main button (empty → `/refine`, painted → `/redraw`). **A panel with actions
+pins them in a footer** (`.fpfoot`, under the scrolling body): the others above, the
+main one last and amber — Refine: Edit (hidden without `can_edit`), Extend, *Refine*;
+Scale: *Apply crop* (live only while the Crop fold's box is up), *Scale*; History:
+*Apply adjustments* (it adds a step). **Hi-res stays in the action row** (it re-diffuses the
+whole picture, so it comes before finishing). Row order: Hi-res, Refine & adjust…,
+Save. Whole-image pass goes through `image.js`'s `refine` → `escalate` (an error sink
+and a `land`). Strength box: whole-image value *is* `#rstrength`; area has its own
+(`syncStrength`).
+
+- **Scale** (the fold `#rdfold-upscale`): down is `Display::resize`, `POST /resize
+  {factor}` — display lane, Lanczos on `raw`, snapped to 8 (`resize_size`), a step
+  through `stepRequest` like a crop; up is `Engine::upscale`, `POST /upscale`, through
+  the queue. Both restart the detail filters. The mask scales with the picture when
+  the shape holds (`ensureMaster`), so a pass's OOM box can offer **Scale down to
+  0.75× and try again** (`scaleDown` in `dialogErr`).
+- **A pass's answer goes to the pane it was pressed on** (`passLander()` taken at
+  the press → `onPassResult`: `takeResult` on Image, the Outputs handler only onto the
+  same `image_id` still open), never to whichever tab shows when it lands.
 
 **Each pass has its own prompt** — `EscalateRequest.refine_prompt`/`hires_prompt`,
 redraw's `prompt` — via `pass_prompt` (blank → the image's own, variables rolled off
@@ -574,11 +590,15 @@ page-level. `#rprompt`/`#hprompt` ride in `escalateSettings()`; the dialog box w
   since the patch is resized back exactly).
 - **`GenResult.step` is in `sameImage`**, or a redraw compares equal and is dropped.
 - **Seed is `p.seed + step`.**
-- **The mask view lies over the image** (display-sized; master mask natural-sized). Its
-  pointer handler skips what the pane took as a pan.
-- **Outputs reach it only through the Image tab**: *Refine & extend…* is
-  `POST /outputs/to-image` (`Display::open_output`, `Slot::Image`, filters `NONE`; the
-  page's model is the `fallback` profile). *Refine with* (`pickModel`) →
+- **The mask view lies over the image** (display-sized; master mask natural-sized). It
+  paints only while the Refine fold is open (`#lbview.masking`); its pointer handler
+  skips what the pane took as a pan.
+- **Outputs open in the same dialog and their passes run there**, in `Slot::Output`
+  (`/outputs/open {stem, model?}`, the page's model as `fallback` when the sidecar's
+  isn't installed; with none it still opens). `diffuse` publishes only `Slot::Image`
+  results as latest, or an Output's refine would land on the Image tab.
+  `opened_from` **survives every step**, so *Save changes* writes what is shown. ←/→
+  are locked while a pass runs. *Refine with* (`pickModel`, on Outputs) →
   `POST /image/model` → `Display::set_model` (wholesale swap, slider starts kept — zero
   for outputs). `GenResult.model` shows it.
 
@@ -604,10 +624,27 @@ seams appear). **Edit and rescale** is separate: `EditRequest.expand` (same
 back. Both side sets are `sideSet` instances, cleared on a new image. Compare uses
 `object-fit: contain`.
 
-Dialog layout: Fit/1:1, *Refine with*, prompt on top; folds Refine, Edit (`can_edit`),
-Upscale, Extend, History (`rememberFolds`, `syncDialogSummaries` from `syncButtons`);
-dock at the foot. `zoomPane` (`viewer.js`) holds fit/centre rules (`expectNew`,
-`keepView`).
+Dialog layout: a **rail** (`.lbrail`) of panel toggles — Refine, Scale, Adjust,
+Brushes, Selection, History — with Fit/1:1, Download and Outputs' saves at its
+foot; the pane; and **floating panels** (`web/js/panels.js`, `.fpanel`) over it.
+Refine: *Refine with*, prompt, folds Refine / Edit (`can_edit`) / Extend. Scale: folds
+Scale and Crop. Adjust: Reset, Tone/Colour/Detail. Brushes. Selection (the area).
+History with Compare. A **status card** (`.lbstatus`, pane's lower left, hidden by
+CSS when empty) holds `#lberr`/OOM, the preview, progress and Stop.
+
+- **A panel element has an `open` property that fires `toggle`** (`panels.js`), as a
+  `<details>` does — the exclusion code reads panels and folds alike. Panels
+  remembered open are opened before anyone listens; `announcePanels` re-fires.
+- **Placed only once the dialog is open** (`panels.layout()` in `showFullSize`; a
+  closed dialog has no size). Position remembered per panel as fractions of the
+  dialog (`yasdig.panel.<id>`); History, unmoved, is held by its bottom edge.
+- **z-order**: panels count up from 10 (renumbered past 900), the status card 1000,
+  the colour wheel 1001, `#lbclose` 1002.
+- **Rail dots** (`railDot`) are the folds' old overview: set from `viewerSummaries`,
+  `drawHistory` and redraw's `syncButtons`.
+
+`zoomPane` holds fit/centre rules (`expectNew`, `keepView`; `setViewerImage(src, keep)`
+keeps the view for the same picture at the same size).
 
 ### History
 
@@ -630,7 +667,7 @@ dock at the foot. `zoomPane` (`viewer.js`) holds fit/centre rules (`expectNew`,
 sd-cli `-r` on families that take them (`ImageFamily::takes_references`: Klein).
 **References** button in Generation (shown from `references` on `/models`) opens
 `#refsdlg`, four `sourceSlot`s (`web/js/refs.js`). `Profile.references` = output stems,
-request-only like `loras`. **Edit** in the Refine dialog (`Engine::edit`, `POST /edit`)
+request-only like `loras`. **Edit** in the Refine & adjust dialog (`Engine::edit`, `POST /edit`)
 uses the image as reference 1 and the prompt as instruction, at the image's shape **at
 the model's base size, never bigger**, resized back.
 
@@ -680,9 +717,10 @@ point to Help rather than repeating it.
 ## The Outputs tab
 
 `work/output/` as a gallery (`web/js/outputs.js`, `Display::open_output`). Click opens
-the viewer; ←/→ step. **No Refine/Hi-res here** — a saved output is `display`
-(invariant 1); escalate via the Image tab. Sliders here stack on baked-in pixels, so in
-`open_output`:
+the Refine & adjust dialog; ←/→ step. **No Hi-res here** (it is the Image tab's action
+row); the dialog's passes run on the opened file — a diffusion over finished pixels,
+chosen, like picking it as a source (see *Redraw*). Sliders here stack on baked-in
+pixels, so in `open_output`:
 
 - **Filters start at `Filters::NONE`.**
 - **The retained profile's `sharpness`/`clarity` are zeroed** (Reset's `start` derives
@@ -713,12 +751,12 @@ role, never a value**: colour, type, space, radius and column caps are `:root` t
 a hex elsewhere means a missing token. Ink ramp and state colour are neutral (bone)
 because they sit beside a graded image. `--fold-title`/`--fold-on` for fold headings.
 **Amber (`.btn-run`) is the dock's main button only** (plus Hi-res above a result,
-and the thumbnails' favourite star as a glyph colour) — in the viewer that is
-*Apply adjustments*, with *Download* first and *Save changes* neutral;
+and the thumbnails' favourite star as a glyph colour) — in Refine & adjust that is
+each panel footer's main action (History's is *Apply adjustments*);
 `.btn` neutral, `.btn-danger` red, `.btn-choice` for "where you are" sets.
 
 - **A bare `<button>` is unstyled**: every button carries `.btn` or `.hint`, except
-  thumbnail grids and `#lbclose`.
+  thumbnail grids, `#lbclose` and a panel's `.fpclose`.
 - **`:disabled` is declared after every `:hover`.**
 - **`--col-*` can't be used in the media query** — the 899 px breakpoint is a literal.
 
@@ -737,14 +775,15 @@ only `js/app.js`.
 | `busy.js` | `IDLE_LABELS`, `setBusy`/`setIdle`, `onIdle`, `cancelRun` |
 | `jobs.js` | the `/jobs` poll: Jobs button/dialog, progress lines, `onResult`, `onNotice` |
 | `hints.js` | `HELP`, `HINTS`, `wireHints`, the tooltip bubble |
-| `viewer.js` | `FILTERS`, sliders, `/adjust`, `zoomPane` |
+| `viewer.js` | the Refine & adjust dialog: open/close, `FILTERS`, sliders, `/adjust`, History, `zoomPane` |
+| `panels.js` | that dialog's floating panels: open, drag, remember, rail dots |
 | `image.js` | Image tab: models, folds, `render`, escalations, runs, Save |
 | `workitems.js` | work-item grid, reopening |
 | `gridmark.js` | click-to-mark actions |
 | `source-slot.js` | source-image slot factory, upload/drop/paste |
 | `loras.js` | LoRA picker factory |
 | `memory.js` | `showError` and the OOM box |
-| `redraw.js` | Refine dialog: mask, requests, history |
+| `redraw.js` | the dialog's passes: the Refine panel, Scale, the mask, Compare |
 | `refs.js` | References button and dialog |
 | `outputs.js` | `fetchOutputs`, `outputGrid`, Outputs tab |
 | `video.js` / `player.js` | Video tab; canvas frame player, `renderClip` |
@@ -899,16 +938,17 @@ must `clearPane` the tab it leaves**; returning to Image calls `restoreImage`
 the wrapped input, or `data-help`); idempotent, run at load and after `renderClip`.
 - **The icon is inside its `<label>`, so its click must `preventDefault()`.**
 - **The bubble is a `popover`** (top layer is the only thing above a modal dialog and
-  outside `.lbside`'s overflow clip).
+  outside a panel body's overflow clip).
 - **The icon is `.hint`, not `.btn`.**
 Tooltip text: a few sentences on how to *choose*, saying when the answer belongs to the
 checkpoint.
 
-**Viewer** (`<dialog id="lightbox">`): post-processing is judged full size here.
+**Viewer** (`<dialog id="lightbox">`, the Refine & adjust dialog's *Adjust* half and
+its owner): post-processing is judged full size here.
 **The eleven sliders come from `FILTERS`** (id = wire name; read by markup, `setPost`,
 `syncPostLabels`, `setBusy`, the `/adjust` body, listeners) — never hand-write one.
-Label above the track; panel fixed 300 px and scrolls. **The panel is folds** (a fold per
-`FILTERS` `group`, then Crop and Area; `viewerSummaries`, `rememberFolds`).
+Label above the track; the Adjust panel holds a fold per `FILTERS` `group`
+(`viewerSummaries`, `rememberFolds`).
 - **Two looks, one set of sliders**: `target` says whether they show the whole
   picture's filters or the area's; the other set is held (`parked` / `area.filters`).
   `/adjust` always sends both (`area: null` removes). `setLook(data)` is how a result
@@ -917,7 +957,7 @@ Label above the track; panel fixed 300 px and scrolls. **The panel is folds** (a
 - **Crop is a history step on `raw`** (`Display::crop`, display lane, `advance` +
   `Retained::replace` → `Superseded`), never a filter: passes read `raw`. Snapped down
   to 8, ≥ 64. Keeps `opened_from` so Outputs' *Save changes* writes it. Locked while a
-  pass runs (`passRunning` in jobs.js, shared with the Refine dialog's History).
+  pass runs (`passRunning` in jobs.js).
 - **The area is composited in `publish`** (`crate::area`): global filters, the area's
   on top (`Fsr::filter`, in memory), `area::composite` by an analytic weight. Pixels
   at weight 0 are the base's bytes. Normalised to the frame, so it survives a pass;
@@ -946,19 +986,23 @@ Label above the track; panel fixed 300 px and scrolls. **The panel is folds** (a
   the area's. Masks are pixels: `crop` crops them, anything else resizes on read.
   Scratch-owned (`remove_files`; a replaced mask is deleted). `/brush` has the upload
   body limit; its answer lands like a slider's (`setResultImage`, never re-centres),
-  serialized on `brushChain`, which `stepRequest` also waits for. Crop, Area and
-  Brushes folds exclude each other (one owns the pointer).
+  serialized on `brushChain`, which `stepRequest` also waits for. **Four things own
+  the pointer and exclude each other**: the Refine fold's mask (only in an open
+  Refine panel), the Crop fold's box (only in an open Scale panel), the Selection
+  panel's area box, the Brushes panel. With none, a left drag pans (`pans` asks
+  `leftTaken`, which redraw.js claims for the mask and Compare's split). Adjust,
+  Scale and History never take it, so they stay open beside.
 - **Restore is the brush that isn't a look**: it paints History step `from` back in,
   raw into raw, **before** the filters (`brush::restore`, `Pending::restore_source`,
   `publish`'s `restore`), so a grade has no seam. `brush::apply` skips it. Keyed to a
   step, so **`advance` drops it** (Apply bakes first); a jump keeps it, and standing on
   `from` restores nothing. Another-size step is Lanczos-scaled.
-- **Crop, Apply and History jumps go through `stepRequest`** (one at a time, after
-  `settlePost` lets a pending `/adjust` land) and answer through the pane's handler
-  (`onViewerResult`: `render` on Image, the Outputs viewer's own). All three are
-  locked while a pass runs (`passRunning`).
-- **The viewer's History and the Refine dialog's are one markup** (`historyMarkup`
-  in viewer.js). `open_output` seeds its first step as "Opened".
+- **Crop, Scale down, Apply and History jumps go through `stepRequest`** (one at a
+  time, after `settlePost` lets a pending `/adjust` land) and answer through the
+  pane's handler (`onViewerResult`: `render` on Image, the Outputs viewer's own). All
+  are locked while a pass runs (`passRunning`). Ctrl+Z steps through `stepTo`.
+- **One History list** (`#lbhistory`), with Compare (redraw.js) above it.
+  `open_output` seeds its first step as "Opened".
 - **Closing is `×` and Escape only.**
 - **Fit/1:1/Reset are `.btn-choice`**; `setFit` toggles `active`.
 - **1:1 centres inline and again on `load`** (a fresh `data:` URL has no size yet) —

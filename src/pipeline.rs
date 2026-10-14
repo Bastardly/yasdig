@@ -106,7 +106,7 @@ impl Retained {
     }
 
     /// The slot an entry is in, so an escalation lands back where it was.
-    fn slot_of(&self, id: u64) -> Slot {
+    pub fn slot_of(&self, id: u64) -> Slot {
         self.live.get(&id).and_then(|l| l.slot).unwrap_or(Slot::Image)
     }
 
@@ -833,8 +833,10 @@ struct Pending {
     source: Option<String>,
     /// The saved image the Outputs viewer opened this from, so *Save changes*
     /// can write back over exactly that file (`Display::overwrite_output`).
-    /// Set only by `open_output` into `Slot::Output`; every pass starts a new
-    /// picture and leaves it `None`. A stem, never a path, for `source`'s reason.
+    /// Set only by `open_output` into `Slot::Output`, and **kept by every step
+    /// after it** — a crop, a scale, a Refine: *Save changes* writes what is
+    /// on screen, whatever made it, and History is there to step back.
+    /// A stem, never a path, for `source`'s reason.
     opened_from: Option<String>,
     refine_passes: u32,
     hires_passes: u32,
@@ -2862,6 +2864,54 @@ impl Display {
         Ok(result)
     }
 
+    /// Scale the image down by `factor` (0..1) as a history step: Scale's
+    /// "down" half — "up" is [`Engine::upscale`], which may run a model and so
+    /// is the diffusion lane's. Lanczos on the CPU, on `raw` like a crop (every
+    /// pass reads `raw`, and "scale down, then Refine" is what an out-of-memory
+    /// pass needs); the display lane's, like `crop`, which it follows step for
+    /// step.
+    ///
+    /// The detail filters restart as after an Upscale (they are sized from the
+    /// image, invariant 6); the area is in fractions and needs nothing but
+    /// `restart`; brush masks resize when read (`brush::weights`).
+    pub fn resize(&mut self, id: u64, factor: f32) -> Result<GenResult> {
+        let p = lock(&self.retained).get(id, "scale")?;
+        let (w, h) = resize_size(p.raw_w, p.raw_h, factor)?;
+        let step = p.step + 1;
+        let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut scratch = Scratch::default();
+        let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
+        let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
+        reduce(&p.raw, &raw, w, h)?;
+
+        let t = Instant::now();
+        let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
+        let area = p.area.as_ref().map(Area::restart);
+        let (png, out_w, out_h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes, None)?;
+        let fsr_ms = t.elapsed().as_millis();
+
+        let was = p.raw.clone();
+        let prev = p.clone();
+        let entry = Pending {
+            raw: raw.clone(),
+            raw_w: out_w,
+            raw_h: out_h,
+            display: display.clone(),
+            filters,
+            area,
+            step,
+            ..p
+        };
+        let entry = advance(&prev, entry, format!("Scale {factor}× · {w}×{h}"));
+        let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
+        if !lock(&self.retained).replace(id, &was, entry) {
+            return Err(Superseded.into());
+        }
+        scratch.keep(&raw);
+        scratch.keep(&display);
+        Ok(result)
+    }
+
     /// Paint with one brush tool, or change how strong it is (`crate::brush`).
     /// `mask`: absent keeps the strokes and sets only the amount, `None`
     /// clears the tool, PNG bytes replace its strokes — the whole mask, as the
@@ -3156,23 +3206,23 @@ impl Display {
     /// 3. This is therefore *not* the lossless re-filter the sliders are
     ///    elsewhere (invariant 1): `raw` here is a filtered image, so a drag
     ///    stacks on what is already there. That is inherent to editing a
-    ///    finished file, and it is why the tab offers no escalation — a
-    ///    diffusion over these pixels is the thing invariant 1 exists to
-    ///    prevent.
+    ///    finished file. A Refine over it is likewise a diffusion over
+    ///    finished pixels — chosen, as picking it as *Image to image*'s
+    ///    source is — and the filters starting at none means nothing already
+    ///    in it is applied twice.
     ///
     /// A missing sidecar is not an error: `list_outputs` lists a PNG dropped in
     /// by hand, so this has to be able to open one. It gets `Profile::default()`
     /// and no prompt, which is all the sliders need.
     ///
-    /// `Slot::Image` is the Outputs viewer's *Refine & extend…*: the same
-    /// picture made the Image tab's result, so the Refine dialog can work on
-    /// it. That is a diffusion over finished pixels, chosen — the same choice
-    /// as picking it as *Image to image*'s source — and (1) still holds: the
-    /// filters start at none, so nothing already in it is applied twice. There
-    /// the profile has to name a model a Refine can run, which an upload's
-    /// default doesn't and a sidecar's may no longer; `fallback` (the Image
-    /// tab's selected model) stands in then.
-    pub fn open_output(&mut self, stem: &str, slot: Slot, fallback: Option<&str>) -> Result<GenResult> {
+    /// Opened into `Slot::Output`, the Outputs tab's own, so it never touches
+    /// the Image tab's picture — and its passes don't either (`diffuse`
+    /// publishes only `Slot::Image` results as the latest). A pass needs a
+    /// model it can run, which an upload's default doesn't name and a
+    /// sidecar's may no longer; `fallback` (the Image tab's selected model)
+    /// stands in then. With none, it still opens: it is there to be looked at
+    /// first, and *Refine with* can pick one.
+    pub fn open_output(&mut self, stem: &str, fallback: Option<&str>) -> Result<GenResult> {
         let stored = output_source(&self.items, stem)?;
         let item = self.items.load_output(stem);
 
@@ -3192,16 +3242,11 @@ impl Display {
         scratch.keep(&display);
 
         let mut profile = item.as_ref().map(|i| i.profile.clone()).unwrap_or_default();
-        if slot == Slot::Image {
-            let mut reg = self.cfg.registry();
-            if !reg.contains_key(&profile.name) {
-                let name = fallback.filter(|n| !n.is_empty()).context(
-                    "pick a model on the Image tab first — this picture names none that is installed",
-                )?;
-                profile = reg
-                    .remove(name)
-                    .filter(|p| !p.family.fill_only())
-                    .with_context(|| format!("unknown model '{name}'"))?;
+        let mut reg = self.cfg.registry();
+        if !reg.contains_key(&profile.name) {
+            let fallback = fallback.filter(|n| !n.is_empty()).and_then(|name| reg.remove(name));
+            if let Some(p) = fallback.filter(|p| !p.family.fill_only()) {
+                profile = p;
             }
         }
         // See (2) above: these two are where the sliders start, and for this one
@@ -3231,9 +3276,7 @@ impl Display {
             // is what stops it overwriting the image being edited.
             work_id: item.as_ref().map(|i| i.id.clone()),
             source: item.as_ref().and_then(|i| i.source.clone()),
-            // Only the Outputs viewer's own slot saves back over the file;
-            // *Refine & extend…* (`Slot::Image`) makes a new picture of it.
-            opened_from: (slot == Slot::Output).then(|| stem.to_string()),
+            opened_from: Some(stem.to_string()),
             refine_passes: item.as_ref().map(|i| i.refine_passes).unwrap_or(0),
             hires_passes: item.as_ref().map(|i| i.hires_passes).unwrap_or(0),
             step: item.as_ref().map(|i| i.step).unwrap_or(0),
@@ -3242,7 +3285,7 @@ impl Display {
         // label would say "Generated" in the viewer's History.
         entry.history = vec![Snapshot::of(&entry, "Opened".into())];
         let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
-        lock(&self.retained).store(id, slot, entry, false);
+        lock(&self.retained).store(id, Slot::Output, entry, false);
         Ok(result)
     }
 
@@ -3457,6 +3500,24 @@ const MIN_CROP: u32 = 64;
 /// A crop request as it will run: width and height snapped *down* to a
 /// multiple of 8, so a later Refine or Hi-res latent covers the picture
 /// exactly, then checked to lie inside the picture and to change something.
+/// The size [`Display::resize`] scales a `w × h` picture to: each side times
+/// `factor`, snapped down to 8 like a crop (sd.cpp's sizes), no side under
+/// [`MIN_CROP`]. Down only: up is Upscale's.
+fn resize_size(w: u32, h: u32, factor: f32) -> Result<(u32, u32)> {
+    if !(factor > 0.0 && factor < 1.0) {
+        bail!("scaling down takes a factor between 0 and 1 — larger is Upscale");
+    }
+    let side = |v: u32| ((v as f32 * factor).round() as u32) / 8 * 8;
+    let (nw, nh) = (side(w), side(h));
+    if nw < MIN_CROP || nh < MIN_CROP {
+        bail!("that would make the picture smaller than {MIN_CROP}×{MIN_CROP}");
+    }
+    if (nw, nh) == (w, h) {
+        bail!("the picture is already that size");
+    }
+    Ok((nw, nh))
+}
+
 fn crop_rect((x, y, w, h): (u32, u32, u32, u32), full_w: u32, full_h: u32) -> Result<(u32, u32, u32, u32)> {
     let (w, h) = (w / 8 * 8, h / 8 * 8);
     if w < MIN_CROP || h < MIN_CROP {
@@ -3775,7 +3836,7 @@ fn random_seed() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        adjust_label, crop_rect,
+        adjust_label, crop_rect, resize_size,
         advance, after_model, edit_size, fit_to, pass_prompt, step_label, AfterModel, Expand, Pending, Retained,
         Slot, MAX_HISTORY,
     };
@@ -3848,6 +3909,20 @@ mod tests {
         assert!(crop_rect((0, 0, 1024, 1024), 1024, 1024).is_err(), "the whole picture");
         // A side that isn't a multiple of 8 can still be kept whole on the other axis.
         assert_eq!(crop_rect((0, 0, 1000, 700), 1000, 768).unwrap(), (0, 0, 1000, 696));
+    }
+
+    #[test]
+    fn scaling_down_keeps_the_aspect_and_snaps_to_eight() {
+        assert_eq!(resize_size(1024, 768, 0.5).unwrap(), (512, 384));
+        // 1216 × 0.75 = 912, 832 × 0.75 = 624: both already on the grid.
+        assert_eq!(resize_size(1216, 832, 0.75).unwrap(), (912, 624));
+        // 1000 × 0.3 = 300 → 296; 700 × 0.3 = 210 → 208.
+        assert_eq!(resize_size(1000, 700, 0.3).unwrap(), (296, 208));
+        assert!(resize_size(1024, 1024, 1.0).is_err(), "not a scale down");
+        assert!(resize_size(1024, 1024, 2.0).is_err(), "up is Upscale's");
+        assert!(resize_size(1024, 1024, f32::NAN).is_err());
+        assert!(resize_size(256, 256, 0.2).is_err(), "under the smallest picture");
+        assert!(resize_size(1000, 1000, 0.9996).is_err(), "rounds back to the same size");
     }
 
     fn live(dir: &Path, name: &str) -> Pending {

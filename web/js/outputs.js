@@ -1,10 +1,9 @@
 import { $, esc, getJSON, post } from './dom.js';
 import { S, escErr } from './state.js';
 import { setBusy, setIdle, onIdle } from './busy.js';
-import { cancelPost, guardClose, lookKey, onViewerResult, setLook, showFullSize, setViewerImage } from './viewer.js';
+import { cancelPost, guardClose, lookKey, onPassResult, onViewerResult, setLook, showFullSize, setViewerImage } from './viewer.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
-import { render } from './image.js';
-import { openRedraw } from './redraw.js';
+import { passRunning } from './jobs.js';
 
 // ---- Outputs ----------------------------------------------------------------
 //
@@ -228,12 +227,15 @@ async function openAt(i) {
   // through the `onIdle` hook below.
   $('lbsavechanges').disabled = true;
   try {
-    const data = await post('/outputs/open', { stem: outputs[i].stem });
+    // The Image tab's model stands in for one the sidecar doesn't name (an
+    // upload), so the dialog's passes have something to run on.
+    const data = await post('/outputs/open', { stem: outputs[i].stem, model: $('template').value || null });
     S.imageId = data.image_id;
     S.currentSrc = `data:image/png;base64,${data.image_base64}`;
     // Both of these are `Filters::NONE` for an output — the picture already
     // carries whatever was applied when it was saved, so 0 means "as saved" and
     // Reset means "back to the file on disk".
+    shownSize = `${data.width}×${data.height}`;
     setLook(data);
     savedKey = lookKey();
     $('postms').textContent = '';
@@ -257,11 +259,14 @@ async function openAt(i) {
   }
 }
 
+// The size on screen, so a new state of the same size keeps the view.
+let shownSize = '';
+
 // The edit as it was when the picture opened or was last saved (`lookKey`);
 // `null` while one is opening, which asks nothing.
 let savedKey = null;
 // Whether leaving this picture may go ahead: at once when its edit is saved,
-// else on the user's word. Closing, ←/→ and Refine & extend all leave it.
+// else on the user's word. Closing and ←/→ leave it.
 function mayLeave() {
   if (S.pane !== 'outputs' || S.imageId === null || savedKey === null || lookKey() === savedKey) return true;
   return confirm('This picture has changes that are not saved. Leave without saving them?\n\n'
@@ -274,7 +279,8 @@ function step(d) {
   const i = Math.min(outputs.length - 1, Math.max(0, index + d));
   // `index` is already the in-flight target while one is opening, so a second
   // press computes the one after it and coalesces rather than repeating.
-  if (i !== index && mayLeave()) openAt(i);
+  // Not while a pass runs on this picture: its answer is for the one open.
+  if (i !== index && !passRunning() && mayLeave()) openAt(i);
 }
 
 // Keep the edit as a new file beside the original. `free_stem` suffixes the
@@ -324,29 +330,6 @@ async function saveChanges() {
   }
 }
 
-// Into the Refine dialog: the saved file becomes the Image tab's result, so
-// refining, extending and editing work on it as on any generation. The Image
-// tab's model stands in for one the sidecar doesn't name (an upload). The tab
-// switch comes first — `showTab` empties the pane it leaves and restores the
-// Image tab's last picture, which `render` then replaces.
-async function toImage() {
-  const stem = outputs[index]?.stem;
-  if (!stem || !mayLeave()) return;
-  setBusy('lbrefine', 'Opening…');
-  $('lberr').textContent = '';
-  try {
-    const data = await post('/outputs/to-image', { stem, model: $('template').value || null });
-    $('lightbox').close();
-    document.querySelector('.tab[data-tab="image"]')?.click();
-    render(data);
-    openRedraw(data, { fromOutput: true });
-  } catch (e) {
-    $('lberr').textContent = String(e.message || e);
-  } finally {
-    setIdle('lbrefine');
-  }
-}
-
 // Declarations only above this line; everything that touches the DOM is here.
 export function initOutputs() {
   del.init();
@@ -355,7 +338,6 @@ export function initOutputs() {
   $('ofavorites').addEventListener('click', () => setGallery('favorite-outputs'));
   $('lbsave').addEventListener('click', saveEdit);
   $('lbsavechanges').addEventListener('click', saveChanges);
-  $('lbrefine').addEventListener('click', toImage);
   guardClose(mayLeave);
 
   // On `document`, because a modal <dialog>'s keydown still bubbles out of it —
@@ -374,21 +356,27 @@ export function initOutputs() {
     step(e.key === 'ArrowRight' ? 1 : -1);
   });
 
-  // A crop (or its undo) in the viewer: the same picture, a new state of it.
-  // The file isn't touched until Save changes or Save as new.
-  onViewerResult('outputs', (data) => {
+  // A crop, a scale, a pass, a step back in the dialog: the same picture, a
+  // new state of it. The file isn't touched until Save changes or Save as new.
+  const landed = (data) => {
+    const same = data.image_id === S.imageId && shownSize === `${data.width}×${data.height}`;
     S.imageId = data.image_id;
     S.currentSrc = `data:image/png;base64,${data.image_base64}`;
+    shownSize = `${data.width}×${data.height}`;
     setLook(data);
     $('lbsaved').textContent = `${outputs[index]?.stem ?? ''} · ${data.width}×${data.height}`;
-    setViewerImage(S.currentSrc);
+    setViewerImage(S.currentSrc, same);
+  };
+  onViewerResult('outputs', landed);
+  // A pass's answer, only onto the picture it ran on, still open here.
+  onPassResult('outputs', (data, id) => {
+    if (S.pane === 'outputs' && $('lightbox').open && S.imageId === id) landed(data);
   });
 
   // Save is only pressable once something is open, which IDLE_LABELS can't know.
   onIdle(() => {
     $('lbsave').disabled = S.imageId === null;
     $('lbsavechanges').disabled = S.imageId === null;
-    $('lbrefine').disabled = S.imageId === null;
   });
 
   loadOutputs();

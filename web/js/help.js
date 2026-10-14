@@ -300,30 +300,40 @@ export const TOPICS = [
       first. The picks stay when you switch to a model that doesn\u2019t use them,
       and come back when you switch back. Reopening a work item puts its
       references back in their slots.</p>
-      <p>To change an image you already have, use <b>Edit</b> in the Refine dialog:
+      <p>To change an image you already have, use <b>Edit</b> in the Refine &amp; adjust dialog:
       it uses the image itself as reference 1.</p>`,
   },
   {
     id: 'redraw',
-    title: 'Refine',
+    title: 'Refine & adjust',
     html: `
-      <h2>Refine</h2>
-      <p>The one place an image is finished. Press <b>Refine…</b> beside the image, or click the image.
-      The dialog shows the picture at Fit or <b>1:1</b> (hold <b>Space</b> to drag
-      it around), with a prompt box at the top, a section per tool (Refine, Edit,
-      Upscale, Extend, History) that folds away, and the live preview and the
-      Refine button at the bottom.</p>
+      <h2>Refine &amp; adjust</h2>
+      <p>The one place an image is finished. Press <b>Refine &amp; adjust…</b> beside the
+      image, click the image, or open a picture on the Outputs tab. The picture fills
+      the screen; the rail on the left opens floating panels over it —
+      <b>Refine</b> (prompt, Refine, Edit, Extend), <b>Scale</b> (Scale, Crop),
+      <b>Adjust</b> (Tone, Colour, Detail), <b>Brushes</b>, <b>Selection</b> and
+      <b>History</b>. Drag a panel by its title bar to put it anywhere; it stays
+      there next time, and a double-click on the title bar puts it back. A dot on a
+      rail button means its panel has something in effect. Fit, <b>1:1</b> and
+      Download are at the rail's foot, Apply at History's; progress and errors appear at the
+      lower left.</p>
+      <p>The picture under the pointer belongs to whichever of the Refine fold,
+      Crop, Selection or Brushes is open — opening one closes the others. With none
+      open, a drag pans at 1:1; the middle button or <b>Space</b>+drag always pans.</p>
       <h3>Whole image or an area — the mask decides</h3>
       ${table(['', 'What happens'], [
         ['Nothing painted', '<b>Refine image</b>: a light pass over the whole picture, at the Refine pass\u2019s steps and strength. Good for detail and texture.'],
         ['Something painted', '<b>Refine area</b>: only the painted part is redrawn, enlarged to the model\u2019s size first, then blended back in. Every pixel outside it stays exactly as it was.'],
       ])}
-      <p><b>Upscale</b> makes the image bigger with no new drawing at all: FSR
-      (instant) or an upscaler model from your upscalers folder (slower, sharper).
-      Because it draws nothing new it can\u2019t undo a refine, so it can be the last
-      step — a bigger file — or come before a refine, which then adds detail at the
-      new size. It waits while something is painted, and it is a History step like
-      the rest.</p>
+      <p><b>Scale</b> makes the image smaller or bigger with no new drawing at all.
+      Smaller is instant. Bigger is FSR (instant) or an upscaler model from your
+      upscalers folder (slower, sharper). Because it draws nothing new it can\u2019t
+      undo a refine, so it can be the last step — a bigger file — or come before a
+      refine, which then adds detail at the new size; scaling down first is what
+      lets a large picture fit in memory. A painted mask scales with the picture,
+      and it is a History step like the rest. When a pass runs out of memory, the
+      box offers <b>Scale down to 0.75× and try again</b>.</p>
       <p><b>Hi-res comes first</b>, from the button above the image: it sets the
       final size and re-draws the whole picture lightly on the way, which would
       partly undo a refine done before it. Enlarge, then refine.</p>
@@ -389,13 +399,13 @@ export const TOPICS = [
       prompts from the Hi-res pass and Refine pass panels. A <code>{variable}</code>
       in them rolls per image.</p>
       <h3>Saved pictures and uploads</h3>
-      <p>In the Outputs viewer, <b>Refine &amp; extend…</b> opens the picture here
-      as the current image, with this dialog open: refine, extend, edit or
-      upscale it like a fresh one. It opens the saved file, which already has its
-      sharpening and grade in it, so the sliders start at zero; save slider changes
-      first if you want them kept. <b>Refine with</b>, at the top of the dialog,
-      picks the model its passes run on: it starts at the model that made the
-      picture, or for an upload the one picked on the Image tab.</p>`,
+      <p>A picture opened on the Outputs tab opens in this same dialog: refine,
+      extend, edit or scale it like a fresh one, then <b>Save changes</b> over the
+      file or <b>Save as new output</b> beside it. It opens the saved file, which
+      already has its sharpening and grade in it, so the sliders start at zero.
+      <b>Refine with</b>, at the top of the dialog, picks the model its passes run
+      on: it starts at the model that made the picture, or for an upload the one
+      picked on the Image tab.</p>`,
   },
   {
     id: 'memory',

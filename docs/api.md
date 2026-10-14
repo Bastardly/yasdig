@@ -331,6 +331,12 @@ needs a Vulkan device and nothing else.
   a multiple of 8, must be at least 64, inside the picture, and not all of it. The
   filters are kept and an area is mapped into the new frame. Display lane, like
   `/adjust`; `409` when a pass replaced the image first.
+- `POST /resize` — `{ "image_id": 3, "factor": 0.5 }`. Scales the retained image
+  *down* (Lanczos, no diffusion) as a history step; `factor` is between 0 and 1, and
+  each side is rounded down to a multiple of 8 and must stay at least 64. Up is
+  `/upscale`. The detail filters restart as after an upscale; an area is kept (it is in
+  fractions) and brush masks are resized when read. Display lane, like `/crop`; `409`
+  when a pass replaced the image first.
 - `POST /save-output` — `{ "image_id": 3 }`. Copies the image on screen, filters and
   all, into `work/output/`. Returns `{ "path": "work/output/…png" }`.
 - `POST /outputs/overwrite` — `{ "image_id": 3 }`, the Outputs viewer's *Save changes*:
@@ -430,16 +436,17 @@ needs a Vulkan device and nothing else.
   for the reason the work-item delete is one, and "delete all" is this request with
   every stem in it rather than a route of its own — which is what keeps the id
   whitelist the only guard the route needs.
-- `POST /outputs/open` — `{ "stem": "1758104523000-12345-s0" }`. Copies a saved image
-  back into the working set and returns the `/generate` shape with a fresh `image_id`,
-  so the viewer's sliders work on it — the Outputs tab's one route. No diffusion runs.
+- `POST /outputs/open` — `{ "stem": "1758104523000-12345-s0", "model": "sdxl-base" }`.
+  Copies a saved image back into the working set and returns the `/generate` shape with
+  a fresh `image_id`, so the sliders and the passes (`/refine`, `/redraw`, `/edit`,
+  `/extend`, `/upscale`, `/resize`) work on it. No diffusion runs to open it. `model`
+  (optional) stands in when the sidecar names no installed model (an upload); without
+  one it still opens, and `/image/model` can pick one. Its passes answer their own
+  request and are never published as the Image tab's latest result.
   Unlike the other `/outputs` routes this one goes through the GPU queue, because it
   ends in a filter pass. `filters` and `filters_start` both come back neutral: the file
   already carries whatever was applied when it was saved, so 0 means "as saved". A PNG
   with no sidecar opens too, with default settings.
-- `POST /outputs/to-image` — `{ "stem": "…", "model": "sdxl-base" }`. The same open,
-  but as the Image tab's result, so `/refine`, `/extend`, `/edit` and the rest work on
-  it. `model` stands in when the sidecar names no installed model (an upload).
 - `POST /image/model` — `{ "image_id": 3, "model": "sdxl-base" }`. Makes that the model
   the image's passes run on (the profile is replaced, the pixels untouched) and answers
   in the `/generate` shape, `model` included. Not a fill-only model.

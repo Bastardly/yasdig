@@ -1,23 +1,28 @@
-import { $, esc, numOr, post, rememberFolds } from './dom.js';
+import { $, esc, numOr, post } from './dom.js';
 import { S } from './state.js';
 import { isBusy, onIdle, setBusy, setIdle } from './busy.js';
 import { onJobs, passRunning, runningJob, soonJobs } from './jobs.js';
-import { historyMarkup, zoomPane } from './viewer.js';
-import { fillReady, oomOptions, passSteps, refine, render, takeResult, upscalerOptions, upscalersReady } from './image.js';
+import { claimLeft, closeViewer, deliver, onLook, onOpen, passLander, railDot, stepRequest, stepTo } from './viewer.js';
+import { fillReady, oomOptions, passSteps, refine, upscalerOptions, upscalersReady } from './image.js';
 import { openGetModels } from './getmodels.js';
 import { showError } from './memory.js';
 import { references } from './refs.js';
 
-// Redraw: paint over part of the Image tab's result and redraw just that part
-// (`POST /redraw`, `Engine::redraw`), in a dialog of its own — the viewer's
-// layout, because a large image wants 1:1 — with the live preview and the
-// image's history beside it.
+// The passes of the Refine & adjust dialog (`#lightbox`; viewer.js owns it):
+// the Refine panel — paint over part of the picture and redraw just that part
+// (`POST /redraw`, `Engine::redraw`), or the whole picture; Edit; Extend — the
+// Scale panel's Scale fold, the pass prompt, the model the passes run on,
+// History's Compare, and Stop in the status card. viewer.js owns the dialog,
+// its pane and History; this module hooks in (`onLook`, `onOpen`,
+// `claimLeft`).
 //
 // The mask is `master`, an offscreen canvas at the image's natural size, white
 // where painted: that is what gets sent. `#rdmask` is the view of it, laid over
-// `#rdimg` at the image's displayed size rather than wrapping it, so the pane's
+// `#lbimg` at the image's displayed size rather than wrapping it, so the pane's
 // fit/centre rules (`zoomPane`) stay as they are. Display-sized, not natural:
-// a 3072² image would otherwise be a second 36 MB canvas for one mask.
+// a 3072² image would otherwise be a second 36 MB canvas for one mask. It
+// paints only while the Refine panel and its Refine fold are open — they own
+// the pointer then, as Crop, Selection and Brushes do theirs.
 
 let master = null;
 // The image the mask belongs to. A different `image_id` clears the mask and the
@@ -36,7 +41,6 @@ let areaStrength = 0.5;
 let strengthFor = null;
 // The result the dialog is showing: its id, size, history and step.
 let shown = null;
-let pane = null;
 let frame = 0;
 // Compare: on or off, which step is on the left, where the split is (a
 // fraction of the image's width), and an epoch that drops a before-image
@@ -49,7 +53,10 @@ let split = 0.5;
 let beforeEpoch = 0;
 let beforeKey = null;
 
-const open = () => $('redraw').open;
+const open = () => $('lightbox').open;
+// The Refine panel is open with its Refine fold: a left drag on the picture
+// paints the mask.
+const masking = () => $('panel-refine').open && $('rdfold-refine').open;
 
 // A set of ← ↑ ↓ → toggles and an amount: Extend's, and Edit's rescale. One
 // factory for both, so the two can't come to disagree about what a side is or
@@ -100,15 +107,22 @@ let extendSides = null;
 let editSides = null;
 // The image was opened from Outputs, so the dialog offers its model: an upload
 // names none, and a saved picture's maker may not be the one to finish with.
-// Cleared with the mask when a different image arrives.
+// Set on every open from the pane it opens on.
 let pickModel = false;
 
+// The mask at the picture's size. A picture that changed size but kept its
+// shape (a Scale, a Hi-res) keeps the mask, scaled with it — that is what lets
+// "scale down and try again" retry an area refine. A new shape (Extend, a
+// crop) would put it in the wrong place, so it goes.
 function ensureMaster(w, h) {
   if (master && master.width === w && master.height === h) return;
+  const old = master;
   master = document.createElement('canvas');
   master.width = w;
   master.height = h;
-  painted = false;
+  const sameShape = old && Math.abs(old.width / old.height - w / h) < 0.01;
+  if (painted && sameShape) master.getContext('2d').drawImage(old, 0, 0, w, h);
+  else painted = false;
 }
 
 function clearMask() {
@@ -122,7 +136,7 @@ function clearMask() {
 // scrolls with the picture at 1:1. The mask, the before image and the split
 // all go through here, so the three can't drift apart.
 function lay(el) {
-  const img = $('rdimg');
+  const img = $('lbimg');
   el.style.left = `${img.offsetLeft}px`;
   el.style.top = `${img.offsetTop}px`;
   el.style.width = `${img.clientWidth}px`;
@@ -132,7 +146,7 @@ function lay(el) {
 // The mask's view. Display-sized; the CSS blur previews the edge softness at
 // the scale the image is shown at.
 function place() {
-  const img = $('rdimg'), c = $('rdmask');
+  const img = $('lbimg'), c = $('rdmask');
   const w = img.clientWidth, h = img.clientHeight;
   if (!w) return;
   layCompare();
@@ -153,7 +167,7 @@ function layCompare() {
   const show = comparing && !!$('rdbefore').getAttribute('src');
   for (const id of ['rdbefore', 'rdsplit', 'rdtagbefore', 'rdtagnow']) $(id).hidden = !show;
   if (!show) return;
-  const img = $('rdimg');
+  const img = $('lbimg');
   const w = img.clientWidth, h = img.clientHeight;
   const x = Math.round(w * split);
   lay($('rdbefore'));
@@ -199,9 +213,9 @@ function stroke(e) {
     if (e.button === 0) dragSplit(e);
     return;
   }
-  if (!master || (e.button !== 0 && e.button !== 2)) return;
+  if (!masking() || !master || (e.button !== 0 && e.button !== 2)) return;
   e.preventDefault();
-  const img = $('rdimg'), view = $('rdview'), c = $('rdmask');
+  const img = $('lbimg'), view = $('lbview'), c = $('rdmask');
   const erase = eraser || e.button === 2;
   const ctx = master.getContext('2d');
   const at = (ev) => {
@@ -245,9 +259,9 @@ function stroke(e) {
 // drag carries it — clamped to the image.
 function dragSplit(e) {
   e.preventDefault();
-  const view = $('rdview');
+  const view = $('lbview');
   const at = (ev) => {
-    const r = $('rdimg').getBoundingClientRect();
+    const r = $('lbimg').getBoundingClientRect();
     split = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
     layCompare();
   };
@@ -269,7 +283,8 @@ const canCompare = () => (shown?.history?.length ?? 0) > 1;
 function setCompare(on) {
   comparing = on && canCompare();
   $('rdcompare').classList.toggle('active', comparing);
-  $('rdview').classList.toggle('comparing', comparing);
+  $('lbview').classList.toggle('comparing', comparing);
+  syncMasking();
   if (comparing) fetchBefore();
   layCompare();
 }
@@ -296,7 +311,7 @@ async function fetchBefore() {
     layCompare();
   } catch (e) {
     if (epoch !== beforeEpoch) return;
-    $('rperr').textContent = String(e.message || e);
+    $('lberr').textContent = String(e.message || e);
     setCompare(false);
   }
 }
@@ -326,6 +341,8 @@ function drawCompare() {
 // remember. A button waiting on its own request is setBusy's until it's back.
 function syncButtons() {
   $('rperase').classList.toggle('active', eraser);
+  // A painted mask is the Refine panel's "something in effect".
+  railDot('refine', painted);
   const live = S.imageId !== null && !!shown;
   syncStrength();
   if (!isBusy('redrawgo')) {
@@ -340,11 +357,12 @@ function syncButtons() {
   // Edit: only for a model that takes references (the image itself is the
   // first), whole-image like Upscale, and it needs an instruction to follow.
   $('rdfold-edit').hidden = !(live && shown.can_edit);
+  $('rdedit').hidden = $('rdfold-edit').hidden;
   if (!isBusy('rdedit')) {
     const said = $('rpprompt').value.trim();
     $('rdedit').textContent = editSides.any() ? 'Edit and rescale' : 'Edit';
     $('rdedit').disabled = !live || painted || !said;
-    $('rdedit').title = painted ? 'Clear the mask to edit the whole image'
+    $('rdedit').title = painted ? 'Clear the Refine fold’s mask to edit the whole image'
       : !said ? 'Type what to change in the prompt box' : '';
   }
   $('rdeditnote').textContent = live ? editSides.note(shown.width, shown.height) : '';
@@ -357,22 +375,23 @@ function syncButtons() {
   if (!isBusy('rdextendgo')) {
     $('rdextendgo').disabled = !live || !fill || painted || !extendSides.any();
     $('rdextendgo').title = !fill ? 'Needs a FLUX.1 Fill model (Get models)'
-      : painted ? 'Clear the mask to extend the canvas'
+      : painted ? 'Clear the Refine fold’s mask to extend the canvas'
         : !extendSides.any() ? 'Pick a side to extend' : '';
   }
   $('rdextendnote').textContent = live ? extendSides.note(shown.width, shown.height) : '';
-  // Upscale is whole-image and changes the size the mask was painted at, so it
-  // waits while something is painted, as a refine of the whole image would.
+  // Scale: the mask scales with the picture (`ensureMaster`), so it needn't
+  // wait for one. Down is a step like a crop, locked while a pass runs.
+  const f = scaleFactor();
+  const to = live && f ? scaledSize(f) : null;
+  const byWidth = $('rdfactor').value === 'width';
+  $('rdwidth').hidden = !byWidth;
+  $('rdupscaler').hidden = byWidth || !(f > 1);
   if (!isBusy('rdupscale')) {
-    $('rdupscale').disabled = !live || painted;
-    $('rdupscale').title = painted ? 'Clear the mask to upscale the whole image' : '';
+    $('rdupscale').textContent = !f || f === 1 ? 'Scale' : f < 1 ? 'Scale down' : 'Scale up';
+    $('rdupscale').disabled = !to || f === 1 || (f < 1 && passRunning());
+    $('rdupscale').title = f < 1 && passRunning() ? 'A pass is running on the image — scale when it lands' : '';
   }
-  if (live) {
-    // The size the server will land on: `fsr::out_size`, whichever upscaler.
-    const f = Number($('rdfactor').value);
-    $('rdupnote').textContent =
-      `${shown.width}×${shown.height} → ${Math.round(shown.width * f)}×${Math.round(shown.height * f)}`;
-  }
+  $('rdupnote').textContent = to ? `${shown.width}×${shown.height} → ${to[0]}×${to[1]}` : '';
   // Blank uses: the area its image's own prompt; the whole image the Refine
   // pass fold's prompt when there is one.
   // Extend shares the box but not the rule: its blank continues the background,
@@ -386,7 +405,20 @@ function syncButtons() {
   syncDialogSummaries();
   $('rdmodel').disabled = passRunning();
   $('rdcancel').hidden = !passRunning();
-  for (const b of $('rdhistory').querySelectorAll('button')) b.disabled = passRunning();
+}
+
+// Scale's factor: the select's, or the Width box's over the picture's width.
+function scaleFactor() {
+  if ($('rdfactor').value !== 'width') return Number($('rdfactor').value);
+  const w = Number($('rdwidth').value);
+  return shown && w > 0 ? w / shown.width : null;
+}
+
+// Where the server lands: down, each side snapped to 8 (`resize_size`); up,
+// `fsr::out_size`, whichever upscaler.
+function scaledSize(f) {
+  if (f < 1) return [Math.floor(Math.round(shown.width * f) / 8) * 8, Math.floor(Math.round(shown.height * f) / 8) * 8];
+  return [Math.round(shown.width * f), Math.round(shown.height * f)];
 }
 
 // Every fold's summary says what is inside, the Image tab's rule, so a folded
@@ -398,11 +430,11 @@ function syncDialogSummaries() {
   put('rdsum-refine', `${painted ? 'area painted' : 'whole image'} · ${strength}`);
   const grown = shown ? editSides.note(shown.width, shown.height).split('→ ')[1] : '';
   put('rdsum-edit', grown ? `rescale → ${grown}` : '');
-  const up = $('rdupscaler').selectedOptions[0]?.textContent ?? '';
-  put('rdsum-upscale', `${$('rdfactor').value}×${up ? ` ${up}` : ''}`);
+  const f = scaleFactor();
+  const up = f > 1 ? $('rdupscaler').selectedOptions[0]?.textContent ?? '' : '';
+  const to = shown && f ? scaledSize(f) : null;
+  put('rdsum-upscale', to ? `${to[0]}×${to[1]}${up ? ` · ${up}` : ''}` : '');
   put('rdsum-extend', fillReady() ? extendSides.label() : 'needs FLUX.1 Fill');
-  const n = shown?.history?.length ?? 0;
-  put('rdsum-history', n ? `${n} step${n === 1 ? '' : 's'}` : '');
 }
 
 // The Strength box shows the number for what the button will do. On a switch
@@ -428,7 +460,13 @@ function takeStrength() {
   }
 }
 
-const dialogErr = (m, oom = null, opts = {}) => showError($('rperr'), m, oom, opts);
+// Every failure in this half lands in the dock's box. Out of memory, it also
+// offers to scale the picture down and run the pass again on it: memory grows
+// with the picture's area, and the server says as much on a decode failure.
+const dialogErr = (m, oom = null, opts = {}) => showError($('lberr'), m, oom, {
+  ...opts,
+  scaleDown: opts.retry ? async () => { if (await scaleDown(0.75)) opts.retry(); } : null,
+});
 
 // A pass in this dialog that failed: plain text, or the out-of-memory box
 // whose *Try again* runs `retry` — the same pass, with the Memory select as it
@@ -436,28 +474,40 @@ const dialogErr = (m, oom = null, opts = {}) => showError($('rperr'), m, oom, op
 function passErr(e, retry) {
   const msg = String(e.message || e);
   if (/cancelled by request/.test(msg)) {
-    $('rperr').textContent = 'Cancelled. The image is as it was.';
+    $('lberr').textContent = 'Cancelled. The image is as it was.';
     return;
   }
-  showError($('rperr'), msg, e.oom, { ...oomOptions(), retry });
+  dialogErr(msg, e.oom, { ...oomOptions(), retry });
 }
 
-// Bigger, with no diffusion. Through the queue like the passes — a model runs
-// on the GPU, an ESRGAN in sd-cli — and back as an ordinary result.
-async function upscale() {
-  if (S.imageId === null || painted) return;
-  $('rperr').textContent = '';
+// Smaller: a step like a crop, on the display lane (`/resize`), answered
+// through the pane's own handler. Says whether it landed.
+const scaleDown = (factor) => stepRequest('/resize', { factor });
+
+// Scale. Down is `scaleDown`; up is no diffusion either, but through the queue
+// like the passes — a model runs on the GPU, an ESRGAN in sd-cli — and back as
+// an ordinary result.
+async function scale() {
+  const f = scaleFactor();
+  if (S.imageId === null || !f || f === 1) return;
+  if (f < 1) {
+    setBusy('rdupscale', 'Scaling…');
+    try { await scaleDown(f); } finally { setIdle('rdupscale'); syncButtons(); }
+    return;
+  }
+  $('lberr').textContent = '';
   setBusy('rdupscale', 'Upscaling…', 'upscale');
   soonJobs();
+  const land = passLander();
   try {
-    takeResult(await post('/upscale', {
+    land(await post('/upscale', {
       image_id: S.imageId,
-      factor: Number($('rdfactor').value),
+      factor: f,
       upscaler: $('rdupscaler').value || null,
     }));
   } catch (e) {
     const msg = String(e.message || e);
-    $('rperr').textContent = /cancelled by request/.test(msg)
+    $('lberr').textContent = /cancelled by request/.test(msg)
       ? 'Cancelled. The image is as it was.' : msg;
   } finally {
     setIdle('rdupscale');
@@ -471,11 +521,12 @@ async function upscale() {
 async function edit() {
   const said = $('rpprompt').value.trim();
   if (S.imageId === null || painted || !said) return;
-  $('rperr').textContent = '';
+  $('lberr').textContent = '';
   setBusy('rdedit', editSides.any() ? 'Editing and rescaling…' : 'Editing…', 'edit');
   soonJobs();
+  const land = passLander();
   try {
-    takeResult(await post('/edit', {
+    land(await post('/edit', {
       image_id: S.imageId, prompt: said, references: references(), memory: $('memory').value || null,
       expand: editSides.expand(),
     }));
@@ -491,11 +542,12 @@ async function edit() {
 // with this dialog's prompt (blank continues the background) and softness.
 async function extend() {
   if (S.imageId === null || painted || !extendSides.any() || !fillReady()) return;
-  $('rperr').textContent = '';
+  $('lberr').textContent = '';
   setBusy('rdextendgo', 'Extending…', 'extend');
   soonJobs();
+  const land = passLander();
   try {
-    takeResult(await post('/extend', {
+    land(await post('/extend', {
       image_id: S.imageId,
       expand: extendSides.expand(),
       prompt: $('rpprompt').value.trim() || null,
@@ -513,7 +565,7 @@ async function extend() {
 // The whole-image refine goes through image.js's `escalate`, which keeps the
 // stale-image reopen and the busy label; this only adds the dialog's prompt.
 async function refineImage() {
-  await refine($('rpprompt').value.trim() || null, dialogErr);
+  await refine($('rpprompt').value.trim() || null, dialogErr, passLander());
   syncButtons();
 }
 
@@ -531,11 +583,12 @@ function maskPng() {
 
 async function redraw() {
   if (!painted || S.imageId === null || !master) return;
-  $('rperr').textContent = '';
+  $('lberr').textContent = '';
   setBusy('redrawgo', 'Refining area…', 'redraw');
   soonJobs();
+  const land = passLander();
   try {
-    takeResult(await post('/redraw', {
+    land(await post('/redraw', {
       image_id: S.imageId,
       mask: maskPng(),
       prompt: $('rpprompt').value.trim() || null,
@@ -548,17 +601,6 @@ async function redraw() {
   } finally {
     setIdle('redrawgo');
     syncButtons();
-  }
-}
-
-async function goto(index) {
-  if (!shown || index < 0 || index >= shown.history.length || index === shown.at) return;
-  if (passRunning()) return;
-  $('rperr').textContent = '';
-  try {
-    takeResult(await post('/history/goto', { image_id: shown.image_id, index }));
-  } catch (e) {
-    $('rperr').textContent = String(e.message || e);
   }
 }
 
@@ -577,27 +619,26 @@ function drawModel() {
 // answers with what the passes can now do (Refine, Hi-res, Edit).
 async function setModel() {
   if (!shown) return;
-  $('rperr').textContent = '';
+  $('lberr').textContent = '';
   try {
-    render(await post('/image/model', { image_id: shown.image_id, model: $('rdmodel').value }));
+    deliver(await post('/image/model', { image_id: shown.image_id, model: $('rdmodel').value }));
   } catch (e) {
-    $('rperr').textContent = String(e.message || e);
+    $('lberr').textContent = String(e.message || e);
     $('rdmodel').value = shown.model;
   }
 }
 
-function drawHistory() {
+function drawDialog() {
   if (!shown) return;
   drawModel();
-  $('rdhistory').innerHTML = historyMarkup(shown);
   drawCompare();
   syncButtons();
 }
 
-// Called by render() with every result the Image tab shows: a new image, a
-// redraw, a refine, a step back. The dialog follows it while open; the mask goes
-// only with a different image or a different size (a hi-res pass).
-export function syncRedraw(data) {
+// Every state the dialog is handed (viewer.js's `onLook`): a new image, a pass,
+// a step back, a crop, a scale. The mask goes with a different image or a new
+// shape (`ensureMaster`).
+function syncRedraw(data) {
   if (data.image_id !== maskFor) {
     maskFor = data.image_id;
     $('rpprompt').value = '';
@@ -608,32 +649,26 @@ export function syncRedraw(data) {
     pickModel = false;
     if (master) clearMask();
   }
-  const fresh = !shown || shown.image_id !== data.image_id;
   ensureMaster(data.width, data.height);
   shown = data;
-  if (!open()) return;
-  // The same image redrawn keeps the view where it was — the point of panning
-  // to a hand is to see the new one land there.
-  if (fresh) pane.expectNew(); else pane.keepView();
-  $('rdimg').src = S.currentSrc;
-  drawHistory();
+  if (open()) drawDialog();
 }
 
-export function openRedraw(data, { fromOutput = false } = {}) {
-  if (fromOutput) pickModel = true;
-  shown = null;
-  // The viewer's sliders may have moved since: the left side is fetched again.
+// The dialog is opening (viewer.js's `onOpen`), on the state `onLook` handed.
+function prepareOpen() {
+  pickModel = S.pane === 'outputs';
+  // The sliders may have moved since: Compare's left side is fetched again.
   beforeKey = null;
   fillUpscalers();
   // Re-read the Strength box from scratch: the fold's may have changed since.
   strengthFor = null;
-  syncRedraw(data);
-  $('rperr').textContent = '';
-  $('redraw').showModal();
-  pane.expectNew();
-  $('rdimg').src = S.currentSrc;
-  pane.shown();
-  drawHistory();
+  syncMasking();
+  drawDialog();
+}
+
+// The pane says a left drag paints only while the Refine fold has the pointer.
+function syncMasking() {
+  $('lbview').classList.toggle('masking', masking() && !comparing);
 }
 
 // The upscalers the page knows (FSR plus every runnable model), kept on the
@@ -655,22 +690,24 @@ function syncVals() {
 export function initRedraw() {
   extendSides = sideSet($('rdextendsides'), syncButtons);
   editSides = sideSet($('rdeditsides'), syncButtons);
+  onLook(syncRedraw);
+  onOpen(prepareOpen);
+  // A plain left drag is the mask's while its fold is open, Compare's split
+  // while comparing; Space hands it back to the pan.
+  claimLeft(() => !space && (comparing || masking()));
+  $('rdfold-refine').addEventListener('toggle', syncMasking);
+  $('panel-refine').addEventListener('toggle', syncMasking);
   $('rdextendgo').addEventListener('click', extend);
   $('rdmodel').addEventListener('change', setModel);
-  // Open or folded, per fold and per browser, like every tab's folds.
-  rememberFolds($('redraw'));
   $('rpstrength').addEventListener('input', syncDialogSummaries);
   $('rdupscaler').addEventListener('change', syncDialogSummaries);
-  $('rdgetfill').addEventListener('click', () => { $('redraw').close(); openGetModels('flux_fill'); });
-  pane = zoomPane({
-    view: $('rdview'), img: $('rdimg'), fit: $('rdfit'), full: $('rdfull'),
-    pans: (e) => e.button === 1 || (e.button === 0 && space),
-  });
-  // After the pane's own listener, so a pan it took is `defaultPrevented` here.
-  $('rdview').addEventListener('pointerdown', stroke);
-  $('rdview').addEventListener('contextmenu', (e) => e.preventDefault());
-  new ResizeObserver(place).observe($('rdimg'));
-  $('rdimg').addEventListener('load', place);
+  $('rdgetfill').addEventListener('click', () => { if (closeViewer()) openGetModels('flux_fill'); });
+  // After the pane's own listener (viewer.js's initViewer runs first), so a
+  // pan it took is `defaultPrevented` here.
+  $('lbview').addEventListener('pointerdown', stroke);
+  $('lbview').addEventListener('contextmenu', (e) => e.preventDefault());
+  new ResizeObserver(place).observe($('lbimg'));
+  $('lbimg').addEventListener('load', place);
 
   // Space to pan and Ctrl+Z to step back — but never from inside the prompt,
   // where both already mean something.
@@ -679,11 +716,11 @@ export function initRedraw() {
     if (!open() || typing(e)) return;
     if (e.code === 'Space') {
       space = true;
-      $('rdview').classList.add('panning');
+      $('lbview').classList.add('panning');
       e.preventDefault();
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && shown) {
       e.preventDefault();
-      goto(shown.at + (e.shiftKey ? 1 : -1));
+      stepTo(shown.at + (e.shiftKey ? 1 : -1));
     } else if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       setCompare(!comparing);
@@ -692,24 +729,25 @@ export function initRedraw() {
   document.addEventListener('keyup', (e) => {
     if (e.code !== 'Space') return;
     space = false;
-    $('rdview').classList.remove('panning');
+    $('lbview').classList.remove('panning');
   });
 
-  $('rdhistory').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-step]');
-    if (b && !b.disabled) goto(Number(b.dataset.step));
-  });
   $('rdcompare').addEventListener('click', () => setCompare(!comparing));
   $('rdcmp').addEventListener('change', () => { cmpWith = Number($('rdcmp').value); fetchBefore(); });
   $('rperase').addEventListener('click', () => { eraser = !eraser; syncButtons(); });
   $('rpclear').addEventListener('click', clearMask);
   $('redrawgo').addEventListener('click', () => (painted ? redraw() : refineImage()));
   $('rpstrength').addEventListener('input', takeStrength);
-  $('rdupscale').addEventListener('click', upscale);
+  $('rdupscale').addEventListener('click', scale);
   $('rdedit').addEventListener('click', edit);
   // Edit waits for an instruction; the button follows the box as it's typed.
   $('rpprompt').addEventListener('input', syncButtons);
-  $('rdfactor').addEventListener('change', syncButtons);
+  $('rdfactor').addEventListener('change', () => {
+    // Width… starts at the picture's own, so the box says what it changes.
+    if ($('rdfactor').value === 'width' && shown && !$('rdwidth').value) $('rdwidth').value = shown.width;
+    syncButtons();
+  });
+  $('rdwidth').addEventListener('input', syncButtons);
   // The fold's strength or prompt edited with the dialog shut: picked up on
   // the next open, since `syncStrength` only re-reads on a switch.
   $('rstrength').addEventListener('input', () => {
@@ -724,17 +762,16 @@ export function initRedraw() {
   // run, so stopping it is killing it (`Stopped::Cancel`).
   $('rdcancel').addEventListener('click', async () => {
     const j = runningJob();
-    if (!j || !PASSES.includes(j.kind)) return;
+    if (!j || !passRunning()) return;
     // Straight to the route rather than `stopJob`, which keeps its failures
     // quiet: an FSR upscale can't be stopped part-way, and the server says so.
     try {
       await post('/jobs/stop', { id: j.id });
     } catch (e) {
-      $('rperr').textContent = String(e.message || e);
+      $('lberr').textContent = String(e.message || e);
     }
     soonJobs();
   });
-  $('rdclose').addEventListener('click', () => $('redraw').close());
   $('rpsoft').addEventListener('input', () => { syncVals(); place(); });
   $('rpbrush').addEventListener('input', syncVals);
   syncVals();

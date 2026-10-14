@@ -1,3 +1,4 @@
+import { followPointer } from './dom.js';
 import { hueWeight, oklchToSrgb, rampWeight } from './colorrange.js';
 
 // ---- The colour wheel: picking an Area by colour --------------------------------
@@ -236,7 +237,7 @@ export function colorWheel({ host, place, onChange, onPreview }) {
         onPreview?.(range);
       };
       drag(x);
-      follow(e, (ev) => drag?.(...at(ev)), () => {
+      followPointer(canvas, e, (ev) => drag?.(...at(ev)), () => {
         drag = null;
         onPreview?.(null);
         onChange?.(range);
@@ -274,31 +275,11 @@ export function colorWheel({ host, place, onChange, onPreview }) {
       onPreview?.(range);
     };
     drag(x, y);
-    follow(e, (ev) => drag?.(...at(ev)), () => {
+    followPointer(canvas, e, (ev) => drag?.(...at(ev)), () => {
       drag = null;
       onPreview?.(null);
       onChange?.(range);
     });
-  }
-
-  // Track a press to its end. Every way a press can end ends it once: the
-  // button let go (on the canvas, which holds the capture, or anywhere on
-  // the page should the capture have been lost), a cancelled pointer, or
-  // the capture taken away — say by the wheel hiding under the pointer.
-  function follow(e, move, end) {
-    let done = false;
-    const off = () => {
-      if (done) return;
-      done = true;
-      canvas.removeEventListener('pointermove', move);
-      canvas.removeEventListener('lostpointercapture', off);
-      for (const t of ['pointerup', 'pointercancel']) window.removeEventListener(t, off, true);
-      end();
-    };
-    canvas.addEventListener('pointermove', move);
-    canvas.addEventListener('lostpointercapture', off);
-    for (const t of ['pointerup', 'pointercancel']) window.addEventListener(t, off, true);
-    try { canvas.setPointerCapture(e.pointerId); } catch { /* the window listeners still end it */ }
   }
 
   // Drag the whole wheel by its dark middle, kept inside the dialog.
@@ -307,7 +288,7 @@ export function colorWheel({ host, place, onChange, onPreview }) {
     const l0 = el.offsetLeft, t0 = el.offsetTop;
     const size = geo.size;
     canvas.style.cursor = 'grabbing';
-    follow(e, (ev) => {
+    followPointer(canvas, e, (ev) => {
       el.style.left = `${clamp(l0 + ev.clientX - x0, 0, bounds.w - size)}px`;
       el.style.top = `${clamp(t0 + ev.clientY - y0, 0, bounds.h - size)}px`;
     }, () => {

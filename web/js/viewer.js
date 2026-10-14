@@ -1,4 +1,5 @@
 import { $, esc, post, rememberFolds } from './dom.js';
+import { floatPanels } from './panels.js';
 import { S, P, escErr } from './state.js';
 import { onJobs, passRunning } from './jobs.js';
 import { regionTool } from './regiontool.js';
@@ -114,6 +115,26 @@ let shown = null;
 // `render`, the Outputs viewer's own. Registered by those modules.
 const resultHandlers = {};
 export const onViewerResult = (pane, fn) => { resultHandlers[pane] = fn; };
+// A pass's answer (Refine, Edit, Extend, Scale up) can take minutes behind a
+// batch, so it goes to the pane it was pressed on, not to whichever is showing
+// when it lands: the Image tab's `takeResult`, the Outputs viewer's handler.
+// `passLander()` is taken when the pass starts.
+const passHandlers = {};
+export const onPassResult = (pane, fn) => { passHandlers[pane] = fn; };
+export function passLander() {
+  const pane = S.pane, id = S.imageId;
+  return (data) => passHandlers[pane]?.(data, id);
+}
+// The Refine half of the dialog (redraw.js) follows every state the viewer is
+// handed, and gets ready on every open. Hooks, so this module needn't import it.
+const lookHooks = [];
+const openHooks = [];
+export const onLook = (fn) => { lookHooks.push(fn); };
+export const onOpen = (fn) => { openHooks.push(fn); };
+// Whether a plain left drag on the picture belongs to the Refine half (the
+// mask, or Compare's split) rather than panning. redraw.js says.
+let leftTaken = () => false;
+export const claimLeft = (fn) => { leftTaken = fn; };
 
 const globalFilters = () => (target === 'all' ? readSliders() : parked);
 
@@ -127,6 +148,13 @@ export const lookKey = () => JSON.stringify([
 const closeGuards = [];
 export const guardClose = (fn) => { closeGuards.push(fn); };
 const mayClose = () => closeGuards.every((g) => g());
+// Close it, if the guards agree — for a button that leaves the dialog for
+// another tab (Extend's *Get models…*).
+export function closeViewer() {
+  if (!mayClose()) return false;
+  $('lightbox').close();
+  return true;
+}
 const areaState = () => area && { ...area, filters: target === 'area' ? readSliders() : area.filters };
 
 function setTarget(t) {
@@ -155,6 +183,7 @@ export function setLook(data) {
   syncBrushes();
   drawHistory();
   syncPostLabels();
+  for (const fn of lookHooks) fn(data);
   // The box describes the picture that was there; put it on this one once
   // it has decoded and has a size.
   if (box?.shown()) $('lbimg').addEventListener('load', reshowTool, { once: true });
@@ -194,6 +223,13 @@ function viewerSummaries() {
   say('sum-lb-brush', painted.map(([t, a]) => `${TOOL_LABELS[t] ?? t} ${a.toFixed(2)}${
     t === 'restore' && shown.restore_from != null ? ` from ${shown.restore_from + 1}` : ''}`).join(' · ') || 'none',
   painted.length > 0);
+  // The rail's dots: which panels have something in effect, so a closed
+  // panel still says so.
+  const look = Object.values(readSliders()).some((x, i) => Math.abs(x - (base[FILTERS[i].id] ?? 0)) > 0.004);
+  railDot('adjust', look || (target === 'area' && Object.values(parked).some((x) => Math.abs(x) > 0.004)));
+  railDot('select', !!a);
+  railDot('brush', painted.length > 0);
+  railDot('scale', cropped);
   syncApply();
 }
 
@@ -275,8 +311,9 @@ function onBox(b) {
 // landing afterwards would silently overwrite: locked while one runs.
 function syncCrop() {
   const busy = passRunning();
-  $('lbcropapply').disabled = busy || stepping;
-  $('lbcropapply').title = busy ? 'A pass is running on the image — crop when it lands' : '';
+  $('lbcropapply').disabled = busy || stepping || toolMode !== 'crop';
+  $('lbcropapply').title = busy ? 'A pass is running on the image — crop when it lands'
+    : toolMode !== 'crop' ? 'Open the Crop fold and draw the box' : '';
   for (const b of $('lbhistory').querySelectorAll('button')) b.disabled = busy || stepping;
   syncApply();
 }
@@ -395,7 +432,7 @@ function syncBrushes() {
   if (!paint) return;
   for (const t of Object.keys(TOOL_LABELS)) if (!(t in strokes())) paint.clear(t);
   syncRestoreFrom();
-  if ($('fold-lb-brush').open) loadMasks();
+  if ($('panel-brush').open) loadMasks();
   if (brushTool in strokes()) $('lbbamount').value = strokes()[brushTool];
   $('lbbamountval').textContent = Number($('lbbamount').value).toFixed(2);
 }
@@ -409,9 +446,8 @@ function loadMasks() {
 
 // ---- History -----------------------------------------------------------------
 //
-// The image's states, newest first, as the Refine dialog lists them — one
-// markup for both lists, so they can't come to disagree about a step.
-export const historyMarkup = (data) => (data?.history ?? []).map((label, i) => `
+// The image's states, newest first: every pass, crop, scale and Apply.
+const historyMarkup = (data) => (data?.history ?? []).map((label, i) => `
     <li><button type="button" data-step="${i}" class="${i === data.at ? 'active' : ''}">
       <img src="/history/${data.image_id}/${i}.png" alt="" loading="lazy">
       <span>${i + 1}. ${esc(label)}</span>
@@ -422,6 +458,7 @@ function drawHistory() {
   const n = shown?.history?.length ?? 0;
   say('sum-lb-history', n ? `${n} step${n === 1 ? '' : 's'} · at ${shown.at + 1}` : '',
     n > 0 && shown.at < n - 1);
+  railDot('history', n > 0 && shown.at < n - 1);
   syncCrop();
 }
 
@@ -535,7 +572,7 @@ function wheelPlace() {
 
 // The crop or the undo answered with a new state of the image: the pane that
 // owns the viewer draws it, the same way it draws any other result.
-function deliver(data) {
+export function deliver(data) {
   resultHandlers[S.pane]?.(data);
 }
 
@@ -543,7 +580,7 @@ function deliver(data) {
 // of the image, and says whether it landed. One at a time, and after any re-filter still on its way — so
 // what is applied or cropped is what is on screen.
 let stepping = false;
-async function stepRequest(route, body) {
+export async function stepRequest(route, body) {
   if (S.imageId === null || stepping) return false;
   stepping = true;
   syncCrop();
@@ -585,15 +622,12 @@ export function setResultImage(src) {
   $('lbimg').src = src;
 }
 
-// Fit, 1:1 and drag-to-pan for an image in a scrolling pane: the viewer's and
-// the Redraw dialog's. A factory, gridmark.js's shape, because two copies of the
-// centring rules below are two chances for one to be fixed and the other not.
-// Builds closures and nothing else, so calling it from an init keeps the
-// declare-only rule.
+// Fit, 1:1 and drag-to-pan for the dialog's scrolling pane. A factory, so the
+// centring rules live in one closure. Builds closures and nothing else, so
+// calling it from an init keeps the declare-only rule.
 //
-// `pans(e)` says whether a pointerdown is a pan: any left drag in the viewer,
-// Space+drag or a middle drag in the dialog, where a left drag paints.
-export function zoomPane({ view, img, fit, full, pans }) {
+// `pans(e)` says whether a pointerdown is a pan.
+function zoomPane({ view, img, fit, full, pans }) {
   // Fitted, or true 1:1 and pannable. The fit/1:1 choice survives from the last
   // time the pane was open, because it is a preference about how you work.
   let isFit = true;
@@ -666,8 +700,11 @@ export function zoomPane({ view, img, fit, full, pans }) {
   };
 }
 
-// The viewer's pane, made in initViewer.
+// The viewer's pane and the floating panels, made in initViewer.
 let lb = null;
+let panels = null;
+// A rail button's dot (`panels.js`): its panel has something in effect.
+export const railDot = (id, on) => panels?.dot(id, on);
 
 // The image is already a data: URL on the page, so this re-uses it rather than
 // fetching anything.
@@ -678,9 +715,20 @@ export function showFullSize(src) {
   lb.expectNew();
   $('lbimg').src = src;
   $('lberr').textContent = '';
+  for (const fn of openHooks) fn();
   $('lightbox').showModal();
-  // After showModal, so the pane has a size to centre against.
+  // After showModal, so the pane has a size to centre against, and the
+  // panels a dialog to be placed in.
   lb.shown();
+  panels.layout();
+}
+
+// A step through History, from the list or Ctrl+Z / Ctrl+Shift+Z.
+export function stepTo(index) {
+  if (!shown || index < 0 || index >= (shown.history?.length ?? 0) || index === shown.at) return;
+  if (passRunning()) return;
+  $('lbimg').addEventListener('load', reshowTool, { once: true });
+  stepRequest('/history/goto', { index });
 }
 
 // Post-process is the free rung of the ladder: no diffusion, just the display
@@ -813,8 +861,12 @@ export function cancelPost() {
 // clicks, not a batch that was started before it was opened. So the big copy is
 // kept in step here too, and re-centred, because what arrived is a different
 // image rather than a re-filter of the one on screen.
-export function setViewerImage(src) {
-  lb?.expectNew();
+//
+// `keep`: the same picture in a new state (a pass on it, a step back) keeps the
+// view where it was — the point of panning to a hand is to see the new one
+// land there.
+export function setViewerImage(src, keep = false) {
+  if (keep) lb?.keepView(); else lb?.expectNew();
   $('lbimg').src = src;
 }
 
@@ -822,6 +874,7 @@ export function setViewerImage(src) {
 // fetch happens here, called from app.js, so an import cycle can never be read
 // half-initialised. Same shape in every module.
 export function initViewer() {
+  buildPanels();
   // Built once, at load, so the panel exists before the first image does —
   // `syncAdvanced` writes the model's start points into it while the viewer is
   // still closed.
@@ -866,19 +919,39 @@ export function initViewer() {
     // The strokes are part of the look too.
     for (const t of Object.keys(TOOL_LABELS)) clearTool(t);
   });
-  // Left drag pans at 1:1; the middle button too, which is the pan left while
-  // a crop or area box has the left one.
+  // Left drag pans at 1:1 unless the Refine half has it (the mask while its
+  // fold is open, Compare's split); the middle button always, which is the
+  // pan left while a box, a brush or the mask has the left one.
   lb = zoomPane({
     view: $('lbview'), img: $('lbimg'), fit: $('lbfit'), full: $('lbfull'),
-    pans: (e) => e.button === 0 || e.button === 1,
+    pans: (e) => e.button === 1 || (e.button === 0 && !leftTaken()),
   });
 
   box = regionTool({ view: $('lbview'), img: $('lbimg'), onChange: onBox });
   box.init();
-  const crop = $('fold-lb-crop'), areaFold = $('fold-lb-area');
-  const brushFold = $('fold-lb-brush');
+  // The four things that own the pointer on the picture — the Refine fold's
+  // mask (in an open Refine panel), the Crop fold's box (in Scale), the
+  // Selection panel's area box, the Brushes panel: opening one closes the
+  // others, so what a drag does is never ambiguous. With none open, a drag
+  // pans. The other panels never take the pointer, so they stay open beside.
+  const crop = $('fold-lb-crop'), areaFold = $('panel-select');
+  const brushFold = $('panel-brush'), maskFold = $('rdfold-refine');
+  const masking = () => $('panel-refine').open && maskFold.open;
+  const maskClaims = () => {
+    if (!masking()) return;
+    crop.open = false;
+    areaFold.open = false;
+    brushFold.open = false;
+  };
+  maskFold.addEventListener('toggle', maskClaims);
+  $('panel-refine').addEventListener('toggle', maskClaims);
+  // Closing Scale drops an unapplied crop, as closing its fold does.
+  $('panel-scale').addEventListener('toggle', () => { if (!$('panel-scale').open) crop.open = false; });
   crop.addEventListener('toggle', () => {
+    // A fold remembered open in a closed Scale panel puts no box up.
+    if (crop.open && !$('panel-scale').open) { crop.open = false; return; }
     if (crop.open) {
+      maskFold.open = false;
       areaFold.open = false;
       brushFold.open = false;
       showCropTool();
@@ -886,9 +959,11 @@ export function initViewer() {
       box.hide();
       toolMode = null;
     }
+    syncCrop();
   });
   areaFold.addEventListener('toggle', () => {
     if (areaFold.open) {
+      maskFold.open = false;
       crop.open = false;
       brushFold.open = false;
       showAreaTool();
@@ -916,11 +991,7 @@ export function initViewer() {
   $('lbdownload').addEventListener('click', download);
   $('lbhistory').addEventListener('click', (e) => {
     const b = e.target.closest('[data-step]');
-    if (!b || b.disabled || !shown) return;
-    const index = Number(b.dataset.step);
-    if (index === shown.at) return;
-    $('lbimg').addEventListener('load', reshowTool, { once: true });
-    stepRequest('/history/goto', { index });
+    if (b && !b.disabled) stepTo(Number(b.dataset.step));
   });
 
   // The area: made on first choosing it. The whole picture, since picking
@@ -994,7 +1065,10 @@ export function initViewer() {
     $('lbcfeatherval').textContent = area.colors.feather.toFixed(2);
     schedulePost();
   });
-  document.querySelector('#lightbox .lbside').addEventListener('pointerenter', () => wheel.hide());
+  // Out of the way once the pointer goes to any panel or the rail.
+  for (const el of document.querySelectorAll('#lightbox .fpanel, #lightbox .lbrail')) {
+    el.addEventListener('pointerenter', () => wheel.hide());
+  }
   $('lbview').addEventListener('pointerdown', () => wheel.hide());
   // Escape closes the wheel first, and the viewer only on a second press —
   // and only once the close guards agree.
@@ -1030,6 +1104,7 @@ export function initViewer() {
   paint.init();
   brushFold.addEventListener('toggle', () => {
     if (brushFold.open) {
+      maskFold.open = false;
       crop.open = false;
       areaFold.open = false;
       paint.show();
@@ -1069,7 +1144,34 @@ export function initViewer() {
     for (const t of Object.keys(TOOL_LABELS)) clearTool(t);
   });
   chooseTool(brushTool);
+  announcePanels();
 
   onJobs(syncCrop);
   rememberFolds($('lightbox'));
+}
+
+// The panels, before anything reads `$('panel-…').open`. Refine and History
+// start open; after that each is where the user left it (`panels.js`).
+function buildPanels() {
+  panels = floatPanels({
+    host: $('lightbox'),
+    rail: document.querySelector('#lightbox .lbrail'),
+    defs: [
+      { id: 'refine', open: true },
+      { id: 'scale' },
+      { id: 'adjust' },
+      { id: 'brush' },
+      { id: 'select' },
+      { id: 'history', open: true, corner: 'bottom-right' },
+    ],
+  });
+  panels.init();
+}
+
+// A panel remembered open was opened before anyone listened: say so now, so
+// the tool it carries (the brushes, the area box) shows as it would have.
+function announcePanels() {
+  for (const el of document.querySelectorAll('#lightbox .fpanel')) {
+    if (el.open) el.dispatchEvent(new Event('toggle'));
+  }
 }

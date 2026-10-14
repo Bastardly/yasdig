@@ -50,7 +50,6 @@ function showTab(name) {
   // step.
   $('lbsave').hidden = name !== 'outputs';
   $('lbsavechanges').hidden = name !== 'outputs';
-  $('lbrefine').hidden = name !== 'outputs';
 
   // The two image panes share one `imageId`, so leaving one has to empty it.
   // Otherwise the picture stays on screen beside Refine and Hi-res buttons that
@@ -138,8 +137,8 @@ initBusy();
 // Before initImage(): its model list calls syncRefs as soon as it loads.
 initRefs();
 initImage();
-// Before the first render(), which calls syncRedraw — and after initViewer(),
-// whose `zoomPane` it builds its own pane from.
+// After initViewer(): it hooks into the dialog viewer.js owns, and its mask's
+// pointerdown must come after the pane's pan listener.
 initRedraw();
 initWorkItems();
 initOutputs();
