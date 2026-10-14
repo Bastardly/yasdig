@@ -1,7 +1,7 @@
 import { $, esc, getJSON, post } from './dom.js';
 import { S, escErr } from './state.js';
 import { setBusy, setIdle, onIdle } from './busy.js';
-import { cancelPost, onViewerResult, setLook, showFullSize, setViewerImage } from './viewer.js';
+import { cancelPost, guardClose, lookKey, onViewerResult, setLook, showFullSize, setViewerImage } from './viewer.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
 import { render } from './image.js';
 import { openRedraw } from './redraw.js';
@@ -217,6 +217,7 @@ async function openAt(i) {
   // image's re-filter on top of the new one.
   cancelPost();
   opening = true;
+  savedKey = null;
   const wasOpen = $('lightbox').open;
   index = i;
   markGrid();
@@ -234,6 +235,7 @@ async function openAt(i) {
     // carries whatever was applied when it was saved, so 0 means "as saved" and
     // Reset means "back to the file on disk".
     setLook(data);
+    savedKey = lookKey();
     $('postms').textContent = '';
     // `showFullSize` clears this, but swapping the image inside an open dialog
     // doesn't — so the previous image's failure would sit under the new one.
@@ -255,13 +257,24 @@ async function openAt(i) {
   }
 }
 
+// The edit as it was when the picture opened or was last saved (`lookKey`);
+// `null` while one is opening, which asks nothing.
+let savedKey = null;
+// Whether leaving this picture may go ahead: at once when its edit is saved,
+// else on the user's word. Closing, ←/→ and Refine & extend all leave it.
+function mayLeave() {
+  if (S.pane !== 'outputs' || S.imageId === null || savedKey === null || lookKey() === savedKey) return true;
+  return confirm('This picture has changes that are not saved. Leave without saving them?\n\n'
+    + 'Cancel, then Save changes or Save as new output, to keep them.');
+}
+
 // Clamped rather than wrapped: running off the end of a gallery and reappearing
 // at the other one loses your place in it.
 function step(d) {
   const i = Math.min(outputs.length - 1, Math.max(0, index + d));
   // `index` is already the in-flight target while one is opening, so a second
   // press computes the one after it and coalesces rather than repeating.
-  if (i !== index) openAt(i);
+  if (i !== index && mayLeave()) openAt(i);
 }
 
 // Keep the edit as a new file beside the original. `free_stem` suffixes the
@@ -272,7 +285,9 @@ async function saveEdit() {
   setBusy('lbsave', 'Saving…');
   $('lberr').textContent = '';
   try {
+    const key = lookKey();
     const data = await post('/save-output', { image_id: S.imageId });
+    savedKey = key;
     $('lbsaved').textContent = `saved → ${data.path}`;
     // The edit is now a tile of its own, at the head of the grid. `loadOutputs`
     // keeps the image being edited open across the refresh.
@@ -296,7 +311,9 @@ async function saveChanges() {
   setBusy('lbsavechanges', 'Saving…');
   $('lberr').textContent = '';
   try {
+    const key = lookKey();
     await post('/outputs/overwrite', { image_id: S.imageId });
+    savedKey = key;
     if (stem) edited.set(stem, Date.now());
     $('lbsaved').textContent = `saved over ${stem} — Reset and save again to undo, until you move on`;
     await loadOutputs();
@@ -314,7 +331,7 @@ async function saveChanges() {
 // Image tab's last picture, which `render` then replaces.
 async function toImage() {
   const stem = outputs[index]?.stem;
-  if (!stem) return;
+  if (!stem || !mayLeave()) return;
   setBusy('lbrefine', 'Opening…');
   $('lberr').textContent = '';
   try {
@@ -339,6 +356,7 @@ export function initOutputs() {
   $('lbsave').addEventListener('click', saveEdit);
   $('lbsavechanges').addEventListener('click', saveChanges);
   $('lbrefine').addEventListener('click', toImage);
+  guardClose(mayLeave);
 
   // On `document`, because a modal <dialog>'s keydown still bubbles out of it —
   // and because the same listener then covers the grid behind it.

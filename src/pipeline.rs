@@ -3269,7 +3269,26 @@ impl Display {
     /// is lost by saving the filtered one here.
     pub fn save_output(&self, id: u64) -> Result<PathBuf> {
         let p = lock(&self.retained).get(id, "save")?;
-        let item = WorkItem {
+        let item = Self::item(id, &p);
+        self.items.save_output(&p.display, &item, self.cfg.settings().embed_png_settings)
+    }
+
+    /// The picture on screen as a file to hand the browser: the bytes
+    /// [`Display::save_output`] would write — `display`, with the settings in
+    /// it when Settings says so — and a name for it, nothing written here.
+    /// A picture opened from Outputs keeps its file's name.
+    pub fn download(&self, id: u64) -> Result<(Vec<u8>, String)> {
+        let p = lock(&self.retained).get(id, "download")?;
+        let item = Self::item(id, &p);
+        let embed = self.cfg.settings().embed_png_settings;
+        let bytes = crate::workitems::output_bytes(&p.display, embed.then_some(&item))?;
+        let stem = p.opened_from.clone().unwrap_or_else(|| format!("{}-s{}", item.id, item.step));
+        Ok((bytes, format!("yasdig-{stem}.png")))
+    }
+
+    /// What a saved or downloaded picture records about how it was made.
+    fn item(id: u64, p: &Pending) -> WorkItem {
+        WorkItem {
             // Named by origin, so every save out of one generation groups
             // together; the job id only stands in when the archive write failed.
             id: p.work_id.clone().unwrap_or_else(|| id.to_string()),
@@ -3291,8 +3310,7 @@ impl Display {
             clarity: p.filters.clarity,
             source: p.source.clone(),
             profile: p.profile.clone(),
-        };
-        self.items.save_output(&p.display, &item, self.cfg.settings().embed_png_settings)
+        }
     }
 }
 

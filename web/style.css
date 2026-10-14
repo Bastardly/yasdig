@@ -182,7 +182,8 @@ h1 {
    nine rules whose job was to undo it — every tab, thumbnail, zoom control and
    icon on the page. A button that wants no chrome should have to say nothing.
 
-   .btn-run is the amber one: it spends GPU time. See the token block. */
+   .btn-run is the amber one: a panel's main action — it spends GPU time, or
+   (the viewer's Apply) is what the panel's sliders lead to. See the token block. */
 
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
 

@@ -3,6 +3,20 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### New
+
+- **Download from the viewer.** A *Download* button saves the picture as you see it,
+  full size and with every adjustment, to your browser's downloads — with its
+  settings in the PNG, like *Save to output*.
+
+### Changed
+
+- **The viewer's buttons**: *Download* comes first, *Apply adjustments* is the amber
+  button, and on the Outputs tab *Save changes* is neutral. Leaving an output with an
+  edit that isn't saved — closing, ←/→ or *Refine & extend…* — now asks first.
+
 ## 0.1.7 — 2026-10-14
 
 ### New

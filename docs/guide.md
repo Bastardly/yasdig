@@ -417,7 +417,8 @@ in the grid. The viewer holds the picture as it was when you opened it and the s
 work on that, so saving twice doesn't grade on top of the first save, and **Reset**
 then **Save changes** puts the original back — until you open another picture.
 **Save as new output**, above it, keeps the original and saves the edit as a new file
-beside it.
+beside it. Closing the viewer, stepping with **←** / **→** or pressing **Refine &
+extend…** with an edit that isn't saved asks first, so an edit isn't lost by accident.
 
 The same **Click to open / Click to delete** toggle and stars the work-item grid has
 are on this one, and behave identically: a click marks, `Delete N
@@ -860,6 +861,14 @@ through History keeps them. A step of another size — before a Hi-res — is sc
 fit, so it comes back softer; it works best between refines. If you know *before*
 refining which part should change, **Refine area** in the Refine dialog redraws only
 what you paint instead.
+
+### Download
+
+**Download**, at the foot of the viewer's panel, saves the picture as you see it —
+full size, every slider, area, brush and crop included — to your browser's downloads
+folder, as `yasdig-….png`. Like *Save to output*, it carries the settings it was made
+with when *Settings in the PNG* is on, so dropping it back on yasdig restores them.
+Nothing is written to `work/output/`.
 
 ### Apply and History
 

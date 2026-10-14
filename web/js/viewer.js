@@ -116,6 +116,17 @@ const resultHandlers = {};
 export const onViewerResult = (pane, fn) => { resultHandlers[pane] = fn; };
 
 const globalFilters = () => (target === 'all' ? readSliders() : parked);
+
+// The edit on screen in one string: both looks, the brushes and where in
+// History it stands. The Outputs viewer keeps the one it last opened or saved,
+// to ask before an unsaved edit is closed or stepped away from.
+export const lookKey = () => JSON.stringify([
+  globalFilters(), areaState(), shown?.brushes ?? {}, shown?.at, shown?.history?.length,
+]);
+// Asked before the viewer closes by × or Escape; any `false` keeps it open.
+const closeGuards = [];
+export const guardClose = (fn) => { closeGuards.push(fn); };
+const mayClose = () => closeGuards.every((g) => g());
 const areaState = () => area && { ...area, filters: target === 'area' ? readSliders() : area.filters };
 
 function setTarget(t) {
@@ -700,6 +711,38 @@ export function schedulePost() {
   postTimer = setTimeout(runPost, 120);
 }
 
+// The picture as shown, as a file: the server's bytes (`Display::download`,
+// with the settings in the PNG), handed to the browser as a download. After
+// any re-filter or stroke still on its way, so the file is what is on screen.
+async function download() {
+  const b = $('lbdownload');
+  if (S.imageId === null || b.disabled) return;
+  b.disabled = true;
+  b.textContent = 'Preparing…';
+  $('lberr').textContent = '';
+  try {
+    await settlePost();
+    await brushChain;
+    const data = await post('/download-image', { image_id: S.imageId });
+    const bytes = Uint8Array.from(atob(data.image_base64), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = data.name;
+    // Inside the dialog: it is modal, so a link outside it is inert.
+    $('lightbox').append(a);
+    a.click();
+    a.remove();
+    // Long enough for the browser to have started reading it.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    $('lberr').textContent = String(e.message || e);
+  } finally {
+    b.disabled = false;
+    b.textContent = 'Download';
+  }
+}
+
 // Let a debounced or in-flight re-filter land before a step is taken from
 // the picture (Apply, Crop, a History jump), so the step is of what is shown.
 async function settlePost() {
@@ -812,7 +855,7 @@ export function initViewer() {
   // The viewer. Closing is the x and Escape (which <dialog> handles itself) and
   // nothing else: a click-anywhere-to-dismiss is fine for something you only look
   // at and hostile for something you edit in.
-  $('lbclose').addEventListener('click', () => $('lightbox').close());
+  $('lbclose').addEventListener('click', () => { if (mayClose()) $('lightbox').close(); });
   // Reset is the whole look: the picture's sliders home, and the area gone.
   $('lbreset').addEventListener('click', () => {
     setTarget('all');
@@ -870,6 +913,7 @@ export function initViewer() {
     if (await stepRequest('/crop', { x: b.x, y: b.y, width: b.w, height: b.h })) crop.open = false;
   });
   $('lbapply').addEventListener('click', () => stepRequest('/apply', {}));
+  $('lbdownload').addEventListener('click', download);
   $('lbhistory').addEventListener('click', (e) => {
     const b = e.target.closest('[data-step]');
     if (!b || b.disabled || !shown) return;
@@ -952,9 +996,10 @@ export function initViewer() {
   });
   document.querySelector('#lightbox .lbside').addEventListener('pointerenter', () => wheel.hide());
   $('lbview').addEventListener('pointerdown', () => wheel.hide());
-  // Escape closes the wheel first, and the viewer only on a second press.
+  // Escape closes the wheel first, and the viewer only on a second press —
+  // and only once the close guards agree.
   $('lightbox').addEventListener('cancel', (e) => {
-    if (wheel.shown()) { e.preventDefault(); wheel.hide(); }
+    if (wheel.shown()) { e.preventDefault(); wheel.hide(); } else if (!mayClose()) e.preventDefault();
   });
   $('lbfeather').addEventListener('input', () => {
     if (!area) return;

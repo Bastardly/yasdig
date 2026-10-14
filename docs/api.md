@@ -338,6 +338,10 @@ needs a Vulkan device and nothing else.
   `work/output/` and in your favourites if it is there too, keeping the file's date so
   the grid keeps its order. Only for an image opened through `/outputs/open` (a 400
   otherwise). Returns `{ "path": … }`.
+- `POST /download-image` — `{ "image_id": 3 }`, the viewer's *Download*: the image on
+  screen as `/save-output` would write it (settings in the PNG when
+  `embed_png_settings` is on), but written nowhere. Returns `{ "image_base64", "name" }`,
+  the name `yasdig-<stem>.png` — the file's own stem for a picture opened from Outputs.
 - `GET /workitems` — every archived generation, newest first. Each carries `id`,
   `created_ms`, `prompt`, `negative`, `seed`, `template`, `width` / `height`,
   `thumb_width` / `thumb_height`, `source` (the `work/output/` stem an

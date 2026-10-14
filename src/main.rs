@@ -193,6 +193,9 @@ enum JobKind {
     /// Write the image on screen back over the saved file it was opened from
     /// (`Display::overwrite_output`) — the Outputs viewer's *Save changes*.
     OverwriteOutput(u64),
+    /// The image on screen as a file for the browser to save
+    /// (`Display::download`): `display` with its settings, answered as base64.
+    DownloadImage(u64),
     /// Step to another state in an image's history (`Display::goto`). A
     /// `publish`, so the display lane's — it answers mid-render.
     Goto { id: u64, index: usize },
@@ -519,6 +522,13 @@ fn run(args: &[String]) -> Result<()> {
                     }
                     JobKind::SaveOutput(id) => display.save_output(id).map(|p| saved_json(&p)),
                     JobKind::OverwriteOutput(id) => display.overwrite_output(id).map(|p| saved_json(&p)),
+                    JobKind::DownloadImage(id) => display.download(id).map(|(png, name)| {
+                        serde_json::json!({
+                            "image_base64": base64::engine::general_purpose::STANDARD.encode(&png),
+                            "name": name,
+                        })
+                        .to_string()
+                    }),
                     JobKind::Goto { id, index } => display.goto(id, index).map(|r| result_json(&r)),
                     JobKind::SetModel { id, model } => display.set_model(id, &model).map(|r| result_json(&r)),
                     JobKind::ViewStep { id, index } => display.view_step(id, index).map(|(png, w, h)| {
@@ -818,6 +828,7 @@ fn route(
         ("POST", "/adjust") => handle_adjust(conn, lanes, &req.body),
         ("POST", "/save-output") => handle_save_output(conn, lanes, &req.body, false),
         ("POST", "/outputs/overwrite") => handle_save_output(conn, lanes, &req.body, true),
+        ("POST", "/download-image") => handle_download_image(conn, lanes, &req.body),
 
         // Progress and Stop, both on the connection thread and both for the
         // same reason: they are *about* the job the worker is running, so
@@ -1847,6 +1858,21 @@ fn handle_save_output(
             };
             submit(conn, &lanes.display, kind, 400)
         }
+        None => Ok(()),
+    }
+}
+
+/// `/download-image`: the picture on screen as a file, with a name for it. A
+/// POST through the display lane like `/save-output`, since only the retained
+/// image knows which file is on screen. (Not `/downloads/…`: those fetch models.)
+fn handle_download_image(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+    }
+
+    match parse_json::<Dto>(conn, body)? {
+        Some(dto) => submit(conn, &lanes.display, JobKind::DownloadImage(dto.image_id), 400),
         None => Ok(()),
     }
 }

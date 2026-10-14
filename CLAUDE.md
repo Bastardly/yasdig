@@ -404,7 +404,8 @@ Page: `finished` moving triggers `loadModels()`; `#getparts` opens the family's 
 ## Settings in the PNG
 
 `src/pngmeta.rs` writes two text chunks into every output `Store::save_output` and
-`overwrite_output` write: A1111's `parameters` text and a `yasdig` JSON record.
+`overwrite_output` write, and into the viewer's *Download* (`Display::download`,
+`POST /download-image`, the same `workitems::output_bytes`): A1111's `parameters` text and a `yasdig` JSON record.
 `POST /png-settings` reads a dropped PNG back. Gated by `Settings::embed_png_settings`
 (on, page-level). Not written into the work-item archive or the live display, since
 *Save to output* is the "keep this one" button.
@@ -698,8 +699,8 @@ the stem** (one stem, one picture), keeps the mtime (grid order), rebuilds each 
 and leaves the sidecar; the page cache-busts the tile (`edited` in `outputs.js`).
 
 - **Deleting is `gridmark.js`**, shared with the work-item grid.
-  **Delete all = the same request with every id.** One of three `confirm()`s
-  (with Close server and Jobs Stop/Remove).
+  **Delete all = the same request with every id.** One of four `confirm()`s
+  (with Close server, Jobs Stop/Remove, and the Outputs viewer's unsaved edit).
 - **`outputGrid` is the one tile** (`height`, `empty`, `onPick`, optional `star`); height must match
   `.wigrid`.
 - **Arrow keys yield to a focused range input**; listener on `document`.
@@ -712,7 +713,8 @@ role, never a value**: colour, type, space, radius and column caps are `:root` t
 a hex elsewhere means a missing token. Ink ramp and state colour are neutral (bone)
 because they sit beside a graded image. `--fold-title`/`--fold-on` for fold headings.
 **Amber (`.btn-run`) is the dock's main button only** (plus Hi-res above a result,
-and the thumbnails' favourite star as a glyph colour);
+and the thumbnails' favourite star as a glyph colour) — in the viewer that is
+*Apply adjustments*, with *Download* first and *Save changes* neutral;
 `.btn` neutral, `.btn-danger` red, `.btn-choice` for "where you are" sets.
 
 - **A bare `<button>` is unstyled**: every button carries `.btn` or `.hint`, except

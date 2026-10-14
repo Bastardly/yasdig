@@ -714,7 +714,7 @@ impl Store {
 /// The bytes an output is written with: `display`, with the settings of `item`
 /// embedded when there is one. Embedding failing (a PNG it can't parse) costs
 /// the metadata, never the save.
-fn output_bytes(display: &Path, item: Option<&WorkItem>) -> Result<Vec<u8>> {
+pub fn output_bytes(display: &Path, item: Option<&WorkItem>) -> Result<Vec<u8>> {
     let bytes = std::fs::read(display).with_context(|| format!("reading {}", display.display()))?;
     Ok(match item {
         Some(item) => crate::pngmeta::embed(&bytes, item).unwrap_or_else(|e| {
