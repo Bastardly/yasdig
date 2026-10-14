@@ -129,20 +129,35 @@ pub fn blur(img: &RgbaImage, sigma: f32) -> RgbaImage {
     let mut a: Vec<f32> = img.as_raw().iter().map(|&v| v as f32).collect();
     let mut b = vec![0.0f32; a.len()];
     for _ in 0..3 {
-        box_pass(&a, &mut b, w, h, r, 4, w * 4);
-        box_pass(&b, &mut a, h, w, r, w * 4, 4);
+        box_pass(&a, &mut b, w, h, r, 4, w * 4, 4);
+        box_pass(&b, &mut a, h, w, r, w * 4, 4, 4);
     }
     let out: Vec<u8> = a.iter().map(|v| v.round().clamp(0.0, 255.0) as u8).collect();
     RgbaImage::from_raw(img.width(), img.height(), out).expect("same size as the input")
 }
 
+/// [`blur`] for a plane of `w × h` numbers, such as a selection's weights.
+pub fn blur_plane(plane: &mut [f32], w: u32, h: u32, sigma: f32) {
+    let r = (((4.0 * sigma * sigma + 1.0).sqrt() - 1.0) / 2.0).round() as usize;
+    if r == 0 {
+        return;
+    }
+    let (w, h) = (w as usize, h as usize);
+    let mut b = vec![0.0f32; plane.len()];
+    for _ in 0..3 {
+        box_pass(plane, &mut b, w, h, r, 1, w, 1);
+        box_pass(&b, plane, h, w, r, w, 1, 1);
+    }
+}
+
 /// One box pass along a line: `len` samples `step` apart, `lines` lines
-/// `stride` apart, four channels interleaved. A running sum, edges clamped.
-fn box_pass(src: &[f32], dst: &mut [f32], len: usize, lines: usize, r: usize, step: usize, stride: usize) {
+/// `stride` apart, `channels` interleaved. A running sum, edges clamped.
+#[allow(clippy::too_many_arguments)]
+fn box_pass(src: &[f32], dst: &mut [f32], len: usize, lines: usize, r: usize, step: usize, stride: usize, channels: usize) {
     let n = (2 * r + 1) as f32;
     for line in 0..lines {
         let base = line * stride;
-        for c in 0..4 {
+        for c in 0..channels {
             let at = |i: isize| src[base + i.clamp(0, len as isize - 1) as usize * step + c];
             let mut sum: f32 = (-(r as isize)..=r as isize).map(at).sum();
             for i in 0..len {
@@ -170,9 +185,13 @@ pub fn weights(mask: &RgbaImage, w: u32, h: u32) -> Vec<f32> {
 /// the FSR pass (`Fsr::filter`); Blur runs here. A mask that can't be read is
 /// skipped with a log line: a stroke lost is better than an image that can no
 /// longer be adjusted.
+/// `limit`, when given, is the area's selection (`Area::weights`): each
+/// stroke's weight is multiplied by it, so the brushes touch only what the
+/// area selects.
 pub fn apply(
     img: &mut RgbaImage,
     brushes: &Brushes,
+    limit: Option<&[f32]>,
     mut filter: impl FnMut(&RgbaImage, &Filters) -> Result<RgbaImage>,
 ) -> Result<()> {
     let (w, h) = img.dimensions();
@@ -192,7 +211,13 @@ pub fn apply(
             Some(f) => filter(img, &f)?,
             None => blur(img, blur_sigma(stroke.amount, w, h)),
         };
-        crate::area::composite_by(img, &local, &weights(&mask, w, h));
+        let mut k = weights(&mask, w, h);
+        if let Some(limit) = limit {
+            for (k, l) in k.iter_mut().zip(limit) {
+                *k *= l;
+            }
+        }
+        crate::area::composite_by(img, &local, &k);
     }
     Ok(())
 }
@@ -297,17 +322,22 @@ mod tests {
         let mut img = src.clone();
         let brushes = Brushes::from([(Tool::Dodge, Stroke { mask: mask.clone(), amount: 0.5, from: None })]);
         let white = |i: &RgbaImage, _: &Filters| Ok(RgbaImage::from_pixel(i.width(), i.height(), image::Rgba([255; 4])));
-        apply(&mut img, &brushes, white).unwrap();
+        apply(&mut img, &brushes, None, white).unwrap();
         assert_eq!(img.get_pixel(0, 0).0, [255; 4]);
         assert_eq!(img.get_pixel(5, 5), src.get_pixel(5, 5));
         // A mask that has gone is skipped, not an error.
         let gone = Brushes::from([(Tool::Burn, Stroke { mask: dir.join("nope.png"), amount: 0.5, from: None })]);
-        assert!(apply(&mut img, &gone, white).is_ok());
+        assert!(apply(&mut img, &gone, None, white).is_ok());
         // Restore is not a look: `apply` leaves it to `restore`, before.
         let before = img.clone();
         let restore = Brushes::from([(Tool::Restore, Stroke { mask, amount: 1.0, from: Some(0) })]);
-        apply(&mut img, &restore, white).unwrap();
+        apply(&mut img, &restore, None, white).unwrap();
         assert_eq!(img, before);
+        // A selection limits a stroke: where it selects nothing, nothing moves.
+        let mut limited = src.clone();
+        let none = vec![0.0; 16 * 16];
+        apply(&mut limited, &brushes, Some(&none), white).unwrap();
+        assert_eq!(limited, src);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -7,6 +7,12 @@ What changed in each release of yasdig. Each release's executables are on the
 
 ### New
 
+- **Pick an area by colour.** A colour wheel over the picture selects hues, and two
+  bars select lightness and saturation, each with a soft fade at its edges. The
+  area's sliders then change only those colours — anywhere, or inside a rectangle or
+  ellipse — and the brushes can be limited to them too. A grey preview shows what is
+  selected while you drag. A **Colour feather** slider softens the selection's edges
+  in the picture, so strong changes don't leave hard outlines.
 - **Restore brush.** Paint an earlier History step back in: refine the whole picture,
   then take back the parts you liked better before. Your sliders apply to the
   combined picture, and *Apply adjustments* makes it a new step.

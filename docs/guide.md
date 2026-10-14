@@ -772,6 +772,40 @@ or from a picture — or reopening a work item all start from neutral again.
 A different config file can be passed as the first argument:
 `cargo run --release -- /path/to/models.toml`.
 
+### Area: pick by colour
+
+An area can select by **colour** as well as by shape. **Whole** means no shape at
+all — every pixel of the selected colours — while **Rectangle** and **Ellipse** limit
+it to the shape too. **Colours…**, beside *Whole image* and *Area*, opens a wheel over
+the picture (making a whole-picture area first if there is none):
+
+- **The rim is every hue.** Click it to start a range there. The band inside it shows
+  what is selected — white fully, black not at all — and the four dots set it: the
+  two filled ones are where full selection starts and ends, the two hollow ones where
+  the fade reaches nothing. A dot pushes the ones it runs into, and they spring back
+  if you drag it away again before letting go. Drag the white part to move the whole range. A red range
+  can run across the top, from magenta to orange.
+- **Lightness and Saturation** are the two bars in the middle, with the same dots —
+  "only the shadows", "only the strong colours".
+- **Feather**, the track under the bars, is the Colour feather slider (below) — here
+  too, so you can watch its grey preview while you drag it.
+- **Double-click a dot** to go back to "any" for that channel (or 0 for Feather).
+- **Drag the dark middle** to move the wheel anywhere on screen; it opens where you
+  left it next time. Double-click the dark middle to put it back over the picture.
+
+While you hold a dot, the picture turns into a grey map of what is selected. Move
+back to the panel and the wheel gets out of the way: the area's sliders now change
+only those colours — deepen just the blue of a sky, warm just the skin. **Invert**
+selects everything else, and **Brushes only paint inside the selection** limits the
+brushes the same way: dodge across the whole frame and only the selected colours
+lighten. Greys never count as a hue, so a hue range doesn't pick them.
+
+**Colour feather** softens the selection in the picture itself. The fade between the
+dots softens it by colour, but where a sky meets a roof the colour changes in a pixel,
+and an extreme change shows that pixel as a hard edge (or as speckle, where the colour
+is noisy). Feather blurs the selection there, up to 2% of the picture's short side.
+The shape's own soft edge is **Shape feather**.
+
 ### Crop
 
 Open the **Crop** fold and a box appears over the picture: drag its corners or edges,

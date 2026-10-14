@@ -106,6 +106,7 @@
 
 mod area;
 mod brush;
+mod colorrange;
 mod bundle;
 mod config;
 mod catalog;

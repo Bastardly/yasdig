@@ -301,9 +301,15 @@ needs a Vulkan device and nothing else.
   reset `sharpness` and `clarity` to the model's values and carry the nine colour knobs
   across. Same response shape as `/generate`, with the time reported in `fsr_ms`.
   `area` sets the image's one area with a look of its own: `{ "shape": "rect" |
-  "ellipse", "x0", "y0", "x1", "y1" (fractions of the frame), "feather" (0..0.5 of the
-  short side), "invert", "filters": { …the same keys… } }`, applied over the whole
-  picture's filters inside the shape. Absent keeps it, `null` removes it. Every result
+  "ellipse" | "whole", "x0", "y0", "x1", "y1" (fractions of the frame), "feather"
+  (0..0.5 of the short side), "invert", "filters": { …the same keys… }, "colors",
+  "brushes" }`, applied over the whole picture's filters inside the selection —
+  shape × colour. `colors` is `{ "hue", "lightness", "saturation", "feather" }`, each
+  channel `null` (any) or `{ "a", "b", "c", "d" }`: fully selected from b to c, easing
+  (smoothstep) to nothing at a and d, in OKLCh — hue in degrees (unwrapped: `a` in 0..360, the rest may run past
+  360), lightness and saturation 0..100. `feather` (0..1, default 0) blurs the colour
+  selection in the picture, σ up to 2% of the short side. `"brushes": true` limits the brushes to the
+  selection. Absent keeps it, `null` removes it. Every result
   carries `area` (or `null`).
 - `POST /brush` — `{ "image_id": 3, "tool": "dodge", "amount": 0.4, "mask":
   "data:image/png;base64,…" }`. Paints with one brush tool (`blur`, `sharpen`, `dodge`,

@@ -725,6 +725,13 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    everything outside a box, and `.region` clips it to the picture. */
 .region.dim .regionbox { box-shadow: 0 0 0 100vmax var(--scrim-soft); }
 .regionbox.ellipse, .featherin.ellipse, .featherout.ellipse { border-radius: 50%; }
+/* The colour wheel (`colorwheel.js`): over the picture, in the dialog's
+   coordinates, above the pane and its overlays. The live preview is the
+   picture's own box, greyed by how selected each pixel is. */
+.colorwheel { position: absolute; z-index: 2; border-radius: 50%; box-shadow: var(--shadow-pop); }
+.colorwheel canvas { display: block; touch-action: none; }
+.selpreview { position: absolute; pointer-events: none; image-rendering: auto; }
+
 /* The brushes' painting layer (`brushpaint.js`): the chosen tool's mask in
    the mask colour, over the picture like Redraw's, shown while the pointer is
    over it or a stroke is going. The ring is the brush. */

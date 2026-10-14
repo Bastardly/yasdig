@@ -921,6 +921,20 @@ Label above the track; panel fixed 300 px and scrolls. **The panel is folds** (a
   at weight 0 are the base's bytes. Normalised to the frame, so it survives a pass;
   `Area::crop` maps it on a crop; `Area::restart` at every `Filters::restart` site;
   not in a `Snapshot` (an undo of a crop doesn't map it back).
+- **An area selects by shape × colour** (`Area::weights`; `Shape::Whole` is no
+  shape): the colour range is OKLCh, the grade's own space (`crate::colorrange`,
+  hue unwrapped `a` in 0..360, greys never hue-selected), read off the picture **after
+  the whole-picture look**. `colorrange.rs` and `web/js/colorrange.js` are the same
+  maths — **one fixture table pins both** (`the_fixture_table_the_page_checks_too`,
+  `colorrange.test.js`); change both or neither. Ramps are smoothstep (a linear
+  fade's corner shows as a line under a strong look). `ColorRange.feather` blurs the
+  colour weight only (`brush::blur_plane`), never the shape's — it has its own edge. `Area.brushes` multiplies brush
+  weights by the selection (`brush::apply`'s `limit`). The wheel (`colorwheel.js`)
+  lives in the dialog, hides on the panel's `pointerenter`, and takes Escape first
+  (`cancel` prevented); its live preview runs the JS maths on the displayed image.
+  **A press ends through `follow`** (pointerup on window, cancel, *or*
+  `lostpointercapture` — hiding drops the capture), and `previewRange(null)` cancels
+  a queued frame, or the grey preview comes back after the release.
 - **`regiontool.js`** is the box for both: one at a time (opening one fold closes the
   other), laid over the image like Redraw's mask; its pointerdown stops the pane's
   pan, so the middle button and Space+drag pan instead.

@@ -3351,11 +3351,21 @@ fn publish(
         }
         let fsr = lock(fsr);
         let mut base = fsr.filter(&img, filters)?;
+        // The area's selection, read once off the picture as the whole-image
+        // look left it: its own look goes in by it, and with `brushes` set
+        // the brushes are limited by it too.
+        let mut limit = None;
         if let Some(a) = area {
-            let local = fsr.filter(&base, &a.filters)?;
-            crate::area::composite(&mut base, &local, a);
+            let k = a.weights(&base);
+            if a.filters != Filters::NONE {
+                let local = fsr.filter(&base, &a.filters)?;
+                crate::area::composite_by(&mut base, &local, &k);
+            }
+            if a.brushes {
+                limit = Some(k);
+            }
         }
-        brush::apply(&mut base, brushes, |i, f| fsr.filter(i, f))?;
+        brush::apply(&mut base, brushes, limit.as_deref(), |i, f| fsr.filter(i, f))?;
         drop(fsr);
         base.save(display)
             .with_context(|| format!("saving {}", display.display()))?;
@@ -3802,6 +3812,8 @@ mod tests {
             feather: 0.0,
             invert: false,
             filters: Filters { tint: 0.2, ..Filters::NONE },
+            colors: None,
+            brushes: false,
         };
         assert_eq!(adjust_label(&Filters::NONE, Some(&a), false), "Adjust: area");
         assert_eq!(adjust_label(&f, Some(&a), false), "Adjust: Lightness +0.20, Vibrance +0.30 + area");

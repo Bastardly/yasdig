@@ -883,17 +883,26 @@
       <div class="lbzoom">
         <button type="button" id="lbtargetall" class="btn btn-choice active">Whole image</button>
         <button type="button" id="lbtargetarea" class="btn btn-choice">Area</button>
+        <button type="button" id="lbcolors" class="btn" title="Pick the hues, lightness and saturation the area selects">Colours…</button>
+      </div>
+      <p class="sub" id="lbcolorsline" hidden></p>
+      <div class="slider" id="lbcfeatherrow" hidden>
+        <div class="head"><label for="lbcfeather">Colour feather</label><span class="val" id="lbcfeatherval"></span></div>
+        <input id="lbcfeather" type="range" min="0" max="1" step="0.01" value="0">
       </div>
       <div id="lbareabox" hidden>
+        <!-- What it selects: a shape, colours, or both (`crate::area`). -->
         <div class="lbzoom">
+          <button type="button" id="lbshapewhole" class="btn btn-choice" title="No shape: select by colour alone">Whole</button>
           <button type="button" id="lbshaperect" class="btn btn-choice">Rectangle</button>
           <button type="button" id="lbshapeellipse" class="btn btn-choice">Ellipse</button>
         </div>
-        <div class="slider">
-          <div class="head"><label for="lbfeather">Feather</label><span class="val" id="lbfeatherval"></span></div>
+        <div class="slider" id="lbfeatherrow">
+          <div class="head"><label for="lbfeather">Shape feather</label><span class="val" id="lbfeatherval"></span></div>
           <input id="lbfeather" type="range" min="0" max="0.5" step="0.01" value="0.1">
         </div>
-        <div class="checks"><label><input type="checkbox" id="lbinvert"> Invert — everything but the shape</label></div>
+        <div class="checks"><label><input type="checkbox" id="lbinvert"> Invert — everything but the selection</label></div>
+        <div class="checks"><label><input type="checkbox" id="lbareabrushes"> Brushes only paint inside the selection</label></div>
         <button type="button" id="lbarearemove" class="btn btn-block">Remove area</button>
       </div>
     </details>

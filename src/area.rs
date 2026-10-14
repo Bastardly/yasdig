@@ -11,10 +11,13 @@
 //! same picture, larger — with nothing to translate. A crop is the one change
 //! of frame, and [`Area::crop`] maps it.
 //!
-//! One area per image. Brushes, when they come, paint the same weight this
-//! module computes analytically; the compositing below does not care where a
-//! weight came from.
+//! One area per image. **It selects by shape, by colour, or both**: the
+//! weight is the shape's (`Shape::Whole` is everywhere) times the colour
+//! range's (`crate::colorrange`), read off the picture as the whole-image
+//! look left it — what is on screen. With `brushes` set, the same weight
+//! limits the brushes too.
 
+use crate::colorrange::ColorRange;
 use crate::config::Filters;
 use anyhow::{bail, Result};
 use image::RgbaImage;
@@ -25,6 +28,8 @@ use serde::{Deserialize, Serialize};
 pub enum Shape {
     Rect,
     Ellipse,
+    /// No shape: the whole frame, for a selection by colour alone.
+    Whole,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -44,6 +49,12 @@ pub struct Area {
     /// The area's own look. Starts neutral; it is applied over the whole-image
     /// look, so a 0 here means "as the rest of the picture".
     pub filters: Filters,
+    /// What it selects by colour, besides the shape. `None` is every colour.
+    #[serde(default)]
+    pub colors: Option<ColorRange>,
+    /// The brushes paint only where this selects.
+    #[serde(default)]
+    pub brushes: bool,
 }
 
 /// The widest soft edge: half the shorter side, past which an ellipse's edge
@@ -65,13 +76,41 @@ impl Area {
         if !(0.0..=MAX_FEATHER).contains(&self.feather) {
             bail!("the area's feather must be between 0 and {MAX_FEATHER}");
         }
+        if let Some(c) = &self.colors {
+            c.validate()?;
+        }
         self.filters.validate("the area")
     }
 
     /// Whether it changes anything: an area whose filters are all off is a
-    /// shape with nothing in it, and publishing skips it outright.
+    /// shape with nothing in it, and publishing skips it outright — unless it
+    /// limits the brushes, which is a job of its own.
     pub fn acts(&self) -> bool {
-        self.filters != Filters::NONE
+        self.filters != Filters::NONE || self.brushes
+    }
+
+    /// Every pixel's weight: shape × colour, then inverted if asked. The
+    /// colour is read off `base`, the picture as the whole-image look left it.
+    pub fn weights(&self, base: &RgbaImage) -> Vec<f32> {
+        let (w, h) = base.dimensions();
+        let mut k: Vec<f32> = match self.colors.filter(ColorRange::narrows) {
+            Some(c) => {
+                let mut k: Vec<f32> = base.pixels().map(|p| c.weight([p.0[0], p.0[1], p.0[2]])).collect();
+                // The colour's own feather, before the shape's: the shape has
+                // its own soft edge, and blurring it again would widen it.
+                crate::brush::blur_plane(&mut k, w, h, c.feather_sigma(w, h));
+                k
+            }
+            None => vec![1.0; (w * h) as usize],
+        };
+        for (i, v) in k.iter_mut().enumerate() {
+            let (x, y) = (i as u32 % w, i as u32 / w);
+            *v *= self.shape_weight(x, y, w, h);
+            if self.invert {
+                *v = 1.0 - *v;
+            }
+        }
+        k
     }
 
     /// What it becomes when a pass replaces the pixels: the shape and the
@@ -90,6 +129,10 @@ impl Area {
     /// which leaves the inverse nothing either way it is read; dropping it is
     /// simpler than keeping a box that has left the frame.
     pub fn crop(&self, (x, y, w, h): (u32, u32, u32, u32), full_w: u32, full_h: u32) -> Option<Area> {
+        // No shape to move: a colour selection is the same in any frame.
+        if self.shape == Shape::Whole {
+            return Some(*self);
+        }
         let (fw, fh) = (full_w as f32, full_h as f32);
         let (cx, cy, cw, ch) = (x as f32 / fw, y as f32 / fh, w as f32 / fw, h as f32 / fh);
         let map = |v: f32, o: f32, s: f32| ((v - o) / s).clamp(0.0, 1.0);
@@ -108,15 +151,24 @@ impl Area {
         (a.x0 < a.x1 && a.y0 < a.y1).then_some(a)
     }
 
-    /// How much of the area's look pixel `(px, py)` of a `w × h` picture gets:
-    /// 1 inside, 0 outside, a smoothstep across the feathered edge.
+    /// How much of the area's look pixel `(px, py)` of a `w × h` picture gets
+    /// by its shape: 1 inside, 0 outside, a smoothstep across the feathered
+    /// edge, then inverted if asked. The colour range is [`Area::weights`]'.
+    /// The tests' view of one pixel; `publish` reads the whole map.
+    #[cfg(test)]
     pub fn weight(&self, px: u32, py: u32, w: u32, h: u32) -> f32 {
+        let inside = self.shape_weight(px, py, w, h);
+        if self.invert { 1.0 - inside } else { inside }
+    }
+
+    fn shape_weight(&self, px: u32, py: u32, w: u32, h: u32) -> f32 {
         // Pixel centres, in pixels, so a feather is round on a non-square frame.
         let (x, y) = (px as f32 + 0.5, py as f32 + 0.5);
         let (l, t) = (self.x0 * w as f32, self.y0 * h as f32);
         let (r, b) = (self.x1 * w as f32, self.y1 * h as f32);
         // Signed distance to the outline in pixels, negative inside.
         let d = match self.shape {
+            Shape::Whole => return 1.0,
             Shape::Rect => {
                 let dx = (l - x).max(x - r);
                 let dy = (t - y).max(y - b);
@@ -136,22 +188,24 @@ impl Area {
             }
         };
         let soft = self.feather * w.min(h) as f32;
-        let inside = if soft <= 0.0 {
+        if soft <= 0.0 {
             if d <= 0.0 { 1.0 } else { 0.0 }
         } else {
             let s = ((soft / 2.0 - d) / soft).clamp(0.0, 1.0);
             s * s * (3.0 - 2.0 * s)
-        };
-        if self.invert { 1.0 - inside } else { inside }
+        }
     }
 }
 
 /// Blend `local` (the picture with the area's look on top) into `base` by the
 /// area's weight. A pixel at weight 0 keeps `base`'s exact bytes and one at 1
 /// takes `local`'s, so outside the shape and its edge nothing moves at all.
+/// The tests' shorthand: `publish` reads the weights once and reuses them for
+/// the brushes, so it calls [`composite_by`] itself.
+#[cfg(test)]
 pub fn composite(base: &mut RgbaImage, local: &RgbaImage, area: &Area) {
-    let (w, h) = base.dimensions();
-    blend(base, local, |x, y| area.weight(x, y, w, h));
+    let k = area.weights(base);
+    composite_by(base, local, &k);
 }
 
 /// [`composite`] by a weight per pixel, row-major, 0..1 — a brush's painted
@@ -197,7 +251,55 @@ mod tests {
             feather: 0.1,
             invert: false,
             filters: Filters { lightness: 0.3, ..Filters::NONE },
+            colors: None,
+            brushes: false,
         }
+    }
+
+    /// Selecting by colour: shape × colour, so a Whole area with a hue range
+    /// picks exactly that hue, an ellipse with one picks it inside only, and
+    /// inverting turns the product round.
+    #[test]
+    fn an_area_selects_by_colour_times_shape() {
+        let red = crate::colorrange::ColorRange {
+            hue: Some(crate::colorrange::Ramp { a: 340.0, b: 350.0, c: 400.0, d: 410.0 }),
+            ..Default::default()
+        };
+        // Left half red, right half blue.
+        let base = RgbaImage::from_fn(8, 4, |x, _| {
+            if x < 4 { image::Rgba([220, 30, 40, 255]) } else { image::Rgba([30, 60, 220, 255]) }
+        });
+        let whole = Area { shape: Shape::Whole, colors: Some(red), feather: 0.0, ..area(Shape::Rect) };
+        let k = whole.weights(&base);
+        assert!((k[0] - 1.0).abs() < 1e-3 && k[7] == 0.0, "red picked, blue not: {k:?}");
+        let inv = Area { invert: true, ..whole }.weights(&base);
+        assert!(inv[0] < 1e-3 && inv[7] == 1.0);
+        // A box over the right half only: the red is outside it, so nothing.
+        let boxed = Area { shape: Shape::Rect, x0: 0.5, y0: 0.0, x1: 1.0, y1: 1.0, ..whole };
+        assert!(boxed.weights(&base).iter().all(|&v| v == 0.0));
+        // A Whole area survives any crop unchanged.
+        assert_eq!(whole.crop((1, 1, 4, 2), 8, 4), Some(whole));
+        // Limiting the brushes is a job of its own, even with no look.
+        assert!(Area { filters: Filters::NONE, brushes: true, ..whole }.acts());
+    }
+
+    #[test]
+    fn a_colour_feather_softens_where_the_colour_changes() {
+        let red = crate::colorrange::ColorRange {
+            hue: Some(crate::colorrange::Ramp { a: 340.0, b: 350.0, c: 400.0, d: 410.0 }),
+            ..Default::default()
+        };
+        // 200 × 100, left half red, right half blue: σ at 1 is 2 px.
+        let base = RgbaImage::from_fn(200, 100, |x, _| {
+            if x < 100 { image::Rgba([220, 30, 40, 255]) } else { image::Rgba([30, 60, 220, 255]) }
+        });
+        let at = |k: &[f32], x: usize| k[50 * 200 + x];
+        let hard = Area { shape: Shape::Whole, colors: Some(red), ..area(Shape::Rect) }.weights(&base);
+        assert!(at(&hard, 99) > 0.99 && at(&hard, 100) == 0.0);
+        let soft = Area { shape: Shape::Whole, colors: Some(ColorRange { feather: 1.0, ..red }), ..area(Shape::Rect) };
+        let k = soft.weights(&base);
+        assert!((0.5..0.99).contains(&at(&k, 99)) && (0.01..0.5).contains(&at(&k, 100)), "{} {}", at(&k, 99), at(&k, 100));
+        assert!(at(&k, 10) > 0.99 && at(&k, 190) < 0.01, "far from the edge, untouched");
     }
 
     #[test]

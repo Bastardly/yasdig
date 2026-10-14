@@ -3,6 +3,8 @@ import { S, P, escErr } from './state.js';
 import { onJobs, passRunning } from './jobs.js';
 import { regionTool } from './regiontool.js';
 import { brushPaint } from './brushpaint.js';
+import { colorWheel } from './colorwheel.js';
+import { FEATHER_REACH, describe, narrows, weight as colorWeight } from './colorrange.js';
 
 // The viewer's panel, top to bottom. This list is the only place a filter is
 // declared: the markup, the labels, setPost, the /adjust body and the
@@ -169,8 +171,10 @@ function viewerSummaries() {
   const a = areaState();
   const changes = a ? Object.values(a.filters).filter((x) => Math.abs(x) > 0.004).length : 0;
   say('sum-lb-area', a
-    ? [a.shape === 'ellipse' ? 'ellipse' : 'rectangle',
-      `${changes} change${changes === 1 ? '' : 's'}`, a.invert ? 'inverted' : null]
+    ? [{ ellipse: 'ellipse', rect: 'rectangle', whole: 'whole' }[a.shape],
+      narrows(a.colors) ? describe(a.colors) : null,
+      `${changes} change${changes === 1 ? '' : 's'}`, a.invert ? 'inverted' : null,
+      a.brushes ? 'limits brushes' : null]
       .filter(Boolean).join(' · ')
     : 'none', !!a);
   const cropped = isCrop();
@@ -230,7 +234,8 @@ function showCropTool() {
 }
 
 function showAreaTool() {
-  if (!area) { box.hide(); toolMode = null; return; }
+  // No box for a selection by colour alone.
+  if (!area || area.shape === 'whole') { box.hide(); toolMode = null; return; }
   toolMode = 'area';
   const w = $('lbimg').naturalWidth || 1, h = $('lbimg').naturalHeight || 1;
   box.show(
@@ -412,13 +417,109 @@ function drawHistory() {
 function syncArea() {
   $('lbareabox').hidden = !area;
   if (area) {
-    $('lbshaperect').classList.toggle('active', area.shape === 'rect');
-    $('lbshapeellipse').classList.toggle('active', area.shape === 'ellipse');
+    for (const s of ['whole', 'rect', 'ellipse']) {
+      $(`lbshape${s}`).classList.toggle('active', area.shape === s);
+    }
+    $('lbfeatherrow').hidden = area.shape === 'whole';
     $('lbfeather').value = area.feather;
     $('lbfeatherval').textContent = area.feather.toFixed(2);
     $('lbinvert').checked = area.invert;
+    $('lbareabrushes').checked = !!area.brushes;
+  } else {
+    wheel?.hide();
   }
+  // Colours… is beside Whole image and Area, so its line is too: shown once
+  // there is an area, the feather once the colours narrow anything.
+  $('lbcolorsline').hidden = !area;
+  $('lbcolorsline').textContent = narrows(area?.colors) ? describe(area.colors) : 'Every colour';
+  $('lbcfeatherrow').hidden = !narrows(area?.colors);
+  const cf = area?.colors?.feather ?? 0;
+  $('lbcfeather').value = cf;
+  $('lbcfeatherval').textContent = cf.toFixed(2);
   if (toolMode === 'area' && !area) { box.hide(); toolMode = null; }
+}
+
+// ---- Selecting by colour --------------------------------------------------------
+//
+// The wheel (`colorwheel.js`) edits `area.colors`. While a dot is held, the
+// picture greys out what isn't selected — worked out here, on the displayed
+// image, with the server's own maths (`colorrange.js`), so it keeps up with
+// the drag; the server re-filters when the dot is let go. The preview shows
+// the colours alone; the shape's box is drawn by the area's own tool.
+let wheel = null;
+let previewPixels = null; // {key, w, h, data} of the displayed image
+let previewFrame = 0;
+let previewWant = null;
+
+// At most one frame's work per screen refresh, on the newest range. Letting
+// go cancels a frame still waiting: one that ran after the hide would put
+// the grey picture back and leave it there.
+function previewRange(range) {
+  const c = $('lbselpreview');
+  previewWant = range;
+  if (!range) {
+    cancelAnimationFrame(previewFrame);
+    previewFrame = 0;
+    c.hidden = true;
+    return;
+  }
+  const img = $('lbimg');
+  if (previewFrame) return;
+  previewFrame = requestAnimationFrame(() => {
+    previewFrame = 0;
+    const range = previewWant;
+    if (!range) return;
+    // The displayed image, at most 1024 px on its long side, read once per
+    // picture: millions of pixels per drag move would not keep up.
+    const k = Math.min(1, 1024 / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * k)), h = Math.max(1, Math.round(img.naturalHeight * k));
+    const key = `${img.src.length}:${img.src.slice(-64)}:${w}`;
+    if (previewPixels?.key !== key) {
+      const off = document.createElement('canvas');
+      off.width = w;
+      off.height = h;
+      const ctx = off.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, w, h);
+      previewPixels = { key, w, h, data: ctx.getImageData(0, 0, w, h).data };
+    }
+    c.width = w;
+    c.height = h;
+    c.style.left = `${img.offsetLeft}px`;
+    c.style.top = `${img.offsetTop}px`;
+    c.style.width = `${img.clientWidth}px`;
+    c.style.height = `${img.clientHeight}px`;
+    const out = c.getContext('2d').createImageData(w, h);
+    const src = previewPixels.data;
+    const inv = !!area?.invert;
+    for (let i = 0; i < src.length; i += 4) {
+      let v = colorWeight(range, src[i], src[i + 1], src[i + 2]);
+      if (inv) v = 1 - v;
+      const g = Math.round(v * 255);
+      out.data[i] = out.data[i + 1] = out.data[i + 2] = g;
+      out.data[i + 3] = 255;
+    }
+    c.getContext('2d').putImageData(out, 0, 0);
+    // The feather as the server spreads it, in the displayed picture's pixels.
+    const sigma = (range.feather ?? 0) * FEATHER_REACH * Math.min(img.clientWidth, img.clientHeight);
+    c.style.filter = sigma > 0.25 ? `blur(${sigma.toFixed(1)}px)` : '';
+    c.hidden = false;
+  });
+}
+
+// The wheel's square: half the window's height, inside the picture's pane,
+// centred on it, in the dialog's coordinates — and the dialog's size, which
+// is how far the user may drag it (`colorwheel.js` remembers where).
+function wheelPlace() {
+  const pane = $('lbview').getBoundingClientRect();
+  const dlg = $('lightbox').getBoundingClientRect();
+  const size = Math.round(Math.min(window.innerHeight * 0.5, pane.width * 0.9, pane.height * 0.9));
+  return {
+    size,
+    left: pane.left - dlg.left + (pane.width - size) / 2,
+    top: pane.top - dlg.top + (pane.height - size) / 2,
+    width: dlg.width,
+    height: dlg.height,
+  };
 }
 
 // The crop or the undo answered with a new state of the image: the pane that
@@ -778,25 +879,83 @@ export function initViewer() {
     stepRequest('/history/goto', { index });
   });
 
-  // The area: made on first choosing it, a centred ellipse.
+  // The area: made on first choosing it. The whole picture, since picking
+  // by colour usually means "everywhere these colours are"; a shape is one
+  // click away.
+  const ensureArea = () => {
+    if (area) return;
+    area = {
+      shape: 'whole', x0: 0.3, y0: 0.3, x1: 0.7, y1: 0.7, feather: 0.1, invert: false,
+      filters: {}, colors: null, brushes: false,
+    };
+    syncArea();
+  };
   $('lbtargetarea').addEventListener('click', () => {
-    if (!area) {
-      area = { shape: 'ellipse', x0: 0.3, y0: 0.3, x1: 0.7, y1: 0.7, feather: 0.1, invert: false, filters: {} };
-      syncArea();
-    }
+    ensureArea();
     setTarget('area');
     if (areaFold.open) showAreaTool();
   });
   $('lbtargetall').addEventListener('click', () => setTarget('all'));
-  for (const [id, shape] of [['lbshaperect', 'rect'], ['lbshapeellipse', 'ellipse']]) {
-    $(id).addEventListener('click', () => {
+  for (const shape of ['whole', 'rect', 'ellipse']) {
+    $(`lbshape${shape}`).addEventListener('click', () => {
       if (!area) return;
       area.shape = shape;
       syncArea();
+      if (shape === 'whole') { box.hide(); toolMode = null; } else if (areaFold.open) showAreaTool();
       box.set({ shape });
       schedulePost();
     });
   }
+  $('lbareabrushes').addEventListener('change', () => {
+    if (!area) return;
+    area.brushes = $('lbareabrushes').checked;
+    viewerSummaries();
+    schedulePost();
+  });
+
+  // The colour wheel. It sits over the picture and gets out of the way when
+  // the pointer goes back to the panel, so the sliders can be judged on the
+  // picture; Colours… brings it back.
+  const pv = document.createElement('canvas');
+  pv.id = 'lbselpreview';
+  pv.className = 'selpreview';
+  pv.hidden = true;
+  $('lbview').append(pv);
+  wheel = colorWheel({
+    host: $('lightbox'),
+    place: wheelPlace,
+    onPreview: previewRange,
+    onChange: (range) => {
+      if (!area) return;
+      // Kept whole even when it narrows nothing, so the feather survives a
+      // channel reset; the server reads only a range that narrows.
+      area.colors = range;
+      syncArea();
+      viewerSummaries();
+      schedulePost();
+    },
+  });
+  wheel.init();
+  // Colours… makes the area if there is none (the whole picture), points the
+  // sliders at it, and opens the wheel: picking colours is picking an area.
+  $('lbcolors').addEventListener('click', () => {
+    ensureArea();
+    setTarget('area');
+    if (areaFold.open && area.shape !== 'whole') showAreaTool();
+    wheel.show(area.colors);
+  });
+  $('lbcfeather').addEventListener('input', () => {
+    if (!area?.colors) return;
+    area.colors = { ...area.colors, feather: Number($('lbcfeather').value) };
+    $('lbcfeatherval').textContent = area.colors.feather.toFixed(2);
+    schedulePost();
+  });
+  document.querySelector('#lightbox .lbside').addEventListener('pointerenter', () => wheel.hide());
+  $('lbview').addEventListener('pointerdown', () => wheel.hide());
+  // Escape closes the wheel first, and the viewer only on a second press.
+  $('lightbox').addEventListener('cancel', (e) => {
+    if (wheel.shown()) { e.preventDefault(); wheel.hide(); }
+  });
   $('lbfeather').addEventListener('input', () => {
     if (!area) return;
     area.feather = Number($('lbfeather').value);
@@ -811,6 +970,7 @@ export function initViewer() {
   });
   $('lbarearemove').addEventListener('click', () => {
     setTarget('all');
+    wheel.hide();
     area = null;
     syncArea();
     schedulePost();
