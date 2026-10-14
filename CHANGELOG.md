@@ -3,6 +3,15 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### New
+
+- **Brushes in the viewer**: Dodge, Burn, Saturate, Desaturate, Blur and Sharpen,
+  painted where you want them with a soft or hard brush. Each tool's strength stays
+  adjustable after you paint, until *Apply adjustments* makes the strokes part of
+  the picture.
+
 ## 0.1.5 — 2026-10-13
 
 ### New

@@ -53,6 +53,8 @@ fn body_limit(path: &str) -> usize {
         // A mask at the image's size, base64 in JSON. Mostly one colour, so
         // small — but a busy one at 3072² is well past `MAX_BODY`.
         "/redraw" => MAX_UPLOAD,
+        // A brush tool's whole mask, the same shape as Redraw's.
+        "/brush" => MAX_UPLOAD,
         // A whole PNG, read for its text chunks.
         "/png-settings" => MAX_UPLOAD,
         _ => MAX_BODY,

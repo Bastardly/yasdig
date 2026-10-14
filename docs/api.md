@@ -305,6 +305,13 @@ needs a Vulkan device and nothing else.
   short side), "invert", "filters": { …the same keys… } }`, applied over the whole
   picture's filters inside the shape. Absent keeps it, `null` removes it. Every result
   carries `area` (or `null`).
+- `POST /brush` — `{ "image_id": 3, "tool": "dodge", "amount": 0.4, "mask":
+  "data:image/png;base64,…" }`. Paints with one brush tool (`blur`, `sharpen`, `dodge`,
+  `burn`, `saturate`, `desaturate`): `mask` is the tool's whole mask at the image's
+  size, its alpha the weight; `"mask": null` clears the tool; no `mask` sets only the
+  `amount` (0..1). Display lane; same response shape as `/adjust`. Every result
+  carries `brushes`, `{ tool: amount }` for each tool holding strokes, and
+  `GET /brush/{image_id}/{tool}.png` serves a tool's mask back.
 - `POST /apply` — `{ "image_id": 3 }`. *Apply adjustments*: the image as shown (filters
   and area in it) becomes the image itself, as a history step labelled with what
   moved; the filters and area reset to none and the slider start points to 0. Passes

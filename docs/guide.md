@@ -800,6 +800,21 @@ subject, for instance. **Remove area** drops it.
 The area follows the picture through a Refine or Hi-res, keeps its colour settings and
 resets its detail ones, as the whole picture's do. A crop moves it with the picture.
 
+### Brushes
+
+The **Brushes** fold paints an effect exactly where you want it: **Dodge** lightens,
+**Burn** darkens, **Saturate** and **Desaturate** add and take away colour, **Blur**
+softens, **Sharpen** crisps edges. Pick a tool and paint on the picture; the effect
+appears when you let go. **Amount** sets how strong the chosen tool is, and moving it
+changes every stroke of that tool at once. **Size** and **Softness** shape the brush
+(the ring shows it). Paint with the right button, or tick **Erase**, to take paint
+back off; **Clear this tool** and **Clear all** start over. The painted mask shows in
+red while the pointer is over the picture. At 1:1, pan with the middle button or
+Space+drag.
+
+Strokes stay live until you apply: a crop keeps them on the same pixels, a Hi-res
+carries them to the bigger picture, and Reset clears them with the rest of the look.
+
 ### Apply and History
 
 The sliders, the area and a crop are all live until you decide otherwise.

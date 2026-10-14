@@ -105,6 +105,7 @@
 //! them arrive only once there was nothing left to report or to stop.
 
 mod area;
+mod brush;
 mod bundle;
 mod config;
 mod catalog;
@@ -168,6 +169,8 @@ enum JobKind {
     /// Make the look part of the picture, as a history step
     /// (`Display::apply_look`).
     Apply(u64),
+    /// Paint with a brush tool or change its amount (`Display::brush`).
+    Brush { id: u64, tool: brush::Tool, amount: Option<f32>, mask: Option<Option<Vec<u8>>> },
     /// Reopen an archived generation as a live result. Needs a worker because
     /// it ends in a `publish`, and because the new `Pending` lives there. The
     /// shelf rides along because the two grids — Current and Favorites — hold
@@ -504,6 +507,9 @@ fn run(args: &[String]) -> Result<()> {
                     }
                     JobKind::Crop { id, rect } => display.crop(id, rect).map(|r| result_json(&r)),
                     JobKind::Apply(id) => display.apply_look(id).map(|r| result_json(&r)),
+                    JobKind::Brush { id, tool, amount, mask } => {
+                        display.brush(id, tool, amount, mask).map(|r| result_json(&r))
+                    }
                     JobKind::Open { id, shelf } => {
                         display.open(&id, shelf).map(|r| result_json(&r))
                     }
@@ -789,6 +795,14 @@ fn route(
         ("POST", "/history/goto") => handle_goto(conn, lanes, &req.body),
         ("POST", "/crop") => handle_crop(conn, lanes, &req.body),
         ("POST", "/apply") => handle_apply(conn, lanes, &req.body),
+        ("POST", "/brush") => handle_brush(conn, lanes, &req.body),
+        // A brush tool's mask, for the page to paint on again.
+        ("GET", p) if p.starts_with("/brush/") && p.ends_with(".png") => {
+            match brush_path(p).and_then(|(id, tool)| pipeline::Retained::brush_mask(&lanes.retained, id, tool)) {
+                Some(png) => conn.respond_with(200, "image/png", "Cache-Control: no-store\r\n", &png),
+                None => conn.respond(404, "text/plain", b"not found"),
+            }
+        }
         ("POST", "/history/view") => handle_view_step(conn, lanes, &req.body),
         // A history step's thumbnail. Off the queue like every thumbnail; both
         // numbers are the whole whitelist.
@@ -2425,11 +2439,17 @@ impl RedrawDto {
     /// a canvas hands the page, and stripping it there would be one more place
     /// to get the prefix wrong.
     fn mask_png(&self) -> Result<Vec<u8>> {
-        let b64 = self.mask.split_once("base64,").map_or(self.mask.as_str(), |(_, b)| b);
-        base64::engine::general_purpose::STANDARD
-            .decode(b64.trim())
-            .context("the mask is not valid base64")
+        data_url_bytes(&self.mask)
     }
+}
+
+/// A `data:image/png;base64,…` URL (or bare base64) as bytes: what a canvas
+/// hands the page, for Redraw's mask and a brush's.
+fn data_url_bytes(url: &str) -> Result<Vec<u8>> {
+    let b64 = url.split_once("base64,").map_or(url, |(_, b)| b);
+    base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .context("the mask is not valid base64")
 }
 
 /// `POST /edit {image_id, prompt, references?, expand?}`: change the image by
@@ -2655,6 +2675,45 @@ fn handle_adjust(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Res
         ),
         None => Ok(()),
     }
+}
+
+/// `POST /brush {image_id, tool, amount?, mask?}`: paint with one brush tool
+/// (`mask` a PNG data URL of the whole mask), clear it (`mask: null`), or —
+/// with no `mask` — set only how strong it is. Display lane.
+fn handle_brush(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+        tool: String,
+        #[serde(default)]
+        amount: Option<f32>,
+        #[serde(default, deserialize_with = "double_option")]
+        mask: Option<Option<String>>,
+    }
+    let Some(d) = parse_json::<Dto>(conn, body)? else {
+        return Ok(());
+    };
+    let Some(tool) = brush::Tool::parse(&d.tool) else {
+        return conn.respond(400, "application/json", error_json(&format!("no brush called '{}'", d.tool)).as_bytes());
+    };
+    let mask = match d.mask {
+        None => None,
+        Some(None) => Some(None),
+        Some(Some(url)) => match data_url_bytes(&url) {
+            Ok(png) => Some(Some(png)),
+            Err(e) => return conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
+        },
+    };
+    submit(conn, &lanes.display, JobKind::Brush { id: d.image_id, tool, amount: d.amount, mask }, 400)
+}
+
+/// `/brush/{image_id}/{tool}.png` → the id and the tool, or `None`.
+fn brush_path(path: &str) -> Option<(u64, brush::Tool)> {
+    let (id, tool) = path.strip_prefix("/brush/")?.strip_suffix(".png")?.split_once('/')?;
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((id.parse().ok()?, brush::Tool::parse(tool)?))
 }
 
 /// `POST /apply {image_id}`: *Apply adjustments* — the look becomes the
@@ -2908,10 +2967,11 @@ fn result_json(res: &GenResult) -> String {
     let filters = serde_json::to_string(&res.filters).unwrap_or_else(|_| "{}".to_string());
     let start = serde_json::to_string(&res.start).unwrap_or_else(|_| "{}".to_string());
     let area = serde_json::to_string(&res.area).unwrap_or_else(|_| "null".to_string());
+    let brushes = serde_json::to_string(&res.brushes).unwrap_or_else(|_| "{}".to_string());
     format!(
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
          \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_hires\":{},\"model\":{},\"can_edit\":{},\
-         \"filters\":{},\"filters_start\":{},\"area\":{},\"prompt\":{},\
+         \"filters\":{},\"filters_start\":{},\"area\":{},\"brushes\":{},\"prompt\":{},\
          \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{},\"weights\":{},\"load_ms\":{},\"stages\":{}}}}}",
         b64,
         res.width,
@@ -2935,6 +2995,7 @@ fn result_json(res: &GenResult) -> String {
         filters,
         start,
         area,
+        brushes,
         // What was actually conditioned, so the page can show a `{variable}`
         // prompt's roll under the image.
         json_str(&res.prompt),
@@ -3823,6 +3884,14 @@ mod tests {
     }
 
     /// The history thumbnail's guard: two whole numbers or nothing.
+    #[test]
+    fn a_brush_mask_path_is_an_id_and_a_tool() {
+        assert_eq!(super::brush_path("/brush/3/dodge.png"), Some((3, crate::brush::Tool::Dodge)));
+        for bad in ["/brush/3/smudge.png", "/brush/a/blur.png", "/brush//blur.png", "/brush/3/../blur.png", "/brush/3.png"] {
+            assert_eq!(super::brush_path(bad), None, "{bad}");
+        }
+    }
+
     #[test]
     fn a_history_path_is_two_numbers() {
         assert_eq!(history_path("/history/3/0.png"), Some((3, 0)));

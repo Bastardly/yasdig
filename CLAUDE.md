@@ -916,6 +916,14 @@ Label above the track; panel fixed 300 px and scrolls. **The panel is folds** (a
 - **`regiontool.js`** is the box for both: one at a time (opening one fold closes the
   other), laid over the image like Redraw's mask; its pointerdown stops the pane's
   pan, so the middle button and Space+drag pan instead.
+- **Brushes** (`crate::brush`, `brushpaint.js`): a mask file plus an amount per tool
+  on `Pending.brushes`, run in `publish` after the area (`brush::apply`; Blur on the
+  CPU, the rest `Fsr::filter`), blended by `area::composite_by` — **one blend** with
+  the area's. Masks are pixels: `crop` crops them, anything else resizes on read.
+  Scratch-owned (`remove_files`; a replaced mask is deleted). `/brush` has the upload
+  body limit; its answer lands like a slider's (`setResultImage`, never re-centres),
+  serialized on `brushChain`, which `stepRequest` also waits for. Crop, Area and
+  Brushes folds exclude each other (one owns the pointer).
 - **Crop, Apply and History jumps go through `stepRequest`** (one at a time, after
   `settlePost` lets a pending `/adjust` land) and answer through the pane's handler
   (`onViewerResult`: `render` on Image, the Outputs viewer's own). All three are

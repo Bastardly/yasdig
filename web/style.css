@@ -725,6 +725,25 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    everything outside a box, and `.region` clips it to the picture. */
 .region.dim .regionbox { box-shadow: 0 0 0 100vmax var(--scrim-soft); }
 .regionbox.ellipse, .featherin.ellipse, .featherout.ellipse { border-radius: 50%; }
+/* The brushes' painting layer (`brushpaint.js`): the chosen tool's mask in
+   the mask colour, over the picture like Redraw's, shown while the pointer is
+   over it or a stroke is going. The ring is the brush. */
+.brushview { position: absolute; cursor: none; touch-action: none; opacity: 0; transition: opacity .12s; }
+.brushview:hover, .brushview.painting { opacity: 1; }
+.brushring {
+  position: absolute; pointer-events: none; box-sizing: border-box;
+  border: 1px solid var(--state); border-radius: 50%; box-shadow: 0 0 0 1px var(--on-state);
+}
+/* Three to a row in a 300 px panel: `minmax(0, …)` so a column may be
+   narrower than its word (a bare `1fr` won't shrink below "Desaturate" and
+   pushed the row under the scrollbar), and the choice set's wide padding
+   trimmed to fit. */
+.lbtools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-1); margin-top: var(--sp-1); }
+.lbtools .btn-choice {
+  display: block; min-width: 0; padding: var(--sp-2) var(--sp-1); text-align: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* Where the area's blend starts and ends. */
 .featherin, .featherout { border: 1px dashed var(--text-dim); pointer-events: none; }
 .region .handle {

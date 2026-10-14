@@ -897,6 +897,36 @@
         <button type="button" id="lbarearemove" class="btn btn-block">Remove area</button>
       </div>
     </details>
+    <!-- Paint an effect where you want it. One mask and one amount per tool
+         (`crate::brush`); live until Apply bakes them in (`brushpaint.js`). -->
+    <details id="fold-lb-brush" class="fold">
+      <summary>Brushes <span class="foldstate" id="sum-lb-brush"></span></summary>
+      <div class="lbtools">
+        <button type="button" data-tool="dodge" class="btn btn-choice active" title="Lighten where you paint">Dodge</button>
+        <button type="button" data-tool="burn" class="btn btn-choice" title="Darken where you paint">Burn</button>
+        <button type="button" data-tool="saturate" class="btn btn-choice" title="More colour where you paint">Saturate</button>
+        <button type="button" data-tool="desaturate" class="btn btn-choice" title="Less colour where you paint">Desaturate</button>
+        <button type="button" data-tool="blur" class="btn btn-choice" title="Soften where you paint">Blur</button>
+        <button type="button" data-tool="sharpen" class="btn btn-choice" title="Crisper edges where you paint">Sharpen</button>
+      </div>
+      <div class="slider">
+        <div class="head"><label for="lbbamount">Amount</label><span class="val" id="lbbamountval"></span></div>
+        <input id="lbbamount" type="range" min="0" max="1" step="0.01" value="0.5">
+      </div>
+      <div class="slider">
+        <div class="head"><label for="lbbsize">Size</label><span class="val" id="lbbsizeval"></span></div>
+        <input id="lbbsize" type="range" min="4" max="400" step="1" value="60">
+      </div>
+      <div class="slider">
+        <div class="head"><label for="lbbsoft">Softness</label><span class="val" id="lbbsoftval"></span></div>
+        <input id="lbbsoft" type="range" min="0" max="1" step="0.01" value="0.5">
+      </div>
+      <div class="checks"><label><input type="checkbox" id="lbberase"> Erase — or paint with the right button</label></div>
+      <div class="row spaced">
+        <div><button type="button" id="lbbclear" class="btn btn-block">Clear this tool</button></div>
+        <div><button type="button" id="lbbclearall" class="btn btn-block">Clear all</button></div>
+      </div>
+    </details>
     <!-- Every state of this picture — Apply and Crop each add one, as the
          Refine dialog's passes do. The same list as that dialog's History
          (`historyMarkup`); click one to go back or forward to it. -->

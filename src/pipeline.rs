@@ -27,6 +27,7 @@
 //! rather than a reason to regenerate.
 
 use crate::area::Area;
+use crate::brush::{self, Brushes, Stroke, Tool};
 use crate::config::{Config, Filters, FiltersPatch, LoraRef, Profile, MAX_STRENGTH, MIN_STRENGTH};
 use crate::redraw;
 use crate::fsr::Fsr;
@@ -162,6 +163,14 @@ impl Retained {
             }
             _ => false,
         }
+    }
+
+    /// One brush tool's mask, as the page painted it: for resuming after a
+    /// crop, a pass or a reopened viewer, when the page's own canvas is gone
+    /// or the wrong size. Connection thread; a file read.
+    pub fn brush_mask(this: &Mutex<Retained>, id: u64, tool: Tool) -> Option<Vec<u8>> {
+        let path = lock(this).live.get(&id)?.pending.brushes.get(&tool)?.mask.clone();
+        std::fs::read(path).ok()
     }
 
     /// A history step's thumbnail: its PNG bytes, made on first request and
@@ -739,6 +748,8 @@ pub struct GenResult {
     /// The area with a look of its own, if the image has one, so a reopened
     /// viewer shows it again.
     pub area: Option<Area>,
+    /// Which brush tools hold strokes, and at what amount.
+    pub brushes: BTreeMap<Tool, f32>,
     /// The prompt as it was actually conditioned — with every `{variable}`
     /// already drawn. It is the retained one, so a refine or a hi-res reports
     /// the sentence that made the image rather than whatever is in the box now,
@@ -783,6 +794,11 @@ struct Pending {
     /// look, like `filters`: carried across a pass with its detail reset
     /// (`Area::restart`), mapped by a crop, never in a `Snapshot`.
     area: Option<Area>,
+    /// The brushes' strokes: a mask file and an amount per tool
+    /// (`crate::brush`). The look again — carried across a pass (resized when
+    /// read), cropped by a crop, baked and cleared by Apply, never in a
+    /// `Snapshot` — and scratch-owned, so `remove_files` deletes the masks.
+    brushes: Brushes,
     prompt: String,
     negative: Option<String>,
     /// The prompt and negative as they were typed, before `variables::expand`
@@ -978,6 +994,9 @@ impl Pending {
     /// thumbnail — the current one among them.
     fn remove_files(&self) {
         let _ = std::fs::remove_file(&self.display);
+        for b in self.brushes.values() {
+            let _ = std::fs::remove_file(&b.mask);
+        }
         for s in self.steps() {
             s.remove_files();
         }
@@ -1419,7 +1438,7 @@ impl Engine {
 
         // 3) Sharpen for display.
         let filters = Filters::starting_at(tpl.sharpness, tpl.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None, &NO_BRUSHES)?;
         let fsr_ms = t.elapsed().as_millis() - upscale_ms;
 
         // Past every `?`: these two are the result, and the `Pending` below owns
@@ -1477,6 +1496,7 @@ impl Engine {
             display,
             filters,
             area: None,
+            brushes: Brushes::new(),
             profile: profile.clone(),
             prompt: prompt.clone(),
             negative: negative.clone(),
@@ -1677,7 +1697,7 @@ impl Engine {
         //    sd.cpp rounds an init image to the latent grid and only warns.
         let t = Instant::now();
         let filters = Filters::starting_at(profile.sharpness, profile.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None, &NO_BRUSHES)?;
         let fsr_ms = fsr_ms_in + t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -1723,6 +1743,7 @@ impl Engine {
             display,
             filters,
             area: None,
+            brushes: Brushes::new(),
             profile,
             prompt: prompt.clone(),
             negative: negative.clone(),
@@ -2030,7 +2051,7 @@ impl Engine {
         // return a slightly different size than it was given.
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
         let area = p.area.as_ref().map(Area::restart);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref())?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2164,7 +2185,7 @@ impl Engine {
         base.save(&raw).with_context(|| format!("writing {}", raw.display()))?;
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
         let area = p.area.as_ref().map(Area::restart);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref())?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2280,7 +2301,7 @@ impl Engine {
         // A new size, so the detail filters restart for it; the grade carries.
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
         let area = p.area.as_ref().map(Area::restart);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref())?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes)?;
         let fsr_ms = t.elapsed().as_millis();
         scratch.keep(&raw);
         scratch.keep(&display);
@@ -2382,7 +2403,7 @@ impl Engine {
         img.to_rgb8().save(&raw).with_context(|| format!("writing {}", raw.display()))?;
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
         let area = p.area.as_ref().map(Area::restart);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref())?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2442,7 +2463,7 @@ impl Engine {
         let t = Instant::now();
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
         let area = p.area.as_ref().map(Area::restart);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref())?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2586,7 +2607,7 @@ impl Engine {
         // 4) Sharpen for display.
         let filters = p.filters.restart(p.profile.sharpness, p.profile.clarity);
         let area = p.area.as_ref().map(Area::restart);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref())?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, area.as_ref(), &p.brushes)?;
         fsr_ms += t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2701,7 +2722,7 @@ impl Display {
         // Deliberately no `Scratch` here, unlike the three passes above. This
         // writes over a file the retained `Pending` already owns, so putting it
         // under the guard would mean a failed drag deleting a live image.
-        let (png, w, h) = publish(&self.fsr, &p.raw, &p.display, &p.filters, p.area.as_ref())?;
+        let (png, w, h) = publish(&self.fsr, &p.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes)?;
         let fsr_ms = t.elapsed().as_millis();
 
         let entry = Pending {
@@ -2728,7 +2749,7 @@ impl Display {
         let history = p.steps();
         let s = p.step(index).with_context(|| format!("this image has no step {index}"))?;
         let t = Instant::now();
-        let (png, w, h) = publish(&self.fsr, &s.raw, &p.display, &p.filters, p.area.as_ref())?;
+        let (png, w, h) = publish(&self.fsr, &s.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes)?;
         let fsr_ms = t.elapsed().as_millis();
         let was = p.raw.clone();
         let entry = Pending {
@@ -2774,9 +2795,22 @@ impl Display {
             .save(&raw)
             .with_context(|| format!("writing {}", raw.display()))?;
         let area = p.area.and_then(|a| a.crop((x, y, w, h), p.raw_w, p.raw_h));
+        // Strokes are in pixels, so they are cut as the picture is. One that
+        // can't be read is dropped rather than failing the crop.
+        let mut brushes = Brushes::new();
+        for (tool, b) in &p.brushes {
+            let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let mask = scratch.path(self.scratch.join(format!("{id}-brush-{}-{n}.png", tool.as_str())));
+            match brush::crop_mask(&b.mask, &mask, (x, y, w, h), p.raw_w, p.raw_h) {
+                Ok(()) => {
+                    brushes.insert(*tool, Stroke { mask, amount: b.amount });
+                }
+                Err(e) => eprintln!("[yasdig] dropping the {} strokes in the crop: {e:#}", tool.as_str()),
+            }
+        }
 
         let t = Instant::now();
-        let (png, out_w, out_h) = publish(&self.fsr, &raw, &display, &p.filters, area.as_ref())?;
+        let (png, out_w, out_h) = publish(&self.fsr, &raw, &display, &p.filters, area.as_ref(), &brushes)?;
         let fsr_ms = t.elapsed().as_millis();
 
         let was = p.raw.clone();
@@ -2787,6 +2821,7 @@ impl Display {
             raw_h: out_h,
             display: display.clone(),
             area,
+            brushes: brushes.clone(),
             step,
             ..p
         };
@@ -2800,6 +2835,76 @@ impl Display {
         }
         scratch.keep(&raw);
         scratch.keep(&display);
+        for b in brushes.values() {
+            scratch.keep(&b.mask);
+        }
+        // The uncropped masks belong to nothing now: no step keeps a stroke.
+        for b in prev.brushes.values() {
+            let _ = std::fs::remove_file(&b.mask);
+        }
+        Ok(result)
+    }
+
+    /// Paint with one brush tool, or change how strong it is (`crate::brush`).
+    /// `mask`: absent keeps the strokes and sets only the amount, `None`
+    /// clears the tool, PNG bytes replace its strokes — the whole mask, as the
+    /// page's canvas holds it, at the picture's size. Display lane, written
+    /// back only over the image it read, like `adjust`.
+    pub fn brush(&mut self, id: u64, tool: Tool, amount: Option<f32>, mask: Option<Option<Vec<u8>>>) -> Result<GenResult> {
+        let mut p = lock(&self.retained).get(id, "paint on")?;
+        let old = p.brushes.get(&tool).cloned();
+        let amount = amount.or(old.as_ref().map(|b| b.amount)).unwrap_or(0.5);
+        brush::validate_amount(amount)?;
+        let mut fresh = None;
+        match &mask {
+            None => match p.brushes.get_mut(&tool) {
+                Some(b) => b.amount = amount,
+                None => bail!("there are no {} strokes to change", tool.as_str()),
+            },
+            Some(None) => {
+                p.brushes.remove(&tool);
+            }
+            Some(Some(png)) => {
+                let w = image::load_from_memory(png).context("the strokes are not a PNG")?;
+                let (w, h) = (w.width(), w.height());
+                if (w, h) != (p.raw_w, p.raw_h) {
+                    bail!("the strokes are {w}×{h} but the picture is {}×{} — paint again", p.raw_w, p.raw_h);
+                }
+                let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+                let path = self.scratch.join(format!("{id}-brush-{}-{n}.png", tool.as_str()));
+                std::fs::write(&path, png).with_context(|| format!("writing {}", path.display()))?;
+                fresh = Some(path.clone());
+                p.brushes.insert(tool, Stroke { mask: path, amount });
+            }
+        }
+        let forget = |f: &Option<PathBuf>| {
+            if let Some(f) = f {
+                let _ = std::fs::remove_file(f);
+            }
+        };
+
+        let t = Instant::now();
+        // Over the display the image owns, as `adjust` does: a drag of the
+        // amount is the same kind of re-filter as a slider's.
+        let published = publish(&self.fsr, &p.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes);
+        let (png, w, h) = match published {
+            Ok(v) => v,
+            Err(e) => {
+                forget(&fresh);
+                return Err(e);
+            }
+        };
+        let fsr_ms = t.elapsed().as_millis();
+        let entry = Pending { raw_w: w, raw_h: h, ..p };
+        let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
+        if !lock(&self.retained).update(id, entry) {
+            forget(&fresh);
+            return Err(Superseded.into());
+        }
+        // The strokes it replaced or cleared belong to nothing now.
+        if mask.is_some() {
+            forget(&old.map(|b| b.mask));
+        }
         Ok(result)
     }
 
@@ -2816,10 +2921,11 @@ impl Display {
     pub fn apply_look(&mut self, id: u64) -> Result<GenResult> {
         let p = lock(&self.retained).get(id, "apply adjustments to")?;
         let acting_area = p.area.filter(Area::acts);
-        if p.filters == Filters::NONE && acting_area.is_none() {
-            bail!("nothing to apply — every slider is at 0");
+        let stroked = p.brushes.values().any(|b| b.amount > 0.0);
+        if p.filters == Filters::NONE && acting_area.is_none() && !stroked {
+            bail!("nothing to apply — every slider is at 0 and nothing is painted");
         }
-        let label = adjust_label(&p.filters, acting_area.as_ref());
+        let label = adjust_label(&p.filters, acting_area.as_ref(), stroked);
         let step = p.step + 1;
         let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();
@@ -2829,7 +2935,7 @@ impl Display {
 
         let t = Instant::now();
         // Neutral, so the published picture is the applied one to the byte.
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &Filters::NONE, None)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &Filters::NONE, None, &NO_BRUSHES)?;
         let fsr_ms = t.elapsed().as_millis();
 
         let was = p.raw.clone();
@@ -2844,6 +2950,7 @@ impl Display {
             display: display.clone(),
             filters: Filters::NONE,
             area: None,
+            brushes: Brushes::new(),
             profile,
             step,
             ..p
@@ -2855,6 +2962,10 @@ impl Display {
         }
         scratch.keep(&raw);
         scratch.keep(&display);
+        // Baked in: the strokes are part of the picture now.
+        for b in prev.brushes.values() {
+            let _ = std::fs::remove_file(&b.mask);
+        }
         Ok(result)
     }
 
@@ -2904,7 +3015,7 @@ impl Display {
         let tmp = self
             .scratch
             .join(format!("{id}-view-{}.png", N.fetch_add(1, Ordering::Relaxed)));
-        let shown = publish(&self.fsr, &s.raw, &tmp, &p.filters, p.area.as_ref());
+        let shown = publish(&self.fsr, &s.raw, &tmp, &p.filters, p.area.as_ref(), &p.brushes);
         let _ = std::fs::remove_file(&tmp);
         shown
     }
@@ -2939,7 +3050,7 @@ impl Display {
         // Filters start where the model says again, exactly as a fresh generate
         // does — the archived image is unsharpened, so there is nothing to undo.
         let filters = Filters::starting_at(item.profile.sharpness, item.profile.clarity);
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None, &NO_BRUSHES)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -2954,6 +3065,7 @@ impl Display {
             display,
             filters,
             area: None,
+            brushes: Brushes::new(),
             profile: item.profile,
             prompt: item.prompt,
             negative: item.negative,
@@ -3027,7 +3139,7 @@ impl Display {
         std::fs::copy(&stored, &raw)
             .with_context(|| format!("opening {}", stored.display()))?;
         let filters = Filters::NONE;
-        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None)?;
+        let (png, w, h) = publish(&self.fsr, &raw, &display, &filters, None, &NO_BRUSHES)?;
         let fsr_ms = t.elapsed().as_millis();
 
         scratch.keep(&raw);
@@ -3060,6 +3172,7 @@ impl Display {
             display,
             filters,
             area: None,
+            brushes: Brushes::new(),
             profile,
             prompt: item.as_ref().map(|i| i.prompt.clone()).unwrap_or_default(),
             negative: item.as_ref().and_then(|i| i.negative.clone()),
@@ -3166,27 +3279,31 @@ fn publish(
     display: &Path,
     filters: &Filters,
     area: Option<&Area>,
+    brushes: &Brushes,
 ) -> Result<(Vec<u8>, u32, u32)> {
-    let (w, h) = match area.filter(|a| a.acts()) {
-        None => lock(fsr).process(raw, display, 1.0, filters)?,
-        // Two looks and a blend: the whole picture's, then the area's on top
-        // of it, mixed by the area's weight (`area::composite`). In memory, so
-        // neither look round-trips through a PNG; only the blend is written.
-        Some(a) => {
-            let img = image::open(raw)
-                .with_context(|| format!("loading {}", raw.display()))?
-                .to_rgba8();
-            let (mut base, local) = {
-                let fsr = lock(fsr);
-                let base = fsr.filter(&img, filters)?;
-                let local = fsr.filter(&base, &a.filters)?;
-                (base, local)
-            };
+    let area = area.filter(|a| a.acts());
+    let stroked = brushes.values().any(|b| b.amount > 0.0);
+    let (w, h) = if area.is_none() && !stroked {
+        lock(fsr).process(raw, display, 1.0, filters)?
+    } else {
+        // The whole picture's look, then the area's on top of it mixed by the
+        // area's weight (`area::composite`), then each brush's by its mask
+        // (`brush::apply`). In memory, so no look round-trips through a PNG;
+        // only the result is written.
+        let img = image::open(raw)
+            .with_context(|| format!("loading {}", raw.display()))?
+            .to_rgba8();
+        let fsr = lock(fsr);
+        let mut base = fsr.filter(&img, filters)?;
+        if let Some(a) = area {
+            let local = fsr.filter(&base, &a.filters)?;
             crate::area::composite(&mut base, &local, a);
-            base.save(display)
-                .with_context(|| format!("saving {}", display.display()))?;
-            base.dimensions()
         }
+        brush::apply(&mut base, brushes, |i, f| fsr.filter(i, f))?;
+        drop(fsr);
+        base.save(display)
+            .with_context(|| format!("saving {}", display.display()))?;
+        base.dimensions()
     };
     let png = std::fs::read(display)?;
     Ok((png, w, h))
@@ -3214,14 +3331,18 @@ impl Pending {
             filters: self.filters,
             start: Filters::starting_at(self.profile.sharpness, self.profile.clarity),
             area: self.area,
+            brushes: self.brushes.iter().map(|(t, b)| (*t, b.amount)).collect(),
             prompt: self.prompt.clone(),
         }
     }
 }
 
+/// No strokes, for every publish of a picture that has none yet.
+static NO_BRUSHES: Brushes = Brushes::new();
+
 /// An applied look's history label: the knobs it moved, by name, or a count
-/// past three, and whether an area went in with it.
-fn adjust_label(filters: &Filters, area: Option<&Area>) -> String {
+/// past three, and whether an area or brush strokes went in with it.
+fn adjust_label(filters: &Filters, area: Option<&Area>, stroked: bool) -> String {
     let moved = filters.changed();
     let mut text = if moved.len() > 3 {
         format!("{} changes", moved.len())
@@ -3236,8 +3357,10 @@ fn adjust_label(filters: &Filters, area: Option<&Area>) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     };
-    if area.is_some() {
-        text = if text.is_empty() { "area".into() } else { format!("{text} + area") };
+    for (on, what) in [(area.is_some(), "area"), (stroked, "brushes")] {
+        if on {
+            text = if text.is_empty() { what.into() } else { format!("{text} + {what}") };
+        }
     }
     format!("Adjust: {text}")
 }
@@ -3571,6 +3694,7 @@ mod tests {
         advance, after_model, edit_size, fit_to, pass_prompt, step_label, AfterModel, Expand, Pending, Retained,
         Slot, MAX_HISTORY,
     };
+    use crate::brush::Brushes;
     use crate::config::{Filters, Profile};
     use crate::fsr::out_size;
     use std::path::Path;
@@ -3609,9 +3733,9 @@ mod tests {
     #[test]
     fn an_applied_look_is_labelled_by_what_it_moved() {
         let f = Filters { lightness: 0.2, vibrance: 0.3, ..Filters::NONE };
-        assert_eq!(adjust_label(&f, None), "Adjust: Lightness +0.20, Vibrance +0.30");
+        assert_eq!(adjust_label(&f, None, false), "Adjust: Lightness +0.20, Vibrance +0.30");
         let many = Filters { lightness: 0.1, contrast: 0.1, shadows: -0.1, hue: 0.1, ..Filters::NONE };
-        assert_eq!(adjust_label(&many, None), "Adjust: 4 changes");
+        assert_eq!(adjust_label(&many, None, false), "Adjust: 4 changes");
         let a = crate::area::Area {
             shape: crate::area::Shape::Rect,
             x0: 0.1,
@@ -3622,8 +3746,10 @@ mod tests {
             invert: false,
             filters: Filters { tint: 0.2, ..Filters::NONE },
         };
-        assert_eq!(adjust_label(&Filters::NONE, Some(&a)), "Adjust: area");
-        assert_eq!(adjust_label(&f, Some(&a)), "Adjust: Lightness +0.20, Vibrance +0.30 + area");
+        assert_eq!(adjust_label(&Filters::NONE, Some(&a), false), "Adjust: area");
+        assert_eq!(adjust_label(&f, Some(&a), false), "Adjust: Lightness +0.20, Vibrance +0.30 + area");
+        assert_eq!(adjust_label(&Filters::NONE, None, true), "Adjust: brushes");
+        assert_eq!(adjust_label(&f, Some(&a), true), "Adjust: Lightness +0.20, Vibrance +0.30 + area + brushes");
     }
 
     #[test]
@@ -3650,6 +3776,7 @@ mod tests {
             profile: Profile::default(),
             filters: Filters::NONE,
             area: None,
+            brushes: Brushes::new(),
             prompt: String::new(),
             negative: None,
             typed_prompt: None,

@@ -70,6 +70,7 @@ pub const WEB_FILES: &[WebFile] = &[
     row!("js/video.js", "text/javascript; charset=utf-8"),
     row!("js/viewer.js", "text/javascript; charset=utf-8"),
     row!("js/regiontool.js", "text/javascript; charset=utf-8"),
+    row!("js/brushpaint.js", "text/javascript; charset=utf-8"),
     row!("js/workitems.js", "text/javascript; charset=utf-8"),
 ];
 

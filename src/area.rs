@@ -151,9 +151,23 @@ impl Area {
 /// takes `local`'s, so outside the shape and its edge nothing moves at all.
 pub fn composite(base: &mut RgbaImage, local: &RgbaImage, area: &Area) {
     let (w, h) = base.dimensions();
-    debug_assert_eq!((w, h), local.dimensions());
+    blend(base, local, |x, y| area.weight(x, y, w, h));
+}
+
+/// [`composite`] by a weight per pixel, row-major, 0..1 — a brush's painted
+/// mask (`crate::brush`). The same blend, so the same promise: weight 0 is
+/// the base's bytes.
+pub fn composite_by(base: &mut RgbaImage, local: &RgbaImage, weights: &[f32]) {
+    let w = base.width() as usize;
+    debug_assert_eq!(weights.len(), w * base.height() as usize);
+    blend(base, local, |x, y| weights[y as usize * w + x as usize]);
+}
+
+/// The one blend both of the above are.
+fn blend(base: &mut RgbaImage, local: &RgbaImage, weight: impl Fn(u32, u32) -> f32) {
+    debug_assert_eq!(base.dimensions(), local.dimensions());
     for (x, y, px) in base.enumerate_pixels_mut() {
-        let k = area.weight(x, y, w, h);
+        let k = weight(x, y);
         if k <= 0.0 {
             continue;
         }

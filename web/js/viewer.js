@@ -2,6 +2,7 @@ import { $, esc, post, rememberFolds } from './dom.js';
 import { S, P, escErr } from './state.js';
 import { onJobs, passRunning } from './jobs.js';
 import { regionTool } from './regiontool.js';
+import { brushPaint } from './brushpaint.js';
 
 // The viewer's panel, top to bottom. This list is the only place a filter is
 // declared: the markup, the labels, setPost, the /adjust body and the
@@ -128,6 +129,8 @@ function setTarget(t) {
 // A new picture, or a new state of this one: the server's word on both looks,
 // where Reset goes, and the history Crop's undo reads.
 export function setLook(data) {
+  // A different picture: the page's masks were of the last one.
+  if (shown && data.image_id !== shown.image_id) paint?.reset();
   shown = data;
   postStart = data.filters_start ?? data.filters;
   target = 'all';
@@ -136,6 +139,7 @@ export function setLook(data) {
   area = data.area ?? null;
   writeSliders(data.filters);
   syncArea();
+  syncBrushes();
   drawHistory();
   syncPostLabels();
   // The box describes the picture that was there; put it on this one once
@@ -171,6 +175,9 @@ function viewerSummaries() {
     : 'none', !!a);
   const cropped = isCrop();
   say('sum-lb-crop', cropped ? `${shown.width}×${shown.height}` : 'whole picture', cropped);
+  const painted = Object.entries(strokes());
+  say('sum-lb-brush', painted.map(([t, a]) => `${TOOL_LABELS[t] ?? t} ${a.toFixed(2)}`).join(' · ') || 'none',
+    painted.length > 0);
   syncApply();
 }
 
@@ -263,8 +270,97 @@ function syncApply() {
   const g = globalFilters();
   const a = areaState();
   const moved = Object.values(g).some((v) => v !== 0)
-    || (!!a && Object.values(a.filters).some((v) => v !== 0));
+    || (!!a && Object.values(a.filters).some((v) => v !== 0))
+    || Object.keys(strokes()).length > 0;
   $('lbapply').disabled = !moved || passRunning() || stepping || S.imageId === null;
+}
+
+// ---- Brushes -------------------------------------------------------------------
+//
+// One mask and one amount per tool, held by the server (`crate::brush`) and
+// painted here (`brushpaint.js`). A stroke ends in `/brush` with the tool's
+// whole mask; the amount slider re-sends only the amount. Both answer with the
+// re-filtered picture, which lands like a slider's (`setResultImage`), so a
+// stroke never re-centres the view.
+const TOOL_LABELS = {
+  dodge: 'Dodge', burn: 'Burn', saturate: 'Saturate', desaturate: 'Desaturate', blur: 'Blur', sharpen: 'Sharpen',
+};
+let paint = null;
+let brushTool = 'dodge';
+// The tools whose strokes the server holds, and their amounts.
+const strokes = () => shown?.brushes ?? {};
+// One `/brush` at a time, in order; a stroke already queued for a tool reads
+// that tool's mask when it goes, so a burst of strokes is one request.
+let brushChain = Promise.resolve();
+const strokeQueued = new Set();
+let amountTimer = null;
+
+const amountFor = (t) => (t === brushTool ? Number($('lbbamount').value) : strokes()[t] ?? 0.5);
+
+function brushSend(make) {
+  brushChain = brushChain.then(async () => {
+    if (S.imageId === null) return;
+    const epoch = postEpoch;
+    try {
+      await settlePost();
+      const t0 = performance.now();
+      const data = await post('/brush', { image_id: S.imageId, ...make() });
+      if (epoch !== postEpoch) return;
+      setResultImage(`data:image/png;base64,${data.image_base64}`);
+      shown = { ...shown, brushes: data.brushes };
+      $('postms').textContent =
+        `${Math.round(performance.now() - t0)} ms · gpu ${data.timings.fsr_ms} ms`;
+      $('lberr').textContent = '';
+      viewerSummaries();
+    } catch (e) {
+      // A pass landed first: its result is on its way, and these strokes go
+      // with the picture they were painted on.
+      if (epoch !== postEpoch || e.status === 409) return;
+      $('lberr').textContent = String(e.message || e);
+    }
+  });
+}
+
+function queueStroke(t) {
+  if (strokeQueued.has(t)) return;
+  strokeQueued.add(t);
+  brushSend(() => {
+    strokeQueued.delete(t);
+    return { tool: t, amount: amountFor(t), mask: paint.dataUrl(t) };
+  });
+}
+
+function clearTool(t) {
+  paint.clear(t);
+  if (t in strokes()) brushSend(() => ({ tool: t, mask: null }));
+}
+
+function chooseTool(t) {
+  brushTool = t;
+  paint.setTool(t);
+  for (const b of document.querySelectorAll('.lbtools [data-tool]')) {
+    b.classList.toggle('active', b.dataset.tool === t);
+  }
+  if (t in strokes()) $('lbbamount').value = strokes()[t];
+  $('lbbamountval').textContent = Number($('lbbamount').value).toFixed(2);
+}
+
+// After a result: drop the page's masks for tools the picture no longer has,
+// and fetch the server's for those the page lacks at this size — only while
+// the fold is open, since nothing needs them otherwise.
+function syncBrushes() {
+  if (!paint) return;
+  for (const t of Object.keys(TOOL_LABELS)) if (!(t in strokes())) paint.clear(t);
+  if ($('fold-lb-brush').open) loadMasks();
+  if (brushTool in strokes()) $('lbbamount').value = strokes()[brushTool];
+  $('lbbamountval').textContent = Number($('lbbamount').value).toFixed(2);
+}
+
+function loadMasks() {
+  for (const t of Object.keys(strokes())) {
+    // The query only defeats the cache; the server routes on the path.
+    if (!paint.has(t)) paint.load(t, `/brush/${shown.image_id}/${t}.png?v=${Date.now()}`).catch(() => {});
+  }
 }
 
 // ---- History -----------------------------------------------------------------
@@ -314,6 +410,8 @@ async function stepRequest(route, body) {
   $('lberr').textContent = '';
   try {
     await settlePost();
+    // And any stroke still on its way: an Apply must bake what was painted.
+    await brushChain;
     const data = await post(route, { image_id: S.imageId, ...body });
     deliver(data);
     return true;
@@ -593,6 +691,8 @@ export function initViewer() {
     syncArea();
     setPost(postStart);
     schedulePost();
+    // The strokes are part of the look too.
+    for (const t of Object.keys(TOOL_LABELS)) clearTool(t);
   });
   // Left drag pans at 1:1; the middle button too, which is the pan left while
   // a crop or area box has the left one.
@@ -604,9 +704,11 @@ export function initViewer() {
   box = regionTool({ view: $('lbview'), img: $('lbimg'), onChange: onBox });
   box.init();
   const crop = $('fold-lb-crop'), areaFold = $('fold-lb-area');
+  const brushFold = $('fold-lb-brush');
   crop.addEventListener('toggle', () => {
     if (crop.open) {
       areaFold.open = false;
+      brushFold.open = false;
       showCropTool();
     } else if (toolMode === 'crop') {
       box.hide();
@@ -616,6 +718,7 @@ export function initViewer() {
   areaFold.addEventListener('toggle', () => {
     if (areaFold.open) {
       crop.open = false;
+      brushFold.open = false;
       showAreaTool();
     } else if (toolMode === 'area') {
       box.hide();
@@ -684,6 +787,51 @@ export function initViewer() {
     syncArea();
     schedulePost();
   });
+
+  // Brushes: the third tool that owns the pointer, so it excludes the other
+  // two the way they exclude each other.
+  paint = brushPaint({
+    view: $('lbview'), img: $('lbimg'), onStroke: queueStroke,
+    locked: () => passRunning() || S.imageId === null,
+  });
+  paint.init();
+  brushFold.addEventListener('toggle', () => {
+    if (brushFold.open) {
+      crop.open = false;
+      areaFold.open = false;
+      paint.show();
+      loadMasks();
+    } else {
+      paint.hide();
+    }
+  });
+  for (const b of document.querySelectorAll('.lbtools [data-tool]')) {
+    b.addEventListener('click', () => chooseTool(b.dataset.tool));
+  }
+  const sizes = () => {
+    paint.set({
+      size: Number($('lbbsize').value),
+      soft: Number($('lbbsoft').value),
+      erase: $('lbberase').checked,
+    });
+    $('lbbsizeval').textContent = `${$('lbbsize').value} px`;
+    $('lbbsoftval').textContent = Number($('lbbsoft').value).toFixed(2);
+  };
+  for (const id of ['lbbsize', 'lbbsoft', 'lbberase']) $(id).addEventListener('input', sizes);
+  sizes();
+  // The amount re-filters the tool's strokes live, debounced like a slider.
+  $('lbbamount').addEventListener('input', () => {
+    $('lbbamountval').textContent = Number($('lbbamount').value).toFixed(2);
+    const t = brushTool;
+    if (!(t in strokes())) return;
+    clearTimeout(amountTimer);
+    amountTimer = setTimeout(() => brushSend(() => ({ tool: t, amount: amountFor(t) })), 120);
+  });
+  $('lbbclear').addEventListener('click', () => clearTool(brushTool));
+  $('lbbclearall').addEventListener('click', () => {
+    for (const t of Object.keys(TOOL_LABELS)) clearTool(t);
+  });
+  chooseTool(brushTool);
 
   onJobs(syncCrop);
   rememberFolds($('lightbox'));
