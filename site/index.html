@@ -38,6 +38,30 @@
     · <a href="https://github.com/Bastardly/yasdig">Source on GitHub</a></p>
 </section>
 
+<!-- Before the Windows download: what Windows will say, and why, so the
+     warnings that follow read as expected rather than as a reason to stop.
+     Opened by the script only once it has found the zip; without it the
+     button is the Releases-page link it always was. -->
+<dialog id="win-dialog" class="card">
+  <h2>Before you download</h2>
+  <p>YASDIG is free and open source — every line of it is
+    <a href="https://github.com/Bastardly/yasdig">public on GitHub</a>. It isn't signed
+    with a paid Microsoft certificate yet, so Windows doesn't know it and will warn you
+    twice:</p>
+  <ol>
+    <li><b>While downloading</b>, Edge may say the file isn't commonly downloaded.
+      Choose <i>⋯ → Keep</i>, then <i>Keep anyway</i>.</li>
+    <li><b>The first time you start it</b>, Windows shows <i>Windows protected your
+      PC</i>. Choose <i>More info → Run anyway</i>.</li>
+  </ol>
+  <p class="sub">After that it starts like any other program. Extract the zip first
+    (right-click → <i>Extract All</i>) and start <code>yasdig.exe</code> from the folder.</p>
+  <div class="dialog-buttons">
+    <button type="button" class="btn" id="win-cancel">Cancel</button>
+    <a class="btn btn-run" id="win-go" href="https://github.com/Bastardly/yasdig/releases" download>Download</a>
+  </div>
+</dialog>
+
 <section class="points">
   <div class="card">
     <h3>Draft cheap, finish what's worth it</h3>
@@ -60,14 +84,16 @@
   <h2>Getting started</h2>
   <ol>
     <li><b>Download</b> the file for your system, above.</li>
-    <li><b>Put it in a folder of its own</b> and start it. Your browser opens on the app.</li>
+    <li><b>Extract it</b> — on Windows, right-click the zip → <i>Extract All</i>. You get a
+      <code>yasdig</code> folder: keep it, everything the app makes goes in there.</li>
+    <li><b>Start <code>yasdig</code></b> in that folder. Your browser opens on the app.</li>
     <li>Open <b>Get models</b>, download a model, then press <b>Generate</b>.</li>
   </ol>
   <p class="sub">You need a graphics card with a current driver (AMD, NVIDIA or Intel).
     How much memory depends on the model; the app says per model.</p>
-  <p class="sub">On Linux, make the file executable once: <code>chmod +x yasdig-linux-x86_64</code>.
-    On Windows, a new download may show <i>Windows protected your PC</i>:
-    choose <i>More info → Run anyway</i>.</p>
+  <p class="sub">On Windows, the first start may show <i>Windows protected your PC</i>:
+    choose <i>More info → Run anyway</i>. YASDIG is open source but not yet signed
+    with a Microsoft certificate.</p>
 </section>
 
 <footer>
@@ -101,19 +127,43 @@
   try {
     const r = await fetch('https://api.github.com/repos/Bastardly/yasdig/releases?per_page=10');
     if (!r.ok) return;
+    // The archives (a zip and a tar.gz holding a `yasdig/` folder), or the
+    // bare executables older releases carry.
+    const WIN = /windows.*\.(zip|exe)$/, LINUX = /linux.*x86_64(\.tar\.gz)?$/;
     const rel = (await r.json()).find((x) => !x.draft
-      && x.assets.some((a) => /windows.*\.exe$/.test(a.name) || /linux/.test(a.name)));
+      && x.assets.some((a) => WIN.test(a.name) || LINUX.test(a.name)));
     if (!rel) return;
-    for (const [id, test] of [['dl-win', /windows.*\.exe$/], ['dl-linux', /linux/]]) {
+    for (const [id, test] of [['dl-win', WIN], ['dl-linux', LINUX]]) {
       const a = rel.assets.find((x) => test.test(x.name));
       if (a) document.getElementById(id).href = a.browser_download_url;
     }
+    const win = rel.assets.find((x) => WIN.test(x.name));
+    if (win) askFirst(win.browser_download_url);
     const date = new Date(rel.published_at).toLocaleDateString(undefined,
       { day: 'numeric', month: 'short', year: 'numeric' });
     document.getElementById('release').textContent =
       `${rel.tag_name}${rel.prerelease ? ' · pre-release' : ''} · ${date}`;
   } catch { /* keep the Releases page links */ }
 })();
+
+// The Windows button explains before it downloads (#win-dialog). The dialog's
+// own link does the downloading, so the browser sees an ordinary click on a
+// file link and nothing here has to start a download by script.
+function askFirst(url) {
+  const dlg = document.getElementById('win-dialog');
+  const go = document.getElementById('win-go');
+  go.href = url;
+  document.getElementById('dl-win').addEventListener('click', (e) => {
+    if (typeof dlg.showModal !== 'function') return; // an old browser: just download
+    e.preventDefault();
+    dlg.showModal();
+    go.focus();
+  });
+  go.addEventListener('click', () => dlg.close());
+  document.getElementById('win-cancel').addEventListener('click', () => dlg.close());
+  // A click on the backdrop closes it too; the card itself doesn't.
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
+}
 </script>
 </body>
 </html>

@@ -2,7 +2,8 @@
 # into yasdig (see build.rs and src/bundle.rs), for Linux and Windows.
 #
 # Draft a release on GitHub with a new `v*` tag (or push one), and both
-# executables are attached to it when the builds finish, ~30 minutes later. A
+# archives (a `yasdig/` folder holding the program and a README) are attached
+# to it when the builds finish, ~15 minutes later. A
 # tag not starting with `v` builds nothing. Run it by hand from the Actions tab
 # to get the files as workflow artifacts only.
 #
@@ -25,7 +26,7 @@ on:
   workflow_dispatch:
 
 # Read-only by default: the two build jobs only check out and compile. The
-# `publish` job, which attaches the executables, asks for write on its own.
+# `publish` job, which attaches the archives, asks for write on its own.
 permissions:
   contents: read
 
@@ -83,7 +84,6 @@ jobs:
           LDFLAGS: -static-libstdc++ -static-libgcc
         run: |
           cargo build --release
-          cp target/release/yasdig yasdig-linux-x86_64
           echo "SD_CLI=stable-diffusion.cpp/build-yasdig/bin/sd-cli" >> "$GITHUB_ENV"
 
       - name: Dependencies
@@ -98,10 +98,23 @@ jobs:
       - name: Test
         run: cargo test
 
+      - name: Package
+        # A folder rather than a bare file: the folder beside the program is
+        # its home, so the download arrives as the thing to keep. A tar keeps
+        # the executable bit, which is why this is a .tar.gz and not a zip —
+        # no `chmod +x` for the person downloading it.
+        run: |
+          mkdir -p pkg/yasdig
+          cp target/release/yasdig pkg/yasdig/yasdig
+          chmod +x pkg/yasdig/yasdig
+          cp packaging/README.txt pkg/yasdig/
+          tar -C pkg -czf yasdig-linux-x86_64.tar.gz yasdig
+          tar -tvzf yasdig-linux-x86_64.tar.gz
+
       - uses: actions/upload-artifact@v4
         with:
           name: yasdig-linux-x86_64
-          path: yasdig-linux-x86_64
+          path: yasdig-linux-x86_64.tar.gz
 
   windows:
     runs-on: windows-2022
@@ -135,7 +148,6 @@ jobs:
           RUSTFLAGS: -C target-feature=+crt-static
         run: |
           cargo build --release
-          Copy-Item target\release\yasdig.exe yasdig-windows-x86_64.exe
           $exe = Get-ChildItem -Recurse stable-diffusion.cpp\build-yasdig\bin -Filter sd-cli.exe | Select-Object -First 1
           Add-Content $env:GITHUB_ENV "SD_CLI=$($exe.FullName)"
 
@@ -152,10 +164,23 @@ jobs:
       - name: Test
         run: cargo test
 
+      - name: Package
+        # A zip, not a bare .exe: Edge's SmartScreen warns hard about
+        # downloading an unsigned executable and much less about an archive.
+        # The first start still shows "Windows protected your PC" until the
+        # program is signed. `-Path` names the folder, so the zip's root is
+        # `yasdig\` — extracted, it is the app's home.
+        run: |
+          New-Item -ItemType Directory pkg\yasdig | Out-Null
+          Copy-Item target\release\yasdig.exe pkg\yasdig\yasdig.exe
+          Copy-Item packaging\README.txt pkg\yasdig\
+          Compress-Archive -Path pkg\yasdig -DestinationPath yasdig-windows-x86_64.zip
+          Get-Item yasdig-windows-x86_64.zip
+
       - uses: actions/upload-artifact@v4
         with:
           name: yasdig-windows-x86_64
-          path: yasdig-windows-x86_64.exe
+          path: yasdig-windows-x86_64.zip
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -168,7 +193,7 @@ jobs:
         with:
           merge-multiple: true
       - name: Release
-        # Two ways in, both ending with the executables attached: a release
+        # Two ways in, both ending with the archives attached: a release
         # drafted by hand on GitHub (its tag push started this run, and its
         # title, notes and pre-release tick are kept — the files are uploaded
         # to it), or a bare `git push origin v…` (the release is created here).
@@ -177,7 +202,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          files="yasdig-linux-x86_64 yasdig-windows-x86_64.exe"
+          files="yasdig-linux-x86_64.tar.gz yasdig-windows-x86_64.zip"
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber $files
           else

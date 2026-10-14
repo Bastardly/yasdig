@@ -40,6 +40,7 @@
   --r-md: 8px;
   --r-lg: 12px;
   --line: 1px solid var(--ink-500);
+  --scrim: rgba(0, 0, 0, .7);   /* behind a dialog: the app's --scrim-soft */
 
   --page-w: 880px;
 }
@@ -98,6 +99,15 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 .start ol { margin: 0 0 var(--sp-3); padding-left: 1.3em; }
 .start li { margin-bottom: var(--sp-2); }
 .start .sub { margin: var(--sp-2) 0 0; }
+
+/* ---- The Windows download's dialog */
+#win-dialog { max-width: min(520px, calc(100vw - 2 * var(--sp-4))); color: var(--text); padding: var(--sp-6); }
+#win-dialog::backdrop { background: var(--scrim); }
+#win-dialog h2 { margin-bottom: var(--sp-2); }
+#win-dialog p, #win-dialog li { margin: 0 0 var(--sp-3); }
+#win-dialog ol { padding-left: 1.3em; margin: 0 0 var(--sp-3); }
+.dialog-buttons { display: flex; justify-content: flex-end; gap: var(--sp-3); margin-top: var(--sp-5); }
+.dialog-buttons .btn { min-width: 120px; font: inherit; font-weight: 600; cursor: pointer; }
 
 /* ---- Footer */
 footer { margin-top: var(--sp-8); padding-top: var(--sp-4); border-top: var(--line);

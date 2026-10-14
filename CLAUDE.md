@@ -40,8 +40,11 @@ them into an assertion is the next move. The DFT's own correctness is in `cargo 
 ## Packaging
 
 A release is **one executable** per OS with sd-cli and the page inside it
-(`.github/workflows/release.yml` on a `v*` tag). Double-clicked, it creates its folders
-beside itself, starts, opens the browser. Not Tauri (WebKitGTK would be a dependency).
+(`.github/workflows/release.yml` on a `v*` tag), shipped as an **archive holding a
+`yasdig/` folder** (the program plus `packaging/README.txt`): a `.zip` on Windows
+(Edge's SmartScreen warns far less than for a bare unsigned `.exe`), a `.tar.gz` on
+Linux (keeps the executable bit). Double-clicked, it creates its folders beside
+itself, starts, opens the browser. Not Tauri (WebKitGTK would be a dependency).
 **`cargo build --release` is the whole recipe.** sd.cpp is a gitignored clone at
 `./stable-diffusion.cpp/`; `build.rs` builds `sd-cli` into `build-yasdig/` there and a
 *release* build embeds it (`build.rs` → `src/bundle.rs`, unpacked to `bin/sd-cli` on
@@ -57,7 +60,9 @@ Five things break silently:
 
 - **Home folder is `home::config_path`**: an argument, else `models.toml` in the CWD,
   else this checkout when the exe is inside its `target/`, else the exe's folder —
-  never the CWD alone. `home::ensure` creates only what is missing.
+  never the CWD alone. `home::ensure` creates only what is missing. **An exe folder
+  inside `temp_dir()` is refused** (`in_temp`): double-clicking it inside the zip runs
+  it from a folder Windows deletes, models and all.
 - **`[sd].binary` wins over the bundle**; `Config::load` unpacks only when it's unset.
 - **Unpack is keyed on the stamp `bin/sd-cli.version`** (build.rs's hash), not on
   hashing 93 MB. Binary goes through `.part` + rename, stamp written last.
@@ -776,7 +781,10 @@ would break `setBusy`/the poll/`style.css`). `showTab` clears the pane it leaves
   out of `docs/`. Short and download-first; tokens hand-copied from `web/style.css`.
   Buttons repoint via `api.github.com/…/releases` (not `releases/latest`, which skips
   pre-releases); failure leaves the Releases link. Asset names
-  (`yasdig-windows-x86_64.exe`, `yasdig-linux-x86_64`) must match `release.yml`.
+  (`yasdig-windows-x86_64.zip`, `yasdig-linux-x86_64.tar.gz`; the regexes still match
+  the bare files older releases carry) must match `release.yml`. **The Windows button
+  opens `#win-dialog` first** (what SmartScreen will say and why — open source, not yet
+  signed), only once the script found the zip; the dialog's own link downloads.
 - **Licences**: Apache-2.0. `THIRD_PARTY_LICENSES.md` (sd.cpp, ggml and their bundled
   libs verbatim, plus the crate table from `cargo tree -e normal` × `cargo metadata`)
   is compiled in and served at `GET /licences`. **Regenerate on an sd.cpp bump or a new

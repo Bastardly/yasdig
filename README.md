@@ -50,20 +50,24 @@ You need a 64-bit **Windows 10 or 11** or **Linux** PC with a graphics card and 
 up-to-date driver; current AMD, NVIDIA and Intel drivers all include Vulkan. There is
 no macOS version.
 
-1. **Download** the file for your system from the
+1. **Download** the archive for your system from [yasdig.com](https://yasdig.com) or the
    [Releases page](https://github.com/Bastardly/yasdig/releases):
-   `yasdig-windows-x86_64.exe` or `yasdig-linux-x86_64`.
-2. **Put it in a folder of its own** that you can write to — `Documents/yasdig`, say,
-   not Program Files. Everything it makes is kept in that folder.
-3. **Start it.** On Windows, double-click it. On Linux, make it executable once
-   (`chmod +x yasdig-linux-x86_64`, or tick "allow executing" in its properties), then
-   run it.
+   `yasdig-windows-x86_64.zip` or `yasdig-linux-x86_64.tar.gz`.
+2. **Extract it** somewhere you can write to — `Documents`, say, not Program Files. On
+   Windows, right-click the zip → *Extract All*. You get a `yasdig` folder: keep it,
+   everything the app makes goes in there.
+3. **Start `yasdig`** in that folder. On Windows, the first start may show *Windows
+   protected your PC*: yasdig is open source but not yet signed with a Microsoft
+   certificate, so choose *More info → Run anyway*. (Started from inside the zip
+   without extracting, it stops and says so: it would be running from a temporary
+   folder Windows deletes.)
 4. **Your browser opens on the app.** Open the **Get models** tab and download a model
    — one click, with progress. The table below helps you choose.
 5. **Back on the Image tab**, type a prompt and press **Generate**.
 
 To stop it, close its console window or press **Close server** on the page. To update,
-replace the file: your models, settings and pictures stay where they are. The folder
+replace `yasdig.exe` (or `yasdig`) with the one from the new archive: your models,
+settings and pictures stay where they are. The folder
 ends up holding:
 
 ```

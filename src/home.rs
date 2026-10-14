@@ -6,7 +6,7 @@
 //! start, an upgrade dropped over the old file, or a folder the person
 //! rearranged by hand are all left exactly as they are.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
 const CONFIG: &str = "models.toml";
@@ -67,8 +67,34 @@ pub fn config_path(explicit: Option<&str>) -> Result<PathBuf> {
         return Ok(checkout.join(CONFIG));
     }
     let root = exe.parent().context("this executable has no folder")?.to_path_buf();
+    // Double-clicking the program *inside* its zip makes Windows copy it to a
+    // temporary folder and run it there — and the home made beside it, models
+    // and pictures included, would go when Windows next cleans that folder.
+    // Canonical on both sides: %TEMP% can be an 8.3 short path.
+    let temp = std::env::temp_dir();
+    let temp = crate::config::plain_canonicalize(&temp).unwrap_or(temp);
+    if in_temp(&root, &temp) {
+        if cfg!(windows) {
+            bail!(
+                "yasdig is running from inside its zip (or another temporary folder), where \
+                 everything it saves would be deleted. Extract it first — right-click the zip, \
+                 Extract All — and start yasdig.exe from the extracted folder."
+            );
+        }
+        bail!(
+            "yasdig is running from a temporary folder ({}), where everything it saves would \
+             be deleted. Extract the archive to a folder of its own and start yasdig there.",
+            root.display()
+        );
+    }
     ensure(&root)?;
     Ok(root.join(CONFIG))
+}
+
+/// Whether `dir` is inside the temporary folder `temp`. A `temp` with no
+/// parent (a root) never counts, so an odd environment can't refuse every path.
+fn in_temp(dir: &Path, temp: &Path) -> bool {
+    temp.parent().is_some() && dir.starts_with(temp)
 }
 
 /// Create whatever of the layout is missing under `root`. Never overwrites.
@@ -104,6 +130,18 @@ pub fn ensure(root: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_program_run_from_the_temp_folder_is_refused() {
+        use super::in_temp;
+        use std::path::Path;
+        let temp = Path::new("/home/u/AppData/Local/Temp");
+        assert!(in_temp(Path::new("/home/u/AppData/Local/Temp/Temp1_yasdig.zip/yasdig"), temp));
+        assert!(!in_temp(Path::new("/home/u/Documents/yasdig"), temp));
+        // A sibling whose name only starts the same is not inside it.
+        assert!(!in_temp(Path::new("/home/u/AppData/Local/Temporary/yasdig"), temp));
+        assert!(!in_temp(Path::new("/opt/yasdig"), Path::new("/")));
+    }
+
     use super::*;
 
     /// The promise a re-run makes: a second start, or an upgrade dropped over

@@ -5,6 +5,15 @@ What changed in each release of yasdig. Each release's executables are on the
 
 ## Unreleased
 
+### Changed
+
+- **Releases are archives**: `yasdig-windows-x86_64.zip` and
+  `yasdig-linux-x86_64.tar.gz`, each a `yasdig` folder holding the program and a short
+  README. Edge warns far less about downloading a zip than a bare program, and on
+  Linux there is no `chmod` step any more. Started from inside the zip without
+  extracting, yasdig now stops and says so, instead of making its home in a folder
+  Windows deletes.
+
 ### New
 
 - **Brushes in the viewer**: Dodge, Burn, Saturate, Desaturate, Blur and Sharpen,
