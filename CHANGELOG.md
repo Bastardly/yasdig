@@ -3,7 +3,7 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
-## Unreleased
+## 0.2.0 — 2026-10-14
 
 ### New
 
@@ -19,9 +19,8 @@ What changed in each release of yasdig. Each release's executables are on the
   History — that you can drag anywhere and that stay where you put them; a dot on a
   rail button shows its panel has something in effect, and a panel's actions stay
   at its foot, the main one in amber — *Apply adjustments* is History's, since it
-  adds a step. The action row reads Hi-res ·
-  Refine & adjust… · Save. Whichever of Refine, Crop, Selection or Brushes is open owns
-  the pointer; with none open, a drag pans.
+  adds a step. Whichever of Refine, Crop, Selection or Brushes is open owns the
+  pointer; with none open, a drag pans.
 - **The Image and Video tabs are workspaces** like the editor: a rail, the picture
   filling the window, and floating panels for every section (Prompts, Models,
   Generation, …), each remembering where you left it. Work items are two panels,
@@ -31,7 +30,7 @@ What changed in each release of yasdig. Each release's executables are on the
   rail's foot. The action row is gone:
   **Hi-res** is in Refine & adjust's Refine panel (and works on Outputs too), and
   **Save to output** in its rail.
-- **Outputs open in the same dialog**, and Refine, Edit, Extend and Scale work there:
+- **Outputs open in the same dialog**, and Refine, Hi-res, Edit, Extend and Scale work there:
   *Save changes* writes the result over the file. *Refine & extend…* is gone.
 
 ### Fixed
