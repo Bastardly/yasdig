@@ -87,6 +87,35 @@ anyway, the error offers the ways out.
 YASDIG is developed and tested on Linux with an AMD Radeon RX 7900 XTX (24 GB). Other
 Vulkan GPUs and Windows should work; reports are welcome.
 
+## Privacy and security
+
+**Everything stays on your computer.** Your prompts, pictures and settings never
+leave it: there is no account, no telemetry and no update check. The only time YASDIG
+goes online is when you press download on the **Get models** tab, and then it fetches
+that model from Hugging Face, from addresses built into the program.
+
+**The page is for this computer only.** The app is a small web server that listens on
+`127.0.0.1`, so other machines on your network can't reach it. It also refuses
+requests that come from other websites open in your browser, and requests sent to it
+under another name (DNS rebinding). There is no login, so if you change `host` in
+`startup.toml` to open the page to your network, anyone who can reach it can use
+it — including deleting pictures and stopping the server. Only do that on a network
+you trust.
+
+**Model files are read, never run.** There is no Python inside, so a `.ckpt` or
+`.pth` file is parsed for its weights and nothing in it is executed. A file it can't
+make sense of is refused, not guessed at.
+
+**Saved pictures carry their settings.** *Save to output* and *Download* write the
+prompt, model names and settings into the PNG, so others can recreate your picture
+and A1111, Forge and Civitai can read it. No file paths are written. If you'd rather
+share pictures without that information, turn off *Settings inside saved PNGs* in
+Settings.
+
+**Found a security problem?** Please report it privately through the repository's
+[Security tab](https://github.com/Bastardly/yasdig/security) (*Report a
+vulnerability*) rather than in a public issue.
+
 ## What's supported
 
 **Model families.** Each but SD 1.x/2.x has a one-click card on the Get models tab:
