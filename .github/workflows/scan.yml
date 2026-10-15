@@ -1,7 +1,8 @@
 # VirusTotal for a release: its two archives, and the program inside each, so
 # both what is downloaded and what runs have a report. The results go into the
 # release (`scan-notes.sh`: a visible section, and a JSON comment yasdig.com
-# reads), plus `scan.json` and, for a release older than this, `SHA256SUMS`.
+# reads), plus `scan.json`, `badge.json` (the README's badge) and, for a
+# release older than this, `SHA256SUMS`.
 #
 # Called by release.yml after `publish`; run by hand from the Actions tab to
 # scan (or re-scan) any tag. Needs the repository secret VT_API_KEY — a free
@@ -73,7 +74,23 @@ jobs:
             | jq -s --arg tag "$TAG" '{tag: $tag, files: .}' > scan.json
           cat scan.json
 
+      # The README's VirusTotal badge: shields.io's endpoint format, read from
+      # the newest release (`releases/latest/download/badge.json`), so it
+      # follows every release with nothing to edit. Green when no engine
+      # flagged any of the four files, amber when some did, grey while one is
+      # still being scanned.
+      - name: Badge
+        run: |
+          jq '[.files[] | select(.status == "completed")] as $done
+            | ($done | map(.malicious + .suspicious) | add // 0) as $n
+            | {schemaVersion: 1, label: "VirusTotal",
+               message: (if ($done | length) < (.files | length) then "scanning"
+                         elif $n == 0 then "clean" else "\($n) flagged" end),
+               color: (if ($done | length) < (.files | length) then "lightgrey"
+                       elif $n == 0 then "brightgreen" else "orange" end)}' scan.json > badge.json
+          cat badge.json
+
       - name: Into the release
         run: |
           bash .github/scripts/scan-notes.sh "$TAG" scan.json
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber scan.json
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber scan.json badge.json
