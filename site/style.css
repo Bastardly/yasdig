@@ -100,12 +100,25 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 .start li { margin-bottom: var(--sp-2); }
 .start .sub { margin: var(--sp-2) 0 0; }
 
-/* ---- The Windows download's dialog */
-#win-dialog { max-width: min(520px, calc(100vw - 2 * var(--sp-4))); color: var(--text); padding: var(--sp-6); }
-#win-dialog::backdrop { background: var(--scrim); }
-#win-dialog h2 { margin-bottom: var(--sp-2); }
-#win-dialog p, #win-dialog li { margin: 0 0 var(--sp-3); }
-#win-dialog ol { padding-left: 1.3em; margin: 0 0 var(--sp-3); }
+/* ---- The download dialogs (Windows, Linux) */
+.dl-dialog { max-width: min(560px, calc(100vw - 2 * var(--sp-4))); color: var(--text); padding: var(--sp-6); }
+.dl-dialog::backdrop { background: var(--scrim); }
+.dl-dialog h2 { margin-bottom: var(--sp-2); }
+.dl-dialog p, .dl-dialog li { margin: 0 0 var(--sp-3); }
+.dl-dialog ol { padding-left: 1.3em; margin: 0 0 var(--sp-3); }
+.dl-dialog pre { margin: 0 0 var(--sp-3); }
+.dl-dialog pre code { display: block; padding: var(--sp-3); white-space: pre; overflow-x: auto; }
+/* What is known about the file: version, scan, hash, provenance. */
+.checked { border-top: var(--line); margin-top: var(--sp-4); padding-top: var(--sp-4); }
+.checked h3 { margin: 0 0 var(--sp-3); font-size: var(--fs-body); color: var(--heading); }
+.checked .flagged b { color: var(--accent); }
+/* The whole hash, breakable anywhere: 64 characters don't fit a phone. */
+.checked .hash code { display: block; padding: var(--sp-2); word-break: break-all; font-size: var(--fs-sm); }
+.checked .copy {
+  margin-left: var(--sp-2); padding: 2px var(--sp-3); border-radius: var(--r-md); cursor: pointer;
+  font: inherit; font-size: var(--fs-sm); background: var(--ink-600); color: var(--text); border: var(--line);
+}
+.checked .copy:hover { background: var(--ink-500); }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: var(--sp-3); margin-top: var(--sp-5); }
 .dialog-buttons .btn { min-width: 120px; font: inherit; font-weight: 600; cursor: pointer; }
 

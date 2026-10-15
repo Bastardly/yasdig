@@ -188,10 +188,23 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Build provenance: GitHub signs that these archives came from this
+      # workflow and commit (`gh attestation verify <file> --repo …`) — the
+      # nearest thing to a signature while the program has no certificate.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      # What a download can be checked against: `sha256sum -c SHA256SUMS`.
+      - name: Checksums
+        run: sha256sum yasdig-linux-x86_64.tar.gz yasdig-windows-x86_64.zip > SHA256SUMS
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            yasdig-linux-x86_64.tar.gz
+            yasdig-windows-x86_64.zip
       - name: Release
         # Two ways in, both ending with the archives attached: a release
         # drafted by hand on GitHub (its tag push started this run, and its
@@ -202,9 +215,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          files="yasdig-linux-x86_64.tar.gz yasdig-windows-x86_64.zip"
+          files="yasdig-linux-x86_64.tar.gz yasdig-windows-x86_64.zip SHA256SUMS"
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber $files
           else
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes $files
           fi
+
+  # VirusTotal, after the archives are public: never in the way of a release.
+  # A scan that fails or times out leaves the release as it is, and the site
+  # says "not scanned yet". `scan.yml` is also run by hand to (re-)scan a tag.
+  scan:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    permissions:
+      contents: write
+    uses: ./.github/workflows/scan.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit

@@ -112,6 +112,17 @@ and A1111, Forge and Civitai can read it. No file paths are written. If you'd ra
 share pictures without that information, turn off *Settings inside saved PNGs* in
 Settings → **General**.
 
+**Checking a download.** YASDIG isn't signed with a paid certificate yet, so every
+release can be checked three other ways, and the download dialog on
+[yasdig.com](https://yasdig.com) shows all three:
+- **VirusTotal** scans each archive and the program inside it when a release is
+  published; the release page links the reports.
+- **The SHA-256** of each archive is on the release page and in `SHA256SUMS`: compare
+  it with `sha256sum <file>` (Linux) or `certutil -hashfile <file> SHA256` (Windows).
+- **GitHub vouches for the build**: `gh attestation verify <file> --repo
+  Bastardly/yasdig` checks that the archive was built by this repository's release
+  workflow from its public source.
+
 **Found a security problem?** Please report it privately through the repository's
 [Security tab](https://github.com/Bastardly/yasdig/security) (*Report a
 vulnerability*) rather than in a public issue.

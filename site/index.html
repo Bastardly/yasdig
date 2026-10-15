@@ -38,11 +38,13 @@
     · <a href="https://github.com/Bastardly/yasdig">Source on GitHub</a></p>
 </section>
 
-<!-- Before the Windows download: what Windows will say, and why, so the
-     warnings that follow read as expected rather than as a reason to stop.
-     Opened by the script only once it has found the zip; without it the
-     button is the Releases-page link it always was. -->
-<dialog id="win-dialog" class="card">
+<!-- Before a download: how to start it, and what is known about the file —
+     its version and SHA-256, what VirusTotal's engines said, and that GitHub
+     built it from the public source (`checked`). Opened by the script only
+     once it has found the release; without it each button is the Releases-page
+     link it always was. Windows also says what SmartScreen will show, so the
+     warnings read as expected rather than as a reason to stop. -->
+<dialog id="win-dialog" class="card dl-dialog">
   <h2>Before you download</h2>
   <p>YASDIG is free and open source — every line of it is
     <a href="https://github.com/Bastardly/yasdig">public on GitHub</a>. It isn't signed
@@ -56,9 +58,27 @@
   </ol>
   <p class="sub">After that it starts like any other program. Extract the zip first
     (right-click → <i>Extract All</i>) and start <code>yasdig.exe</code> from the folder.</p>
+  <div class="checked" id="win-checked"></div>
   <div class="dialog-buttons">
-    <button type="button" class="btn" id="win-cancel">Cancel</button>
+    <button type="button" class="btn" data-cancel>Cancel</button>
     <a class="btn btn-run" id="win-go" href="https://github.com/Bastardly/yasdig/releases" download>Download</a>
+  </div>
+</dialog>
+<dialog id="linux-dialog" class="card dl-dialog">
+  <h2>Before you download</h2>
+  <p>YASDIG is free and open source — every line of it is
+    <a href="https://github.com/Bastardly/yasdig">public on GitHub</a>. The download
+    is a folder in a <code>.tar.gz</code>: extract it where you want to keep it, and
+    start the program inside.</p>
+  <pre><code>tar xzf yasdig-linux-x86_64.tar.gz
+./yasdig/yasdig</code></pre>
+  <p class="sub">It needs your graphics driver's Vulkan support — Mesa's RADV on AMD
+    and Intel, or NVIDIA's own driver — which most distributions install with the
+    driver.</p>
+  <div class="checked" id="linux-checked"></div>
+  <div class="dialog-buttons">
+    <button type="button" class="btn" data-cancel>Cancel</button>
+    <a class="btn btn-run" id="linux-go" href="https://github.com/Bastardly/yasdig/releases" download>Download</a>
   </div>
 </dialog>
 
@@ -137,8 +157,11 @@
       const a = rel.assets.find((x) => test.test(x.name));
       if (a) document.getElementById(id).href = a.browser_download_url;
     }
-    const win = rel.assets.find((x) => WIN.test(x.name));
-    if (win) askFirst(win.browser_download_url);
+    const scan = scanOf(rel.body);
+    for (const [os, test] of [['win', WIN], ['linux', LINUX]]) {
+      const a = rel.assets.find((x) => test.test(x.name));
+      if (a) askFirst(os, a, rel, scan);
+    }
     const date = new Date(rel.published_at).toLocaleDateString(undefined,
       { day: 'numeric', month: 'short', year: 'numeric' });
     document.getElementById('release').textContent =
@@ -146,21 +169,95 @@
   } catch { /* keep the Releases page links */ }
 })();
 
-// The Windows button explains before it downloads (#win-dialog). The dialog's
-// own link does the downloading, so the browser sees an ordinary click on a
-// file link and nothing here has to start a download by script.
-function askFirst(url) {
-  const dlg = document.getElementById('win-dialog');
-  const go = document.getElementById('win-go');
-  go.href = url;
-  document.getElementById('dl-win').addEventListener('click', (e) => {
+// The scan the release pipeline put in the notes (.github/scripts/
+// scan-notes.sh): one `<!-- yasdig-scan {…} -->` comment, scan.json minified.
+// Change both or neither. No comment, or one that doesn't parse: no scan yet.
+function scanOf(body) {
+  const m = /<!-- yasdig-scan (\{.*?\}) -->/.exec(body || '');
+  try { return m ? JSON.parse(m[1]) : null; } catch { return null; }
+}
+
+const esc = (s) => String(s).replace(/[&<>"]/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const day = (iso) => new Date(iso).toLocaleDateString(undefined,
+  { day: 'numeric', month: 'short', year: 'numeric' });
+
+// What is known about this download, for its dialog: the version, the file's
+// SHA-256 (GitHub's own `digest` of the asset, so it is there from the moment
+// the file is), VirusTotal's verdicts on the archive and on the program inside
+// it, and whether GitHub attests it built the file (filled in on open).
+function checked(os, asset, rel, scan) {
+  const hash = (asset.digest || '').replace(/^sha256:/, '');
+  const mine = (scan?.files || []).filter((f) => f.os === (os === 'win' ? 'windows' : 'linux'));
+  const archive = mine.find((f) => f.kind === 'archive');
+  const program = mine.find((f) => f.kind === 'program');
+  const done = (f) => f && f.status === 'completed';
+  const flagged = mine.filter(done).reduce((n, f) => n + f.malicious + f.suspicious, 0);
+  let vt;
+  if (done(archive) || done(program)) {
+    const part = (f, what) => (done(f)
+      ? `<a href="${esc(f.report)}">${f.malicious + f.suspicious} of ${f.engines}</a> engines flagged ${what}` : null);
+    vt = `<p${flagged ? ' class="flagged"' : ''}><b>VirusTotal:</b> ${
+      [part(archive, 'the download'), part(program, 'the program inside')].filter(Boolean).join(' · ')}
+      <span class="sub">— scanned ${day((archive || program).scanned)}</span></p>`
+      + (flagged ? `<p class="sub">A few engines flag most new programs that aren't signed yet: their
+        verdict is a guess from how the file looks, not something found in it. The report
+        lists each engine and what it said.</p>` : '');
+  } else {
+    vt = `<p><b>VirusTotal:</b> <span class="sub">not scanned yet — the results appear a few
+      minutes after a release${hash ? `, or <a href="https://www.virustotal.com/gui/file/${hash}">look the file up</a>` : ''}.</span></p>`;
+  }
+  const check = os === 'win'
+    ? `certutil -hashfile ${asset.name} SHA256` : `sha256sum ${asset.name}`;
+  return `<h3>Checked</h3>
+    <p><b>Version:</b> ${esc(rel.tag_name)} <span class="sub">· ${day(rel.published_at)}</span></p>
+    ${vt}
+    ${hash ? `<p><b>SHA-256:</b> <button type="button" class="copy" data-copy="${hash}">Copy</button></p>
+      <p class="hash"><code>${hash}</code></p>
+      <p class="sub">Check yours with <code>${esc(check)}</code>: it should print the same.</p>` : ''}
+    <p class="attest" hidden><b>Built by GitHub</b> from the public source —
+      <a href="https://github.com/Bastardly/yasdig/attestations">the attestation</a>; check it with
+      <code>gh attestation verify ${esc(asset.name)} --repo Bastardly/yasdig</code>.</p>`;
+}
+
+// Each button explains before it downloads (#win-dialog, #linux-dialog). The
+// dialog's own link does the downloading, so the browser sees an ordinary click
+// on a file link and nothing here has to start a download by script.
+function askFirst(os, asset, rel, scan) {
+  const dlg = document.getElementById(`${os}-dialog`);
+  const go = document.getElementById(`${os}-go`);
+  const box = document.getElementById(`${os}-checked`);
+  go.href = asset.browser_download_url;
+  box.innerHTML = checked(os, asset, rel, scan);
+  // Whether GitHub signed for this build: asked once, on first open. Releases
+  // from before the attestations simply don't show the line.
+  let asked = false;
+  const attest = async () => {
+    if (asked || !asset.digest) return;
+    asked = true;
+    try {
+      const r = await fetch(`https://api.github.com/repos/Bastardly/yasdig/attestations/${asset.digest}`);
+      if (r.ok && ((await r.json()).attestations || []).length) box.querySelector('.attest').hidden = false;
+    } catch { /* no line */ }
+  };
+  document.getElementById(os === 'win' ? 'dl-win' : 'dl-linux').addEventListener('click', (e) => {
     if (typeof dlg.showModal !== 'function') return; // an old browser: just download
     e.preventDefault();
     dlg.showModal();
     go.focus();
+    attest();
   });
   go.addEventListener('click', () => dlg.close());
-  document.getElementById('win-cancel').addEventListener('click', () => dlg.close());
+  dlg.querySelector('[data-cancel]').addEventListener('click', () => dlg.close());
+  box.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-copy]');
+    if (!b) return;
+    try {
+      await navigator.clipboard.writeText(b.dataset.copy);
+      b.textContent = 'Copied';
+    } catch { b.textContent = 'Select it below'; }
+    setTimeout(() => { b.textContent = 'Copy'; }, 1500);
+  });
   // A click on the backdrop closes it too; the card itself doesn't.
   dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
 }

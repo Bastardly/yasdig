@@ -89,7 +89,23 @@ site when `site/` changed):
    `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file <file>`: the
    workflow's publish job finds the release and only uploads the archives to it,
    keeping title and notes. If it already ran, `gh release edit vX.Y.Z --notes-file`.
-4. Watch it (`gh run watch`); check both archives are on the release.
+4. Watch it (`gh run watch`); check both archives are on the release, and — about
+   20 minutes later — the *VirusTotal* section in its notes.
+
+**Trust without a certificate**: `publish` also writes `SHA256SUMS` and a build
+provenance attestation (`actions/attest-build-provenance`); then the `scan` job
+(`.github/workflows/scan.yml`, reusable, also runnable by hand with a tag) uploads
+both archives and the program inside each to VirusTotal
+(`.github/scripts/virustotal.sh`: bash, curl, jq; secret **`VT_API_KEY`**, Public API
+at 4 calls/min) and appends the result to the release notes
+(`scan-notes.sh`, between `<!-- yasdig-scan-begin/end -->`, replaced on a re-run, the
+notes above kept), plus `scan.json`. It runs after the release is public and never
+blocks one.
+
+- **The site parses that notes section**: one `<!-- yasdig-scan {scan.json} -->`
+  comment (`scanOf` in `site/index.html`). Change both or neither.
+- **The hash shown is GitHub's own `digest` of the asset**, there from upload,
+  not the scan's.
 
 sd.cpp flags in `build.rs` (`GGML_NATIVE=OFF`, `GGML_OPENMP=OFF`, `/MT`) make it
 portable; the workflow fails if sd-cli links anything but the Vulkan loader and libc.
@@ -868,11 +884,15 @@ would break `setBusy`/the poll/`style.css`). `showTab` clears the pane it leaves
 - **Website**: `site/` (yasdig.com), deployed by `.github/workflows/pages.yml`, kept
   out of `docs/`. Short and download-first; tokens hand-copied from `web/style.css`.
   Buttons repoint via `api.github.com/…/releases` (not `releases/latest`, which skips
-  pre-releases); failure leaves the Releases link. Asset names
+  pre-releases); failure leaves the Releases link. **Both buttons open a dialog
+  first** (`#win-dialog`, `#linux-dialog`, `askFirst`): how to start it, then a
+  *Checked* block (`checked()`): version, VirusTotal's verdicts, the SHA-256 with a
+  copy button, and — when `api.github.com/…/attestations/<digest>` has one — the
+  build attestation. Asset names
   (`yasdig-windows-x86_64.zip`, `yasdig-linux-x86_64.tar.gz`; the regexes still match
-  the bare files older releases carry) must match `release.yml`. **The Windows button
-  opens `#win-dialog` first** (what SmartScreen will say and why — open source, not yet
-  signed), only once the script found the zip; the dialog's own link downloads.
+  the bare files older releases carry) must match `release.yml`. The Windows dialog
+  also says what SmartScreen will show and why; a dialog opens only once the script
+  found the file, and its own link downloads.
 - **Licences**: Apache-2.0. `THIRD_PARTY_LICENSES.md` (sd.cpp, ggml and their bundled
   libs verbatim, plus the crate table from `cargo tree -e normal` × `cargo metadata`)
   is compiled in and served at `GET /licences`. **Regenerate on an sd.cpp bump or a new

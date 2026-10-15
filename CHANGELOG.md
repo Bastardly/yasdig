@@ -23,6 +23,11 @@ What changed in each release of yasdig. Each release's executables are on the
   which defaults only reach SD 1.x, 2.x and SDXL, and Nightly warns that it is a work
   in progress.
 - **Refine & adjust** says *Press Esc to close* at its foot.
+- **Every release is checked in the open**: VirusTotal scans the archives and the
+  program inside each, the release notes link the reports, and every release carries
+  `SHA256SUMS` and a GitHub build attestation. On [yasdig.com](https://yasdig.com)
+  both download buttons now open a dialog with the version, VirusTotal's result, the
+  SHA-256 (with a copy button) and the attestation.
 
 ## 0.2.0 — 2026-10-14
 
