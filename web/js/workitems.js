@@ -1,7 +1,7 @@
 import { $, esc, getJSON, post } from './dom.js';
 import { S } from './state.js';
 import { imageLoras, imageSource, models, render, setParts, setUpscaler, syncCfgPlaceholders,
-         syncOutSize, syncParts } from './image.js';
+         syncOutSize, syncParts, syncSeedLine } from './image.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
 import { setReferences } from './refs.js';
 
@@ -206,6 +206,7 @@ export function applyWorkItem(item) {
   $('prompt').value = item.typed_prompt ?? item.prompt;
   $('negative').value = item.typed_negative ?? item.negative ?? '';
   $('seed').value = item.seed;
+  syncSeedLine();
   // Assigned directly, and deliberately without firing `change`: that listener
   // is syncAdvanced, which would overwrite every field below with the model's
   // defaults — the exact opposite of restoring this item.

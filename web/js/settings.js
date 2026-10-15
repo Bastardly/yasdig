@@ -1,4 +1,5 @@
-import { $, esc, post, rememberFolds } from './dom.js';
+import { $, esc, post } from './dom.js';
+import { floatPanels } from './panels.js';
 import { setUpFactor, loadModels, upscalersReady, upscalerOptions } from './image.js';
 import { wireHints } from './hints.js';
 import { loadModelSettings } from './modelsettings.js';
@@ -31,63 +32,56 @@ import { loadModelSettings } from './modelsettings.js';
 // nothing.
 const BLANK = true;
 
-// Where a section starts. Every section is a fold (`<details class="fold">`),
-// like the Image tab's, and they come in the Image tab's order — Prompts,
-// Models, Generation, Image to image, Hi-res, Refine — so a default is found
-// where its control is. `open: false` starts one folded; what each fold was
-// last left at is remembered per browser (`rememberFolds`).
-//
-// `pane` is the id of the container the rows under it are rendered into, and it
-// is why this table is still one table: `markup` is called once per pane and
-// skips what isn't in the one it is building, so a section changing column is
-// this one word rather than a second list and a second loop.
-const SECTION = (title, { open = true, help = null, pane = 'setform' } = {}) =>
-  ({ title, open, help, pane });
+// Where a section starts. Every section is a floating panel with a rail
+// button (`panels.js`), like the Image tab's, and they come in the Image tab's
+// order — Prompts, Models, Generation, Image to image, Hi-res, Refine — so a
+// default is found where its control is. `open` is whether it starts open the
+// first time; after that each is where the user left it. `rail` is a shorter
+// name for the rail button.
+// `both`: the panel resizes in width as well as height (`panels.js`).
+const SECTION = (title, { open = false, help = null, rail = null, both = false } = {}) =>
+  ({ title, open, help, rail: rail ?? title, both });
 
-// A heading inside a section, for rows that belong together but not to a fold
-// of their own — the six UNet defaults inside Generation.
+// A line of grey text inside a section: what its rows are, or a warning.
+const NOTE = (note) => ({ note });
+
+// A heading inside a section, for the kinds of row General gathers.
 const SUB = (sub, help = null) => ({ sub, help });
 
+// Where the Per model panel stands among the sections.
+const PER_MODEL = { permodel: true };
+
 export const FIELDS = [
-  SECTION('Prompts'),
+  SECTION('Default prompt', { both: true }),
   { key: 'prompt', page: true, from: 'prompt', kind: 'textarea' },
   { key: 'negative', page: true, from: 'negative', kind: 'text' },
 
   // Not a default for any control: the word lists behind `{animal}` in a
-  // prompt. It is on this tab because it is stored in the same file and saves
-  // with the same button — but in the *other* column, because a list that grows
-  // without bound has no business between Negative prompt and Steps: twenty
-  // variables pushed the whole form off the screen. The right-hand column is
-  // also wide enough to put a name, its words and the × on one row.
-  SECTION('Prompt variables', { help: 'setvars', pane: 'setvarbox' }),
+  // prompt. With the prompts, since that is what they are written into, and
+  // stored in the same file. Its panel resizes both ways (`resize: 'both'`):
+  // a variable's words can be whole phrases.
+  SUB('Prompt variables', 'setvars'),
   { key: 'variables', page: true, kind: 'vars' },
 
-  // The Image tab's Models fold holds the Memory select, so its default is here.
-  // Global like the cache mode; a model that needs RAM says so in its own
-  // defaults.
-  SECTION('Models'),
-  { key: 'memory', from: 'memory', kind: 'mirror' },
-
-  SECTION('Generation'),
+  SECTION('Generation', { open: true }),
+  // Every value is right for every family (`config::CACHE_MODES`) and no recipe
+  // pins it, so it reaches them all — which is why it comes before the UNet rows.
+  { key: 'cache_mode', from: 'cachemode', kind: 'mirror' },
+  { key: 'upscale_factor', from: 'upscale', kind: 'num', min: 1, max: 4, step: 0.1 },
+  { key: 'upscaler', from: 'upscaler', kind: 'upscaler' },
   // The six knobs a family recipe names. Here they are the defaults for the
   // UNet families only, because that is what they are: every other family's
   // recipe is laid over them (`ImageFamily::recipe`), so a Steps box that
-  // claimed to reach a Z-Image would be a setting that appears not to take.
-  // Kept rather than removed because they are the one place to change every
-  // SDXL at once; a single model is Per model's business.
-  SUB('SD 1.x, SD 2.x and SDXL', 'setunet'),
+  // claimed to reach a Z-Image would be a setting that appears not to take —
+  // hence the note. Kept rather than removed because they are the one place to
+  // change every SDXL at once; a single model is Per model's business.
+  NOTE('These six only apply to SD 1.x, SD 2.x and SDXL models; every other family brings its own.'),
   { key: 'steps', from: 'steps', kind: 'int', min: 1, max: 100 },
   { key: 'cfg_scale', from: 'cfg', kind: 'num', min: 0, step: 0.1 },
   { key: 'sampler', from: 'sampler', kind: 'mirror' },
   { key: 'scheduler', from: 'scheduler', kind: 'mirror' },
   { key: 'width', from: 'w', kind: 'int', min: 64, step: 64 },
   { key: 'height', from: 'h', kind: 'int', min: 64, step: 64 },
-  SUB('Every model'),
-  // Every value is right for every family (`config::CACHE_MODES`) and no recipe
-  // pins it, so it reaches them all — which is why it is out of the UNet rows.
-  { key: 'cache_mode', from: 'cachemode', kind: 'mirror' },
-  { key: 'upscale_factor', from: 'upscale', kind: 'num', min: 1, max: 4, step: 0.1 },
-  { key: 'upscaler', from: 'upscaler', kind: 'upscaler' },
 
   // The pass over a source runs Steps and CFG scale above; its strength and
   // working size are the two numbers of its own.
@@ -106,34 +100,48 @@ export const FIELDS = [
   { key: 'refine_strength', from: 'rstrength', kind: 'num', min: 0.05, max: 0.95, step: 0.05 },
   { key: 'refine_cfg_scale', from: 'rcfg', kind: 'num', min: 0, step: 0.1, blank: BLANK },
 
+  // Not a section of the form: where Per model's panel (its own file and
+  // Save, `#panel-set-per-model`) goes in the rail and the order.
+  PER_MODEL,
+
+  // How this machine runs, what is kept and what is cleared: one panel, a
+  // heading per kind.
+  SECTION('General'),
+  // The Image tab's Models panel holds the Memory select, so its default is
+  // here. Global like the cache mode; a model that needs RAM says so in its own
+  // defaults.
+  SUB('Models'),
+  { key: 'memory', from: 'memory', kind: 'mirror' },
+
   // Not defaults for any control: how this machine runs, so their own labels
   // and help, and here rather than beside a button on the Image tab.
-  SECTION('Speed and limits'),
-  { key: 'reference_size', page: true, label: 'Reference size', help: 'setrefsize', kind: 'choice',
+  SUB('Speed and limits'),
+  { key: 'reference_size', page: true, label: 'Reference image size', help: 'setrefsize', kind: 'choice',
     options: [[512, '512 px (default)'], [768, '768 px'], [1024, '1024 px'], [0, 'Full (the output’s size)']] },
   { key: 'vae_conv_direct', page: true, label: 'Fast VAE decode', help: 'setvaedirect', kind: 'check' },
   { key: 'gpu_reserve_gb', page: true, label: 'Keep free on the GPU (GB)', help: 'setgpureserve', kind: 'num', min: 0, max: 16, step: 0.5 },
   { key: 'max_image_side', page: true, label: 'Largest image side', help: 'setmaxside', kind: 'int', min: 1024, max: 32768, step: 512 },
 
   // What goes into a picture saved to output, beside its pixels.
-  SECTION('Saved images'),
+  SUB('Saved images'),
   { key: 'embed_png_settings', page: true, label: 'Settings inside saved PNGs', help: 'setembedpng', kind: 'check' },
 
   // Not a default for any control either: what *Close server* deletes on the
   // way out (`src/shutdown.rs`). Off unless ticked, and favourites never.
-  SECTION('When the server is closed'),
+  SUB('When the server is closed'),
   { key: 'clear_workitems_on_close', page: true, label: 'Clear work items', help: 'setclearwi', kind: 'check' },
   { key: 'clear_outputs_on_close', page: true, label: 'Clear outputs', help: 'setclearout', kind: 'check' },
   { key: 'clear_videos_on_close', page: true, label: 'Clear videos', help: 'setclearvid', kind: 'check' },
 
-  SECTION('Advanced', { open: false }),
+  SUB('Advanced'),
   { key: 'hires_flash_attn', label: 'Flash attention', help: 'setflash', kind: 'check' },
   { key: 'weight_type', label: 'Weight type', help: 'setwtype', kind: 'text', blank: BLANK },
   { key: 'extra_args', label: 'Extra sd-cli arguments', help: 'setargs', kind: 'lines' },
 
   // Features a release ships hidden because they are unfinished. Off by
   // default; ticking one shows it at once (`applyNightly`).
-  SECTION('Nightly features', { open: false }),
+  SECTION('Nightly features', { rail: 'Nightly' }),
+  NOTE('Very much a work in progress: these can change or break between releases.'),
   { key: 'nightly_video', page: true, label: 'Video tab (work in progress)', help: 'setnightlyvideo', kind: 'check' },
 ];
 
@@ -164,8 +172,8 @@ const varRow = (name = '', words = []) => `
   <div class="varrow">
     <input class="varname" value="${esc(name)}" placeholder="animal"
       aria-label="Variable name">
-    <input class="varwords" value="${esc(words.join(', '))}"
-      placeholder="crab, horse, dog, cat" aria-label="Words, comma separated">
+    <textarea class="varwords" rows="1" placeholder="crab, horse, dog, cat"
+      aria-label="Words or phrases, separated by commas or new lines">${esc(words.join(', '))}</textarea>
     <button type="button" class="btn btn-danger" data-vardel
       title="Remove this variable">&times;</button>
   </div>`;
@@ -218,36 +226,52 @@ function control(f) {
   }
 }
 
-// The markup for one container. Everything not in that pane is skipped, the
-// `<details>` bookkeeping included — `folded` is only ever set by a section this
-// pane actually drew, so the fold can't be opened in one container and closed in
-// the other.
-function markup(pane) {
-  const out = [];
-  let inFold = false;
-  let active = 'setform';   // anything declared before the first section
+// Where `markup` puts the static Per model panel among the generated ones.
+const PER_MODEL_SLOT = '<!-- per model -->';
+
+// A section's panel id and storage key: `panel-set-<slug>`.
+const slug = (title) => `set-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-$/, '')}`;
+
+// The panels, one per section, and the rail's buttons for them. A section's
+// header is its title (with its (i) when it has one); its rows are the body.
+function markup() {
+  const rail = [];
+  const panels = [];
+  let body = null;
+  const close = () => { if (body) panels.push(`${body.join('\n')}\n    </div>\n  </section>`); };
   for (const f of FIELDS) {
     if (f.title) {
-      if (inFold && active === pane) out.push('</details>');
-      inFold = false;
-      active = f.pane;
-      if (active !== pane) continue;
-      const id = `setfold-${f.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-      out.push(`<details class="fold" id="${id}"${f.open ? ' open' : ''}><summary>${
-        f.help ? `<label data-help="${f.help}">${f.title}</label>` : f.title}</summary>`);
-      inFold = true;
+      close();
+      const id = slug(f.title);
+      rail.push(`<button type="button" class="btn btn-choice railbtn" data-panel="${id}">${f.rail}</button>`);
+      const title = f.help ? `<label data-help="${f.help}">${f.title}</label>` : f.title;
+      body = [`  <section class="fpanel" id="panel-${id}" aria-label="${f.title}" hidden>
+    <header class="fphead"><b>${title}</b><button type="button" class="fpclose" aria-label="Close ${f.title}">&times;</button></header>
+    <div class="fpbody">`];
       continue;
     }
-    if (active !== pane) continue;
+    if (f.permodel) {
+      // Its panel is static markup; this is where it stands in the rail and,
+      // through the marker, in the order the panels are inserted.
+      close();
+      body = null;
+      rail.push('<button type="button" class="btn btn-choice railbtn" data-panel="set-per-model">Per model</button>');
+      panels.push(PER_MODEL_SLOT);
+      continue;
+    }
+    if (f.note) {
+      body.push(`<p class="sub">${f.note}</p>`);
+      continue;
+    }
     if (f.sub) {
-      out.push(`<label class="grouphead"${f.help ? ` data-help="${f.help}"` : ''}>${f.sub}</label>`);
+      body.push(`<label class="grouphead"${f.help ? ` data-help="${f.help}"` : ''}>${f.sub}</label>`);
       continue;
     }
     // The only field with no label of its own: the section heading above it is
     // the label, there being exactly one field under it, and "Prompt variables"
     // followed by "Variables" says it twice.
     if (f.kind === 'vars') {
-      out.push(control(f));
+      body.push(control(f));
       continue;
     }
     const label = f.label ?? labelOf(f.from);
@@ -255,16 +279,20 @@ function markup(pane) {
     if (f.kind === 'check') {
       // A checkbox labels itself from the right, like every other one on the
       // page — `.checks` is the rule that stops `label` being a block here.
-      out.push(`<div class="checks"><label data-help="${help}">`
+      body.push(`<div class="checks"><label data-help="${help}">`
         + `${control(f)} ${label}</label></div>`);
     } else {
-      out.push(`<label for="${fieldId(f)}" data-help="${help}">${label}</label>`);
-      out.push(control(f));
+      body.push(`<label for="${fieldId(f)}" data-help="${help}">${label}</label>`);
+      body.push(control(f));
     }
   }
-  if (inFold) out.push('</details>');
-  return out.join('\n');
+  close();
+  return { rail: rail.join('\n'), panels: panels.join('\n') };
 }
+
+// The tab is a workspace (`panels.js`): its panels can be placed once it shows.
+let wsPanels = null;
+export const layoutSettingsTab = () => wsPanels?.layout();
 
 // ---- Reading and writing the form ------------------------------------------
 
@@ -311,8 +339,9 @@ function take(f) {
       // what comes back agree, and the dirty check compares them.
       const name = row.querySelector('.varname').value.trim().toLowerCase();
       if (!name) continue;
+      // Commas or new lines: a phrase per line reads better once they are long.
       out[name] = row.querySelector('.varwords').value
-        .split(',').map((w) => w.trim()).filter(Boolean);
+        .split(/[,\n]/).map((w) => w.trim()).filter(Boolean);
     }
     return out;
   }
@@ -335,7 +364,7 @@ function take(f) {
   return Number.isFinite(n) ? n : undefined;
 }
 
-const rows = () => FIELDS.filter((f) => !f.title && !f.sub);
+const rows = () => FIELDS.filter((f) => f.key);
 
 function fill(s) {
   for (const f of rows()) put(f, s[f.key]);
@@ -504,14 +533,23 @@ async function save() {
 export function initSettings() {
   // Built synchronously so `wireHints` finds these labels in its first pass;
   // the values arrive from the fetch below, which cannot land before boot ends.
-  //
-  // Two containers, one table: the variables are in the other column and
-  // everything else is the form. `fill`, `body` and the dirty check don't know
-  // that — they address a control by its id, which is unique to the document
-  // rather than to a pane.
-  $('setform').innerHTML = markup('setform');
-  $('setvarbox').innerHTML = markup('setvarbox');
-  rememberFolds($('tab-settings'));
+  // `fill`, `body` and the dirty check address a control by its id, unique to
+  // the document, so they don't care which panel it is in.
+  const { rail, panels } = markup();
+  $('setrail').innerHTML = rail;
+  const [before, after] = panels.split(PER_MODEL_SLOT);
+  $('panel-set-per-model').insertAdjacentHTML('beforebegin', before);
+  $('panel-set-per-model').insertAdjacentHTML('afterend', after);
+  // The variables' explainer, under their rows.
+  $('panel-set-default-prompt').querySelector('.fpbody').append($('setvarnote').content.cloneNode(true));
+  wsPanels = floatPanels({
+    host: $('tab-settings'),
+    rail: $('setrail'),
+    defs: FIELDS.filter((f) => f.title || f.permodel).map((f) => (f.permodel
+      ? { id: 'set-per-model', open: true, corner: 'bottom-right' }
+      : { id: slug(f.title), open: f.open, both: f.both })),
+  });
+  wsPanels.init();
   wireHints($('tab-settings'));
   $('setsave').addEventListener('click', save);
   // Delegated to the *tab*, not to the form, because the panes are two elements

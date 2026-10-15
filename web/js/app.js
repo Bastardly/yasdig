@@ -19,7 +19,7 @@ import { initWorkItems, markGrid } from './workitems.js';
 import { initOutputs, loadOutputs } from './outputs.js';
 import { initVideo, layoutVideoTab } from './video.js';
 import { initConvert } from './convert.js';
-import { initSettings } from './settings.js';
+import { initSettings, layoutSettingsTab } from './settings.js';
 import { initHelp, openHelp } from './help.js';
 import { initGetModels } from './getmodels.js';
 import { initModelSettings } from './modelsettings.js';
@@ -42,6 +42,7 @@ function showTab(name) {
   // A hidden workspace has no size: its panels are placed once it shows.
   if (name === 'image') layoutImageTab();
   if (name === 'video') layoutVideoTab();
+  if (name === 'settings') layoutSettingsTab();
   // Nothing is playing on a tab nobody is looking at. A 24 fps canvas timer is
   // cheap but it is not free, and it would go on redrawing all night.
   if (name !== 'video') stopPlayback();

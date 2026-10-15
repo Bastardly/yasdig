@@ -3,6 +3,27 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### Changed
+
+- **The top bar stays put** when a page scrolls, and nothing but a dialog covers it.
+  The credits are a thin footer fixed to the window's bottom, and the Image, Video
+  and Settings tabs never scroll.
+- **Panels can be made taller or shorter** by their bottom-right corner, and remember
+  it.
+- **After each generation is split up**: *Run after each image* is at the top of the
+  Hi-res pass and Refine pass panels, *Save Output* is in the rail above *Until
+  stopped*, and Output upscale and Upscaler stay in Generation.
+- **The rail shows the seed** the next Generate uses, in amber when it is pinned.
+- **Settings is a workspace** like the Image tab: eight sections in the rail —
+  Default prompt (with the prompt variables, in a panel that also widens), Generation,
+  Image to image, Hi-res pass, Refine pass, Per model, General and Nightly — with Save
+  at the rail's foot. A variable's words can be one phrase per line. Generation notes
+  which defaults only reach SD 1.x, 2.x and SDXL, and Nightly warns that it is a work
+  in progress.
+- **Refine & adjust** says *Press Esc to close* at its foot.
+
 ## 0.2.0 — 2026-10-14
 
 ### New

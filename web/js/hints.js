@@ -227,19 +227,18 @@ const HELP = [
   { ids: ['autorun'],
     text: 'Ignore the count and keep drawing new seeds until you press Stop. For '
         + 'leaving a prompt running and picking from the gallery afterwards.' },
-  { ids: ['aftereach'],
-    text: 'What happens to each image once it is drawn, without you pressing the '
-        + 'buttons. All three are off by default: a run that quietly refined and '
-        + 'saved everything would be spending GPU time nobody asked for.' },
   { ids: ['opthires'],
-    text: 'Run the hi-res pass on every image of the run. Roughly doubles the '
-        + 'time per image, and is what makes an unattended run produce finished '
-        + 'pictures rather than drafts.' },
+    text: 'Run this hi-res pass on every image of a run, as it lands, with the '
+        + 'settings below. Off by default: it roughly doubles the time per image, '
+        + 'and is what makes an unattended run produce finished pictures rather '
+        + 'than drafts.' },
   { ids: ['optrefine'],
-    text: 'Run refine on every image of the run. With the hi-res pass on too, it '
-        + 'runs after it — refining the bigger picture, not the draft.' },
+    text: 'Run this refine pass on every image of a run, as it lands, with the '
+        + 'settings below. Off by default. With the hi-res pass on too, it runs '
+        + 'after it — refining the bigger picture, not the draft.' },
   { ids: ['optsave'],
-    text: 'Copy every image of the run into work/output/. Everything is kept in '
+    text: 'Copy every image of a run into work/output/ (the Outputs tab) as it '
+        + 'lands, after any hi-res or refine pass ticked. Everything is kept in '
         + 'the gallery either way; this is the folder to point other programs at, '
         + 'and the pool Start from and the video tab\'s first frame pick from.' },
   { ids: ['source'],
@@ -329,11 +328,6 @@ const HELP = [
   // moving `[defaults]` into a form had to stop being the answer to. There were
   // four: `upscale_factor` has a box on the Image tab now, so its sentence is up
   // with the rest of that panel's under `upscale`.
-  { ids: ['setunet'],
-    text: 'Where every SD 1.x, SD 2.x and SDXL checkpoint starts. Other families '
-        + 'start from their own defaults instead — a Z-Image turbo wants 8 steps '
-        + 'at CFG 1, and 25 steps at CFG 6 would be a wrong answer for it — so '
-        + 'these do not reach them. To change one model, use Per model.' },
   { ids: ['setpermodel'],
     text: 'Where one model starts, when that should differ from the rest: a '
         + 'turbo SDXL at 6 steps and CFG 1, say, which its file cannot tell us. '

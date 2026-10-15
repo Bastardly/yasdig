@@ -110,7 +110,7 @@ make sense of is refused, not guessed at.
 prompt, model names and settings into the PNG, so others can recreate your picture
 and A1111, Forge and Civitai can read it. No file paths are written. If you'd rather
 share pictures without that information, turn off *Settings inside saved PNGs* in
-Settings.
+Settings → **General**.
 
 **Found a security problem?** Please report it privately through the repository's
 [Security tab](https://github.com/Bastardly/yasdig/security) (*Report a

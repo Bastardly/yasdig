@@ -188,6 +188,24 @@ function syncModelsSummary() {
   syncRailDots();
 }
 
+// The upscaler's name as the select shows it; FSR when none is picked.
+function upscalerName() {
+  const sel = $('upscaler');
+  return sel.value ? sel.options[sel.selectedIndex]?.textContent ?? sel.value : 'FSR';
+}
+
+// The rail's seed line: what the next Generate uses, read-only. Amber when
+// pinned (not -1), since every image then repeats it. Called from
+// `syncSummaries`, and after the writes that fire no event (a reopened work
+// item, Info's seed pin).
+export function syncSeedLine() {
+  const v = $('seed').value.trim() || '-1';
+  const el = $('seedline');
+  el.textContent = `Seed: ${v}`;
+  el.title = el.textContent;
+  el.classList.toggle('on', v !== '-1');
+}
+
 // ---- The workspace ------------------------------------------------------------
 //
 // The tab is a rail, the picture on a stage, and floating panels over it
@@ -246,6 +264,7 @@ function syncSummaries() {
   // Everything that changes a summary is something a running loop should
   // hear, so this is also where the loop is told.
   syncLoop();
+  syncSeedLine();
   // Before `/models` answers every box is empty, and "× · steps" says nothing.
   if (!currentModel()) return;
   // The line is cut to fit (`.fold > summary`), so the whole of it is the title.
@@ -269,24 +288,11 @@ function syncSummaries() {
     $('scheduler').value === 'auto' ? null : $('scheduler').value,
     $('cachemode').value === 'off' ? null : `${$('cachemode').value} cache`,
     refs ? `${refs} ref${refs > 1 ? 's' : ''}` : null,
+    source ? null : `${$('upscale').value}× via ${upscalerName()}`,
   ].filter(Boolean).join(' · '));
   // A step cache trades exactness for time, and references change what is
   // drawn: departures from the plain path a folded section must not hide.
   $('sum-gen').classList.toggle('on', n > 1 || $('cachemode').value !== 'off' || refs > 0);
-
-  const after = [
-    $('opthires').checked ? 'hi-res' : null,
-    $('optrefine').checked ? 'refine' : null,
-    $('optsave').checked ? 'save' : null,
-  ].filter(Boolean);
-  const sel = $('upscaler');
-  const by = sel.value ? sel.options[sel.selectedIndex]?.textContent ?? sel.value : 'FSR';
-  say('sum-after', [
-    source ? null : `${$('upscale').value}× via ${by}`,
-    after.length ? after.join(' → ') : 'nothing after',
-  ].filter(Boolean).join(' · '));
-  // Each of these spends a pass of GPU time on every image of a run.
-  $('sum-after').classList.toggle('on', after.length > 0);
 
   say('sum-src', source ? `from ${source} · strength ${$('srcstrength').value}` : 'off');
   // In the accent rather than dim, like every summary below that marks a
@@ -300,16 +306,19 @@ function syncSummaries() {
 
   syncModelsSummary();
 
-  for (const [id, steps, sel] of [['sum-hires', 'hsteps', 'hiresmodel'],
-                                  ['sum-refine', 'rsteps', 'refmodel']]) {
+  for (const [id, steps, sel, opt] of [['sum-hires', 'hsteps', 'hiresmodel', 'opthires'],
+                                       ['sum-refine', 'rsteps', 'refmodel', 'optrefine']]) {
     const n = parseInt($(steps).value, 10) || 0;
+    const each = $(opt).checked;
     say(id, n > 0
-      ? `${n} steps${id === 'sum-hires' ? ` · ${S.upFactor}×` : ''} · ${$(sel).value || 'same model'}`
+      ? [each ? 'after each' : null, `${n} steps`, id === 'sum-hires' ? `${S.upFactor}×` : null,
+        $(sel).value || 'same model'].filter(Boolean).join(' · ')
       : 'off');
-    // Another checkpoint finishing the picture is easy to forget once folded.
-    // Compared with the diffusion model rather than tested for being set: a
-    // pick that names the generating model is the same model, and stays dim.
-    $(id).classList.toggle('on', !!$(sel).value && $(sel).value !== $('template').value);
+    // In the accent when it runs on every image of a run (GPU time on each),
+    // or on another checkpoint, which is easy to forget once closed. Compared
+    // with the diffusion model rather than tested for being set: a pick that
+    // names the generating model is the same model, and stays dim.
+    $(id).classList.toggle('on', each || (!!$(sel).value && $(sel).value !== $('template').value));
   }
   syncRailDots();
 }
@@ -813,6 +822,7 @@ export function render(data) {
   // something that happens to the box you just typed in.
   $('seedval').addEventListener('click', () => {
     $('seed').value = data.seed;
+    syncSeedLine();
   });
 
   // Which archived generation this descends from, so the grid can show it.
@@ -1345,6 +1355,7 @@ export function initImage() {
   initFolds();
   $('go').addEventListener('click', startRun);
   $('saveout').addEventListener('click', saveOutput);
+  syncSeedLine();
   $('stop').addEventListener('click', stopRun);
   $('cancelgen').addEventListener('click', cancelImage);
   // The Hi-res fold's view of the shared upscale factor.

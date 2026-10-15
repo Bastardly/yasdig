@@ -185,20 +185,23 @@ carries names).
 
 ## The Image tab's panels
 
-The Image and Video tabs are **workspaces**, the Refine & adjust dialog's shape
+The Image, Video and Settings tabs are **workspaces**, the Refine & adjust dialog's shape
 (`.workspace`): a rail (`.wsrail`) of panel toggles, the picture on a **stage**
 (`.stage`, `#result`; a click opens Refine & adjust), floating panels
 (`panels.js`, `--ws-panel-w`), and a **status card** (`.statuscard`: `#err`/OOM, the
 preview, `#prog`, `#loopnote`). Image panels: Prompts, Models (LoRAs included, *Save
-as defaults* in its footer), Generation (the seed first, the *After each generation*
-fold last), Image to image, Hi-res pass, Refine pass, **Info** (`#resultinfo`: size,
-seed pin, timings, the rolled prompt), **Current** and **Favorites**. The rail's foot:
-*Until stopped* (`#autorun`), Cancel/Stop, Generate. **No action row**: Hi-res, Refine, Save to output are in the dialog.
+as defaults* in its footer), Generation (the seed first, Output upscale/Upscaler
+last), Image to image, Hi-res pass and Refine pass (each starting with *Run after each
+image*, `#opthires`/`#optrefine`), **Info** (`#resultinfo`: size, seed pin, timings,
+the rolled prompt), **Current** and **Favorites**. The rail's foot: the seed line
+(`#seedline`, `syncSeedLine` — call it after any write to `#seed` that fires no
+event), *Save Output* (`#optsave`), *Until stopped* (`#autorun`), Cancel/Stop,
+Generate. **No action row**: Hi-res, Refine, Save to output are in the dialog.
 
 **Every panel header says what is inside** (`syncSummaries`, `syncModelsSummary`). A
 line turns `.foldstate.on` when the panel departs from the plain path (>1 image or
-loop, source picked, any After-each box, a separate Hi-res/Refine model, LoRAs or a
-memory mode), and **the rail button's dot mirrors any such line in the panel**,
+loop, source picked, a pass ticked to run after each image, a separate Hi-res/Refine
+model, LoRAs or a memory mode), and **the rail button's dot mirrors any such line in the panel**,
 header or nested fold (`syncRailDots`). Driven by a
 delegated `input`/`change` listener on the tab; a redraw that fires no event must call
 it (hence `loraPicker`'s `onChange`).
@@ -212,7 +215,19 @@ Break silently:
   sits bottom-right.
 - **A hidden tab has no size**: `showTab` calls `layoutImageTab`/`layoutVideoTab`.
 - **The page stops scrolling on a workspace tab** (`.app:has(> .workspace…)` is the
-  window's height); panels scroll their own bodies.
+  window's height less the fixed footer, `--foot-h`); panels scroll their own bodies.
+- **The page frame**: `.tabs` is sticky and `.powered` is a fixed footer; every
+  `.workspace` has `isolation: isolate`, so its panels' z-indexes (up to 1000) stack
+  inside it and never over the top bar. The dialogs are in the top layer.
+- **Panels resize vertically** (`resize: vertical`); `panels.js` saves a dragged
+  height (`p.h`, from a `ResizeObserver` on the inline height) and a header
+  double-click clears it with the position.
+- **Settings' panels are built from `FIELDS`** (`markup()` in settings.js, one per
+  `SECTION`; `SUB()` a heading inside one, `NOTE()` a grey line; `both` widens the
+  panel too — Default prompt, for long variable phrases; `rail:` shortens a button's
+  label). Per model is static markup (`#panel-set-per-model`, its Save/Clear in the
+  footer), placed by the `PER_MODEL` marker. Only rows with a `key` are settings
+  (`rows()` in both modules).
 - **Picking a hi-res/refine model refills that fold** (`fillPass` from `passModel`),
   since `swap_model` is wholesale. Blank pass-CFG placeholder follows the picked model.
 - **Save as defaults skips a fold holding another model's numbers** (`foreign` in

@@ -13,9 +13,11 @@ import { followPointer } from './dom.js';
 // changes, as a <details> does, so code written against a fold reads a panel
 // the same way.
 //
-// Remembered per browser, per panel: open or not, and where it was left, as
-// fractions of the dialog so it lands in the same place after the window
-// changes size. Double-click a header to put the panel back where it starts.
+// Remembered per browser, per panel: open or not, where it was left (as
+// fractions of the host, so it lands in the same place after the window
+// changes size), and a height the user dragged it to (`resize: vertical`, its
+// bottom-right corner) — and a width too for a panel defined `both`. Double-click a header to put the panel back where it
+// starts, at its natural height.
 // Storage can be missing or throw (a private window): everything works
 // without it, as the markup says.
 //
@@ -31,7 +33,7 @@ export function floatPanels({ host, rail, defs }) {
     try { return JSON.parse(localStorage.getItem(key(id))) ?? {}; } catch { return {}; }
   };
   const save = (p) => {
-    try { localStorage.setItem(key(p.id), JSON.stringify({ open: !p.el.hidden, at: p.at })); } catch { /* this session only */ }
+    try { localStorage.setItem(key(p.id), JSON.stringify({ open: !p.el.hidden, at: p.at, h: p.h, w: p.w })); } catch { /* this session only */ }
   };
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
   const railW = () => rail.offsetWidth;
@@ -67,8 +69,13 @@ export function floatPanels({ host, rail, defs }) {
 
   function place(p) {
     if (p.el.hidden || !host.clientWidth) return;
-    // The size it would have with all the room it wants, for the corner maths.
+    // The size it would have with all the room it wants (or was dragged to),
+    // for the corner maths; `put` then caps it at the room below.
     p.el.style.maxHeight = '';
+    p.el.style.height = p.h ? `${p.h}px` : '';
+    // A panel that widens (`both`) keeps the width it was dragged to, still
+    // inside the host.
+    if (p.both) p.el.style.width = p.w ? `${Math.min(p.w, host.clientWidth - railW() - 2 * GAP)}px` : '';
     if (p.at) put(p, p.at.x * host.clientWidth, p.at.y * host.clientHeight);
     else if (p.corner) corner(p);
     else put(p, ...home(p));
@@ -117,11 +124,17 @@ export function floatPanels({ host, rail, defs }) {
           head: el.querySelector('.fphead'),
           button: rail.querySelector(`[data-panel="${d.id}"]`),
           at: null,
+          h: null,
+          w: null,
+          both: !!d.both,
         };
+        el.classList.toggle('fpboth', p.both);
         panels.set(d.id, p);
         Object.defineProperty(el, 'open', { get: () => !el.hidden, set: (v) => setOpen(p, !!v) });
         const was = load(d.id);
         p.at = was.at ?? null;
+        p.h = was.h ?? null;
+        p.w = was.w ?? null;
         el.hidden = !(was.open ?? !!d.open);
         p.button?.classList.toggle('active', !el.hidden);
         p.button?.addEventListener('click', () => setOpen(p, el.hidden));
@@ -136,9 +149,26 @@ export function floatPanels({ host, rail, defs }) {
         p.head.addEventListener('dblclick', (e) => {
           if (e.target.closest('button')) return;
           p.at = null;
+          p.h = null;
+          p.w = null;
           save(p);
           place(p);
         });
+        // The corner grip writes an inline height, and nothing else here
+        // does but `place` from `p.h` — so a height that differs from `p.h`
+        // is the user's drag. Saved a moment after it stops.
+        let pending = 0;
+        new ResizeObserver(() => {
+          if (p.el.hidden) return;
+          const h = parseFloat(p.el.style.height), w = parseFloat(p.el.style.width);
+          if ((!h || h === p.h) && (!p.both || !w || w === p.w)) return;
+          clearTimeout(pending);
+          pending = setTimeout(() => {
+            p.h = Math.round(parseFloat(p.el.style.height)) || null;
+            if (p.both) p.w = Math.round(parseFloat(p.el.style.width)) || null;
+            save(p);
+          }, 250);
+        }).observe(el);
       });
       window.addEventListener('resize', () => { for (const p of panels.values()) place(p); });
     },

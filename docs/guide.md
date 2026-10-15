@@ -4,18 +4,25 @@ Every part of the app, tab by tab. The in-app **Help** tab covers the same groun
 
 ## Settings
 
-The **Settings** tab is `user/settings.toml` as a form: the values every model
-starts from, and what the prompt boxes contain when the page loads. Steps, CFG,
-sampler, scheduler and size are in a section named *SD 1.x, SD 2.x and SDXL*, because that is
-all they reach — other families start from their own (see
-[Model families](configuration.md#model-families)).
+The **Settings** tab is `user/settings.toml` as a workspace like the Image tab's: a
+rail of sections, each a panel you open, move and resize — the values every model
+starts from, and what the prompt boxes contain when the page loads. In
+*Generation*, Steps, CFG, sampler, scheduler and size carry a note that they only
+reach SD 1.x, SD 2.x and SDXL — other families start from their own (see
+[Model families](configuration.md#model-families)). **Save settings** is at the
+rail's foot.
 Press **Save settings** and it is written and takes effect immediately — the
 model list and the Image tab's boxes refill themselves, with no restart and no
 reload.
 
-*Prompt variables* is the one section that is not a set of defaults, and it sits
-in its own card beside the form rather than in it — a list that grows without
-bound has no business in the middle of one. It is the word lists behind
+The sections, in the rail's order: **Default prompt** (the prompt boxes' starting
+text, and *Prompt variables*), **Generation**, **Image to image**, **Hi-res pass**,
+**Refine pass**, **Per model**, **General** (Models, Speed and limits, Saved images,
+When the server is closed, Advanced) and **Nightly**. The Default prompt panel can be
+made wider as well as taller, by its corner, since a variable's words can be whole
+phrases — one per line or separated by commas.
+
+*Prompt variables* is the one part that is not a set of defaults. It is the word lists behind
 `{animal}` in a prompt, and [Prompt variables](#prompt-variables) below says what
 they do. Everything else is the default for a control on one of the other tabs,
 and carries that control's own label and its own **(i)**, so "Refine strength"
@@ -24,6 +31,8 @@ sections are named after what they belong to, which is why *Steps* appears
 twice — once for the Image tab and once under *Starting from an image*, where it
 is a different pass. The three under **Advanced** are the ones with no control
 anywhere else: flash attention, the weight type and extra sd-cli arguments.
+**Nightly** holds features still in the works, which can change or break between
+releases.
 
 Edits you haven't saved are marked on the Settings tab itself, so walking away
 mid-change says so from wherever you walked to, and reloading the page asks
@@ -53,7 +62,7 @@ once per model:
 - On the Image tab, set the boxes the way that model wants them and press
   **Save as defaults for this model**. It opens that way from then on, and is tagged
   *tuned* in the select.
-- Or on the Settings tab, the **Per model** card: pick a model, and each box shows
+- Or on the Settings tab, the **Per model** panel: pick a model, and each box shows
   its own setting — or is empty, with the value it will start at as the
   placeholder. Empty a box to drop that setting; **Clear all** drops them all.
 
@@ -186,22 +195,24 @@ the same one. A model or LoRA you haven't installed is named in the line under t
 button instead of being picked. A ComfyUI PNG holds a node graph rather than
 settings, so it loads nothing and says so.
 
-Settings → *Saved images* turns the writing off, if you share pictures and would
+Settings → General → *Saved images* turns the writing off, if you share pictures and would
 rather your prompts didn't travel with them.
 
 ## The Image tab
 
 The Image tab is a workspace: a rail down the left, the latest picture filling the rest,
 and **panels** that float over it. Each rail button opens one — **Prompts**, **Models**,
-**Generation** (with the seed at its top and *After each generation* at its foot),
+**Generation** (the seed at its top, the output size and upscaler at its foot),
 **Image to image**, **Hi-res pass**, **Refine pass**,
 **Info** (the picture's size, seed, timings and the prompt as it was drawn), **Current**
 and **Favorites** (the work items). Open as many as you like and drag each by its title
 bar to where you want it; it stays there next time, and a double-click on the title bar
 puts it back. Each panel's title bar says what is inside, in amber when it departs from
 a plain generate (a batch, a source, a LoRA, an extra pass), and the rail button then
-carries a dot so a closed panel still says so. **Until stopped**, Stop and **Generate**
-are at the rail's foot; progress, the live preview and any error appear in a card at the lower
+carries a dot so a closed panel still says so. A panel can be made taller or shorter
+by its bottom-right corner, and remembers that too. The rail's foot shows the seed
+the next Generate uses (in amber when it is pinned rather than -1), then **Save
+Output** and **Until stopped**, Stop and **Generate**; progress, the live preview and any error appear in a card at the lower
 left of the picture.
 
 Click the picture to open **Refine & adjust** — Hi-res, Refine, Edit, Extend, Scale,
@@ -369,7 +380,7 @@ nothing on this side is looking at it.
 ## Upscalers
 
 Every render is enlarged on its way to the output size, and the **Upscaler** select
-beside *Output upscale* in the *After each generation* fold (Generation panel) picks what does it. **FSR (EASU)** is the
+beside *Output upscale*, at the foot of the Generation panel, picks what does it. **FSR (EASU)** is the
 default: milliseconds, no file, and it only redistributes the pixels the checkpoint
 drew. A **model** draws new fine texture instead — hair, fabric, skin — at the cost of
 seconds. **Get models → Upscalers** downloads four that run here — 4x-UltraSharp and
@@ -552,7 +563,7 @@ replaces the ones after it. An image keeps its last twelve steps and always its
 original; history is scratch, gone with the image or the server. Compare shows an
 earlier step of another shape (before an Extend) whole inside the frame.
 
-For a batch, the *After each generation* fold runs Hi-res and Refine on every image
+For a batch, *Run after each image* in the Hi-res pass and Refine pass panels runs them on every image
 with the prompts from the Hi-res pass and Refine pass panels; a `{variable}` in them
 rolls per image.
 
@@ -639,14 +650,15 @@ A pinned seed **advances by one per image**, so a batch of eight isn't eight cop
 the same picture; the first image is exactly the seed you pinned. `-1` keeps drawing a
 fresh seed per image, as always.
 
-The **After each generation** fold, at the foot of the Generation panel, adds three optional steps, all off by default, run in
-this order:
+Three optional steps run on each image as it lands, all off by default, in this
+order:
 
-- **Hi-res pass** — at the factor in the Hi-res pass panel's **Hi-res scale** (1 to 4, so
-  2.5 is fine), which is the same value as the select above the image.
-- **Refine** — after the hi-res pass, for the reason the buttons are in that order.
-- **Save to output** — writes the finished image to `work/output/`, so a run can fill a
-  folder without a click per image.
+- **Hi-res pass** — *Run after each image* at the top of the Hi-res pass panel, at
+  that panel's **Hi-res scale** (1 to 4, so 2.5 is fine).
+- **Refine** — the same box in the Refine pass panel; after the hi-res pass, for the
+  reason the buttons are in that order.
+- **Save Output** — in the rail, above *Until stopped*: writes the finished image to
+  `work/output/`, so a run can fill a folder without a click per image.
 
 They apply to a run of one just as much as to a batch, which is how you queue a single
 generate-and-refine and walk away. Both passes read the same boxes the buttons
@@ -662,7 +674,7 @@ yasdig) drops whatever is still queued. And every generation is archived, so an
 overnight loop writes a few MB per image into `work/workitems/` — delete what you
 don't want from the grid. Only the newest image per place it is shown is kept warm, in
 `work/current/`, which is emptied on start and on *Close server*: a refined or hi-res
-image you want to keep is one **Save to output** away (or tick it in *After each*).
+image you want to keep is one **Save to output** away (or tick **Save Output** in the rail).
 
 
 ## Convert

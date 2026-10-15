@@ -105,6 +105,7 @@
   --rail-w: 130px;       /* that dialog's rail of panel toggles */
   --ws-rail-w: 150px;    /* the Image and Video tabs' rail: longer labels */
   --ws-panel-w: 380px;   /* their panels: forms, wider than the dialog's */
+  --foot-h: 28px;        /* the fixed page footer, and the dialog's foot line */
   --thumb-h: 200px;      /* work items, clips, and the img2img sources — one
                             size, because they are the same strip of pictures
                             doing the same job on two tabs */
@@ -128,7 +129,7 @@ body {
   margin: 0;
   font: var(--fs-body)/var(--lh-body) var(--font-ui);
   background: var(--ink-900); color: var(--text);
-  display: flex; padding: var(--sp-4);
+  display: flex; padding: var(--sp-4) var(--sp-4) calc(var(--foot-h) + var(--sp-4));
   flex-direction: column;
 }
 /* A modal dialog — the viewer, Refine, References, Jobs, the picker — freezes
@@ -239,9 +240,16 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
    share one GPU and almost no controls — a clip has frames, fps and a flow
    shift and no upscale ladder at all — so they are separate panels rather than
    one panel with half its fields hidden. */
+/* Sticky, and above everything on the page but a dialog (which is in the top
+   layer): the workspaces isolate their panels' stacking, so a panel can't
+   climb over it. The negative top margin and matching padding carry its
+   background into the body's padding, so scrolled content doesn't show above
+   it. */
 .tabs {
   display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1);
-  margin: 0 0 var(--sp-4); border-bottom: var(--line); padding-bottom: var(--sp-2);
+  margin: calc(-1 * var(--sp-4)) 0 var(--sp-4); border-bottom: var(--line);
+  padding: var(--sp-4) 0 var(--sp-2);
+  position: sticky; top: calc(-1 * var(--sp-4)); z-index: 50; background: var(--ink-900);
 }
 
 /* The one control in the tab row that isn't a tab: as far from them as the
@@ -395,12 +403,12 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   display: grid; grid-template-columns: 10rem minmax(0, 1fr) auto;
   gap: var(--sp-2); margin-top: var(--sp-2);
 }
-.varrow .btn { padding: var(--sp-2); }
+.varrow .btn { padding: var(--sp-2); align-self: start; }
+/* The words: one line to start, taller by its own corner when the phrases are
+   long (the panel widens too — `.fpboth`). */
+.varrow .varwords { min-height: 0; height: auto; resize: vertical; }
 /* Above the rows, not under them — see the `vars` case in settings.js. */
 .varadd { margin-top: var(--sp-2); }
-/* The generated heading is the first thing in that card, and `.grouphead`'s top
-   margin exists to part it from the field above it, which here there isn't. */
-#setvarbox > .grouphead:first-child { margin-top: 0; }
 
 .grouphead { display: block; font-size: var(--fs-sm); color: var(--text); font-weight: bold; margin: var(--sp-3) 0 0; }
 /* The Image tab's folds. Each is a section of the panel with a line under
@@ -612,6 +620,15 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   border-radius: var(--r-lg); box-shadow: var(--shadow-pop); overflow: hidden;
 }
 .fpanel:not([hidden]) { display: flex; }
+/* Taller or shorter by its bottom-right corner (`panels.js` remembers it);
+   the body scrolls, the width stays. */
+.fpanel { resize: vertical; min-height: 120px; }
+/* Settings' Default prompt: wider too, since a variable's words can be whole
+   phrases. Never narrower than it starts. */
+.fpanel.fpboth { resize: both; min-width: var(--fpanel-w); }
+/* Settings' rail: generated buttons in a wrapper, stacked full width like
+   every rail's own. */
+.railbtns { display: flex; flex-direction: column; gap: var(--sp-2); }
 .fphead {
   display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3);
   border-bottom: var(--line); cursor: move; user-select: none; touch-action: none;
@@ -643,6 +660,14 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 }
 .statuscard:not(:has(> .err:not(:empty), img.livepreview:not([hidden]), > .sub:not(:empty), .runstop > button:not([hidden]))) { display: none; }
 .statuscard > .err { max-height: 40vh; overflow-y: auto; }
+/* The dialog's foot line, under everything: panels may cover it. Centred over
+   the pane, not the window. */
+.lbfoot {
+  position: absolute; z-index: 5; bottom: 0; left: var(--railw); right: 0; height: var(--foot-h);
+  display: flex; align-items: center; justify-content: center; pointer-events: none;
+  color: var(--text-dim); font-size: var(--fs-sm);
+}
+#lightbox .statuscard { bottom: calc(var(--foot-h) + var(--sp-3)); }
 .statuscard > .err:empty, .statuscard > .sub:empty { display: none; }
 .statuscard .livepreview { max-height: min(var(--preview-h), 35vh); }
 
@@ -651,14 +676,21 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    (`panels.js`). The page stops scrolling while one is shown; its panels
    scroll instead. */
 .app:has(> .workspace:not([hidden])) {
-  height: calc(100vh - 2 * var(--sp-4)); display: flex; flex-direction: column;
+  height: calc(100vh - 2 * var(--sp-4) - var(--foot-h)); display: flex; flex-direction: column;
 }
 .workspace {
   --railw: var(--ws-rail-w); --fpanel-w: var(--ws-panel-w);
-  position: relative; flex: 1; min-height: 0; display: flex; overflow: hidden;
+  position: relative; flex: 1; min-height: 0; display: flex; overflow: hidden; isolation: isolate;
   border: var(--line); border-radius: var(--r-lg); background: var(--ink-900);
 }
-.railfoot > .checks { margin-top: 0; }
+.railfoot > .checks { margin-top: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+/* The seed the next Generate uses: one line, cut short rather than wrapped,
+   amber when pinned. */
+.seedline {
+  font-size: var(--fs-sm); color: var(--text-dim); font-family: var(--font-num);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.seedline.on { color: var(--accent); }
 .railfoot .runstop { display: flex; flex-direction: column; gap: var(--sp-2); }
 .railfoot .runstop:not(:has(> :not([hidden]))) { display: none; }
 .stage {
@@ -668,6 +700,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .stage > img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--r-lg); cursor: zoom-in; }
 .stage:empty::after { content: attr(data-empty); color: var(--text-dim); }
 .fpbody > .wihead { margin-top: var(--sp-2); }
+
 /* The Video stage: the canvas, and the player's row under it. */
 .vstage { flex-direction: column; }
 .vstage:not(:empty) > #vcanvas { max-width: 100%; max-height: calc(100% - 56px); width: auto; }
@@ -954,7 +987,15 @@ a:hover { color: var(--accent-hi); }
 }
 
 /* The credits line under every tab, and the way to the licence notices. */
-.powered { text-align: center; color: var(--text-dim); font-size: var(--fs-sm); margin: var(--sp-5) 0 var(--sp-4); }
+/* The credits: a thin bar fixed to the window's foot on every tab, so it is at
+   the bottom however short the page, and never makes a workspace scroll (the
+   body keeps its height free, and the workspace's height leaves it out). */
+.powered {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50; height: var(--foot-h);
+  display: flex; align-items: center; justify-content: center; gap: .3em;
+  background: var(--ink-900); border-top: var(--line);
+  color: var(--text-dim); font-size: var(--fs-sm); white-space: nowrap;
+}
 /* The licence notices in Help: long, fixed-width, scrolled in place. */
 .licences { max-height: 480px; overflow: auto; white-space: pre-wrap; font-family: var(--font-num);
             font-size: var(--fs-micro); color: var(--text-dim); background: var(--ink-800);

@@ -30,7 +30,7 @@ import { wireHints } from './hints.js';
 // module has declared it — a ReferenceError that takes the whole module graph,
 // and every tab, down with it. The CLAUDE.md rule "a module's top level
 // declares and nothing else" is exactly this.
-const rows = () => FIELDS.filter((f) => !f.title && !f.sub && !f.page);
+const rows = () => FIELDS.filter((f) => f.key && !f.page);
 
 const idOf = (f) => `pm-${f.key}`;
 
@@ -83,18 +83,13 @@ function markup() {
     const help = f.help ?? f.from;
     return `<label for="${idOf(f)}" data-help="${help}">${label}</label>${control(f)}`;
   }).join('\n');
-  return `<label class="grouphead" data-help="setpermodel">Per model</label>
-    <label for="pmmodel">Model</label>
+  // The heading and the Save / Clear buttons are the panel's own
+  // (`#panel-set-per-model` in index.html): its header and pinned footer.
+  return `<label for="pmmodel">Model</label>
     <select id="pmmodel"></select>
     <p class="sub" id="pmnote"></p>
     <div id="pmparts"></div>
-    <div id="pmrows">${html}</div>
-    <div class="row spaced">
-      <div><button type="button" id="pmsave" class="btn btn-block">Save for this model</button></div>
-      <div><button type="button" id="pmclear" class="btn btn-block">Clear all</button></div>
-    </div>
-    <p class="sub" id="pmmsg"></p>
-    <div id="pmerr" class="err"></div>`;
+    <div id="pmrows">${html}</div>`;
 }
 
 // ---- Reading and writing ---------------------------------------------------

@@ -53,9 +53,15 @@
     <!-- What starts and stops the work, always in reach: the seed (the one
          setting reached for between renders), stopping, starting. -->
     <div class="railfoot">
-      <!-- A run that keeps drawing new seeds until Stop, beside the button
-           that starts it: the count is in the Generation panel. -->
+      <!-- The seed the next Generate uses, to read at a glance: amber when
+           pinned (not -1), since then every image repeats it. Set in the
+           Generation panel, or pinned from Info (`syncSeedLine`). -->
+      <div class="seedline" id="seedline"></div>
+      <!-- Keep every image of the run in work/output/ as it lands; and a run
+           that keeps drawing new seeds until Stop. Beside the button that
+           starts them: the count is in the Generation panel. -->
       <div class="checks">
+        <label><input type="checkbox" id="optsave"> Save Output</label>
         <label><input type="checkbox" id="autorun"> Until stopped</label>
       </div>
       <!-- Two halves of stopping, side by side when both show. *Cancel
@@ -270,39 +276,27 @@
          Shown only for a model that takes them — the server says which
          (`references` on /models). The picks live in #refsdlg (refs.js). -->
     <button type="button" id="refsopen" class="btn btn-block" hidden>References…</button>
-      <!-- What happens to each image once it is drawn: part of the run, so in
-           its panel. Its summary is the line the panel used to have. -->
-      <details id="fold-after" class="fold" open>
-        <summary><label data-help="aftereach">After each generation</label> <span class="foldstate" id="sum-after"></span></summary>
-        <!-- The output upscale describes a txt2img: the pass over a source has no
-             enlarge stage. 1 is not a special case, it is FSR skipped — see the
-             tooltip. -->
-        <div class="row" data-when="text">
-          <div>
-            <label for="upscale">Output upscale</label>
-            <input id="upscale" type="number" step="0.1" min="1" max="4">
-        </div>
-        <!-- Beside the factor because it is the other half of the same step:
-             how much, and by what. Filled from GET /upscalers; the empty value
-             is FSR, which needs no file. -->
+      <!-- How big the picture comes out: part of every generate. -->
+      <!-- The output upscale describes a txt2img: the pass over a source has no
+           enlarge stage. 1 is not a special case, it is FSR skipped — see the
+           tooltip. -->
+      <div class="row" data-when="text">
         <div>
-          <label for="upscaler">Upscaler</label>
-          <select id="upscaler"><option value="">FSR (EASU)</option></select>
-        </div>
+          <label for="upscale">Output upscale</label>
+          <input id="upscale" type="number" step="0.1" min="1" max="4">
+      </div>
+      <!-- Beside the factor because it is the other half of the same step:
+           how much, and by what. Filled from GET /upscalers; the empty value
+           is FSR, which needs no file. -->
+      <div>
+        <label for="upscaler">Upscaler</label>
+        <select id="upscaler"><option value="">FSR (EASU)</option></select>
+      </div>
       </div>
       <!-- The arithmetic, live and under the row it is about — the same shape as
-           #srcnote. The model select quotes this sum for the model's
-           own factor; this box is what moves the right-hand half of it. -->
+         #srcnote. The model select quotes this sum for the model's
+         own factor; this box is what moves the right-hand half of it. -->
       <p class="sub" id="outsize" data-when="text"></p>
-      <!-- Off by default, all three: a run that quietly refined and saved
-           everything would be spending GPU time nobody asked for. The fold's
-           own heading is theirs too, which is why its (i) explains them. -->
-      <div class="checks">
-        <label><input type="checkbox" id="opthires"> Hi-res pass</label>
-        <label><input type="checkbox" id="optrefine"> Refine</label>
-        <label><input type="checkbox" id="optsave"> Save to output</label>
-      </div>
-      </details>
     </div>
   </section>
   <!-- Where the picture begins: noise, or an image. The one thing that used to
@@ -364,6 +358,12 @@
   <section class="fpanel" id="fold-hires" aria-label="Hi-res pass" hidden>
     <header class="fphead"><b>Hi-res pass</b> <span class="foldstate" id="sum-hires"></span><button type="button" class="fpclose" aria-label="Close Hi-res pass">&times;</button></header>
     <div class="fpbody">
+      <!-- Off by default: a run that quietly hi-res'd everything would be
+           spending GPU time nobody asked for. The rest of this panel is the
+           pass's settings, here and in Refine & adjust. -->
+      <div class="checks">
+        <label><input type="checkbox" id="opthires"> Run after each image</label>
+      </div>
       <label for="hiresmodel">Hi-res model</label>
       <select id="hiresmodel"></select>
       <div class="row">
@@ -402,6 +402,10 @@
   <section class="fpanel" id="fold-refine" aria-label="Refine pass" hidden>
     <header class="fphead"><b>Refine pass</b> <span class="foldstate" id="sum-refine"></span><button type="button" class="fpclose" aria-label="Close Refine pass">&times;</button></header>
     <div class="fpbody">
+      <!-- Off by default, like Hi-res's. -->
+      <div class="checks">
+        <label><input type="checkbox" id="optrefine"> Run after each image</label>
+      </div>
       <label for="refmodel">Refine model</label>
       <select id="refmodel"></select>
       <div class="row">
@@ -791,24 +795,19 @@
 
        No video section: those settings are per-model and live on a [[video]]
        entry, which has no defaults layer under it. -->
-  <div class="layout" id="tab-settings" hidden>
-  <div class="card col-controls">
-    <div id="setform"></div>
-    <div class="dock">
-      <div id="seterr" class="err"></div>
-      <p class="sub" id="setmsg"></p>
+  <!-- Settings is a workspace like the Image tab: a rail of sections, each a
+       floating panel (`settings.js` builds them from `FIELDS`), and Save at
+       the rail's foot. -->
+  <div class="workspace" id="tab-settings" hidden>
+  <nav class="wsrail" aria-label="Settings">
+    <div id="setrail" class="railbtns"></div>
+    <div class="railfoot">
       <button id="setsave" class="btn btn-run btn-block">Save settings</button>
     </div>
-  </div>
-
-  <div class="col-result">
-    <!-- The one thing on this side of the Settings tab you can act on, and the
-         reason it is not in the form: the list grows without bound, and in the
-         controls column it pushed everything under it off the screen. Here the
-         row fits `name | words | ×` on one line. Filled by `markup('setvarbox')`
-         — the heading, the button and the rows are all from that table. -->
-    <div class="card">
-      <div id="setvarbox"></div>
+  </nav>
+  <div class="stage setstage"></div>
+  <!-- The variables' explainer, moved into their panel by `settings.js`. -->
+  <template id="setvarnote">
       <p class="sub">A variable is a name and a list of words. Name one
       <code>animal</code>, give it <code>crab, horse, dog</code>, and
       <code>{animal}</code> anywhere in a prompt becomes one of them — a
@@ -818,31 +817,22 @@
       to the sampler: it de-emphasises the word. Case is ignored, and a name
       nothing answers to is reported rather than quietly drawn into the image as
       text.</p>
+  </template>
+  <!-- user/model-settings.toml: one model's overrides. Its own panel and its
+       own Save, because it is its own file — see web/js/modelsettings.js. -->
+  <section class="fpanel" id="panel-set-per-model" aria-label="Per model" hidden>
+    <header class="fphead"><b><label data-help="setpermodel">Per model</label></b><button type="button" class="fpclose" aria-label="Close Per model">&times;</button></header>
+    <div class="fpbody" id="pmbox"></div>
+    <div class="fpfoot">
+      <p class="sub" id="pmmsg"></p>
+      <div id="pmerr" class="err"></div>
+      <button type="button" id="pmclear" class="btn btn-block">Clear all</button>
+      <button type="button" id="pmsave" class="btn btn-run btn-block">Save for this model</button>
     </div>
-
-    <!-- user/model-settings.toml: one model's overrides. Its own card and its
-         own Save, because it is its own file — see web/js/modelsettings.js. -->
-    <div class="card spaced">
-      <div id="pmbox"></div>
-    </div>
-
-    <div class="card spaced">
-      <b>What these are</b>
-      <p class="sub">A model starts from four layers, each overriding the one
-      before it only where it says something: <b>the form on the left</b>
-      (<code>user/settings.toml</code>); its <b>family's defaults</b>, which set
-      size, steps, CFG and sampler for every family but SD and SDXL; a
-      <code>[templates.&lt;name&gt;]</code> block in <code>models.toml</code>, if
-      you wrote one; and <b>Per model</b> above
-      (<code>user/model-settings.toml</code>).</p>
-      <p class="sub">Both files here are rewritten in full on every save, and
-      Per model keeps only what differs from where the model would start anyway
-      — so raising a setting on the left still reaches every model that has no
-      opinion of its own about it.</p>
-      <p class="sub">Nothing here is retroactive: an image already made keeps
-      the settings it was made with, which is what lets reopening a work item
-      restore it faithfully.</p>
-    </div>
+  </section>
+  <div class="statuscard">
+    <div id="seterr" class="err"></div>
+    <p class="sub" id="setmsg"></p>
   </div>
   </div>
 </div>
@@ -1202,6 +1192,8 @@
       <button type="button" id="rdcancel" class="btn btn-danger btn-block" hidden>Cancel generation</button>
     </div>
   </div>
+  <!-- Under the panels: they may be dragged over it. -->
+  <div class="lbfoot">Press Esc to close</div>
   <button type="button" id="lbclose" aria-label="Close">&times;</button>
 </dialog>
 <!-- Reference images for the next generation: up to four, numbered as the
