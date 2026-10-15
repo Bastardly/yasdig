@@ -29,6 +29,14 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # The README's VirusTotal badge, served from here: shields.io won't fetch
+      # from github.com, so the newest release's badge.json (scan.yml) is
+      # copied into the site. A release with none yet leaves the badge as the
+      # last deploy had it — or absent, which shields shows as an error.
+      - name: VirusTotal badge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download --repo "$GITHUB_REPOSITORY" --pattern badge.json --dir site || true
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

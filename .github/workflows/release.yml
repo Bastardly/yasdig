@@ -230,6 +230,7 @@ jobs:
     needs: publish
     permissions:
       contents: write
+      actions: write
     uses: ./.github/workflows/scan.yml
     with:
       tag: ${{ github.ref_name }}

@@ -106,9 +106,10 @@ blocks one.
   comment (`scanOf` in `site/index.html`). Change both or neither.
 - **The hash shown is GitHub's own `digest` of the asset**, there from upload,
   not the scan's.
-- **The README's VirusTotal badge reads `badge.json`** (shields.io endpoint format)
-  from `releases/latest/download/`, so a release whose scan hasn't run shows the
-  shields error badge until it has.
+- **The README's VirusTotal badge reads `https://yasdig.com/badge.json`** (shields.io
+  endpoint format). **shields.io refuses github.com URLs**, so `pages.yml` copies the
+  newest release's `badge.json` into the site on every deploy, and `scan.yml` starts
+  a deploy when it is done (`actions: write`).
 
 sd.cpp flags in `build.rs` (`GGML_NATIVE=OFF`, `GGML_OPENMP=OFF`, `/MT`) make it
 portable; the workflow fails if sd-cli links anything but the Vulkan loader and libc.

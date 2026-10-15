@@ -25,6 +25,8 @@ on:
 
 permissions:
   contents: write
+  # To redeploy yasdig.com, which serves the README's badge (pages.yml).
+  actions: write
 
 jobs:
   virustotal:
@@ -94,3 +96,8 @@ jobs:
         run: |
           bash .github/scripts/scan-notes.sh "$TAG" scan.json
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber scan.json badge.json
+
+      # yasdig.com serves the badge (shields.io won't read from github.com):
+      # deploying again picks up the newest release's badge.json.
+      - name: Redeploy the site
+        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref master

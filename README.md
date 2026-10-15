@@ -1,7 +1,7 @@
 # YASDIG
 
 [![Latest release](https://img.shields.io/github/v/release/Bastardly/yasdig?include_prereleases)](https://github.com/Bastardly/yasdig/releases)
-[![VirusTotal](https://img.shields.io/endpoint?url=https%3A%2F%2Fgithub.com%2FBastardly%2Fyasdig%2Freleases%2Flatest%2Fdownload%2Fbadge.json)](https://github.com/Bastardly/yasdig/releases/latest)
+[![VirusTotal](https://img.shields.io/endpoint?url=https%3A%2F%2Fyasdig.com%2Fbadge.json)](https://github.com/Bastardly/yasdig/releases/latest)
 [![Release build](https://img.shields.io/github/actions/workflow/status/Bastardly/yasdig/release.yml?label=release%20build)](https://github.com/Bastardly/yasdig/actions/workflows/release.yml)
 [![Downloads](https://img.shields.io/github/downloads/Bastardly/yasdig/total)](https://github.com/Bastardly/yasdig/releases)
 [![Licence](https://img.shields.io/github/license/Bastardly/yasdig)](LICENSE)
