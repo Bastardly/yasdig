@@ -8,14 +8,13 @@
 ![Windows | Linux](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational)
 ![Vulkan](https://img.shields.io/badge/GPU-Vulkan-red)
 
-**[yasdig.com](https://yasdig.com)** · [Download](https://github.com/Bastardly/yasdig/releases)
+**[yasdig.com](https://yasdig.com)** · [Download](https://github.com/Bastardly/yasdig/releases) · [YouTube](https://youtube.com/@yasdig-sd)
 
 **Yet Another Stable Diffusion Image Generator** — a nod to the open-source habit of
-calling a thing "yet another" one, and to the many generators before it. It was called
-*rustimage* until October 2026.
+calling a thing "yet another" one, and to the many generators before it. 
 
 YASDIG makes pictures on your own computer, with your own graphics card. It is one
-file: no Python, no installer, nothing to set up. The drawing is done by
+file: no Python, no installer, nothing to set up. It's private: There is no account, no telemetry and no update checks. The drawing is done by
 [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) on Vulkan, so it
 runs on AMD, NVIDIA and Intel GPUs alike.
 
@@ -124,7 +123,10 @@ Settings → **General**.
 release can be checked three other ways, and the download dialog on
 [yasdig.com](https://yasdig.com) shows all three:
 - **VirusTotal** scans each archive and the program inside it when a release is
-  published; the release page links the reports.
+  published; the release page links the reports. Antivirus engines sometimes flag
+  new, unsigned open-source programs that are perfectly safe (a false positive). If
+  that happens to a release, the report stays public, and we report it to the vendor
+  as a false positive and say so on the release page.
 - **The SHA-256** of each archive is on the release page and in `SHA256SUMS`: compare
   it with `sha256sum <file>` (Linux) or `certutil -hashfile <file> SHA256` (Windows).
 - **GitHub vouches for the build**: `gh attestation verify <file> --repo
@@ -188,3 +190,8 @@ built into the program; its notices and those of everything else inside are in
 licences*. **Models are not part of YASDIG.** Every model has its own licence, set by
 the people who made it, and some forbid commercial use: check the page each Get models
 card links before using what you make.
+
+## Support
+
+YASDIG is free and always will be. If it's useful to you and you'd like to help keep
+it going, you can [support it on Ko-fi](https://ko-fi.com/yasdig). Thank you!

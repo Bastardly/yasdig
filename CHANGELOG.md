@@ -3,6 +3,10 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+- A *Support yasdig on Ko-fi* link in the app's footer, the README and yasdig.com.
+
 ## 0.2.2 — 2026-10-17
 
 ### New
