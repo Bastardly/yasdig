@@ -55,6 +55,8 @@ fn body_limit(path: &str) -> usize {
         "/redraw" => MAX_UPLOAD,
         // A brush tool's whole mask, the same shape as Redraw's.
         "/brush" => MAX_UPLOAD,
+        // The Text panel's layer: a whole picture-sized PNG.
+        "/text" => MAX_UPLOAD,
         // A whole PNG, read for its text chunks.
         "/png-settings" => MAX_UPLOAD,
         _ => MAX_BODY,

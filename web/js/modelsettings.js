@@ -125,7 +125,7 @@ function fill() {
   const n = Object.keys(m.over).length + Object.keys(m.parts_over).length;
   $('pmnote').textContent = `${m.family_label}. `
     + (n ? `${n} setting${n === 1 ? '' : 's'} saved for this model; ` : 'Nothing saved for this model; ')
-    + 'an empty box starts where the placeholder says.';
+    + 'an empty box uses the default it shows.';
   for (const f of rows()) {
     const el = $(idOf(f));
     const v = m.over[f.key];
@@ -148,7 +148,9 @@ function fill() {
       el.placeholder = `default: ${fallback}`;
       el.value = (v ?? []).join('\n');
     } else {
-      el.placeholder = fallback;
+      // Said as a default, like the selects' "— default: … —": a bare number
+      // in a grey box read as a disabled field.
+      el.placeholder = fallback === '' ? '' : `default: ${fallback}`;
       el.value = v ?? '';
     }
   }

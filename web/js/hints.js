@@ -98,16 +98,21 @@ const HELP = [
     text: 'Where the steps are spent between full noise and none. Auto lets '
         + 'sd.cpp pick the model’s own, which is the right answer for Flux and '
         + 'Flux.2. The Help tab compares them.' },
-  { ids: ['rpprompt'],
-    text: 'What this pass is asked for. Over a painted area: what should appear '
-        + 'there — "a red scarf", "an open hand". Over the whole image: what to bring '
-        + 'out — "sharper fabric texture". Blank uses the Refine pass prompt, or the '
-        + 'image\u2019s own. Used for this pass only; the image keeps its prompt.' },
+  { ids: ['rdeditprompt'],
+    text: 'What Edit should change, as an instruction — "make it night", "remove '
+        + 'the hat". The picture itself goes to the model as image 1, and any '
+        + 'References follow it. Kept apart from the Refine prompt, so it never '
+        + 'becomes what every refine after it is asked for.' },
+  { ids: ['rdextendprompt'],
+    text: 'What to draw in the new strips. Blank continues the background, which is '
+        + 'usually what you want: the image\u2019s own prompt names its subject, and '
+        + 'Fill would draw it again at the edge.' },
   { ids: ['rprompt', 'hprompt'],
     text: 'Optional: what this pass is asked for, instead of the image\u2019s own '
-        + 'prompt. Used by After each generation and, when its own box is blank, by '
-        + 'the Refine & adjust dialog. A refine is a light pass, so it suits detail ("sharper '
-        + 'fabric") more than a different object — that is a painted area.' },
+        + 'prompt — the same box here and in Refine & adjust, and what Run after '
+        + 'each image uses. A refine is a light pass, so it suits detail ("sharper '
+        + 'fabric") more than a different object; over a painted area, say what '
+        + 'should appear there — "a red scarf", "an open hand".' },
   { ids: ['rpstrength'],
     text: 'How much of the picture the pass may change. The whole image follows the '
         + 'Refine pass fold (a light 0.2–0.35 adds detail). An area keeps its own: '

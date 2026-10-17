@@ -272,7 +272,10 @@ impl Default for Settings {
             // sd.cpp's auto-fit: no flag at all, which is what every run made
             // before this existed used on the image side.
             memory: crate::config::MEMORY_AUTO.to_string(),
-            upscale_factor: 2.0,
+            // 1: the picture comes out at the size it was drawn. A first
+            // render at twice the size it was asked for confused new users;
+            // the box is one click away when a bigger output is wanted.
+            upscale_factor: 1.0,
             // FSR: free, and needs no file. An ESRGAN model is a download.
             upscaler: None,
             // Off. Sharpening is a live slider under the image, not something a

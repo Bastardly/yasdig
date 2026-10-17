@@ -868,10 +868,13 @@
   <nav class="lbrail" aria-label="Refine and adjust">
     <b class="railtitle">Refine &amp; adjust</b>
     <button type="button" class="btn btn-choice railbtn" data-panel="refine">Refine</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="hires">Hi-res</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="extend">Extend</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="scale">Scale</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="adjust">Adjust</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="brush">Brushes</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="select">Selection</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="text">Text</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="history">History</button>
     <div class="railfoot">
       <div class="lbzoom">
@@ -912,8 +915,13 @@
     <span id="rdtagbefore" class="rdtag rdtag-before" hidden></span>
     <span id="rdtagnow" class="rdtag rdtag-now" hidden></span>
   </div>
+  <!-- The passes, one panel each, the Image tab's layout: settings, the
+       prompt for the pass last, the buttons pinned at the foot with the main
+       one amber. The Refine and Hi-res settings are the Image tab's own Refine
+       pass and Hi-res pass controls, shown again (`data-mirror`, mirror.js):
+       one value, two places. -->
   <section class="fpanel" id="panel-refine" aria-label="Refine" hidden>
-    <header class="fphead"><b>Refine</b><button type="button" class="fpclose" aria-label="Close Refine">&times;</button></header>
+    <header class="fphead"><b>Refine</b> <span class="foldstate" id="rdsum-refine"></span><button type="button" class="fpclose" aria-label="Close Refine">&times;</button></header>
     <div class="fpbody">
       <!-- Only for a picture opened from Outputs, whose maker is unknown — an
            upload — or may not be the one to finish with. Sets the model every
@@ -922,53 +930,36 @@
         <label for="rdmodel">Refine with</label>
         <select id="rdmodel"></select>
       </div>
-      <!-- Outside the folds: Refine, Edit and Extend all read it. -->
-      <label for="rpprompt">Prompt for this pass</label>
-      <prompt-box>
-        <textarea id="rpprompt" rows="3" placeholder="blank uses this image's own prompt"></textarea>
-      </prompt-box>
-      <details id="rdfold-refine" class="fold" open>
-        <summary>Refine <span class="foldstate" id="rdsum-refine"></span></summary>
-        <p class="sub">With nothing painted, Refine works on the whole image. Paint
-          over an area to refine just that — while this fold is open, a drag on the
-          picture paints. Right-drag erases; Space+drag pans at 1:1.</p>
-        <!-- One box, two numbers: the label says which. Whole image mirrors the
-             Refine pass fold's strength; area keeps its own (redraw.js). -->
-        <div class="rdrow">
-          <label for="rpstrength" id="rpstrengthlabel">Strength (whole image)</label>
-          <input id="rpstrength" type="number" step="0.05" min="0.05" max="0.95" value="0.5">
-        </div>
-        <div class="slider">
-          <div class="head"><label for="rpsoft">Edge softness</label><span class="val" id="rpsoftval"></span></div>
-          <input id="rpsoft" type="range" min="0" max="64" step="1" value="16">
-        </div>
-        <div class="slider">
-          <div class="head"><label for="rpbrush">Brush</label><span class="val" id="rpbrushval"></span></div>
-          <input id="rpbrush" type="range" min="4" max="200" step="1" value="40">
-        </div>
-        <div class="redrawtools">
-          <button type="button" id="rperase" class="btn btn-choice">Eraser</button>
-          <button type="button" id="rpclear" class="btn">Clear</button>
-        </div>
-      </details>
-      <!-- Hi-res: enlarge by the shared factor (the Hi-res pass panel's
-           Enlarge box is the same number) and re-draw the whole picture
-           lightly at the new size, with that panel's steps, strength, model
-           and prompt. Before a refine: it would partly undo one made first. -->
-      <details id="rdfold-hires" class="fold">
-        <summary>Hi-res <span class="foldstate" id="rdsum-hires"></span></summary>
-        <div class="rdrow">
-          <label for="upfactor">Enlarge</label>
-          <select id="upfactor" title="Upscale before the hi-res pass"></select>
-        </div>
-        <p class="sub" id="rdhiresnote"></p>
-      </details>
+      <div data-mirror="refmodel"></div>
+      <div data-mirror="rsteps rcfg"></div>
+      <!-- One box, two numbers: the label says which. Whole image is the
+           Refine pass panel's strength; area keeps its own (redraw.js). -->
+      <div class="rdrow">
+        <label for="rpstrength" id="rpstrengthlabel">Strength (whole image)</label>
+        <input id="rpstrength" type="number" step="0.05" min="0.05" max="0.95" value="0.5">
+      </div>
+      <p class="sub">With nothing painted, Refine works on the whole image. Paint
+        over an area to refine just that: while this panel is open, a drag on the
+        picture paints. Right-drag erases; Space+drag pans at 1:1.</p>
+      <div class="slider">
+        <div class="head"><label for="rpsoft">Edge softness</label><span class="val" id="rpsoftval"></span></div>
+        <input id="rpsoft" type="range" min="0" max="64" step="1" value="16">
+      </div>
+      <div class="slider">
+        <div class="head"><label for="rpbrush">Brush</label><span class="val" id="rpbrushval"></span></div>
+        <input id="rpbrush" type="range" min="4" max="200" step="1" value="40">
+      </div>
       <!-- Change the whole picture by instruction, with no painting: the image
-           itself goes to the model as reference 1, the prompt says what to change.
-           The whole fold shows only for a model that takes references
-           (`can_edit`), and its button in the footer with it. -->
+           itself goes to the model as reference 1, the instruction says what to
+           change. Its own box, so "make it night" never becomes the refine
+           prompt every after-each refine reads. Shown only for a model that
+           takes references (`can_edit`), and its button with it. -->
       <details id="rdfold-edit" class="fold" hidden>
         <summary>Edit <span class="foldstate" id="rdsum-edit"></span></summary>
+        <label for="rdeditprompt">What to change</label>
+        <prompt-box>
+          <textarea id="rdeditprompt" rows="2" placeholder="make it night · remove the hat"></textarea>
+        </prompt-box>
         <!-- Edit's own sides, apart from Extend's: the model redraws the whole
              picture in the grown shape, nothing pasted back. Picking one turns
              the button into "Edit and rescale". The same markup and code as
@@ -989,39 +980,64 @@
         </div>
         <p class="sub" id="rdeditnote"></p>
       </details>
-      <!-- Extend: grow the canvas on the chosen sides and draw what's beyond them
-           with FLUX.1 Fill, on any image — it turns on by itself once a Fill
-           model is installed. Uses this dialog's prompt (blank continues the
-           background) and the Refine fold's edge softness. Whole-image. -->
-      <details id="rdfold-extend" class="fold">
-        <summary><label data-help="extend">Extend</label> <span class="foldstate" id="rdsum-extend"></span></summary>
-        <p class="sub" id="rdneedsfill" hidden>Needs FLUX.1 Fill, a model trained to
-          continue a picture past its edges.
-          <button type="button" id="rdgetfill" class="btn">Get models…</button></p>
-        <div class="rdsides" id="rdextendsides">
-          <button type="button" class="btn btn-choice" data-side="left" title="Extend left">←</button>
-          <button type="button" class="btn btn-choice" data-side="top" title="Extend up">↑</button>
-          <button type="button" class="btn btn-choice" data-side="bottom" title="Extend down">↓</button>
-          <button type="button" class="btn btn-choice" data-side="right" title="Extend right">→</button>
-          <select data-amount title="How far each chosen side grows">
-            <option value="128">128 px</option>
-            <option value="256" selected>256 px</option>
-            <option value="384">384 px</option>
-            <option value="512">512 px</option>
-          </select>
-        </div>
-        <p class="sub" id="rdextendnote"></p>
-      </details>
+      <div data-mirror="rprompt" data-label="Prompt for this pass"></div>
     </div>
-    <!-- The panel's actions, pinned under its body so they show however far
-         it is scrolled: the others above, the main one last, amber — the
-         tabs' dock pattern. The mask decides the main one: nothing painted
-         is "Refine image", painted is "Refine area". -->
+    <!-- The mask decides the main button: nothing painted is "Refine image",
+         painted is "Refine area". Eraser and Clear are the mask's. -->
     <div class="fpfoot">
-      <button type="button" id="rdhires" class="btn btn-block">Hi-res</button>
+      <div class="redrawtools">
+        <button type="button" id="rperase" class="btn btn-choice">Eraser</button>
+        <button type="button" id="rpclear" class="btn">Clear</button>
+      </div>
       <button type="button" id="rdedit" class="btn btn-block" hidden>Edit</button>
-      <button type="button" id="rdextendgo" class="btn btn-block">Extend</button>
       <button type="button" id="redrawgo" class="btn btn-run btn-block" disabled>Refine image</button>
+    </div>
+  </section>
+  <!-- Hi-res: enlarge by Hi-res scale and re-draw the whole picture lightly at
+       the new size. Before a refine: it would partly undo one made first. -->
+  <section class="fpanel" id="panel-hires" aria-label="Hi-res" hidden>
+    <header class="fphead"><b>Hi-res</b><button type="button" class="fpclose" aria-label="Close Hi-res">&times;</button></header>
+    <div class="fpbody">
+      <div data-mirror="hiresmodel"></div>
+      <div data-mirror="hsteps hcfg"></div>
+      <div data-mirror="hstrength hiresscale"></div>
+      <p class="sub" id="rdhiresnote"></p>
+      <div data-mirror="hprompt" data-label="Prompt for this pass"></div>
+    </div>
+    <div class="fpfoot">
+      <button type="button" id="rdhires" class="btn btn-run btn-block">Hi-res</button>
+    </div>
+  </section>
+  <!-- Extend: grow the canvas on the chosen sides and draw what's beyond them
+       with FLUX.1 Fill, on any image — it turns on by itself once a Fill model
+       is installed. Its own prompt (blank continues the background); the
+       Refine panel's edge softness. -->
+  <section class="fpanel" id="panel-extend" aria-label="Extend" hidden>
+    <header class="fphead"><b><label data-help="extend">Extend</label></b> <span class="foldstate" id="rdsum-extend"></span><button type="button" class="fpclose" aria-label="Close Extend">&times;</button></header>
+    <div class="fpbody">
+      <p class="sub" id="rdneedsfill" hidden>Needs FLUX.1 Fill, a model trained to
+        continue a picture past its edges.
+        <button type="button" id="rdgetfill" class="btn">Get models…</button></p>
+      <div class="rdsides" id="rdextendsides">
+        <button type="button" class="btn btn-choice" data-side="left" title="Extend left">←</button>
+        <button type="button" class="btn btn-choice" data-side="top" title="Extend up">↑</button>
+        <button type="button" class="btn btn-choice" data-side="bottom" title="Extend down">↓</button>
+        <button type="button" class="btn btn-choice" data-side="right" title="Extend right">→</button>
+        <select data-amount title="How far each chosen side grows">
+          <option value="128">128 px</option>
+          <option value="256" selected>256 px</option>
+          <option value="384">384 px</option>
+          <option value="512">512 px</option>
+        </select>
+      </div>
+      <p class="sub" id="rdextendnote"></p>
+      <label for="rdextendprompt">Prompt for this pass</label>
+      <prompt-box>
+        <textarea id="rdextendprompt" rows="2" placeholder="blank continues the background"></textarea>
+      </prompt-box>
+    </div>
+    <div class="fpfoot">
+      <button type="button" id="rdextendgo" class="btn btn-run btn-block">Extend</button>
     </div>
   </section>
   <section class="fpanel" id="panel-scale" aria-label="Scale" hidden>
@@ -1151,6 +1167,57 @@
         <div class="checks"><label><input type="checkbox" id="lbareabrushes"> Brushes only paint inside the selection</label></div>
         <button type="button" id="lbarearemove" class="btn btn-block">Remove area</button>
       </div>
+    </div>
+  </section>
+  <!-- Text on the picture (texttool.js): drawn by the page, previewed over
+       the picture, and laid over it as it looks by `/text` — Apply's step with
+       the text on top, so its colour is exactly the one picked. -->
+  <section class="fpanel" id="panel-text" aria-label="Text" hidden>
+    <header class="fphead"><b>Text</b><button type="button" class="fpclose" aria-label="Close Text">&times;</button></header>
+    <div class="fpbody">
+      <label for="txttext">Text</label>
+      <textarea id="txttext" rows="3" placeholder="A line per line"></textarea>
+      <label for="txtfont">Font</label>
+      <select id="txtfont"></select>
+      <div class="lbzoom">
+        <button type="button" id="txtbold" class="btn btn-choice" title="Bold"><b>B</b></button>
+        <button type="button" id="txtitalic" class="btn btn-choice" title="Italic"><i>I</i></button>
+        <button type="button" class="btn btn-choice" data-align="left" title="Align left">Left</button>
+        <button type="button" class="btn btn-choice active" data-align="center" title="Centre">Centre</button>
+        <button type="button" class="btn btn-choice" data-align="right" title="Align right">Right</button>
+      </div>
+      <div class="slider">
+        <div class="head"><label for="txtsize">Size</label><span class="val" id="txtsizeval"></span></div>
+        <input id="txtsize" type="range" min="8" max="400" step="1" value="64">
+      </div>
+      <div class="slider">
+        <div class="head"><label for="txtline">Line spacing</label><span class="val" id="txtlineval"></span></div>
+        <input id="txtline" type="range" min="0.8" max="2" step="0.05" value="1.2">
+      </div>
+      <div class="rdrow">
+        <label for="txtcolor">Colour</label>
+        <input id="txtcolor" type="color" value="#ffffff">
+      </div>
+      <div class="slider">
+        <div class="head"><label for="txtopacity">Opacity</label><span class="val" id="txtopacityval"></span></div>
+        <input id="txtopacity" type="range" min="0.05" max="1" step="0.05" value="1">
+      </div>
+      <div class="slider">
+        <div class="head"><label for="txtoutline">Outline</label><span class="val" id="txtoutlineval"></span></div>
+        <input id="txtoutline" type="range" min="0" max="24" step="1" value="0">
+      </div>
+      <div class="rdrow">
+        <label for="txtoutcolor">Outline colour</label>
+        <input id="txtoutcolor" type="color" value="#000000">
+      </div>
+      <div class="checks"><label><input type="checkbox" id="txtshadow"> Shadow</label></div>
+      <p class="sub">Drag the text on the picture to place it. It is laid over the
+        picture as it looks — the sliders are applied first, as Apply does — and
+        becomes a History step.</p>
+    </div>
+    <div class="fpfoot">
+      <button type="button" id="txtclear" class="btn btn-block">Clear</button>
+      <button type="button" id="txtadd" class="btn btn-run btn-block" disabled>Add text</button>
     </div>
   </section>
   <section class="fpanel" id="panel-history" aria-label="History" hidden>

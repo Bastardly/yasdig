@@ -749,6 +749,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .rdrow input { width: 90px; }
 .redrawtools { display: flex; gap: var(--sp-2); margin: var(--sp-3) 0; }
 .redrawtools .btn { flex: 1; }
+.fpfoot .redrawtools { margin: 0; }
 #rdcancel { margin-top: var(--sp-2); }
 .rdupscale { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
 .rdupscale select { min-width: 0; }
@@ -831,6 +832,19 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .region { position: absolute; overflow: hidden; cursor: crosshair; touch-action: none; }
 .regionbox, .featherin, .featherout { position: absolute; box-sizing: border-box; }
 .regionbox { border: 1px solid var(--state); cursor: move; }
+/* While the pointer is on a panel or the rail (viewer.js), the boxes, the
+   mask and the brush ring step aside: what a slider does to the selection's
+   soft edge is the thing to judge. */
+/* Not the text preview: it is the thing being edited from the panel, so it
+   stays in view while you type. */
+.region, .maskview, .brushring { transition: opacity .12s; }
+#lightbox.overpanel .region, #lightbox.overpanel .maskview,
+#lightbox.overpanel .brushring { opacity: 0; }
+/* The Text panel's preview (texttool.js): over the picture like the mask,
+   and the thing a drag moves while the panel is open. */
+.textview { position: absolute; cursor: move; touch-action: none; }
+.textview.moving { cursor: grabbing; }
+#lightbox input[type=color] { width: 56px; height: 32px; padding: 2px; cursor: pointer; }
 /* Crop: what goes, dimmed; one huge shadow is the cheapest way to dim
    everything outside a box, and `.region` clips it to the picture. */
 .region.dim .regionbox { box-shadow: 0 0 0 100vmax var(--scrim-soft); }
@@ -850,6 +864,12 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .brushring {
   position: absolute; pointer-events: none; box-sizing: border-box;
   border: 1px solid var(--state); border-radius: 50%; box-shadow: 0 0 0 1px var(--on-state);
+}
+/* The full-strength core: inside it the whole amount, between it and the ring
+   the softness fading out. Dashed, so the two read as one brush. */
+.brushcore {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  box-sizing: border-box; border: 1px dashed var(--state); border-radius: 50%;
 }
 /* Three to a row in a 300 px panel: `minmax(0, …)` so a column may be
    narrower than its word (a bare `1fr` won't shrink below "Desaturate" and

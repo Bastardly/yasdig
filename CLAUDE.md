@@ -622,11 +622,17 @@ area pass: `src/redraw.rs` (pure geometry/compositing), `Engine::redraw`, `POST
 /redraw`, `SdRunner::redraw` (`img2img_cmd` + `--mask`). The mask decides the Refine
 panel's main button (empty → `/refine`, painted → `/redraw`). **A panel with actions
 pins them in a footer** (`.fpfoot`, under the scrolling body): the others above, the
-main one last and amber — Refine: Edit (hidden without `can_edit`), Extend, *Refine*;
-Scale: *Apply crop* (live only while the Crop fold's box is up), *Scale*; History:
-*Apply adjustments* (it adds a step). **Hi-res is a fold in the Refine panel**
-(`#upfactor`, the shared `S.upFactor`; `hiresPass` in image.js; gated on `can_hires`
-and the Hi-res pass panel's steps) and works on Outputs too. *Save to output* is in
+main one last and amber — Refine: Eraser · Clear, Edit (hidden without
+`can_edit`), *Refine*; Hi-res: *Hi-res*; Extend: *Extend*; Scale: *Apply crop* (live
+only while the Crop fold's box is up), *Scale*; History: *Apply adjustments* (it adds
+a step). **Each pass panel ends with its own *Prompt for this pass***: Refine's is
+`#rprompt`, Hi-res's `#hprompt` (both mirrored), Extend's `#rdextendprompt`; Edit has
+its own instruction box (`#rdeditprompt`) so it never becomes the refine prompt.
+**The Refine and Hi-res panels' settings are the Image tab's controls, mirrored**
+(`web/js/mirror.js`: `data-mirror="rsteps rcfg"` builds `dl-<id>` fields from the
+source's label and control; a write sets the source and fires its event, then every
+field re-reads — so `fillPass`, the summaries and the loop hear it). `hiresPass` and
+`refine` read `#hiresmodel`/`#refmodel` directly, so Outputs uses them too. *Save to output* is in
 the dialog's rail on the Image pane (`saveOutput`). Whole-image passes go through
 `image.js`'s `escalate` (an error sink and a `land`). Strength box: whole-image value *is* `#rstrength`; area has its own
 (`syncStrength`).
@@ -657,7 +663,7 @@ page-level. `#rprompt`/`#hprompt` ride in `escalateSettings()`; the dialog box w
 - **`GenResult.step` is in `sameImage`**, or a redraw compares equal and is dropped.
 - **Seed is `p.seed + step`.**
 - **The mask view lies over the image** (display-sized; master mask natural-sized). It
-  paints only while the Refine fold is open (`#lbview.masking`); its pointer handler
+  paints only while the Refine panel is open (`#lbview.masking`); its pointer handler
   skips what the pane took as a pan.
 - **Outputs open in the same dialog and their passes run there**, in `Slot::Output`
   (`/outputs/open {stem, model?}`, the page's model as `fallback` when the sidecar's
@@ -690,11 +696,12 @@ seams appear). **Edit and rescale** is separate: `EditRequest.expand` (same
 back. Both side sets are `sideSet` instances, cleared on a new image. Compare uses
 `object-fit: contain`.
 
-Dialog layout: a **rail** (`.lbrail`) of panel toggles — Refine, Scale, Adjust,
-Brushes, Selection, History — with Fit/1:1, Download and Outputs' saves at its
-foot; the pane; and **floating panels** (`web/js/panels.js`, `.fpanel`) over it.
-Refine: *Refine with*, prompt, folds Refine / Edit (`can_edit`) / Extend. Scale: folds
-Scale and Crop. Adjust: Reset, Tone/Colour/Detail. Brushes. Selection (the area).
+Dialog layout: a **rail** (`.lbrail`) of panel toggles — Refine, Hi-res, Extend,
+Scale, Adjust, Brushes, Selection, Text, History — with Fit/1:1, Download and the saves at
+its foot; the pane; and **floating panels** (`web/js/panels.js`, `.fpanel`) over it.
+Refine: *Refine with* (Outputs), model/steps/CFG, strength, edge softness and brush,
+the Edit fold (`can_edit`), the prompt. Hi-res: model/steps/CFG/strength/scale, the
+prompt. Extend: sides, the prompt. Scale: folds Scale and Crop. Adjust: Reset, Tone/Colour/Detail. Brushes. Selection (the area).
 History with Compare. A **status card** (`.statuscard`, pane's lower left, hidden by
 CSS when empty) holds `#lberr`/OOM, the preview, progress and Stop.
 
@@ -708,6 +715,21 @@ CSS when empty) holds `#lberr`/OOM, the preview, progress and Stop.
   the colour wheel 1001, `#lbclose` 1002.
 - **Rail dots** (`railDot`) are the folds' old overview: set from `viewerSummaries`,
   `drawHistory` and redraw's `syncButtons`.
+- **Text is drawn by the page and baked by the server** (`web/js/texttool.js`,
+  `POST /text {image_id, layer, label}`, `Display::text`): the browser has the fonts
+  and shapes any script; one `paint` draws the preview and the full-size transparent
+  PNG. `/text` is **Apply's step with the layer on top** (`Display::bake`, shared with
+  `apply_look`; `overlay_onto`): the look is baked first, so the text keeps its exact
+  colour. Fonts offered are the ones installed, found by measuring
+  (`installedFonts`) — `document.fonts.check()` says yes to any name.
+- **`.overpanel`** on `#lightbox` while the pointer is on a panel or the rail: the
+  region box, the mask and the brush ring fade, so a slider's effect on a soft edge
+  is what you see. **Not the text preview**: it is what the Text panel edits.
+- **Brushes draw no mask on screen** (`brushpaint.js`): the effect is what is looked
+  at. Two rings — the size, and the full-strength core at `size × (1 − softness)`.
+  The Refine mask's brush has the same pair (`placeRing` in redraw.js), the other
+  way round: the core is the stroke, the ring is `brush + 2 × Edge softness` (its
+  fade goes outward), scaled from the picture's pixels like the mask's blur.
 
 `zoomPane` holds fit/centre rules (`expectNew`, `keepView`; `setViewerImage(src, keep)`
 keeps the view for the same picture at the same size).
@@ -844,6 +866,8 @@ only `js/app.js`.
 | `hints.js` | `HELP`, `HINTS`, `wireHints`, the tooltip bubble |
 | `viewer.js` | the Refine & adjust dialog: open/close, `FILTERS`, sliders, `/adjust`, History, `zoomPane` |
 | `panels.js` | floating panels (the dialog's and the workspaces'): open, drag, remember, rail dots |
+| `mirror.js` | the dialog's stand-ins for the Image tab's pass controls (`data-mirror`) |
+| `texttool.js` | the Text panel: installed fonts, the preview, the full-size layer |
 | `image.js` | Image tab: its panels, models, `render` (stage + Info), escalations, runs, Save |
 | `workitems.js` | the Current and Favorites grids, reopening |
 | `gridmark.js` | click-to-mark actions |
@@ -1057,9 +1081,9 @@ Label above the track; the Adjust panel holds a fold per `FILTERS` `group`
   the area's. Masks are pixels: `crop` crops them, anything else resizes on read.
   Scratch-owned (`remove_files`; a replaced mask is deleted). `/brush` has the upload
   body limit; its answer lands like a slider's (`setResultImage`, never re-centres),
-  serialized on `brushChain`, which `stepRequest` also waits for. **Four things own
-  the pointer and exclude each other**: the Refine fold's mask (only in an open
-  Refine panel), the Crop fold's box (only in an open Scale panel), the Selection
+  serialized on `brushChain`, which `stepRequest` also waits for. **Five things own
+  the pointer and exclude each other**: the Text panel (a drag moves the text), the
+  Refine panel's mask, the Crop fold's box (only in an open Scale panel), the Selection
   panel's area box, the Brushes panel. With none, a left drag pans (`pans` asks
   `leftTaken`, which redraw.js claims for the mask and Compare's split). Adjust,
   Scale and History never take it, so they stay open beside.
@@ -1068,7 +1092,7 @@ Label above the track; the Adjust panel holds a fold per `FILTERS` `group`
   `publish`'s `restore`), so a grade has no seam. `brush::apply` skips it. Keyed to a
   step, so **`advance` drops it** (Apply bakes first); a jump keeps it, and standing on
   `from` restores nothing. Another-size step is Lanczos-scaled.
-- **Crop, Scale down, Apply and History jumps go through `stepRequest`** (one at a
+- **Crop, Scale down, Apply, Text and History jumps go through `stepRequest`** (one at a
   time, after `settlePost` lets a pending `/adjust` land) and answer through the
   pane's handler (`onViewerResult`: `render` on Image, the Outputs viewer's own). All
   are locked while a pass runs (`passRunning`). Ctrl+Z steps through `stepTo`.

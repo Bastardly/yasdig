@@ -310,16 +310,16 @@ export const TOPICS = [
       <h2>Refine &amp; adjust</h2>
       <p>The one place an image is finished. Click the picture on the Image tab, or
       open one on the Outputs tab. The picture fills the screen; the rail on the
-      left opens floating panels over it — <b>Refine</b> (prompt, Refine, Hi-res,
-      Edit, Extend), <b>Scale</b> (Scale, Crop),
-      <b>Adjust</b> (Tone, Colour, Detail), <b>Brushes</b>, <b>Selection</b> and
-      <b>History</b>. Drag a panel by its title bar to put it anywhere; it stays
+      left opens floating panels over it — <b>Refine</b> (and Edit), <b>Hi-res</b>,
+      <b>Extend</b>, <b>Scale</b> (Scale, Crop),
+      <b>Adjust</b> (Tone, Colour, Detail), <b>Brushes</b>, <b>Selection</b>,
+      <b>Text</b> and <b>History</b>. Drag a panel by its title bar to put it anywhere; it stays
       there next time, and a double-click on the title bar puts it back. A dot on a
       rail button means its panel has something in effect. Fit, <b>1:1</b> and
       Download (and Save to output, from the Image tab) are at the rail's foot,
       Apply at History's; progress and errors appear at the
       lower left.</p>
-      <p>The picture under the pointer belongs to whichever of the Refine fold,
+      <p>The picture under the pointer belongs to whichever of the Refine panel,
       Crop, Selection or Brushes is open — opening one closes the others. With none
       open, a drag pans at 1:1; the middle button or <b>Space</b>+drag always pans.</p>
       <h3>Whole image or an area — the mask decides</h3>

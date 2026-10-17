@@ -3022,12 +3022,54 @@ impl Display {
             bail!("nothing to apply — every slider is at 0 and nothing is painted");
         }
         let label = adjust_label(&p.filters, acting_area.as_ref(), stroked);
+        self.bake(id, p, None, label)
+    }
+
+    /// Text on the picture (the dialog's Text panel): `png` is a transparent
+    /// layer the page drew at the picture's size, laid over the picture *as
+    /// it looks* — Apply's step with the layer on top, so the text keeps
+    /// exactly the colour it was given, and no slider tints or sharpens it
+    /// later. `label` is the text's first words, for History.
+    pub fn text(&mut self, id: u64, png: &[u8], label: &str) -> Result<GenResult> {
+        let p = lock(&self.retained).get(id, "add text to")?;
+        let layer = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+            .context("the text layer is not a PNG")?
+            .to_rgba8();
+        if layer.pixels().all(|px| px.0[3] == 0) {
+            bail!("there is no text to add");
+        }
+        self.bake(id, p, Some(layer), text_label(label))
+    }
+
+    /// Apply's step, shared with Text: `display` (the look baked in), with
+    /// `overlay` laid over it if there is one, becomes a new `raw`, and the
+    /// look starts again from nothing.
+    fn bake(&mut self, id: u64, p: Pending, overlay: Option<image::RgbaImage>, label: String) -> Result<GenResult> {
         let step = p.step + 1;
         let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut scratch = Scratch::default();
         let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
         let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
-        std::fs::copy(&p.display, &raw).with_context(|| format!("copying {}", p.display.display()))?;
+        match overlay {
+            None => {
+                std::fs::copy(&p.display, &raw).with_context(|| format!("copying {}", p.display.display()))?;
+            }
+            Some(layer) => {
+                let mut base = image::open(&p.display)
+                    .with_context(|| format!("loading {}", p.display.display()))?
+                    .to_rgba8();
+                let (w, h) = base.dimensions();
+                // Drawn for the size the page last saw; a pass may have
+                // landed since.
+                let layer = if layer.dimensions() == (w, h) {
+                    layer
+                } else {
+                    image::imageops::resize(&layer, w, h, image::imageops::FilterType::Lanczos3)
+                };
+                overlay_onto(&mut base, &layer);
+                base.save(&raw).with_context(|| format!("writing {}", raw.display()))?;
+            }
+        }
 
         let t = Instant::now();
         // Neutral, so the published picture is the applied one to the byte.
@@ -3500,6 +3542,36 @@ const MIN_CROP: u32 = 64;
 /// A crop request as it will run: width and height snapped *down* to a
 /// multiple of 8, so a later Refine or Hi-res latent covers the picture
 /// exactly, then checked to lie inside the picture and to change something.
+/// Lay `layer` over `base`, by the layer's alpha: an opaque pixel replaces,
+/// a transparent one leaves the base's bytes exactly, between blends.
+/// `base` keeps its own alpha.
+fn overlay_onto(base: &mut image::RgbaImage, layer: &image::RgbaImage) {
+    for (b, l) in base.pixels_mut().zip(layer.pixels()) {
+        let a = l.0[3] as u32;
+        if a == 0 {
+            continue;
+        }
+        for c in 0..3 {
+            b.0[c] = ((l.0[c] as u32 * a + b.0[c] as u32 * (255 - a) + 127) / 255) as u8;
+        }
+    }
+}
+
+/// History's name for a text step: `Text: "first words"`, one line, no
+/// control characters, at most 40 characters of the text.
+fn text_label(text: &str) -> String {
+    let line: String = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    let short: String = line.chars().take(40).collect();
+    let more = if line.chars().count() > 40 { "…" } else { "" };
+    if short.is_empty() { "Text".into() } else { format!("Text: \"{short}{more}\"") }
+}
+
 /// The size [`Display::resize`] scales a `w × h` picture to: each side times
 /// `factor`, snapped down to 8 like a crop (sd.cpp's sizes), no side under
 /// [`MIN_CROP`]. Down only: up is Upscale's.
@@ -3836,7 +3908,7 @@ fn random_seed() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        adjust_label, crop_rect, resize_size,
+        adjust_label, crop_rect, overlay_onto, resize_size, text_label,
         advance, after_model, edit_size, fit_to, pass_prompt, step_label, AfterModel, Expand, Pending, Retained,
         Slot, MAX_HISTORY,
     };
@@ -3909,6 +3981,27 @@ mod tests {
         assert!(crop_rect((0, 0, 1024, 1024), 1024, 1024).is_err(), "the whole picture");
         // A side that isn't a multiple of 8 can still be kept whole on the other axis.
         assert_eq!(crop_rect((0, 0, 1000, 700), 1000, 768).unwrap(), (0, 0, 1000, 696));
+    }
+
+    #[test]
+    fn text_lies_over_the_picture_by_its_alpha() {
+        let mut base = image::RgbaImage::from_pixel(3, 1, image::Rgba([10, 20, 30, 255]));
+        let mut layer = image::RgbaImage::new(3, 1);
+        layer.put_pixel(0, 0, image::Rgba([255, 255, 255, 255]));
+        layer.put_pixel(1, 0, image::Rgba([255, 255, 255, 0]));
+        layer.put_pixel(2, 0, image::Rgba([210, 220, 230, 128]));
+        overlay_onto(&mut base, &layer);
+        assert_eq!(base.get_pixel(0, 0).0, [255, 255, 255, 255], "opaque replaces");
+        assert_eq!(base.get_pixel(1, 0).0, [10, 20, 30, 255], "transparent keeps the bytes");
+        assert_eq!(base.get_pixel(2, 0).0, [110, 120, 130, 255], "half blends");
+    }
+
+    #[test]
+    fn a_text_step_is_named_by_its_first_words() {
+        assert_eq!(text_label("Hello\nworld"), "Text: \"Hello world\"");
+        assert_eq!(text_label("   "), "Text");
+        let long = text_label(&"a".repeat(60));
+        assert!(long.ends_with("…\"") && long.chars().count() == "Text: \"".len() + 40 + 2);
     }
 
     #[test]

@@ -2,10 +2,11 @@
 //
 // One mask per tool, each a canvas at the picture's own size: white where it
 // is painted, its alpha the weight the server blends the tool's effect by
-// (`crate::brush`). What is on screen is a display-sized overlay of the
-// chosen tool's mask in the mask colour, shown while the pointer is over the
-// picture or a stroke is going — off the picture you see the result clean,
-// as in the Refine dialog.
+// (`crate::brush`). The masks are never drawn on screen: unlike Refine's
+// mask, which marks what will be redrawn, a brush's effect *is* the thing to
+// look at, and a tinted overlay hid it. The display-sized overlay canvas only
+// catches the pointer; the brush is shown as two rings — the outer where the
+// softness ends, the inner where the full amount is applied.
 //
 // Dabs rather than Redraw's line segments, because softness here is the
 // stroke's own falloff — a radial gradient per dab — not a blur of the view:
@@ -19,6 +20,7 @@
 export function brushPaint({ view, img, onStroke, locked }) {
   let overlay = null;
   let ring = null;
+  let core = null;
   let tool = 'dodge';
   let opts = { size: 60, soft: 0.5, erase: false };
   let active = false;
@@ -54,20 +56,12 @@ export function brushPaint({ view, img, onStroke, locked }) {
     draw();
   }
 
+  // The overlay stays clear (see the header): a re-lay only resizes it.
   function draw() {
     if (frame || !overlay) return;
     frame = requestAnimationFrame(() => {
       frame = 0;
-      const ctx = overlay.getContext('2d');
-      ctx.clearRect(0, 0, overlay.width, overlay.height);
-      const m = masks.get(tool);
-      if (!m) return;
-      ctx.drawImage(m, 0, 0, overlay.width, overlay.height);
-      // Keep the mask's shape, take the colour.
-      ctx.globalCompositeOperation = 'source-in';
-      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--mask').trim();
-      ctx.fillRect(0, 0, overlay.width, overlay.height);
-      ctx.globalCompositeOperation = 'source-over';
+      overlay.getContext('2d').clearRect(0, 0, overlay.width, overlay.height);
     });
   }
 
@@ -88,6 +82,9 @@ export function brushPaint({ view, img, onStroke, locked }) {
     if (!ring) return;
     const r = view.getBoundingClientRect();
     ring.style.width = ring.style.height = `${opts.size}px`;
+    // Where the dab's gradient starts to fall off (`dab`).
+    core.style.width = core.style.height = `${opts.size * (1 - opts.soft)}px`;
+    core.hidden = opts.soft <= 0.02;
     ring.style.left = `${e.clientX - r.left + view.scrollLeft - opts.size / 2}px`;
     ring.style.top = `${e.clientY - r.top + view.scrollTop - opts.size / 2}px`;
   }
@@ -141,6 +138,9 @@ export function brushPaint({ view, img, onStroke, locked }) {
       ring = document.createElement('div');
       ring.className = 'brushring';
       ring.hidden = true;
+      core = document.createElement('div');
+      core.className = 'brushcore';
+      ring.append(core);
       view.append(overlay, ring);
       overlay.addEventListener('pointerdown', stroke);
       overlay.addEventListener('pointermove', placeRing);

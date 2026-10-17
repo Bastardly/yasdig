@@ -478,9 +478,8 @@ start a real pass from a saved picture at a strength you choose, pick it in the
 A click on the picture — or a picture opened on the Outputs tab — opens **Refine &
 adjust**, the one place an image is finished: the picture, nearly full screen, with a
 narrow **rail** down the left. Each rail button opens a floating panel over the
-picture: **Refine** (the pass prompt, Refine, Hi-res, Edit, Extend), **Scale** (Scale
-and Crop), **Adjust** (Tone, Colour, Detail — see *Postprocessing*), **Brushes**,
-**Selection** (the area and its colours) and **History**. A panel's buttons stay at
+picture: **Refine** (and Edit), **Hi-res**, **Extend**, **Scale** (Scale and Crop), **Adjust** (Tone, Colour, Detail — see *Postprocessing*), **Brushes**,
+**Selection** (the area and its colours), **Text** and **History**. A panel's buttons stay at
 its foot however far you scroll it, the main one in amber. Open as many as you like;
 drag one by its title bar to put it anywhere, and it stays there next time
 (double-click the title bar to put it back). A dot on a rail button says its panel has
@@ -489,16 +488,20 @@ closed. The rail's foot has Fit / **1:1**, **Download** and, from the Image tab,
 to output**; **Apply adjustments** is History's main button. Progress, the live
 preview, Stop and any error appear in a card at the lower left.
 
-**Hi-res** (the Refine panel's *Hi-res* fold and button) enlarges the picture and adds
-detail at the new size, with the Hi-res pass panel's steps, strength and model — do
-that first, since it re-draws the whole picture lightly and would partly undo a refine
-made before it.
+Each pass panel ends with its own **Prompt for this pass**, above its buttons. The
+Refine and Hi-res panels show the same settings as the Image tab's Refine pass and
+Hi-res pass panels — model, steps, CFG, strength, prompt — and they are the same
+values: change one here and the Image tab says so too. Edit has its own instruction
+box, and Extend its own prompt (blank continues the background).
 
-The picture under the pointer belongs to whichever of the Refine fold, Crop, Selection
-or Brushes is open — opening one closes the others. With none open, a drag pans at
+**Hi-res** enlarges the picture and adds detail at the new size — do that first, since
+it re-draws the whole picture lightly and would partly undo a refine made before it.
+
+The picture under the pointer belongs to whichever of the Refine panel (its mask),
+Crop, Selection or Brushes is open — opening one closes the others. With none open, a drag pans at
 1:1; the middle button or Space+drag always pans.
 
-What the Refine fold's button does depends on the mask:
+What the Refine panel's button does depends on the mask:
 
 - **Nothing painted — Refine image.** A light img2img pass over the whole picture, at
   the Refine pass's steps and strength: detail and texture rather than new content.
@@ -903,8 +906,19 @@ makes the combination a new step. Restore strokes belong to the history they wer
 painted against, so a new step (a refine, a crop, an Apply) drops them; jumping
 through History keeps them. A step of another size — before a Hi-res — is scaled to
 fit, so it comes back softer; it works best between refines. If you know *before*
-refining which part should change, **Refine area** in the Refine fold redraws only
+refining which part should change, **Refine area** in the Refine panel redraws only
 what you paint instead.
+
+### Text
+
+The **Text** panel puts words on the picture. Type them (a line per line), pick a font —
+the list is the fonts this computer has, plus Sans-serif, Serif, Monospace and System —
+then Bold, Italic, alignment, **Size**, **Line spacing**, **Colour**, **Opacity**, an
+**Outline** and a **Shadow**; the last two keep text readable on a busy picture. It
+shows over the picture as you go; drag it to where it belongs. **Add text** makes it
+part of the picture as a History step: it is laid over the picture as it looks, so the
+sliders are applied first (as *Apply adjustments* does) and the text keeps exactly the
+colour you picked. Step back in History to take it off again.
 
 ### Download
 

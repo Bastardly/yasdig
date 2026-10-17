@@ -3,8 +3,8 @@ import { S } from './state.js';
 import { isBusy, onIdle, setBusy, setIdle } from './busy.js';
 import { onJobs, passRunning, runningJob, soonJobs } from './jobs.js';
 import { claimLeft, closeViewer, deliver, onLook, onOpen, passLander, railDot, stepRequest, stepTo } from './viewer.js';
-import { fillReady, hiresPass, oomOptions, passSteps, refine, setUpFactor, upOptions, upscalerOptions,
-         upscalersReady } from './image.js';
+import { fillReady, hiresPass, oomOptions, passSteps, refine, upscalerOptions, upscalersReady } from './image.js';
+import { mirrors } from './mirror.js';
 import { openGetModels } from './getmodels.js';
 import { showError } from './memory.js';
 import { references } from './refs.js';
@@ -34,7 +34,7 @@ let painted = false;
 let eraser = false;
 // Space is held: a left drag pans instead of painting, as in every paint program.
 let space = false;
-// The area's own strength. The whole image's is the Refine pass fold's box,
+// The area's own strength. The whole image's is the Refine pass panel's box,
 // so the dialog and the fold always agree and *Save as defaults* sees it; the
 // one Strength box in the dialog shows whichever the mask says applies.
 let areaStrength = 0.5;
@@ -57,7 +57,7 @@ let beforeKey = null;
 const open = () => $('lightbox').open;
 // The Refine panel is open with its Refine fold: a left drag on the picture
 // paints the mask.
-const masking = () => $('panel-refine').open && $('rdfold-refine').open;
+const masking = () => $('panel-refine').open;
 
 // A set of ← ↑ ↓ → toggles and an amount: Extend's, and Edit's rescale. One
 // factory for both, so the two can't come to disagree about what a side is or
@@ -106,6 +106,9 @@ function sideSet(root, onChange) {
 }
 let extendSides = null;
 let editSides = null;
+// The Refine and Hi-res panels' settings: the Image tab's Refine pass and
+// Hi-res pass controls, shown again (mirror.js). Built in `initRedraw`.
+let passFields = null;
 // The image was opened from Outputs, so the dialog offers its model: an upload
 // names none, and a saved picture's maker may not be the one to finish with.
 // Set on every open from the pane it opens on.
@@ -199,6 +202,25 @@ function draw() {
     ctx.fillRect(0, 0, c.width, c.height);
     ctx.globalCompositeOperation = 'source-over';
   });
+}
+
+// The brush, as the Brushes panel shows its own: a dashed core the size of
+// the stroke, which is redrawn in full, and a ring where Edge softness's fade
+// ends — outward from the paint by the softness on every side, in the
+// picture's pixels, so it is scaled to the screen like the mask's blur.
+let ring = null;
+function placeRing(e) {
+  const img = $('lbimg');
+  const show = masking() && !comparing && !space && !!master && !!img.clientWidth;
+  ring.hidden = !show;
+  if (!show) return;
+  const brush = Number($('rpbrush').value);
+  const outer = brush + 2 * Number($('rpsoft').value) * (img.clientWidth / master.width);
+  const view = $('lbview').getBoundingClientRect();
+  ring.style.width = ring.style.height = `${outer}px`;
+  ring.style.left = `${e.clientX - view.left + $('lbview').scrollLeft - outer / 2}px`;
+  ring.style.top = `${e.clientY - view.top + $('lbview').scrollTop - outer / 2}px`;
+  ring.firstElementChild.style.width = ring.firstElementChild.style.height = `${brush}px`;
 }
 
 // One stroke, press to release, drawn into the master as round segments. The
@@ -353,7 +375,7 @@ function syncButtons() {
     const noSteps = passSteps('refine') <= 0;
     $('redrawgo').disabled = !live || (!painted && noSteps);
     $('redrawgo').title = !painted && live && noSteps
-      ? 'Refine steps is 0 — set it in the Refine pass fold' : '';
+      ? 'Refine steps is 0 — set it above' : '';
   }
   // Hi-res: on the Hi-res pass panel's steps (a profile can say 0 while the
   // panel says otherwise), and only while the picture is inside the hi-res
@@ -363,7 +385,7 @@ function syncButtons() {
     const steps = passSteps('hires') > 0;
     $('rdhires').disabled = !live || !shown.can_hires || !steps;
     $('rdhires').title = !live ? '' : !shown.can_hires ? 'Already at the hi-res size limit (Settings → Hi-res max side)'
-      : !steps ? 'Hi-res steps is 0 — set it in the Hi-res pass panel' : '';
+      : !steps ? 'Hi-res steps is 0 — set it above' : '';
   }
   $('rdhiresnote').textContent = live
     ? `${shown.width}×${shown.height} → ${Math.round(shown.width * hf)}×${Math.round(shown.height * hf)}` : '';
@@ -372,11 +394,11 @@ function syncButtons() {
   $('rdfold-edit').hidden = !(live && shown.can_edit);
   $('rdedit').hidden = $('rdfold-edit').hidden;
   if (!isBusy('rdedit')) {
-    const said = $('rpprompt').value.trim();
+    const said = $('rdeditprompt').value.trim();
     $('rdedit').textContent = editSides.any() ? 'Edit and rescale' : 'Edit';
     $('rdedit').disabled = !live || painted || !said;
     $('rdedit').title = painted ? 'Clear the Refine fold’s mask to edit the whole image'
-      : !said ? 'Type what to change in the prompt box' : '';
+      : !said ? 'Type what to change in Edit\u2019s box' : '';
   }
   $('rdeditnote').textContent = live ? editSides.note(shown.width, shown.height) : '';
   // Extend: FLUX.1 Fill when one is installed, nothing to pick. Without one the
@@ -405,16 +427,6 @@ function syncButtons() {
     $('rdupscale').title = f < 1 && passRunning() ? 'A pass is running on the image — scale when it lands' : '';
   }
   $('rdupnote').textContent = to ? `${shown.width}×${shown.height} → ${to[0]}×${to[1]}` : '';
-  // Blank uses: the area its image's own prompt; the whole image the Refine
-  // pass fold's prompt when there is one.
-  // Extend shares the box but not the rule: its blank continues the background,
-  // since the image's own prompt names a subject it would draw again.
-  const fold = $('rprompt').value.trim();
-  $('rpprompt').placeholder = painted
-    ? "blank uses this image's own prompt"
-    : !fold
-      ? "blank: Refine uses this image's own prompt; Extend continues the background"
-      : `blank: Refine uses the Refine pass prompt (${fold}); Extend continues the background`;
   syncDialogSummaries();
   $('rdmodel').disabled = passRunning();
   $('rdcancel').hidden = !passRunning();
@@ -441,7 +453,6 @@ function syncDialogSummaries() {
   const put = (id, text) => { $(id).textContent = text ? `— ${text}` : ''; };
   const strength = $('rpstrength').value;
   put('rdsum-refine', `${painted ? 'area painted' : 'whole image'} · ${strength}`);
-  put('rdsum-hires', `${S.upFactor}×`);
   const grown = shown ? editSides.note(shown.width, shown.height).split('→ ')[1] : '';
   put('rdsum-edit', grown ? `rescale → ${grown}` : '');
   const f = scaleFactor();
@@ -449,6 +460,7 @@ function syncDialogSummaries() {
   const to = shown && f ? scaledSize(f) : null;
   put('rdsum-upscale', to ? `${to[0]}×${to[1]}${up ? ` · ${up}` : ''}` : '');
   put('rdsum-extend', fillReady() ? extendSides.label() : 'needs FLUX.1 Fill');
+  railDot('extend', extendSides.any());
 }
 
 // The Strength box shows the number for what the button will do. On a switch
@@ -533,7 +545,7 @@ async function scale() {
 // the server, and any picks in the References dialog follow it — so the prompt
 // names those "image 2" onwards.
 async function edit() {
-  const said = $('rpprompt').value.trim();
+  const said = $('rdeditprompt').value.trim();
   if (S.imageId === null || painted || !said) return;
   $('lberr').textContent = '';
   setBusy('rdedit', editSides.any() ? 'Editing and rescaling…' : 'Editing…', 'edit');
@@ -564,7 +576,7 @@ async function extend() {
     land(await post('/extend', {
       image_id: S.imageId,
       expand: extendSides.expand(),
-      prompt: $('rpprompt').value.trim() || null,
+      prompt: $('rdextendprompt').value.trim() || null,
       feather: Number($('rpsoft').value),
       memory: $('memory').value || null,
     }));
@@ -577,9 +589,10 @@ async function extend() {
 }
 
 // The whole-image refine goes through image.js's `escalate`, which keeps the
-// stale-image reopen and the busy label; this only adds the dialog's prompt.
+// stale-image reopen and the busy label. Its prompt is the Refine pass's own
+// (`#rprompt`, mirrored in this panel), already in `escalateSettings`.
 async function refineImage() {
-  await refine($('rpprompt').value.trim() || null, dialogErr, passLander());
+  await refine(null, dialogErr, passLander());
   syncButtons();
 }
 
@@ -605,7 +618,9 @@ async function redraw() {
     land(await post('/redraw', {
       image_id: S.imageId,
       mask: maskPng(),
-      prompt: $('rpprompt').value.trim() || null,
+      // The Refine pass's prompt (mirrored in the panel); blank uses the
+      // image's own.
+      prompt: $('rprompt').value.trim() || null,
       strength: numOr('rpstrength'),
       feather: Number($('rpsoft').value),
       memory: $('memory').value || null,
@@ -655,7 +670,10 @@ function drawDialog() {
 function syncRedraw(data) {
   if (data.image_id !== maskFor) {
     maskFor = data.image_id;
-    $('rpprompt').value = '';
+    // Edit's instruction and Extend's prompt were about the last picture.
+    // The Refine and Hi-res prompts are the Image tab's, and stay.
+    $('rdeditprompt').value = '';
+    $('rdextendprompt').value = '';
     // The sides too: a rescale picked for the last picture would turn this
     // one's Edit into "Edit and rescale" unasked.
     extendSides?.clear();
@@ -671,8 +689,8 @@ function syncRedraw(data) {
 // The dialog is opening (viewer.js's `onOpen`), on the state `onLook` handed.
 function prepareOpen() {
   pickModel = S.pane === 'outputs';
-  // The shared factor, as the Hi-res pass panel last set it.
-  $('upfactor').innerHTML = upOptions();
+  // The Refine and Hi-res panels' fields, from the Image tab's controls.
+  passFields.sync();
   // The sliders may have moved since: Compare's left side is fetched again.
   beforeKey = null;
   fillUpscalers();
@@ -704,6 +722,17 @@ function syncVals() {
 }
 
 export function initRedraw() {
+  // After the strength box re-reads: a model picked here refills the Refine
+  // pass's numbers (`fillPass`), the whole-image strength among them.
+  passFields = mirrors($('lightbox'), {
+    onSync: () => {
+      if (strengthFor === 'image' && document.activeElement !== $('rpstrength')) {
+        $('rpstrength').value = $('rstrength').value;
+      }
+      if (open()) syncButtons();
+    },
+  });
+  passFields.init();
   extendSides = sideSet($('rdextendsides'), syncButtons);
   editSides = sideSet($('rdeditsides'), syncButtons);
   onLook(syncRedraw);
@@ -711,7 +740,6 @@ export function initRedraw() {
   // A plain left drag is the mask's while its fold is open, Compare's split
   // while comparing; Space hands it back to the pan.
   claimLeft(() => !space && (comparing || masking()));
-  $('rdfold-refine').addEventListener('toggle', syncMasking);
   $('panel-refine').addEventListener('toggle', syncMasking);
   $('rdextendgo').addEventListener('click', extend);
   $('rdmodel').addEventListener('change', setModel);
@@ -723,6 +751,15 @@ export function initRedraw() {
   $('lbview').addEventListener('pointerdown', stroke);
   $('lbview').addEventListener('contextmenu', (e) => e.preventDefault());
   new ResizeObserver(place).observe($('lbimg'));
+  ring = document.createElement('div');
+  ring.className = 'brushring';
+  ring.hidden = true;
+  const core = document.createElement('div');
+  core.className = 'brushcore';
+  ring.append(core);
+  $('lbview').append(ring);
+  $('lbview').addEventListener('pointermove', placeRing);
+  $('lbview').addEventListener('pointerleave', () => { ring.hidden = true; });
   $('lbimg').addEventListener('load', place);
 
   // Space to pan and Ctrl+Z to step back — but never from inside the prompt,
@@ -759,10 +796,9 @@ export function initRedraw() {
     await hiresPass(dialogErr, passLander());
     syncButtons();
   });
-  $('upfactor').addEventListener('change', (e) => { setUpFactor(parseFloat(e.target.value)); syncButtons(); });
   $('rdedit').addEventListener('click', edit);
   // Edit waits for an instruction; the button follows the box as it's typed.
-  $('rpprompt').addEventListener('input', syncButtons);
+  $('rdeditprompt').addEventListener('input', syncButtons);
   $('rdfactor').addEventListener('change', () => {
     // Width… starts at the picture's own, so the box says what it changes.
     if ($('rdfactor').value === 'width' && shown && !$('rdwidth').value) $('rdwidth').value = shown.width;

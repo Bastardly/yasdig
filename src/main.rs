@@ -172,6 +172,8 @@ enum JobKind {
     /// Make the look part of the picture, as a history step
     /// (`Display::apply_look`).
     Apply(u64),
+    /// Lay a text layer over the picture as a step (`Display::text`).
+    Text { id: u64, layer: Vec<u8>, label: String },
     /// Paint with a brush tool or change its amount (`Display::brush`).
     Brush { id: u64, tool: brush::Tool, amount: Option<f32>, mask: Option<Option<Vec<u8>>>, from: Option<usize> },
     /// Reopen an archived generation as a live result. Needs a worker because
@@ -513,6 +515,7 @@ fn run(args: &[String]) -> Result<()> {
                     JobKind::Crop { id, rect } => display.crop(id, rect).map(|r| result_json(&r)),
                     JobKind::Resize { id, factor } => display.resize(id, factor).map(|r| result_json(&r)),
                     JobKind::Apply(id) => display.apply_look(id).map(|r| result_json(&r)),
+                    JobKind::Text { id, layer, label } => display.text(id, &layer, &label).map(|r| result_json(&r)),
                     JobKind::Brush { id, tool, amount, mask, from } => {
                         display.brush(id, tool, amount, mask, from).map(|r| result_json(&r))
                     }
@@ -815,6 +818,7 @@ fn route(
         ("POST", "/crop") => handle_crop(conn, lanes, &req.body),
         ("POST", "/resize") => handle_resize(conn, lanes, &req.body),
         ("POST", "/apply") => handle_apply(conn, lanes, &req.body),
+        ("POST", "/text") => handle_text(conn, lanes, &req.body),
         ("POST", "/brush") => handle_brush(conn, lanes, &req.body),
         // A brush tool's mask, for the page to paint on again.
         ("GET", p) if p.starts_with("/brush/") && p.ends_with(".png") => {
@@ -2747,6 +2751,25 @@ fn handle_apply(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         Some(d) => submit(conn, &lanes.display, JobKind::Apply(d.image_id), 400),
         None => Ok(()),
     }
+}
+
+/// `POST /text {image_id, layer, label}`: the dialog's Text panel — `layer`
+/// a transparent PNG (data URL) the page drew at the picture's size, laid over
+/// the picture as it looks, as a step (`Display::text`). Display lane.
+fn handle_text(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        image_id: u64,
+        layer: String,
+        #[serde(default)]
+        label: String,
+    }
+    let Some(d) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let layer = match data_url_bytes(&d.layer) {
+        Ok(b) => b,
+        Err(e) => return conn.respond(400, "application/json", error_body(&e).as_bytes()),
+    };
+    submit(conn, &lanes.display, JobKind::Text { id: d.image_id, layer, label: d.label }, 400)
 }
 
 /// `POST /crop {image_id, x, y, width, height}`: crop the image, in its own

@@ -714,7 +714,7 @@ export const upOptions = () => {
 
 export function setUpFactor(v) {
   S.upFactor = v;
-  for (const id of ['upfactor', 'hiresscale', 'vfactor']) {
+  for (const id of ['hiresscale', 'dl-hiresscale', 'vfactor']) {
     const el = $(id);
     if (!el || parseFloat(el.value) === v) continue;
     if (el.tagName === 'SELECT' && ![...el.options].some((o) => parseFloat(o.value) === v)) {
@@ -983,13 +983,15 @@ export const escalateModels = () => ({
 // nobody reads. On Outputs there is no Refine pass fold's model: the dialog's
 // *Refine with* has already set the image's.
 export const refine = (prompt, err, land) => escalate('redrawgo', '/refine', {
-  model: P('refmodel')?.value || null, ...escalateSettings(),
+  // The Refine pass panel's model, which the dialog's Refine panel shows too,
+  // so it is the one picked on Outputs as well.
+  model: $('refmodel').value || null, ...escalateSettings(),
   ...(prompt ? { refine_prompt: prompt } : {}),
 }, 'Refining…', 'refine', err, land);
 // Hi-res, from the dialog's Refine panel: enlarge by the shared factor and
 // re-diffuse at the new size, with the Hi-res pass panel's settings and model.
 export const hiresPass = (err, land) => escalate('rdhires', '/hires', {
-  model: P('hiresmodel')?.value || null, upscale: S.upFactor,
+  model: $('hiresmodel').value || null, upscale: S.upFactor,
   ...escalateSettings(),
 }, 'Hi-res pass…', 'hires', err, land);
 

@@ -1,5 +1,6 @@
 import { $, esc, post, rememberFolds } from './dom.js';
 import { floatPanels } from './panels.js';
+import { GENERIC, installedFonts, textTool } from './texttool.js';
 import { S, P, escErr } from './state.js';
 import { onJobs, passRunning } from './jobs.js';
 import { regionTool } from './regiontool.js';
@@ -929,22 +930,19 @@ export function initViewer() {
 
   box = regionTool({ view: $('lbview'), img: $('lbimg'), onChange: onBox });
   box.init();
-  // The four things that own the pointer on the picture — the Refine fold's
-  // mask (in an open Refine panel), the Crop fold's box (in Scale), the
-  // Selection panel's area box, the Brushes panel: opening one closes the
-  // others, so what a drag does is never ambiguous. With none open, a drag
-  // pans. The other panels never take the pointer, so they stay open beside.
+  // The four things that own the pointer on the picture — the Refine panel's
+  // mask, the Crop fold's box (in Scale), the Selection panel's area box, the
+  // Brushes panel: opening one closes the others, so what a drag does is never
+  // ambiguous. With none open, a drag pans. The other panels never take the
+  // pointer, so they stay open beside.
   const crop = $('fold-lb-crop'), areaFold = $('panel-select');
-  const brushFold = $('panel-brush'), maskFold = $('rdfold-refine');
-  const masking = () => $('panel-refine').open && maskFold.open;
-  const maskClaims = () => {
-    if (!masking()) return;
+  const brushFold = $('panel-brush'), maskFold = $('panel-refine');
+  maskFold.addEventListener('toggle', () => {
+    if (!maskFold.open) return;
     crop.open = false;
     areaFold.open = false;
     brushFold.open = false;
-  };
-  maskFold.addEventListener('toggle', maskClaims);
-  $('panel-refine').addEventListener('toggle', maskClaims);
+  });
   // Closing Scale drops an unapplied crop, as closing its fold does.
   $('panel-scale').addEventListener('toggle', () => { if (!$('panel-scale').open) crop.open = false; });
   crop.addEventListener('toggle', () => {
@@ -1065,9 +1063,13 @@ export function initViewer() {
     $('lbcfeatherval').textContent = area.colors.feather.toFixed(2);
     schedulePost();
   });
-  // Out of the way once the pointer goes to any panel or the rail.
+  // Out of the way once the pointer goes to any panel or the rail: the
+  // wheel closes, and the boxes, the mask and the brush rings fade
+  // (`.overpanel`), so the soft edge of what a slider is doing is what you
+  // see while you drag it. They come back with the pointer.
   for (const el of document.querySelectorAll('#lightbox .fpanel, #lightbox .lbrail')) {
-    el.addEventListener('pointerenter', () => wheel.hide());
+    el.addEventListener('pointerenter', () => { wheel.hide(); $('lightbox').classList.add('overpanel'); });
+    el.addEventListener('pointerleave', () => $('lightbox').classList.remove('overpanel'));
   }
   $('lbview').addEventListener('pointerdown', () => wheel.hide());
   // Escape closes the wheel first, and the viewer only on a second press —
@@ -1116,6 +1118,25 @@ export function initViewer() {
   for (const b of document.querySelectorAll('.lbtools [data-tool]')) {
     b.addEventListener('click', () => chooseTool(b.dataset.tool));
   }
+
+  // Text: the fifth thing that owns the pointer (a drag moves the text), so
+  // it and the other four close each other.
+  const textFold = $('panel-text');
+  for (const other of [maskFold, crop, areaFold, brushFold]) {
+    other.addEventListener('toggle', () => { if (other.open) textFold.open = false; });
+  }
+  textFold.addEventListener('toggle', () => {
+    if (textFold.open) {
+      maskFold.open = false;
+      crop.open = false;
+      areaFold.open = false;
+      brushFold.open = false;
+      text.show();
+    } else {
+      text.hide();
+    }
+  });
+  wireText();
   const sizes = () => {
     paint.set({
       size: Number($('lbbsize').value),
@@ -1147,7 +1168,66 @@ export function initViewer() {
   announcePanels();
 
   onJobs(syncCrop);
+  onJobs(syncText);
   rememberFolds($('lightbox'));
+}
+
+// ---- Text ------------------------------------------------------------------
+//
+// The Text panel's controls into `texttool.js`, and *Add text* into `/text`
+// as a step (`stepRequest`, like Apply). After it lands the box empties: the
+// text is in the picture now, and a preview left over it would draw it twice.
+let text = null;
+function wireText() {
+  text = textTool({ view: $('lbview'), img: $('lbimg') });
+  text.init();
+  $('txtfont').innerHTML = [...GENERIC, ...installedFonts().map((f) => [f, f])]
+    .map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+  let align = 'center';
+  const read = () => {
+    // The size's ceiling follows the picture: a fifth of its height.
+    $('txtsize').max = Math.max(64, Math.round(($('lbimg').naturalHeight || 1024) / 5));
+    text.set({
+      text: $('txttext').value, family: $('txtfont').value,
+      bold: $('txtbold').classList.contains('active'), italic: $('txtitalic').classList.contains('active'),
+      size: Number($('txtsize').value), line: Number($('txtline').value), align,
+      color: $('txtcolor').value, opacity: Number($('txtopacity').value),
+      outline: Number($('txtoutline').value), outlineColor: $('txtoutcolor').value,
+      shadow: $('txtshadow').checked,
+    });
+    $('txtsizeval').textContent = `${$('txtsize').value} px`;
+    $('txtlineval').textContent = `×${Number($('txtline').value).toFixed(2)}`;
+    $('txtopacityval').textContent = `${Math.round(Number($('txtopacity').value) * 100)}%`;
+    $('txtoutlineval').textContent = Number($('txtoutline').value) ? `${$('txtoutline').value} px` : 'none';
+    syncText();
+  };
+  for (const ev of ['input', 'change']) $('panel-text').addEventListener(ev, read);
+  for (const id of ['txtbold', 'txtitalic']) {
+    $(id).addEventListener('click', () => { $(id).classList.toggle('active'); read(); });
+  }
+  for (const b of $('panel-text').querySelectorAll('[data-align]')) {
+    b.addEventListener('click', () => {
+      align = b.dataset.align;
+      for (const x of $('panel-text').querySelectorAll('[data-align]')) x.classList.toggle('active', x === b);
+      read();
+    });
+  }
+  $('txtclear').addEventListener('click', () => { $('txttext').value = ''; read(); });
+  $('txtadd').addEventListener('click', async () => {
+    if (!text.has()) return;
+    if (await stepRequest('/text', { layer: text.png(), label: $('txttext').value })) {
+      $('txttext').value = '';
+      read();
+    }
+  });
+  read();
+}
+
+// Add text is for text there is, and waits like every step while a pass runs.
+function syncText() {
+  if (!text) return;
+  $('txtadd').disabled = !text.has() || passRunning() || stepping || S.imageId === null;
+  railDot('text', text.has());
 }
 
 // The panels, before anything reads `$('panel-…').open`. Refine and History
@@ -1158,10 +1238,13 @@ function buildPanels() {
     rail: document.querySelector('#lightbox .lbrail'),
     defs: [
       { id: 'refine', open: true },
+      { id: 'hires' },
+      { id: 'extend' },
       { id: 'scale' },
       { id: 'adjust' },
       { id: 'brush' },
       { id: 'select' },
+      { id: 'text' },
       { id: 'history', open: true, corner: 'bottom-right' },
     ],
   });

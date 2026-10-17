@@ -3,6 +3,32 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### New
+
+- **Text on the picture**: a Text panel in Refine & adjust, with the fonts this
+  computer has, bold and italic, size, line spacing, alignment, colour, opacity, an
+  outline and a shadow. Drag it into place; *Add text* makes it a History step, laid
+  over the picture as it looks, so its colour is exactly the one picked.
+
+### Changed
+
+- **Refine & adjust has a panel per pass**: Refine (with Edit), Hi-res and Extend,
+  each with its own *Prompt for this pass* last and its buttons at the foot. Refine
+  and Hi-res show the Image tab's own settings for those passes — model, steps, CFG,
+  strength — and changing them in either place changes both. Edit has its own
+  instruction box.
+- **Brushes show the result, not a red overlay**, and the brush is two rings: its
+  size, and the full-strength core inside the softness. The Refine mask's brush shows
+  the same pair: the stroke, and how far Edge softness fades out around it.
+- **Boxes step aside while you adjust**: with the pointer on a panel, the selection
+  box, crop box and mask fade, so a vignette's soft edge is what you see.
+- **Output upscale starts at 1** on a new install: a first render comes out at the
+  size it was drawn.
+- **Per model** shows its empty boxes as `default: …`, so they no longer look
+  disabled.
+
 ## 0.2.1 — 2026-10-15
 
 ### Changed

@@ -331,6 +331,12 @@ needs a Vulkan device and nothing else.
   a multiple of 8, must be at least 64, inside the picture, and not all of it. The
   filters are kept and an area is mapped into the new frame. Display lane, like
   `/adjust`; `409` when a pass replaced the image first.
+- `POST /text` — `{ "image_id": 3, "layer": "data:image/png;base64,…", "label": "Hello" }`.
+  The Refine & adjust dialog's Text panel: `layer` is a transparent PNG at the
+  picture's size, laid over the picture *as it looks* (the filters, area and brushes
+  baked first, as `/apply` does) as a history step named `Text: "…"` from `label`'s
+  first 40 characters. The look starts again from zero. Display lane; `409` when a
+  pass replaced the image first.
 - `POST /resize` — `{ "image_id": 3, "factor": 0.5 }`. Scales the retained image
   *down* (Lanczos, no diffusion) as a history step; `factor` is between 0 and 1, and
   each side is rounded down to a multiple of 8 and must stay at least 64. Up is
