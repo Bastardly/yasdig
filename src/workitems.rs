@@ -239,6 +239,22 @@ impl Store {
         self.shelf_dir(shelf).join(format!("{id}.json"))
     }
 
+    /// The item's Refine & adjust edits (`crate::edits`): a folder beside its
+    /// three files, on whichever shelf it is on, moved and deleted with them.
+    pub fn edits_dir(&self, shelf: Shelf, id: &str) -> PathBuf {
+        self.shelf_dir(shelf).join(format!("{id}.edits"))
+    }
+
+    /// Where an item's edits go now: the shelf its picture is on, the
+    /// favourites when it is starred.
+    pub fn edits_home(&self, id: &str) -> Option<PathBuf> {
+        if !valid_id(id) {
+            return None;
+        }
+        let shelf = if self.image_path(Shelf::Favorites, id).is_file() { Shelf::Favorites } else { Shelf::Work };
+        self.image_path(shelf, id).is_file().then(|| self.edits_dir(shelf, id))
+    }
+
     /// Archive a generation: the unsharpened image, a thumbnail, and the
     /// settings. `item.thumb_*` are filled in here, since only this function
     /// knows what the thumbnailer produced.
@@ -354,7 +370,7 @@ impl Store {
                 Err(e) => return Err(e).with_context(|| format!("deleting {}", p.display())),
             }
         }
-        Ok(())
+        remove_edits(&self.edits_dir(shelf, id))
     }
 
     /// Star a work item: **move** its three files onto the favourites shelf.
@@ -380,6 +396,7 @@ impl Store {
             return Ok(());
         }
         copy_picture(work, fav, id, true)?;
+        copy_edits(&self.edits_dir(Shelf::Work, id), &self.edits_dir(Shelf::Favorites, id))?;
         self.delete(Shelf::Work, id)
     }
 
@@ -395,6 +412,7 @@ impl Store {
         }
         if !self.image_path(Shelf::Work, id).is_file() {
             copy_picture(self.shelf_dir(Shelf::Favorites), self.shelf_dir(Shelf::Work), id, true)?;
+            copy_edits(&self.edits_dir(Shelf::Favorites, id), &self.edits_dir(Shelf::Work, id))?;
         }
         self.delete(Shelf::Favorites, id)
     }
@@ -854,6 +872,37 @@ fn sort_outputs(out: &mut [Output]) {
 /// `{stem}-thumb.png` when there is one. The modification time comes along,
 /// since the output gallery is ordered by it and starring an image must not
 /// move it to the front.
+/// An item's edits folder onto another shelf, file by file (it is flat).
+/// None is nothing to do. The record goes last, so a half copy has none and
+/// opens as the original rather than as a record naming missing files.
+fn copy_edits(from: &Path, to: &Path) -> Result<()> {
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(to).with_context(|| format!("creating {}", to.display()))?;
+    let mut files: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+    files.sort_by_key(|p| p.file_name().is_some_and(|n| n == "edits.json"));
+    for f in files {
+        let dst = to.join(f.file_name().unwrap_or_default());
+        std::fs::copy(&f, &dst).with_context(|| format!("keeping {}", f.display()))?;
+    }
+    Ok(())
+}
+
+/// Delete an edits folder: its files, then the folder — never
+/// `remove_dir_all`, so a stray subfolder stops it rather than going too.
+fn remove_edits(dir: &Path) -> Result<()> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
+    for e in entries.flatten() {
+        if e.path().is_file() {
+            std::fs::remove_file(e.path()).with_context(|| format!("deleting {}", e.path().display()))?;
+        }
+    }
+    std::fs::remove_dir(dir).with_context(|| format!("deleting {}", dir.display()))
+}
+
 fn copy_picture(from: &Path, to: &Path, stem: &str, sidecar: bool) -> Result<()> {
     std::fs::create_dir_all(to).with_context(|| format!("creating {}", to.display()))?;
     for (name, required) in [
@@ -1271,6 +1320,36 @@ mod tests {
         assert_eq!(back.prompt, "a lovely fluffy crab");
         assert_eq!(back.typed_prompt, None);
         assert_eq!(back.typed_negative, None);
+    }
+
+    /// An item's edits folder goes where its picture goes — starred,
+    /// un-starred — and is deleted with it; the listing never sees it.
+    #[test]
+    fn the_edits_folder_moves_and_goes_with_its_item() {
+        let dir = std::env::temp_dir().join(format!("yasdig-edits-{}", new_id(9)));
+        let store = Store::new(&dir, &dir.join("user"));
+        let src = dir.join("src.png");
+        image::RgbaImage::from_pixel(64, 32, image::Rgba([7, 7, 7, 255])).save(&src).unwrap();
+        let mut it = item("900-9", 900);
+        store.save(&src, &mut it).unwrap();
+        let work = store.edits_dir(Shelf::Work, "900-9");
+        assert_eq!(store.edits_home("900-9"), Some(work.clone()));
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("edits.json"), b"{}").unwrap();
+        std::fs::write(work.join("step.png"), b"s").unwrap();
+        assert_eq!(store.list(Shelf::Work).len(), 1, "the folder is no item");
+
+        store.favorite("900-9").unwrap();
+        let fav = store.edits_dir(Shelf::Favorites, "900-9");
+        assert!(!work.exists() && fav.join("step.png").is_file() && fav.join("edits.json").is_file());
+        assert_eq!(store.edits_home("900-9"), Some(fav.clone()));
+        store.unfavorite("900-9").unwrap();
+        assert!(!fav.exists() && work.join("step.png").is_file());
+
+        store.delete(Shelf::Work, "900-9").unwrap();
+        assert!(!work.exists());
+        assert_eq!(store.edits_home("900-9"), None, "no picture, nowhere to keep edits");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A favourite lives on its own shelf, out of `Delete all`'s reach, and is

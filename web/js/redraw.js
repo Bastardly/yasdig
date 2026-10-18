@@ -3,11 +3,11 @@ import { S } from './state.js';
 import { isBusy, onIdle, setBusy, setIdle } from './busy.js';
 import { onJobs, passRunning, runningJob, soonJobs } from './jobs.js';
 import { claimLeft, closeViewer, deliver, onLook, onOpen, passLander, railDot, stepRequest, stepTo } from './viewer.js';
-import { fillReady, hiresPass, oomOptions, passSteps, refine, upscalerOptions, upscalersReady } from './image.js';
+import { fillReady, hiresPass, modelNamed, oomOptions, passSteps, refine, upscalerOptions, upscalersReady } from './image.js';
 import { mirrors } from './mirror.js';
 import { openGetModels } from './getmodels.js';
 import { showError } from './memory.js';
-import { references } from './refs.js';
+import { onRefsChange, references } from './refs.js';
 
 // The passes of the Refine & adjust dialog (`#lightbox`; viewer.js owns it):
 // the Refine panel — paint over part of the picture and redraw just that part
@@ -358,15 +358,31 @@ function drawCompare() {
 
 // `passRunning` (jobs.js): the history is locked while a pass runs.
 
+// Whether Refine may follow the References dialog's picks: when the model the
+// press runs on takes them. The whole-image refine runs on the Refine pass's
+// model when one is picked, else the image's; an area always runs on the
+// image's (`Engine::redraw` swaps nothing). `can_edit` is the image's.
+function refineTakesRefs() {
+  if (!shown) return false;
+  const pick = !painted && $('refmodel').value;
+  return pick ? !!modelNamed(pick)?.references : !!shown.can_edit;
+}
+
+// What a Refine sends: the picks, only when the panel's tick asks — a
+// finishing pass never follows the generation's references unasked.
+const refineRefs = () => (refineTakesRefs() && $('rprefs').checked ? references() : []);
+
 // What the dialog's buttons say and allow, from the mask and the result on
 // screen. Painted is "Refine area" (the redraw pass); nothing painted is
 // "Refine image" (the refine pass) — the mask decides, so there is no mode to
 // remember. A button waiting on its own request is setBusy's until it's back.
 function syncButtons() {
   $('rperase').classList.toggle('active', eraser);
-  // A painted mask is the Refine panel's "something in effect".
-  railDot('refine', painted);
   const live = S.imageId !== null && !!shown;
+  // A painted mask, or references going with it: the Refine panel's
+  // "something in effect".
+  $('rprefsrow').hidden = !(live && refineTakesRefs());
+  railDot('refine', painted || refineRefs().length > 0);
   syncStrength();
   if (!isBusy('redrawgo')) {
     $('redrawgo').textContent = painted ? 'Refine area' : 'Refine image';
@@ -391,13 +407,16 @@ function syncButtons() {
     ? `${shown.width}×${shown.height} → ${Math.round(shown.width * hf)}×${Math.round(shown.height * hf)}` : '';
   // Edit: only for a model that takes references (the image itself is the
   // first), whole-image like Upscale, and it needs an instruction to follow.
-  $('rdfold-edit').hidden = !(live && shown.can_edit);
-  $('rdedit').hidden = $('rdfold-edit').hidden;
+  // Its rail button goes with the model, and an open panel closes for an
+  // image that can't be edited.
+  document.querySelector('.lbrail [data-panel="edit"]').hidden = !(live && shown.can_edit);
+  if (shown && !shown.can_edit && $('panel-edit').open) $('panel-edit').open = false;
+  railDot('edit', editSides.any() || references().length > 0);
   if (!isBusy('rdedit')) {
     const said = $('rdeditprompt').value.trim();
     $('rdedit').textContent = editSides.any() ? 'Edit and rescale' : 'Edit';
     $('rdedit').disabled = !live || painted || !said;
-    $('rdedit').title = painted ? 'Clear the Refine fold’s mask to edit the whole image'
+    $('rdedit').title = painted ? 'Clear the Refine panel’s mask to edit the whole image'
       : !said ? 'Type what to change in Edit\u2019s box' : '';
   }
   $('rdeditnote').textContent = live ? editSides.note(shown.width, shown.height) : '';
@@ -452,9 +471,10 @@ function scaledSize(f) {
 function syncDialogSummaries() {
   const put = (id, text) => { $(id).textContent = text ? `— ${text}` : ''; };
   const strength = $('rpstrength').value;
-  put('rdsum-refine', `${painted ? 'area painted' : 'whole image'} · ${strength}`);
+  const refs = (n) => (n ? ` · ${n} ref${n === 1 ? '' : 's'}` : '');
+  put('rdsum-refine', `${painted ? 'area painted' : 'whole image'} · ${strength}${refs(refineRefs().length)}`);
   const grown = shown ? editSides.note(shown.width, shown.height).split('→ ')[1] : '';
-  put('rdsum-edit', grown ? `rescale → ${grown}` : '');
+  put('rdsum-edit', `${grown ? `rescale → ${grown}` : ''}${refs(references().length)}`.replace(/^ · /, ''));
   const f = scaleFactor();
   const up = f > 1 ? $('rdupscaler').selectedOptions[0]?.textContent ?? '' : '';
   const to = shown && f ? scaledSize(f) : null;
@@ -592,7 +612,7 @@ async function extend() {
 // stale-image reopen and the busy label. Its prompt is the Refine pass's own
 // (`#rprompt`, mirrored in this panel), already in `escalateSettings`.
 async function refineImage() {
-  await refine(null, dialogErr, passLander());
+  await refine(null, dialogErr, passLander(), { references: refineRefs() });
   syncButtons();
 }
 
@@ -624,6 +644,7 @@ async function redraw() {
       strength: numOr('rpstrength'),
       feather: Number($('rpsoft').value),
       memory: $('memory').value || null,
+      references: refineRefs(),
     }));
   } catch (e) {
     passErr(e, redraw);
@@ -799,6 +820,9 @@ export function initRedraw() {
   $('rdedit').addEventListener('click', edit);
   // Edit waits for an instruction; the button follows the box as it's typed.
   $('rdeditprompt').addEventListener('input', syncButtons);
+  // The References dialog's picks, from any of its buttons, and Refine's tick.
+  onRefsChange(() => { if (open()) syncButtons(); });
+  $('rprefs').addEventListener('change', syncButtons);
   $('rdfactor').addEventListener('change', () => {
     // Width… starts at the picture's own, so the box says what it changes.
     if ($('rdfactor').value === 'width' && shown && !$('rdwidth').value) $('rdwidth').value = shown.width;

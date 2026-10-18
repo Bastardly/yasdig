@@ -249,6 +249,8 @@ export const layoutImageTab = () => wsPanels?.layout();
 
 // The checkpoint a pass will run: the one picked for it, or the one generating.
 const passModel = (sel) => models.find((m) => m.name === $(sel).value) ?? currentModel();
+// A model of the listing by name, for the dialog's pass gating (redraw.js).
+export const modelNamed = (name) => models.find((m) => m.name === name);
 
 // The steps a press of that pass will run with: the fold's box, which
 // `escalateSettings()` sends and the server folds over the image's profile
@@ -982,11 +984,12 @@ export const escalateModels = () => ({
 // is where a failure goes: the dialog is modal, so `#rerr` behind it is a line
 // nobody reads. On Outputs there is no Refine pass fold's model: the dialog's
 // *Refine with* has already set the image's.
-export const refine = (prompt, err, land) => escalate('redrawgo', '/refine', {
+// `extra` is the dialog's own: the references a ticked Refine follows.
+export const refine = (prompt, err, land, extra = {}) => escalate('redrawgo', '/refine', {
   // The Refine pass panel's model, which the dialog's Refine panel shows too,
   // so it is the one picked on Outputs as well.
   model: $('refmodel').value || null, ...escalateSettings(),
-  ...(prompt ? { refine_prompt: prompt } : {}),
+  ...(prompt ? { refine_prompt: prompt } : {}), ...extra,
 }, 'Refining…', 'refine', err, land);
 // Hi-res, from the dialog's Refine panel: enlarge by the shared factor and
 // re-diffuse at the new size, with the Hi-res pass panel's settings and model.

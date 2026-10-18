@@ -21,6 +21,7 @@ How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the detail
   src/settings.rs  user/settings.toml and user/model-settings.toml
   src/pipeline.rs  orchestrate sd -> fsr -> escalations, with timings + result cache
   src/workitems.rs durable storage: work/workitems/ + work/output/
+  src/edits.rs     a work item's kept Refine & adjust edits (<id>.edits/)
   src/videos.rs    durable storage for clips: work/videos/
   src/fsr/         wgpu compute (upscale.wgsl = EASU, grade.wgsl = colour,
                    contrast.wgsl = clarity, sharpen.wgsl = RCAS)
@@ -36,7 +37,8 @@ How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the detail
   user/favorite_outputs/  saved images you kept
   src/shutdown.rs  what Close server clears on the way out
   work/            scratch, cleared at startup
-  work/workitems/  every generation + its settings — kept
+  work/workitems/  every generation + its settings — kept; <id>.edits/ holds an
+                   edited one's History steps and look (src/edits.rs)
   work/output/     what you pressed "Save to output" on — kept
   work/videos/     one directory per clip: its frames, a thumbnail, its settings
   ```

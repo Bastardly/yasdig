@@ -225,12 +225,14 @@ needs a Vulkan device and nothing else.
   size, no rescale. Optional `refine_prompt` (`/hires`: `hires_prompt`) is what the
   pass is asked for; blank or absent uses the image's own prompt, which the image
   keeps either way. `/generate` and `/img2img` take the same two for their
-  after-each passes.
+  after-each passes. Optional `references` (output stems, at most 4) are pictures the
+  pass follows, on a model that takes them; refused otherwise. Never sent by an
+  after-each pass.
 - `POST /redraw` — `{ "image_id": 3, "mask": "<base64 PNG or data: URL>", "prompt":
   "a red scarf", "strength": 0.5, "feather": 16 }`. Redraws where the mask is white.
   The mask must be the image's own size; the rest is optional (blank prompt = the
   image's own, strength 0.5, `feather` — edge softness in image pixels, 0–128 —
-  16). Queued ahead of everything not yet running, like `/refine`, and answers in its
+  16), and `references` as on `/refine`. Queued ahead of everything not yet running, like `/refine`, and answers in its
   shape, with `timings.redraw_ms`.
 - `POST /edit` — `{ "image_id": 3, "prompt": "make it night", "references": ["…"] }`.
   Changes the image by instruction on a model that takes references: the image itself

@@ -22,6 +22,27 @@ use std::sync::{Arc, Mutex};
 /// Stop from a crash without a second channel for it.
 pub const CANCELLED: &str = "cancelled by request";
 
+/// The reference images onto a command: one `-r` each, in the order the
+/// prompt names them. Only ever the `refs` a caller hands over — never
+/// `Profile::references`, which every pass shares through `base_cmd`: a refine
+/// handed the generation's references would redraw toward them rather than
+/// finish the picture it was given. A Refine takes them only when asked.
+fn push_refs(cmd: &mut Command, p: &Profile, refs: &[PathBuf], ref_side: Option<u32>) {
+    for r in refs {
+        cmd.args(["-r", &path_str(r)]);
+    }
+    // sd.cpp resizes every reference itself before encoding it — to the
+    // output's area, up to a megapixel, *up* as well as down — so a
+    // smaller file on our side would be scaled back. Its own cap is the
+    // control (`vae_input_max_pixels`, `docs/edit.md`); naming only that
+    // key keeps the model's automatic preset. A hand-written
+    // `--ref-image-args` in `extra_args` wins.
+    let placed = p.extra_args.iter().any(|a| a == "--ref-image-args");
+    if let Some(side) = ref_side.filter(|s| *s > 0 && !refs.is_empty() && !placed) {
+        cmd.args(["--ref-image-args", &format!("vae_input_max_pixels={}", side * side)]);
+    }
+}
+
 pub struct SdRunner<'a> {
     cfg: &'a Config,
     /// Where progress goes and where a cancel comes from. Defaults to a
@@ -79,10 +100,7 @@ impl<'a> SdRunner<'a> {
     }
 
     /// `txt2img`'s command, split out so a test can read it. The reference
-    /// images go here and nowhere else: one `-r` each, in the order the prompt
-    /// names them. `base_cmd` is shared with every img2img pass, and a refine
-    /// handed the references would redraw toward them rather than finish the
-    /// picture it was given.
+    /// images are the `refs` handed in ([`push_refs`]), never the profile's.
     #[allow(clippy::too_many_arguments)]
     fn txt2img_cmd(
         &self,
@@ -98,19 +116,7 @@ impl<'a> SdRunner<'a> {
         cmd.args(["-W", &p.width.to_string()]);
         cmd.args(["-H", &p.height.to_string()]);
         cmd.args(["--steps", &p.steps.to_string()]);
-        for r in refs {
-            cmd.args(["-r", &path_str(r)]);
-        }
-        // sd.cpp resizes every reference itself before encoding it — to the
-        // output's area, up to a megapixel, *up* as well as down — so a
-        // smaller file on our side would be scaled back. Its own cap is the
-        // control (`vae_input_max_pixels`, `docs/edit.md`); naming only that
-        // key keeps the model's automatic preset. A hand-written
-        // `--ref-image-args` in `extra_args` wins.
-        let placed = p.extra_args.iter().any(|a| a == "--ref-image-args");
-        if let Some(side) = ref_side.filter(|s| *s > 0 && !refs.is_empty() && !placed) {
-            cmd.args(["--ref-image-args", &format!("vae_input_max_pixels={}", side * side)]);
-        }
+        push_refs(&mut cmd, p, refs, ref_side);
         cmd
     }
 
@@ -149,10 +155,15 @@ impl<'a> SdRunner<'a> {
         cfg: f32,
         big_image: bool,
         label: &str,
+        refs: &[PathBuf],
+        ref_side: Option<u32>,
     ) -> Command {
         let mut cmd = self.base_cmd(p, prompt, negative, seed, out, cfg);
         // sd.cpp derives dimensions from the init image, so no -W/-H here.
         cmd.args(["-i", &path_str(init)]);
+        // sd.cpp encodes references whether or not there is an init image
+        // (`pipeline/image.cpp`), so an area refine can follow one.
+        push_refs(&mut cmd, p, refs, ref_side);
         cmd.args(["--strength", &format!("{strength}")]);
         // Effective steps have to scale with strength, or the pass is simply
         // under-resolved. `strength` decides how far up the sigma schedule the
@@ -216,8 +227,12 @@ impl<'a> SdRunner<'a> {
         cfg: f32,
         big_image: bool,
         label: &str,
+        refs: &[PathBuf],
+        ref_side: Option<u32>,
     ) -> Result<()> {
-        let cmd = self.img2img_cmd(p, prompt, negative, seed, init, out, strength, steps, cfg, big_image, label);
+        let cmd = self.img2img_cmd(
+            p, prompt, negative, seed, init, out, strength, steps, cfg, big_image, label, refs, ref_side,
+        );
         self.run(cmd, label)
     }
 
@@ -243,8 +258,12 @@ impl<'a> SdRunner<'a> {
         big_image: bool,
         label: &str,
         mask: &Path,
+        refs: &[PathBuf],
+        ref_side: Option<u32>,
     ) -> Result<()> {
-        let mut cmd = self.img2img_cmd(p, prompt, negative, seed, init, out, strength, steps, cfg, big_image, label);
+        let mut cmd = self.img2img_cmd(
+            p, prompt, negative, seed, init, out, strength, steps, cfg, big_image, label, refs, ref_side,
+        );
         cmd.args(["--mask", &path_str(mask)]);
         self.run(cmd, label)
     }
@@ -2199,10 +2218,11 @@ binary = "/opt/sd-cli"
         assert!(!is_out_of_memory("[ERROR  ] main.cpp:965  - generate failed"));
     }
 
-    /// References are `-r`, one each in order, on a txt2img only: the img2img
-    /// passes share `base_cmd`, and a refine must never be handed them.
+    /// References are `-r`, one each in order, and only the ones a command is
+    /// handed: the img2img passes share `base_cmd`, and a refine must never
+    /// pick up the generation's from the profile.
     #[test]
-    fn references_go_to_txt2img_and_nowhere_else() {
+    fn a_pass_carries_only_the_references_it_is_handed() {
         let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
         let p = Profile {
             model: PathBuf::from("/models/klein.safetensors"),
@@ -2229,8 +2249,15 @@ binary = "/opt/sd-cli"
         let hand = Profile { extra_args: vec!["--ref-image-args".into(), "preset=flux2".into()], ..p.clone() };
         let a = argv(&r.txt2img_cmd(&hand, "x", None, 1, Path::new("o.png"), &refs, Some(768)));
         assert_eq!(a.iter().filter(|x| *x == "--ref-image-args").count(), 1);
-        let pass = argv(&r.img2img_cmd(&p, "x", None, 1, Path::new("i.png"), Path::new("o.png"), 0.3, 10, 1.0, false, "x"));
+        let pass = argv(&r.img2img_cmd(&p, "x", None, 1, Path::new("i.png"), Path::new("o.png"), 0.3, 10, 1.0, false, "x", &[], None));
         assert!(!pass.iter().any(|x| x == "-r"), "the profile's references must not reach a pass");
+        // A Refine asked to follow references gets them, capped the same way.
+        let asked = argv(&r.img2img_cmd(
+            &p, "x", None, 1, Path::new("i.png"), Path::new("o.png"), 0.3, 10, 1.0, false, "x", &refs[..1], Some(768),
+        ));
+        let given: Vec<&str> = asked.windows(2).filter(|w| w[0] == "-r").map(|w| w[1].as_str()).collect();
+        assert_eq!(given, ["/s/ref1.png"]);
+        assert_eq!(flag(&asked, "--ref-image-args"), Some("vae_input_max_pixels=589824"));
     }
 
     /// An Extend strip is a Fill pass at strength 1 on the Fill model's own
@@ -2266,8 +2293,8 @@ binary = "/opt/sd-cli"
         let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
         let p = Profile { model: PathBuf::from("/models/m.safetensors"), ..Default::default() };
         let r = SdRunner::new(&cfg);
-        let base = argv(&r.img2img_cmd(&p, "a hand", None, 7, Path::new("i.png"), Path::new("o.png"), 0.8, 20, 6.0, false, "x"));
-        let mut masked = r.img2img_cmd(&p, "a hand", None, 7, Path::new("i.png"), Path::new("o.png"), 0.8, 20, 6.0, false, "x");
+        let base = argv(&r.img2img_cmd(&p, "a hand", None, 7, Path::new("i.png"), Path::new("o.png"), 0.8, 20, 6.0, false, "x", &[], None));
+        let mut masked = r.img2img_cmd(&p, "a hand", None, 7, Path::new("i.png"), Path::new("o.png"), 0.8, 20, 6.0, false, "x", &[], None);
         masked.args(["--mask", "m.png"]);
         let masked = argv(&masked);
         assert_eq!(&masked[..base.len()], &base[..]);

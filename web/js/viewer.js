@@ -1238,6 +1238,7 @@ function buildPanels() {
     rail: document.querySelector('#lightbox .lbrail'),
     defs: [
       { id: 'refine', open: true },
+      { id: 'edit' },
       { id: 'hires' },
       { id: 'extend' },
       { id: 'scale' },

@@ -29,6 +29,7 @@
 use crate::area::Area;
 use crate::brush::{self, Brushes, Stroke, Tool};
 use crate::config::{Config, Filters, FiltersPatch, LoraRef, Profile, MAX_STRENGTH, MIN_STRENGTH};
+use crate::edits;
 use crate::redraw;
 use crate::fsr::Fsr;
 use crate::sd::{Monitor, SdRunner, VideoIo};
@@ -91,9 +92,67 @@ struct Live {
 #[derive(Default)]
 pub struct Retained {
     live: BTreeMap<u64, Live>,
+    /// Where an edited work item's edits are kept (`crate::edits`), saved on
+    /// every write-back below. `None` in tests that aren't about it.
+    items: Option<workitems::Store>,
 }
 
 impl Retained {
+    pub fn with_store(items: workitems::Store) -> Retained {
+        Retained { live: BTreeMap::new(), items: Some(items) }
+    }
+
+    /// Save an edited work item's state to its `.edits/` folder: the one
+    /// place a write-back becomes durable, so every History step, slider and
+    /// stroke is a save. Not an Outputs entry (that has *Save changes*), not
+    /// an image nothing has changed — unless it was saved before, so undoing
+    /// back to the start is kept too. A failure is logged, never the
+    /// operation's: the picture on screen is still right.
+    fn persist(&self, p: &Pending) {
+        let (Some(items), Some(work)) = (&self.items, &p.work_id) else {
+            return;
+        };
+        if p.opened_from.is_some() {
+            return;
+        }
+        let Some(dir) = items.edits_home(work) else {
+            return;
+        };
+        if !p.edited() && !dir.exists() {
+            return;
+        }
+        let (record, files) = p.record();
+        if let Err(e) = edits::save(&dir, &record, &files) {
+            eprintln!("[yasdig] keeping the edits of {work}: {e:#}");
+        }
+    }
+
+    /// The live entry for work item `work` outside Outputs, if any: on
+    /// screen, or held by a pass still running on it.
+    fn live_work_item(&self, work: &str) -> Option<(u64, Pending)> {
+        self.live
+            .iter()
+            .find(|(_, l)| l.pending.work_id.as_deref() == Some(work) && l.pending.opened_from.is_none())
+            .map(|(k, l)| (*k, l.pending.clone()))
+    }
+
+    /// A pass's result, back where its image is. An image another took the
+    /// slot from while the pass ran stays out of it — it is updated in place
+    /// and saved, and goes when its pin does. Taking `Slot::Image` back would
+    /// throw away the picture now on screen.
+    fn put_back(&mut self, id: u64, entry: Pending) {
+        match self.live.get(&id).map(|l| l.slot) {
+            Some(None) => {
+                self.persist(&entry);
+                if let Some(l) = self.live.get_mut(&id) {
+                    l.pending = entry;
+                }
+            }
+            Some(Some(slot)) => self.store(id, slot, entry, false),
+            None => self.store(id, Slot::Image, entry, false),
+        }
+    }
+
     fn get(&self, id: u64, action: &str) -> Result<Pending> {
         match self.live.get(&id) {
             Some(l) => Ok(l.pending.clone()),
@@ -127,6 +186,7 @@ impl Retained {
             self.drop_if_free(k);
         }
         let pins = self.live.get(&id).map_or(0, |l| l.pins) + u32::from(pin);
+        self.persist(&entry);
         self.live.insert(
             id,
             Live {
@@ -145,6 +205,8 @@ impl Retained {
         match self.live.get_mut(&id) {
             Some(l) if l.pending.raw == entry.raw => {
                 l.pending = entry;
+                let p = l.pending.clone();
+                self.persist(&p);
                 true
             }
             _ => false,
@@ -159,6 +221,8 @@ impl Retained {
         match self.live.get_mut(&id) {
             Some(l) if l.pending.raw == was => {
                 l.pending = entry;
+                let p = l.pending.clone();
+                self.persist(&p);
                 true
             }
             _ => false,
@@ -501,6 +565,11 @@ pub struct EscalateRequest {
     /// retry after an out-of-memory is exactly this field changing. Applied
     /// after [`Engine::swap_model`], so it survives a swap to another model.
     pub memory: Option<String>,
+    /// Reference images (output stems) for a Refine to follow, on a model that
+    /// takes them. Request-only and empty unless the page's *Use with Refine*
+    /// is ticked: the generation's own references never reach a pass
+    /// (`sd::push_refs`). `/hires` ignores it.
+    pub references: Vec<String>,
 }
 
 /// What an Edit asks for: an instruction, and any further reference images.
@@ -534,6 +603,8 @@ pub struct RedrawRequest {
     /// Edge softness in image pixels (`redraw::feather`); `None` is
     /// [`REDRAW_SOFTNESS`].
     pub feather: Option<u32>,
+    /// Reference images to follow, as on [`EscalateRequest::references`].
+    pub references: Vec<String>,
 }
 
 /// Fixes what was under the mask while keeping its shape and colours — the
@@ -1009,6 +1080,52 @@ impl Pending {
         Some((self.step(from)?.raw, b.mask.clone(), b.amount))
     }
 
+    /// Whether anything was done to it in Refine & adjust: a step, a look
+    /// away from where the sliders start, an area or a brush.
+    fn edited(&self) -> bool {
+        !self.history.is_empty()
+            || self.filters != Filters::starting_at(self.profile.sharpness, self.profile.clarity)
+            || self.area.is_some()
+            || !self.brushes.is_empty()
+    }
+
+    /// Its state as `crate::edits` keeps it, with the scratch file behind
+    /// each name.
+    fn record(&self) -> (edits::Record, Vec<(String, PathBuf)>) {
+        let mut files = Vec::new();
+        let mut name = |p: &Path| {
+            let n = edits::name_for(p);
+            files.push((n.clone(), p.to_path_buf()));
+            n
+        };
+        let steps = self
+            .steps()
+            .iter()
+            .map(|s| edits::Step {
+                file: name(&s.raw),
+                profile: s.profile.clone(),
+                refine_passes: s.refine_passes,
+                hires_passes: s.hires_passes,
+                step: s.step,
+                label: s.label.clone(),
+            })
+            .collect();
+        let brushes = self
+            .brushes
+            .iter()
+            .map(|(tool, b)| edits::BrushRec { tool: *tool, file: name(&b.mask), amount: b.amount, from: b.from })
+            .collect();
+        let record = edits::Record {
+            version: edits::VERSION,
+            at: if self.history.is_empty() { 0 } else { self.at },
+            steps,
+            filters: self.filters,
+            area: self.area,
+            brushes,
+        };
+        (record, files)
+    }
+
     /// Everything this image owns: the display, and every step's raw and
     /// thumbnail — the current one among them.
     fn remove_files(&self) {
@@ -1078,6 +1195,7 @@ impl Engine {
         let items = workitems::Store::new(&work_dir, &cfg.user_dir());
         let videos = VideoStore::new(&work_dir);
         let fsr = Arc::new(Mutex::new(Fsr::new()?));
+        let retained = Arc::new(Mutex::new(Retained::with_store(workitems::Store::new(&work_dir, &cfg.user_dir()))));
         // Fail fast with a friendly message if the sd binary is missing.
         SdRunner::new(&cfg).preflight()?;
         Ok(Engine {
@@ -1087,7 +1205,7 @@ impl Engine {
             items,
             videos,
             monitor,
-            retained: Arc::default(),
+            retained,
         })
     }
 
@@ -1706,6 +1824,8 @@ impl Engine {
             profile.cfg_scale,
             fw.max(fh) > BIG_IMAGE_SIDE,
             "img2img source",
+            &[],
+            None,
         )?;
         let gen_ms = t.elapsed().as_millis();
         let (cache_skipped, cache_steps) = self.monitor.cache_skip().unwrap_or_default();
@@ -2042,6 +2162,9 @@ impl Engine {
         let mut scratch = Scratch::default();
         let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
         let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
+        let base = p.profile.width.max(p.profile.height);
+        let refs = self.pass_refs(&over.references, &p.profile, &mut scratch, &format!("{id}-{step}-{n}"), base)?;
+        let ref_side = Some(self.cfg.settings().reference_size);
         let sd = self.sd();
 
         let vars = self.cfg.settings().variables;
@@ -2061,6 +2184,8 @@ impl Engine {
             p.profile.refine_cfg(),
             p.big_image(),
             "img2img refine",
+            &refs,
+            ref_side,
         )?;
         let refine_ms = t.elapsed().as_millis();
 
@@ -2155,6 +2280,8 @@ impl Engine {
         let out = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-rp-out.png")));
         let raw = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-raw.png")));
         let display = scratch.path(self.scratch.join(format!("{id}-{step}-{n}-full.png")));
+        let refs = self.pass_refs(&req.references, &p.profile, &mut scratch, &format!("{id}-{step}-{n}"), target)?;
+        let ref_side = Some(self.cfg.settings().reference_size);
 
         use image::imageops::{crop_imm, resize, FilterType};
         let crop_mask = crop_imm(&mask, crop.x, crop.y, crop.w, crop.h).to_image();
@@ -2191,6 +2318,8 @@ impl Engine {
             ww.max(wh) > BIG_IMAGE_SIDE,
             "img2img redraw",
             &sd_mask,
+            &refs,
+            ref_side,
         )?;
         let redraw_ms = t.elapsed().as_millis();
 
@@ -2339,6 +2468,43 @@ impl Engine {
         });
         self.keep(id, entry);
         Ok(result)
+    }
+
+    /// A Refine's references, checked and copied into scratch as
+    /// `{stem}-ref1.png` onward — never adopted, invariant 8 — and shrunk to
+    /// the model's size like a generation's. Refused on a model that can't
+    /// take them, which on a pass means the model it runs on after a swap.
+    fn pass_refs(
+        &self,
+        stems: &[String],
+        profile: &Profile,
+        scratch: &mut Scratch,
+        stem: &str,
+        side: u32,
+    ) -> Result<Vec<PathBuf>> {
+        if stems.is_empty() {
+            return Ok(Vec::new());
+        }
+        if !profile.family.takes_references() {
+            bail!(
+                "references need a model that takes them (Flux.2 Klein); this pass runs on a {} model",
+                profile.family.label()
+            );
+        }
+        if stems.len() > crate::config::MAX_REFERENCES {
+            bail!("at most {} reference images", crate::config::MAX_REFERENCES);
+        }
+        if let Some(bad) = stems.iter().find(|r| !workitems::valid_id(r)) {
+            bail!("'{bad}' is not an output image");
+        }
+        let mut refs = Vec::new();
+        for (i, s) in stems.iter().enumerate() {
+            let src = self.output_source(s)?;
+            let dst = scratch.path(self.scratch.join(format!("{stem}-ref{}.png", i + 1)));
+            stage_reference(&src, &dst, side)?;
+            refs.push(dst);
+        }
+        Ok(refs)
     }
 
     pub fn edit(&mut self, id: u64, req: &EditRequest) -> Result<GenResult> {
@@ -2606,6 +2772,8 @@ impl Engine {
             // size we started from.
             budget > BIG_IMAGE_SIDE,
             "img2img hi-res",
+            &[],
+            None,
         )?;
         let hires_ms = t.elapsed().as_millis();
 
@@ -2684,9 +2852,7 @@ impl Engine {
 
     /// Put an escalation's result back where its image was shown.
     fn keep(&self, id: u64, entry: Pending) {
-        let mut r = lock(&self.retained);
-        let slot = r.slot_of(id);
-        r.store(id, slot, entry, false);
+        lock(&self.retained).put_back(id, entry);
     }
 }
 
@@ -3170,6 +3336,12 @@ impl Display {
     /// The profile comes back verbatim from the sidecar, so the passes run with
     /// the settings that made the image rather than whatever the UI shows now —
     /// the same property a live `Pending` has, extended across a restart.
+    ///
+    /// An item edited before comes back as it was left (`crate::edits`): still
+    /// live — on screen, or under a pass still running — it is that entry,
+    /// under its own id, so the pass lands on what is shown; otherwise its
+    /// `.edits/` folder is copied in. A folder that can't be read opens the
+    /// original, said in the log: it must never cost the picture.
     pub fn open(&mut self, work_id: &str, shelf: Shelf) -> Result<GenResult> {
         let item = self.items.load(shelf, work_id)?;
         // The validated id, never the sidecar's own `id` field: a copied-in
@@ -3177,7 +3349,30 @@ impl Display {
         // item's picture.
         let stored = self.items.image_path(shelf, work_id);
 
+        let live = lock(&self.retained).live_work_item(work_id);
+        if let Some((id, p)) = live {
+            let t = Instant::now();
+            let (png, _, _) =
+                publish(&self.fsr, &p.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes, p.restore_source(p.at))?;
+            let result = p.result(id, png, Timings { fsr_ms: t.elapsed().as_millis(), ..Default::default() });
+            lock(&self.retained).store(id, Slot::Image, p, false);
+            return Ok(result);
+        }
+
         let id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        if let Some(dir) = self.items.edits_home(work_id) {
+            let kept = edits::load(&dir).and_then(|r| r.map(|r| self.reopen_edits(id, &dir, r, &item)).transpose());
+            match kept {
+                Ok(Some((entry, png, fsr_ms))) => {
+                    let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
+                    lock(&self.retained).store(id, Slot::Image, entry, false);
+                    return Ok(result);
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("[yasdig] {work_id}'s edits can't be read, opening the original: {e:#}"),
+            }
+        }
+
         let mut scratch = Scratch::default();
         let raw = scratch.path(self.scratch.join(format!("{id}-0-raw.png")));
         let display = scratch.path(self.scratch.join(format!("{id}-0-full.png")));
@@ -3223,6 +3418,79 @@ impl Display {
         let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
         lock(&self.retained).store(id, Slot::Image, entry, false);
         Ok(result)
+    }
+
+    /// A work item's kept edits as a live entry: every step and brush mask
+    /// copied into scratch under `id`'s names (invariant 8), the step it was
+    /// on published with its look. The picture's own fields come from the
+    /// sidecar, as on a plain open.
+    fn reopen_edits(&self, id: u64, dir: &Path, rec: edits::Record, item: &WorkItem) -> Result<(Pending, Vec<u8>, u128)> {
+        let t = Instant::now();
+        let mut scratch = Scratch::default();
+        let mut copy_in = |file: &str, name: String| -> Result<PathBuf> {
+            let dst = scratch.path(self.scratch.join(name));
+            std::fs::copy(dir.join(file), &dst).with_context(|| format!("reopening {}", dir.join(file).display()))?;
+            Ok(dst)
+        };
+        let mut history = Vec::new();
+        for s in rec.steps {
+            let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let raw = copy_in(&s.file, format!("{id}-{}-{n}-raw.png", s.step))?;
+            let mut profile = s.profile;
+            // As `Store::load` does: whether the model is there now.
+            profile.exists = profile.missing().is_empty();
+            history.push(Snapshot {
+                raw,
+                profile,
+                refine_passes: s.refine_passes,
+                hires_passes: s.hires_passes,
+                step: s.step,
+                label: s.label,
+            });
+        }
+        let mut brushes = Brushes::new();
+        for b in rec.brushes {
+            let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let mask = copy_in(&b.file, format!("{id}-brush-{}-{n}.png", b.tool.as_str()))?;
+            brushes.insert(b.tool, Stroke { mask, amount: b.amount, from: b.from });
+        }
+        let cur = history[rec.at].clone();
+        let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let display = scratch.path(self.scratch.join(format!("{id}-{}-{n}-full.png", cur.step)));
+        let mut p = Pending {
+            raw: cur.raw,
+            raw_w: 0,
+            raw_h: 0,
+            display,
+            profile: cur.profile,
+            filters: rec.filters,
+            area: rec.area,
+            brushes,
+            prompt: item.prompt.clone(),
+            negative: item.negative.clone(),
+            typed_prompt: item.typed_prompt.clone(),
+            typed_negative: item.typed_negative.clone(),
+            seed: item.seed,
+            work_id: Some(item.id.clone()),
+            source: item.source.clone(),
+            opened_from: None,
+            refine_passes: cur.refine_passes,
+            hires_passes: cur.hires_passes,
+            step: cur.step,
+            history,
+            at: rec.at,
+        };
+        let (png, w, h) =
+            publish(&self.fsr, &p.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes, p.restore_source(p.at))?;
+        (p.raw_w, p.raw_h) = (w, h);
+        for s in &p.history {
+            scratch.keep(&s.raw);
+        }
+        for b in p.brushes.values() {
+            scratch.keep(&b.mask);
+        }
+        scratch.keep(&p.display);
+        Ok((p, png, t.elapsed().as_millis()))
     }
 
     /// Bring a finished image in `work/output/` back as a live result, so the
@@ -3910,6 +4178,7 @@ mod tests {
     use super::{
         adjust_label, crop_rect, overlay_onto, resize_size, text_label,
         advance, after_model, edit_size, fit_to, pass_prompt, step_label, AfterModel, Expand, Pending, Retained,
+        edits, workitems, Shelf,
         Slot, MAX_HISTORY,
     };
     use crate::brush::Brushes;
@@ -4096,6 +4365,65 @@ mod tests {
         assert!(!a.raw.exists() && !a.display.exists());
         assert!(r.get(2, "t").is_ok() && out.raw.exists());
         assert!(r.get(3, "t").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A Store over `dir` holding work item `w1`'s picture, and a live entry
+    /// of it with two steps, a look and a brush: an edited work item.
+    fn edited_item(dir: &Path) -> (workitems::Store, Pending) {
+        use crate::brush::{Stroke, Tool};
+        let items = workitems::Store::new(&dir.join("work"), &dir.join("user"));
+        std::fs::write(items.image_path(Shelf::Work, "w1"), b"png").unwrap();
+        let first = Pending { work_id: Some("w1".into()), ..live(dir, "a") };
+        // A pass carries the work item on (`..p` in every escalation).
+        let mut p = Pending { work_id: first.work_id.clone(), ..pass(dir, &first, "b") };
+        p.filters.saturation = 0.3;
+        let mask = dir.join("blur.png");
+        std::fs::write(&mask, b"m").unwrap();
+        p.brushes.insert(Tool::Blur, Stroke { mask, amount: 0.5, from: None });
+        (items, p)
+    }
+
+    /// Every write-back of an edited work item is a save to its `.edits/`,
+    /// which outlives the entry; a plain one, and an Outputs one, save nothing.
+    #[test]
+    fn an_edited_work_item_is_kept_beside_it() {
+        let dir = scratch("keep-edits");
+        let (items, p) = edited_item(&dir);
+        let folder = items.edits_dir(Shelf::Work, "w1");
+        let mut r = Retained::with_store(items);
+        r.store(1, Slot::Image, Pending { work_id: Some("w1".into()), ..live(&dir, "plain") }, false);
+        assert!(!folder.exists(), "nothing edited, nothing kept");
+        r.store(2, Slot::Output, Pending { opened_from: Some("o".into()), ..p.clone() }, false);
+        assert!(!folder.exists(), "an Outputs entry has Save changes instead");
+        r.store(1, Slot::Image, p.clone(), false);
+        // Another item takes the slot: the entry's scratch files go, its
+        // edits stay.
+        r.store(3, Slot::Image, live(&dir, "c"), false);
+        assert!(!p.raw.exists());
+        let rec = edits::load(&folder).unwrap().unwrap();
+        assert_eq!(rec.steps.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(), ["Generated", "b"]);
+        assert_eq!((rec.at, rec.filters.saturation, rec.brushes.len()), (1, 0.3, 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A pass that finishes on an image the user has since switched away from
+    /// updates that image, and leaves the one on screen in the slot.
+    #[test]
+    fn a_late_pass_never_takes_the_slot_back() {
+        let dir = scratch("late-pass");
+        let (items, p) = edited_item(&dir);
+        let folder = items.edits_dir(Shelf::Work, "w1");
+        let mut r = Retained::with_store(items);
+        r.store(1, Slot::Image, p.clone(), true);
+        r.store(2, Slot::Image, live(&dir, "other"), false);
+        let after = Pending { work_id: p.work_id.clone(), ..pass(&dir, &p, "refined") };
+        r.put_back(1, after);
+        assert!(r.get(2, "t").is_ok(), "the picture on screen keeps its slot");
+        assert_eq!(r.slot_of(2), Slot::Image);
+        assert_eq!(edits::load(&folder).unwrap().unwrap().steps.len(), 3, "the late step is kept");
+        r.unpin(1);
+        assert!(r.get(1, "t").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

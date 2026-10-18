@@ -622,8 +622,7 @@ area pass: `src/redraw.rs` (pure geometry/compositing), `Engine::redraw`, `POST
 /redraw`, `SdRunner::redraw` (`img2img_cmd` + `--mask`). The mask decides the Refine
 panel's main button (empty → `/refine`, painted → `/redraw`). **A panel with actions
 pins them in a footer** (`.fpfoot`, under the scrolling body): the others above, the
-main one last and amber — Refine: Eraser · Clear, Edit (hidden without
-`can_edit`), *Refine*; Hi-res: *Hi-res*; Extend: *Extend*; Scale: *Apply crop* (live
+main one last and amber — Refine: Eraser · Clear, *Refine*; Edit: *Edit*; Hi-res: *Hi-res*; Extend: *Extend*; Scale: *Apply crop* (live
 only while the Crop fold's box is up), *Scale*; History: *Apply adjustments* (it adds
 a step). **Each pass panel ends with its own *Prompt for this pass***: Refine's is
 `#rprompt`, Hi-res's `#hprompt` (both mirrored), Extend's `#rdextendprompt`; Edit has
@@ -696,11 +695,13 @@ seams appear). **Edit and rescale** is separate: `EditRequest.expand` (same
 back. Both side sets are `sideSet` instances, cleared on a new image. Compare uses
 `object-fit: contain`.
 
-Dialog layout: a **rail** (`.lbrail`) of panel toggles — Refine, Hi-res, Extend,
+Dialog layout: a **rail** (`.lbrail`) of panel toggles — Refine, Edit (its button
+hidden without `can_edit`), Hi-res, Extend,
 Scale, Adjust, Brushes, Selection, Text, History — with Fit/1:1, Download and the saves at
 its foot; the pane; and **floating panels** (`web/js/panels.js`, `.fpanel`) over it.
 Refine: *Refine with* (Outputs), model/steps/CFG, strength, edge softness and brush,
-the Edit fold (`can_edit`), the prompt. Hi-res: model/steps/CFG/strength/scale, the
+the References row (`refineTakesRefs`), the prompt. Edit: the instruction, References,
+the rescale sides. Hi-res: model/steps/CFG/strength/scale, the
 prompt. Extend: sides, the prompt. Scale: folds Scale and Crop. Adjust: Reset, Tone/Colour/Detail. Brushes. Selection (the area).
 History with Compare. A **status card** (`.statuscard`, pane's lower left, hidden by
 CSS when empty) holds `#lberr`/OOM, the preview, progress and Stop.
@@ -737,7 +738,24 @@ keeps the view for the same picture at the same size).
 ### History
 
 `Pending.history` (`Snapshot`s), `Pending.at`, `Display::goto`, `POST /history/goto`,
-`GET /history/{id}/{index}.png`. Scratch only.
+`GET /history/{id}/{index}.png`. Lives in scratch, and **every write-back of an edited
+work item is a save** to `{shelf}/{id}.edits/` (`Retained::persist` from `store`,
+`update`, `replace`; `crate::edits`): step raws, brush masks, `edits.json` with `at`,
+each step's profile/label, filters, area and brush amounts. `Display::open` reuses a
+live entry for the item (on screen or pinned by a pass), else copies the folder in
+(`reopen_edits`); a folder it can't read opens the original. Moves and goes with the
+item (`Store::favorite`/`delete`), so Delete all and Close server's clear reach it.
+
+- **Folder names carry a per-run prefix** (`edits::name_for`): scratch names repeat
+  across runs (job ids restart at 0) and a file already in the folder is never
+  rewritten. Saving writes files, then the record via rename, then drops stale files.
+- **Not saved**: an Outputs entry (`opened_from`), or one with nothing edited
+  (`Pending::edited`) and no folder yet. Page-only state (the painted mask, the
+  Edit/Extend boxes, the Text box) isn't kept.
+- **A late pass never takes a slot back** (`Retained::put_back`, from
+  `Engine::keep`): its image, displaced while it ran, is updated and saved in place
+  (`a_late_pass_never_takes_the_slot_back`). It used to fall back to `Slot::Image`
+  and evict the picture on screen.
 
 - **`advance` keeps the replaced image as a step**; a pass from an earlier step drops
   later ones; `MAX_HISTORY` (12) drops the oldest after the original.
@@ -753,13 +771,18 @@ keeps the view for the same picture at the same size).
 ## References
 
 sd-cli `-r` on families that take them (`ImageFamily::takes_references`: Klein).
-**References** button in Generation (shown from `references` on `/models`) opens
+**References** button in Generation (shown from `references` on `/models`), and the
+dialog's Edit and Refine panels (`data-refs-open`, `openRefs`), open
 `#refsdlg`, four `sourceSlot`s (`web/js/refs.js`). `Profile.references` = output stems,
 request-only like `loras`. **Edit** in the Refine & adjust dialog (`Engine::edit`, `POST /edit`)
 uses the image as reference 1 and the prompt as instruction, at the image's shape **at
 the model's base size, never bigger**, resized back.
 
-- **`-r` is in `txt2img_cmd` only** (`references_go_to_txt2img_and_nowhere_else`).
+- **`-r` comes only from the refs a command is handed** (`sd::push_refs`), never from
+  `Profile::references`, which every pass shares through `base_cmd`
+  (`a_pass_carries_only_the_references_it_is_handed`). A Refine/area refine gets
+  them only when the panel's *Use with Refine* is ticked (`EscalateRequest`/
+  `RedrawRequest.references`, staged by `Engine::pass_refs`); after-each never.
 - **Copied into scratch and fitted** (`stage_reference`).
 - **The family gate is the server's** (`Profile::validate`: family, `MAX_REFERENCES`
   = 4, `valid_id`).
@@ -1145,6 +1168,9 @@ sharpness/clarity, no grade), stored as `postStart`; double-click one slider res
    holding one live image per slot (`Slot::Image`, `Slot::Output` in `Retained`). An
    escalated image exists only in scratch until saved, so jobs **pin** it
    (`Retained::pin`). `Pending.work_id` and `Pending.source` are ids/stems, never paths.
+   **A work item's kept edits** (`{shelf}/{id}.edits/`, `src/edits.rs`) obey the same
+   rule both ways: steps and masks are hard-linked (or copied) *out* of scratch, and
+   `Display::open` copies them back *in* under fresh names.
 9. **Filter a clip's frames; never re-diffuse them.** `Engine::enlarge_clip` runs
    `Fsr::process` per frame (deterministic, no flicker). Per-frame `refine` would boil
    in motion; refining a clip means a VACE `--control-video` pass. `work/videos/` is

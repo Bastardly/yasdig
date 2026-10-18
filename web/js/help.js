@@ -310,7 +310,7 @@ export const TOPICS = [
       <h2>Refine &amp; adjust</h2>
       <p>The one place an image is finished. Click the picture on the Image tab, or
       open one on the Outputs tab. The picture fills the screen; the rail on the
-      left opens floating panels over it — <b>Refine</b> (and Edit), <b>Hi-res</b>,
+      left opens floating panels over it — <b>Refine</b>, <b>Edit</b> (Klein images), <b>Hi-res</b>,
       <b>Extend</b>, <b>Scale</b> (Scale, Crop),
       <b>Adjust</b> (Tone, Colour, Detail), <b>Brushes</b>, <b>Selection</b>,
       <b>Text</b> and <b>History</b>. Drag a panel by its title bar to put it anywhere; it stays
@@ -362,7 +362,10 @@ export const TOPICS = [
       instruction, with no painting: type what to change — "make it night",
       "remove the hat", "turn the jacket red" — and press Edit. The image goes to
       the model as reference 1, so it keeps the picture and changes what you
-      asked. Pictures picked under <i>References</i> go along as image 2 onwards.
+      asked. Pictures picked under <i>References</i> — the Edit panel has the
+      button too — go along as image 2 onwards. On a model that takes references,
+      the Refine panel can follow them as well: pick them and tick <i>Use with
+      Refine</i>, then paint the jacket and ask for "the jacket from image 1" (there the picks are numbered from 1).
       It is a History step like any other, so Compare shows what changed and
       Ctrl+Z takes it back. It draws at the model\u2019s own size (1024 for Klein)
       and scales up to fit, so on a large image a <b>Refine image</b> afterwards
@@ -395,7 +398,9 @@ export const TOPICS = [
       <p>Every pass is a step in the <b>History</b>. Click a step to go back to it
       (Ctrl+Z and Ctrl+Shift+Z step through). A new pass from an earlier step
       replaces the ones after it. An image keeps its last twelve steps and always
-      its original.</p>
+      its original. A work item remembers all of it — History, sliders, selection
+      and brushes — when you switch to another and back, and after a restart; it
+      goes when the item is deleted.</p>
       <h3>In a batch</h3>
       <p><i>After each generation</i> runs Hi-res and Refine on every image, with the
       prompts from the Hi-res pass and Refine pass panels. A <code>{variable}</code>

@@ -5,7 +5,23 @@ What changed in each release of yasdig. Each release's executables are on the
 
 ## Unreleased
 
+### New
+
+- **A work item remembers its Refine & adjust edits.** Switch to another item and
+  back, or restart, and its History, sliders, selection and brushes are as you left
+  them: every step is saved in a folder beside the item, which moves with it when
+  starred and goes when it is deleted.
+- **Edit is its own panel** in Refine & adjust, between Refine and Hi-res, shown for
+  models that take references (Flux.2 Klein).
+- **References from Refine & adjust**: the Edit and Refine panels open the References
+  dialog. Refine can now follow the picks too (tick *Use with Refine*), whole picture
+  or a painted area — "the jacket from image 1".
 - A *Support yasdig on Ko-fi* link in the app's footer, the README and yasdig.com.
+
+### Fixed
+
+- A pass that finished after you had switched to another work item replaced the
+  picture on screen with its own; it now lands in its own item's History.
 
 ## 0.2.2 — 2026-10-17
 

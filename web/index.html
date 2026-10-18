@@ -869,6 +869,7 @@
   <nav class="lbrail" aria-label="Refine and adjust">
     <b class="railtitle">Refine &amp; adjust</b>
     <button type="button" class="btn btn-choice railbtn" data-panel="refine">Refine</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="edit" hidden>Edit</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="hires">Hi-res</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="extend">Extend</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="scale">Scale</button>
@@ -950,37 +951,14 @@
         <div class="head"><label for="rpbrush">Brush</label><span class="val" id="rpbrushval"></span></div>
         <input id="rpbrush" type="range" min="4" max="200" step="1" value="40">
       </div>
-      <!-- Change the whole picture by instruction, with no painting: the image
-           itself goes to the model as reference 1, the instruction says what to
-           change. Its own box, so "make it night" never becomes the refine
-           prompt every after-each refine reads. Shown only for a model that
-           takes references (`can_edit`), and its button with it. -->
-      <details id="rdfold-edit" class="fold" hidden>
-        <summary>Edit <span class="foldstate" id="rdsum-edit"></span></summary>
-        <label for="rdeditprompt">What to change</label>
-        <prompt-box>
-          <textarea id="rdeditprompt" rows="2" placeholder="make it night · remove the hat"></textarea>
-        </prompt-box>
-        <!-- Edit's own sides, apart from Extend's: the model redraws the whole
-             picture in the grown shape, nothing pasted back. Picking one turns
-             the button into "Edit and rescale". The same markup and code as
-             Extend's set (`sideSet` in redraw.js), so the two can't drift. -->
-        <p class="sub rdsideshead"><label data-help="rescale">Rescale with Edit</label> — redraws the
-          whole picture in the new shape</p>
-        <div class="rdsides" id="rdeditsides">
-          <button type="button" class="btn btn-choice" data-side="left" title="Rescale left">←</button>
-          <button type="button" class="btn btn-choice" data-side="top" title="Rescale up">↑</button>
-          <button type="button" class="btn btn-choice" data-side="bottom" title="Rescale down">↓</button>
-          <button type="button" class="btn btn-choice" data-side="right" title="Rescale right">→</button>
-          <select data-amount title="How far each chosen side grows">
-            <option value="128">128 px</option>
-            <option value="256" selected>256 px</option>
-            <option value="384">384 px</option>
-            <option value="512">512 px</option>
-          </select>
-        </div>
-        <p class="sub" id="rdeditnote"></p>
-      </details>
+      <!-- References for a Refine, on a model that takes them: the same picks
+           as the Image tab's References dialog, sent only when ticked — a
+           finishing pass must never follow the generation's references
+           unasked (`refineRefs` in redraw.js). -->
+      <div class="rdrow rdrefs" id="rprefsrow" hidden>
+        <button type="button" class="btn" data-refs-open>References…</button>
+        <label><input type="checkbox" id="rprefs"> Use with Refine</label>
+      </div>
       <div data-mirror="rprompt" data-label="Prompt for this pass"></div>
     </div>
     <!-- The mask decides the main button: nothing painted is "Refine image",
@@ -990,8 +968,48 @@
         <button type="button" id="rperase" class="btn btn-choice">Eraser</button>
         <button type="button" id="rpclear" class="btn">Clear</button>
       </div>
-      <button type="button" id="rdedit" class="btn btn-block" hidden>Edit</button>
       <button type="button" id="redrawgo" class="btn btn-run btn-block" disabled>Refine image</button>
+    </div>
+  </section>
+  <!-- Edit: change the whole picture by instruction, with no painting. The
+       image itself goes to the model as reference 1, any picks in the
+       References dialog after it, and the instruction says what to change.
+       Its own box, so "make it night" never becomes the refine prompt every
+       after-each refine reads. Its rail button shows only for a model that
+       takes references (`can_edit`). -->
+  <section class="fpanel" id="panel-edit" aria-label="Edit" hidden>
+    <header class="fphead"><b>Edit</b> <span class="foldstate" id="rdsum-edit"></span><button type="button" class="fpclose" aria-label="Close Edit">&times;</button></header>
+    <div class="fpbody">
+      <label for="rdeditprompt">What to change</label>
+      <prompt-box>
+        <textarea id="rdeditprompt" rows="2" placeholder="make it night · remove the hat"></textarea>
+      </prompt-box>
+      <div class="rdrow rdrefs">
+        <button type="button" class="btn" data-refs-open>References…</button>
+      </div>
+      <p class="sub">The picture is image 1; your references follow it as image 2, 3…</p>
+      <!-- Edit's own sides, apart from Extend's: the model redraws the whole
+           picture in the grown shape, nothing pasted back. Picking one turns
+           the button into "Edit and rescale". The same markup and code as
+           Extend's set (`sideSet` in redraw.js), so the two can't drift. -->
+      <p class="sub rdsideshead"><label data-help="rescale">Rescale with Edit</label> — redraws the
+        whole picture in the new shape</p>
+      <div class="rdsides" id="rdeditsides">
+        <button type="button" class="btn btn-choice" data-side="left" title="Rescale left">←</button>
+        <button type="button" class="btn btn-choice" data-side="top" title="Rescale up">↑</button>
+        <button type="button" class="btn btn-choice" data-side="bottom" title="Rescale down">↓</button>
+        <button type="button" class="btn btn-choice" data-side="right" title="Rescale right">→</button>
+        <select data-amount title="How far each chosen side grows">
+          <option value="128">128 px</option>
+          <option value="256" selected>256 px</option>
+          <option value="384">384 px</option>
+          <option value="512">512 px</option>
+        </select>
+      </div>
+      <p class="sub" id="rdeditnote"></p>
+    </div>
+    <div class="fpfoot">
+      <button type="button" id="rdedit" class="btn btn-run btn-block" disabled>Edit</button>
     </div>
   </section>
   <!-- Hi-res: enlarge by Hi-res scale and re-draw the whole picture lightly at

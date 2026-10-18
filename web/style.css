@@ -747,6 +747,8 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .rdrow { display: flex; align-items: center; gap: var(--sp-3); }
 .rdrow label { margin: 0; flex: 1; }
 .rdrow input { width: 90px; }
+/* The References row: a button, and in Refine its tick, which is no number box. */
+.rdrefs input { width: auto; }
 .redrawtools { display: flex; gap: var(--sp-2); margin: var(--sp-3) 0; }
 .redrawtools .btn { flex: 1; }
 .fpfoot .redrawtools { margin: 0; }

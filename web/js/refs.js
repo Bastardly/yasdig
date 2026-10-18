@@ -12,8 +12,10 @@ import { sourceSlot } from './source-slot.js';
 // so the dialog routes it to the first empty slot instead.
 
 const N = 4;
-// Called whenever a pick changes, so the Generation fold's summary can say so.
-let changed = () => {};
+// Called whenever a pick changes: the Generation fold's summary, and the
+// Refine & adjust dialog's buttons and dots.
+const listeners = [];
+const changed = () => listeners.forEach((fn) => fn());
 // The model the button was last drawn for.
 let model = null;
 
@@ -37,11 +39,22 @@ export function setReferences(stems) {
   slots.forEach((s, i) => s.set(stems[i] ?? null));
 }
 
-export const onRefsChange = (fn) => { changed = fn; };
+export const onRefsChange = (fn) => { listeners.push(fn); };
 
+// The Generation panel's button and the Refine & adjust dialog's
+// (`data-refs-open`, in Refine and Edit) all say how many are picked.
 function drawButton() {
   const n = references().length;
-  $('refsopen').textContent = n ? `References (${n})` : 'References…';
+  for (const b of [$('refsopen'), ...document.querySelectorAll('[data-refs-open]')]) {
+    b.textContent = n ? `References (${n})` : 'References…';
+  }
+}
+
+// The dialog, from any of those buttons. Modal, so over Refine & adjust it
+// stacks above it in the top layer, and Escape closes it first.
+export function openRefs() {
+  $('refserr').textContent = '';
+  $('refsdlg').showModal();
 }
 
 // Shown for a model that takes references, hidden otherwise.
@@ -54,10 +67,8 @@ export function syncRefs(m) {
 
 export function initRefs() {
   for (const s of slots) s.init();
-  $('refsopen').addEventListener('click', () => {
-    $('refserr').textContent = '';
-    $('refsdlg').showModal();
-  });
+  $('refsopen').addEventListener('click', openRefs);
+  for (const b of document.querySelectorAll('[data-refs-open]')) b.addEventListener('click', openRefs);
   $('refsdone').addEventListener('click', () => $('refsdlg').close());
   // A click on the backdrop closes it, as the Jobs dialog's does: the box
   // inside carries the padding, so only the backdrop is the dialog itself.

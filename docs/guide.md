@@ -532,15 +532,22 @@ split by a line you drag; *Compare with* picks the step. Both halves carry the s
 grade and sharpening, and a smaller earlier step is stretched to the same box, so what
 you see is what the pass changed.
 
-**Edit** (Flux.2 Klein images) changes the whole picture by instruction, with no
-painting: type what to change — "make it night", "remove the hat" — and press Edit.
-The image goes to the model as reference 1 and any References picks follow it, so the
+**Edit** (Flux.2 Klein images; its own panel, shown only for them) changes the whole
+picture by instruction, with no painting: type what to change — "make it night", "remove the hat" — and press Edit.
+The image goes to the model as reference 1 and any References picks follow it (the
+panel's **References…** button opens the same dialog as the Generation panel's), so the
 picture is kept and what you asked is changed. It runs at the image's shape at the model's
 own size (1024 for Klein) and is scaled back up — an edit costs the render's tokens
 plus the reference's, and at 2048 that ran Klein 9B out of memory — so a Refine image
 afterwards brings a large image's detail back. A History step like the rest.
 
-**Rescale with Edit**, under the Edit button, gives it a new shape: pick sides
+**References in Refine.** On a model that takes references, the Refine panel has a
+**References…** button too, and **Use with Refine**: ticked, a Refine — the whole
+picture or a painted area — follows the picks, so you can paint over a jacket and ask
+for "the jacket from image 1". Unticked (the default), a Refine never sees them: a
+finishing pass shouldn't drift toward the pictures the image was generated from.
+
+**Rescale with Edit**, in the Edit panel, gives it a new shape: pick sides
 (← ↑ ↓ →) and an amount and the button becomes **Edit and rescale**. The model redraws
 the whole picture to fill the bigger frame — "the same room, wider". It is a
 re-imagining, nothing pasted back, so faces and small detail can change; when the
@@ -563,7 +570,11 @@ Every pass — Refine, Refine area, Hi-res, Edit, Extend, Scale — is a step in
 each. Click one to go back (or Ctrl+Z / Ctrl+Shift+Z): fixed the fingers, ruined the
 hat, step back to the fingers and try the hat again. A new pass from an earlier step
 replaces the ones after it. An image keeps its last twelve steps and always its
-original; history is scratch, gone with the image or the server. Compare shows an
+original. **A work item remembers its edits**: switch to another and back, or close
+the server and come back tomorrow, and its History, sliders, selection and brushes are
+as you left it — every step is saved beside the item (`work/workitems/<id>.edits/`,
+moved with it when starred, deleted with it). The painted Refine area and the Edit,
+Extend and Text boxes are not kept. Compare shows an
 earlier step of another shape (before an Extend) whole inside the frame.
 
 For a batch, *Run after each image* in the Hi-res pass and Refine pass panels runs them on every image

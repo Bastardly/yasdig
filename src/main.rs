@@ -113,6 +113,7 @@ mod catalog;
 mod convert;
 mod discover;
 mod downloads;
+mod edits;
 mod foldscale;
 mod half;
 mod fsr;
@@ -2044,6 +2045,9 @@ fn run_escalation(
         // The after-each passes run with the generate's own, already on the
         // retained profile.
         memory: None,
+        // Never: an after-each refine finishes the picture, and the
+        // generation's references would pull it toward them.
+        references: Vec::new(),
     }
 }
 
@@ -2363,6 +2367,9 @@ struct EscalateDto {
     /// Where the weights live for this pass; absent keeps the image's.
     #[serde(default)]
     memory: Option<String>,
+    /// Reference images (output stems) for a Refine to follow; absent is none.
+    #[serde(default)]
+    references: Vec<String>,
 }
 
 impl EscalateDto {
@@ -2378,6 +2385,7 @@ impl EscalateDto {
             refine_prompt: self.refine_prompt.clone(),
             hires_prompt: self.hires_prompt.clone(),
             memory: self.memory.clone(),
+            references: self.references.clone(),
         }
     }
 }
@@ -2407,7 +2415,7 @@ fn handle_refine(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Res
     }
 }
 
-/// `POST /redraw {image_id, mask, prompt?, strength?}`: redraw the painted
+/// `POST /redraw {image_id, mask, prompt?, strength?, references?}`: redraw the painted
 /// part of the image in hand. `mask` is a base64 PNG at the image's size, white
 /// where to redraw — base64 in JSON rather than a raw body like `/upload`,
 /// because it travels with three other fields, and a mask is mostly one colour
@@ -2436,6 +2444,7 @@ fn handle_redraw(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Res
                 strength: dto.strength,
                 feather: dto.feather,
                 memory: dto.memory,
+                references: dto.references,
             },
         },
     )
@@ -2453,6 +2462,9 @@ struct RedrawDto {
     feather: Option<u32>,
     #[serde(default)]
     memory: Option<String>,
+    /// Reference images to follow, as on `/refine`; absent is none.
+    #[serde(default)]
+    references: Vec<String>,
 }
 
 impl RedrawDto {
@@ -4074,6 +4086,12 @@ mod tests {
         assert_eq!(bare.image_id, 7);
         assert_eq!(bare.overrides().refine_cfg_scale, None);
         assert_eq!(bare.overrides().refine_strength, None);
+        // References only when the Refine panel's tick sends them.
+        assert!(bare.overrides().references.is_empty());
+        let r: EscalateDto = serde_json::from_str(r#"{"image_id":7,"references":["a-1"]}"#).unwrap();
+        assert_eq!(r.overrides().references, ["a-1"]);
+        let d: RedrawDto = serde_json::from_str(r#"{"image_id":7,"mask":""}"#).unwrap();
+        assert!(d.references.is_empty());
 
         let cleared: EscalateDto =
             serde_json::from_str(r#"{"image_id":7,"refine_cfg_scale":null}"#).unwrap();
