@@ -238,10 +238,16 @@ impl LoraBase {
     /// Whether a LoRA for this base belongs on a `family` model.
     ///
     /// Flux.1 dev and schnell are one architecture distilled two ways, so a Flux
-    /// LoRA — which [`flux_lora`] can only ever call `Flux` — fits both.
+    /// LoRA — which [`flux_lora`] can only ever call `Flux` — fits both. A
+    /// FLUX.3 LoRA is always called `Flux3Klein` and fits the base too.
     pub fn fits(self, family: ImageFamily) -> bool {
         match self {
             LoraBase::Image(ImageFamily::Flux) => matches!(family, ImageFamily::Flux | ImageFamily::FluxSchnell),
+            // Likewise FLUX.3 Klein and its base: one architecture, and the
+            // names can't say which a LoRA was trained on.
+            LoraBase::Image(ImageFamily::Flux3Klein) => {
+                matches!(family, ImageFamily::Flux3Klein | ImageFamily::Flux3KleinBase)
+            }
             LoraBase::Image(f) => f == family,
             LoraBase::Other(_) => false,
             LoraBase::Unknown => true,
@@ -855,6 +861,12 @@ fn lora_base(t: &Tensors) -> LoraBase {
     {
         return LoraBase::Image(ImageFamily::Krea2);
     }
+    // FLUX.3's own stacks. Ahead of the Flux test, which its `single_blocks`
+    // and `*_stream_modulations` would pass. No separator inside either
+    // marker, so kohya's flattened spelling matches too.
+    if t.has("txt_mode_blocks") || t.has("content_mode_blocks") {
+        return LoraBase::Image(ImageFamily::Flux3Klein);
+    }
     if t.has("double_blocks")
         || t.has("single_blocks")
         || t.has("single_transformer_blocks")
@@ -1056,6 +1068,18 @@ fn image_model(t: &Tensors) -> Option<Role> {
         && (t.has("cond_stage_model.") || t.has("conditioner.") || t.has("text_encoders."));
     let image = |family| Some(Role::Image { family, bundled });
 
+    // FLUX.3, sd.cpp's own pair of markers (`model_loader.cpp`, checked
+    // before every other family there too). First here as well: it keeps
+    // `single_blocks`, which Flux.1's arm below would claim. `ref_time_in` is
+    // the distilled Klein's flow-map timestep (`flux3.hpp`'s `flow_map`); the
+    // base has none — read off both released GGUFs.
+    if t.has("emb_in.image.weight") && t.has("txt_mode_blocks.0.q_proj.weight") {
+        return image(if t.has("ref_time_in.in_layer.weight") {
+            ImageFamily::Flux3Klein
+        } else {
+            ImageFamily::Flux3KleinBase
+        });
+    }
     if t.has("cap_embedder.0.weight") {
         return image(ImageFamily::ZImage);
     }
@@ -1785,6 +1809,18 @@ mod tests {
             ]),
             LoraBase::Image(ImageFamily::Krea2)
         );
+        // FLUX.3: its own stacks win over the `single_blocks` and
+        // `*_stream_modulations` that would send it to the Flux test, in both
+        // spellings; and it fits Klein and the base alike, nothing else.
+        for flux3 in [
+            "diffusion_model.txt_mode_blocks.0.q_proj.lora_A.weight",
+            "lora_unet_content_mode_blocks_image_0_q_proj.lora_down.weight",
+        ] {
+            let b = base(&[(flux3, &[16, 3072]), ("diffusion_model.single_blocks.3.q_proj.lora_A.weight", &[16, 3072])]);
+            assert_eq!(b, LoraBase::Image(ImageFamily::Flux3Klein), "{flux3}");
+            assert!(b.fits(ImageFamily::Flux3Klein) && b.fits(ImageFamily::Flux3KleinBase));
+            assert!(!b.fits(ImageFamily::Flux) && !b.fits(ImageFamily::Flux2Klein4b));
+        }
         for zimage in [
             "diffusion_model.layers.0.attention.to_q.lora_A.weight",
             "lora_unet_layers_0_attention_qkv.lora_down.weight",
@@ -1994,6 +2030,28 @@ mod tests {
             classify(&krea),
             Role::Image { family: ImageFamily::Krea2, bundled: false }
         );
+        // FLUX.3, by the names in the released Q4_K GGUFs (no prefix) and with
+        // sd.cpp's: Klein carries `ref_time_in`, its base doesn't. Both have
+        // `single_blocks`, which must not make either a Flux.1.
+        let flux3 = |prefix: &str, distilled: bool| {
+            let mut names = vec![
+                format!("{prefix}emb_in.image.weight"),
+                format!("{prefix}emb_in.image_cond.weight"),
+                format!("{prefix}txt_mode_blocks.0.q_proj.weight"),
+                format!("{prefix}content_mode_blocks.image.0.q_proj.weight"),
+                format!("{prefix}single_blocks.0.q_proj.weight"),
+                format!("{prefix}early_stream_modulations.txt.lin.weight"),
+            ];
+            if distilled {
+                names.push(format!("{prefix}ref_time_in.in_layer.weight"));
+            }
+            let names: Vec<(&str, &[u64])> = names.iter().map(|n| (n.as_str(), &[3072u64, 3072][..])).collect();
+            classify(&t(&names))
+        };
+        for prefix in ["", "model.diffusion_model."] {
+            assert_eq!(flux3(prefix, true), Role::Image { family: ImageFamily::Flux3Klein, bundled: false });
+            assert_eq!(flux3(prefix, false), Role::Image { family: ImageFamily::Flux3KleinBase, bundled: false });
+        }
         // FLUX.1 Fill: Flux's layout with a 384-wide `img_in` — runnable, for
         // Extend only. The other width variants still need inputs this build
         // doesn't send.

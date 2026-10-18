@@ -146,6 +146,7 @@ vulnerability*) rather than in a public issue.
 | SD 1.x, SD 2.x, SDXL | the huge library of community checkpoints and LoRAs | SDXL: a 6.9 GB file |
 | Z-Image Turbo | fast: 8 steps | about 11 GB |
 | Flux.2 Klein 4B / 9B | fast (4 steps); takes reference images and can **Edit** | about 9 / 19 GB |
+| FLUX.3 Klein / Klein Base | 16 steps / 20-step base; takes reference images and can **Edit** | about 11 GB |
 | Flux.1 schnell / dev | 4-step drafts / detailed 20-step renders | about 18.5 GB |
 | Krea 2 Turbo | 8 steps | about 15 GB |
 | Qwen-Image | the largest here (20B); strong at text in pictures | about 17 GB |
@@ -159,7 +160,7 @@ under `models/`.
 **Also in the box:**
 - **Image to image:** start from your own picture (upload, drop or paste) instead of
   from noise.
-- **References:** Klein can look at up to four pictures while it draws ("the jacket
+- **References:** Klein (Flux.2 and FLUX.3) can look at up to four pictures while it draws ("the jacket
   from image 2").
 - **LoRAs**, checked against the model, so one made for another family is refused
   rather than silently doing nothing.

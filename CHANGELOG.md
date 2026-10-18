@@ -3,6 +3,26 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### New
+
+- **FLUX.3 Klein and FLUX.3 Klein Base.** Black Forest Labs' new models, recognised
+  from the file like every other family: Klein draws in 16 steps at CFG 1, the base
+  in 20 at CFG 3.5. Both take reference images and can **Edit**. They use the Flux.2
+  VAE and Krea 2's Qwen3-VL-4B text encoder, so if you have either already, the Get
+  models card only fetches the model (6.2 GB at Q8).
+- **FLUX.3 LoRAs** are told apart from Flux.1 and Flux.2 ones, and fit both FLUX.3
+  models.
+
+### Changed
+
+- **stable-diffusion.cpp updated** to `b13a482` (2026-10-18). It now picks flash
+  attention and direct convolution for each part of the model by measuring them on
+  your GPU. yasdig still pins the two it measured (flash attention in the diffusion
+  model, direct convolution in the VAE) and leaves the rest to that test, using the
+  new `--flash-attn`/`--conv-direct` flags instead of the deprecated ones.
+
 ## 0.2.3 — 2026-10-18
 
 ### New

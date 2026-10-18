@@ -142,7 +142,8 @@ pub struct Settings {
     /// not a model's. Not applied to Edit, whose first reference is the image
     /// being changed.
     pub reference_size: u32,
-    /// sd-cli's `--vae-conv-direct`: the VAE's convolutions computed directly
+    /// sd-cli's `--conv-direct auto,vae=on` (`--vae-conv-direct` before sd.cpp
+    /// `46362fc`; off is `vae=off`): the VAE's convolutions computed directly
     /// instead of through `ggml_conv_2d`'s im2col, which unrolls the
     /// full-resolution activations into a buffer gigabytes long per layer. The
     /// decode is bound by that traffic, not by the weights — an f16 copy of

@@ -87,6 +87,17 @@ to use once it has an edit mode:
 | the text encoder | 4B: Qwen3-4B, the same file as Z-Image's. 9B: Qwen3-8B, [GGUF](https://huggingface.co/unsloth/Qwen3-8B-GGUF/tree/main) (`Q8_0`) |
 | the VAE — Flux.2's | [`flux2-vae.safetensors`](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/tree/main/split_files/vae) |
 
+**FLUX.3 Klein** — about 11 GB at Q8. Klein is the distilled release (16 steps at
+CFG 1); Klein Base is the undistilled one (20 steps at CFG 3.5), for finetuning and
+LoRAs. `doctor` tells them apart. Both take reference images and can edit. Black
+Forest Labs' own repos are gated, so these links are leejet's GGUFs:
+
+| file | where to get it |
+|---|---|
+| the model | Klein [GGUF](https://huggingface.co/leejet/flux-3-image-klein-GGUF/tree/main) (`Q8_0`, 6.2 GB); Klein Base [GGUF](https://huggingface.co/leejet/flux-3-image-klein-base-GGUF/tree/main) (`Q8_0`, 6.1 GB) |
+| the text encoder — Qwen3-VL-4B | the same file as Krea 2's, below |
+| the VAE — Flux.2's | the same file as Flux.2 Klein's, above |
+
 **Krea 2** — about 15 GB:
 
 | file | where to get it |
@@ -232,7 +243,7 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `memory` | Where the weights live while a pass runs: `auto` (default — sd.cpp's auto-fit places each part on the card, then in RAM, then on disk, by free memory), `ram` (`--params-backend "*=cpu,te=disk"`: every weight in RAM, leaving the card for the work — the fix for a big model out of GPU memory — except the text encoder, which is read from its file, used for the prompt and released, so it holds no RAM while the picture is drawn. sd.cpp keeps those weights in the GPU's pinned host memory, amdgpu's **GTT**, which the kernel caps at half of RAM by default: a model bigger than that — a 17 GB fp16 9B on a 30 GB machine — can't run this way however much RAM is free, and fails with a lost device. The out-of-memory box checks the GTT and offers `disk` instead) or `disk` (`--params-backend diffusion=disk,te=disk`: re-read from the file, the least RAM, slower). Every pass uses it, Refine and Hi-res included. Per model through *Save as defaults for this model*; a `--params-backend` in `extra_args` wins over it |
 | `gpu_reserve_gb` | GB of the graphics card kept free while a model draws: `--max-vram -N` on every run, in every Memory mode. Default `0`, sd.cpp's own packing (free memory minus 512 MiB). When the desktop, browser and driver need more slack, RADV stops a run with *"Not enough memory for command submission"* and a lost device; the out-of-memory box offers 3 GB then, and saves it here. Page-level: it describes the machine, not a model |
 | `reference_size` | The side, in pixels, each reference image is drawn at: `--ref-image-args vae_input_max_pixels=N²` on a generate with references. Default `512` (the likeness held there on Klein 9B); `0` is sd.cpp's own (each reference resized to the output's area, up to a megapixel — *up* as well as down, so shrinking the files ourselves would be undone). The biggest speed knob with references: on a Q8 Klein 9B at 1024² with four references, 153 s full-size, 54 s at 768 and 33.6 s at 512 (22 s with none). Not applied to Edit, whose first reference is the image being changed. Page-level |
-| `vae_conv_direct` | sd-cli's `--vae-conv-direct`, default **on**: the VAE's convolutions computed directly instead of through an im2col buffer gigabytes long. Klein 9B's decode went from 9.3 s to 0.9 s and Krea 2's from 3.3 s to 1.2 s, the same picture. Page-level |
+| `vae_conv_direct` | sd-cli's `--conv-direct auto,vae=on` (off: `vae=off`), default **on**: the VAE's convolutions computed directly instead of through an im2col buffer gigabytes long. Klein 9B's decode went from 9.3 s to 0.9 s and Krea 2's from 3.3 s to 1.2 s, the same picture. Page-level |
 | `embed_png_settings` | Write the settings that made a picture into the PNG when it is saved to output: A1111's `parameters` text, which Civitai, A1111 and Forge read, plus yasdig's own record of the Image tab's settings. Default **on**; no file paths are ever written. Page-level |
 | `nightly_video` | Show the Video tab, default **off** — the video workflow is unfinished. Hidden is not removed: clips on disk and every route stay. Page-level |
 | `cache_mode` | Step caching for the generate pass: `off` (default), `spectrum` or `adaptive` — UCache on SD 1.x, SD 2.x and SDXL, EasyCache on the DiT families, chosen by the server since each only works on its own kind. Refine and Hi-res always run uncached. The result says how many steps it skipped |
@@ -247,7 +258,7 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `hires_steps` / `hires_strength` | the "Hi-res pass" img2img, after an enlarge. Defaults `12` / `0.30`; a floor like `refine_steps`, and `0` turns the pass off |
 | `hires_cfg_scale` *(opt)* | the same, for the hi-res pass. Two knobs rather than one because the two passes work on different pixels at different sizes |
 | `hires_max_side` | longest side the hi-res pass may diffuse at (default 2048); beyond it, FSR finishes the job. Does not limit refine. Also where *Image to image*'s working size starts |
-| `hires_flash_attn` | `--diffusion-fa` for the img2img passes when they run large (default true; worth 6× at 2048²) |
+| `hires_flash_attn` | `--flash-attn auto,diffusion=on` for the img2img passes when they run large (default true; worth 6× at 2048²) |
 | `weight_type` *(opt)* | on-the-fly quantization, e.g. `q8_0`, via sd-cli `--type` |
 | `extra_args` *(opt)* | arbitrary flags passed verbatim to sd-cli |
 | `clear_workitems_on_close` | when **Close server** is pressed, delete every work item on the Current shelf. Default `false`. Favorites are never touched |

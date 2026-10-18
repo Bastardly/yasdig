@@ -386,7 +386,7 @@ const HELP = [
         + 'image can be slow to show in the page. Your GPU sets the real maximum. '
         },
   { ids: ['setflash'],
-    text: 'Pass --diffusion-fa to the refine and hi-res passes when they run '
+    text: 'Use flash attention in the refine and hi-res passes when they run '
         + 'large. Worth about 6× at 2048² on this card (122 s → 20 s), so leave '
         + 'it on unless your GPU or driver cannot do it.' },
   { ids: ['setwtype'],

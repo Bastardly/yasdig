@@ -83,7 +83,7 @@ needs a Vulkan device and nothing else.
   { "prompt": "…", "template": "sdxl-turbo", "negative": null, "seed": -1 }
   ```
   `references` — output stems, at most 4, for a model that takes reference images
-  (Flux.2 Klein) — are named in the prompt as image 1, image 2; `[]` is none, and a
+  (Flux.2 and FLUX.3 Klein) — are named in the prompt as image 1, image 2; `[]` is none, and a
   model that doesn't take them refuses any.
   The run itself: `count` images (default 1, at most 1000), or `"loop": true` to keep
   going until stopped; a pinned `seed` advances by one per image. There is one loop at

@@ -9,7 +9,7 @@
 //! VAE halves the file and the memory it holds. It does **not** speed the
 //! decode up — measured, Klein's stayed at 9.3 s — because the decode is bound
 //! by full-resolution activations, not by 84M weights; what did is
-//! `--vae-conv-direct` (`Settings::vae_conv_direct`), 9.3 s → 0.9 s.
+//! direct convolution (`Settings::vae_conv_direct`), 9.3 s → 0.9 s.
 //!
 //! Safetensors in, safetensors out, same tensor names: a VAE through `--vae`
 //! needs no prefix, and discovery reads the result exactly like the original.

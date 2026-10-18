@@ -149,6 +149,16 @@ pub const MIN_STRENGTH: f32 = 0.05;
 /// plain txt2img, which is never what either escalation button wants.
 pub const MAX_STRENGTH: f32 = 0.95;
 
+/// Flash attention pinned on in the diffusion model, every other module left
+/// to sd.cpp's `auto` probe. One argument: sd-cli takes the last `--flash-attn`.
+pub const DIFFUSION_FLASH_ATTN: [&str; 2] = ["--flash-attn", "auto,diffusion=on"];
+
+/// Whether hand-written arguments already say where flash attention runs, in
+/// the current spelling or a deprecated one — then ours stays out.
+pub fn names_flash_attn(extra_args: &[String]) -> bool {
+    extra_args.iter().any(|a| matches!(a.as_str(), "--flash-attn" | "--fa" | "--diffusion-fa"))
+}
+
 /// Every `--sampling-method` sd-cli takes, in its own order
 /// (`stable-diffusion.cpp src/stable-diffusion.cpp:80`). Checked by
 /// [`check_sampling`] so a typo is an error naming the list rather than a
@@ -1100,6 +1110,16 @@ pub enum ImageFamily {
     /// Flux.2 Klein 9B. Qwen3-8B and the Flux.2 VAE.
     #[serde(rename = "flux2_klein_9b")]
     Flux2Klein9b,
+    /// FLUX.3 Image Klein, the distilled release: a transformer of its own
+    /// (`txt_mode_blocks`, `content_mode_blocks`), Qwen3-VL-4B — Krea 2's
+    /// encoder — and the Flux.2 VAE. Told from the base by `ref_time_in`, the
+    /// flow-map timestep only the distilled one carries.
+    #[serde(rename = "flux3_klein")]
+    Flux3Klein,
+    /// FLUX.3 Image Klein Base: Klein without the flow map, run longer and at
+    /// real CFG. Its own family because the header says which one a file is.
+    #[serde(rename = "flux3_klein_base")]
+    Flux3KleinBase,
     /// Z-Image (Tongyi). One Qwen3-4B as the text encoder, and Flux's `ae` VAE.
     #[serde(rename = "z_image")]
     ZImage,
@@ -1127,7 +1147,7 @@ pub enum ImageFamily {
 impl ImageFamily {
     /// Every variant. Tests hold across it, and [`Config::scan_images`] asks it
     /// which roles some family has a slot for.
-    pub const ALL: [ImageFamily; 11] = [
+    pub const ALL: [ImageFamily; 13] = [
         ImageFamily::Sd1,
         ImageFamily::Sd2,
         ImageFamily::Sdxl,
@@ -1135,6 +1155,8 @@ impl ImageFamily {
         ImageFamily::FluxSchnell,
         ImageFamily::Flux2Klein4b,
         ImageFamily::Flux2Klein9b,
+        ImageFamily::Flux3Klein,
+        ImageFamily::Flux3KleinBase,
         ImageFamily::ZImage,
         ImageFamily::Krea2,
         ImageFamily::QwenImage,
@@ -1152,12 +1174,18 @@ impl ImageFamily {
     /// today has both; the match stays exhaustive so a new variant has to
     /// decide.
     /// Whether sd-cli conditions this family on reference images (`-r`). The
-    /// Flux.2 Klein pair do, natively (sd.cpp's `flux2` preset); every other
+    /// Flux.2 and FLUX.3 Kleins do, natively (sd.cpp's `flux2` preset); every other
     /// runnable family here either has no reference path or needs an edit
     /// checkpoint or LoRA this build doesn't run yet. Served on `/models`, so
     /// the page's References button follows it rather than a copy of it.
     pub fn takes_references(self) -> bool {
-        matches!(self, ImageFamily::Flux2Klein4b | ImageFamily::Flux2Klein9b)
+        matches!(
+            self,
+            ImageFamily::Flux2Klein4b
+                | ImageFamily::Flux2Klein9b
+                | ImageFamily::Flux3Klein
+                | ImageFamily::Flux3KleinBase
+        )
     }
 
     pub fn runnable(self) -> bool {
@@ -1169,6 +1197,8 @@ impl ImageFamily {
             | ImageFamily::FluxSchnell
             | ImageFamily::Flux2Klein4b
             | ImageFamily::Flux2Klein9b
+            | ImageFamily::Flux3Klein
+            | ImageFamily::Flux3KleinBase
             | ImageFamily::ZImage
             | ImageFamily::Krea2
             | ImageFamily::QwenImage
@@ -1214,11 +1244,14 @@ impl ImageFamily {
     /// - Krea 2 Turbo, from its model card (8 steps, guidance 0, which is
     ///   sd.cpp's CFG 1). Krea 2 Raw is the base.
     ///
-    /// Flux.1 is the exception — `guidance_in` says dev from schnell — so each
+    /// Flux.1 and FLUX.3 are the exceptions — `guidance_in` says Flux.1 dev
+    /// from schnell, `ref_time_in` FLUX.3 Klein from its base — so each
     /// gets its own: dev's 20 steps at CFG 1 with sd.cpp's default distilled
     /// guidance of 3.5, schnell's 4. Qwen-Image's is `docs/qwen_image.md`'s
     /// CFG 2.5 at a modest 20 steps; its flow shift of 3 is sd.cpp's default
-    /// for the family already.
+    /// for the family already. FLUX.3's are `docs/flux3.md`'s: Klein 16 steps
+    /// at CFG 1, the base 20 at CFG 3.5; its flow shift of 6.93 is sd.cpp's
+    /// own, applied by the default (discrete) schedule that Auto leaves it.
     ///
     /// Every size is 1024², the size each was trained around. Krea 2's card
     /// shows 2048², which here is what the hi-res pass is for.
@@ -1242,6 +1275,8 @@ impl ImageFamily {
             ImageFamily::Flux => dit(20, 1.0),
             ImageFamily::FluxSchnell => dit(4, 1.0),
             ImageFamily::Flux2Klein4b | ImageFamily::Flux2Klein9b => dit(4, 1.0),
+            ImageFamily::Flux3Klein => dit(16, 1.0),
+            ImageFamily::Flux3KleinBase => dit(20, 3.5),
             ImageFamily::Krea2 => dit(8, 1.0),
             ImageFamily::QwenImage => dit(20, 2.5),
             // Black Forest Labs' reference for Fill: 28–50 steps at a distilled
@@ -1256,7 +1291,10 @@ impl ImageFamily {
     /// large passes because that is where it paid off on SDXL (122 s → 20 s at
     /// 2048²), but a DiT attends over every token of the image in every block,
     /// so it is the difference at 1024² too — and every example in sd.cpp's
-    /// DiT docs passes it. No `--offload-to-cpu`: a Z-Image turbo is 12.3 GB of
+    /// DiT docs passes it. Spelled `--flash-attn auto,diffusion=on`
+    /// ([`DIFFUSION_FLASH_ATTN`]): `--diffusion-fa` is deprecated since sd.cpp
+    /// `d763dae`, and the new flag leaves the encoder and VAE to
+    /// sd.cpp's own `auto` probe. No `--offload-to-cpu`: a Z-Image turbo is 12.3 GB of
     /// DiT and 8 GB of Qwen3, which fits a 24 GB card, while offloading would
     /// hold all 20 GB in system RAM, the thing this box runs out of first. A
     /// model too big for the card gets it per model, in `extra_args`.
@@ -1266,9 +1304,9 @@ impl ImageFamily {
         } else if self == ImageFamily::FluxFill {
             // Fill was distilled at a guidance of 30 — sd.cpp's default of 3.5
             // is dev's, and on Fill it gives a washed-out, under-committed strip.
-            &["--diffusion-fa", "--guidance", "30"]
+            &["--flash-attn", "auto,diffusion=on", "--guidance", "30"]
         } else {
-            &["--diffusion-fa"]
+            &DIFFUSION_FLASH_ATTN
         }
     }
 
@@ -1368,6 +1406,7 @@ impl ImageFamily {
             }
             ImageFamily::Flux2Klein4b => &[FLUX2_VAE, QWEN3_4B],
             ImageFamily::Flux2Klein9b => &[FLUX2_VAE, QWEN3_8B],
+            ImageFamily::Flux3Klein | ImageFamily::Flux3KleinBase => &[FLUX2_VAE, QWEN3_VL_4B],
             ImageFamily::ZImage => &[FLUX_VAE, QWEN3_4B],
             ImageFamily::Krea2 => &[WAN21_VAE, QWEN3_VL_4B],
             ImageFamily::QwenImage => &[WAN21_VAE, QWEN25_VL_7B],
@@ -1384,6 +1423,8 @@ impl ImageFamily {
             ImageFamily::FluxSchnell => "Flux.1 schnell",
             ImageFamily::Flux2Klein4b => "Flux.2 Klein 4B",
             ImageFamily::Flux2Klein9b => "Flux.2 Klein 9B",
+            ImageFamily::Flux3Klein => "FLUX.3 Klein",
+            ImageFamily::Flux3KleinBase => "FLUX.3 Klein Base",
             ImageFamily::ZImage => "Z-Image",
             ImageFamily::Krea2 => "Krea 2",
             ImageFamily::QwenImage => "Qwen-Image",
@@ -1401,6 +1442,8 @@ impl ImageFamily {
             ImageFamily::FluxSchnell => "flux_schnell",
             ImageFamily::Flux2Klein4b => "flux2_klein_4b",
             ImageFamily::Flux2Klein9b => "flux2_klein_9b",
+            ImageFamily::Flux3Klein => "flux3_klein",
+            ImageFamily::Flux3KleinBase => "flux3_klein_base",
             ImageFamily::ZImage => "z_image",
             ImageFamily::Krea2 => "krea2",
             ImageFamily::QwenImage => "qwen_image",
@@ -1808,7 +1851,8 @@ pub struct VideoModel {
     /// the memory-hungry part of the pipeline, not the transformer.
     #[serde(default)]
     pub vae_tiling: bool,
-    /// `--diffusion-fa`. On, like every documented Wan invocation.
+    /// Flash attention in the diffusion model ([`DIFFUSION_FLASH_ATTN`]). On,
+    /// like every documented Wan invocation.
     #[serde(default = "default_true")]
     pub flash_attn: bool,
     #[serde(default)]
@@ -3772,14 +3816,21 @@ lora_dir = "adapters"
         assert_eq!(Profile::default().cache_mode, CACHE_OFF, "an old sidecar ran uncached");
     }
 
-    /// Only the Klein pair take reference images, and a profile refuses them
-    /// anywhere else, past four, or under a name that isn't an output stem.
+    /// Only the Kleins — Flux.2's and FLUX.3's — take reference images, and a
+    /// profile refuses them anywhere else, past four, or under a name that
+    /// isn't an output stem.
     #[test]
     fn references_are_klein_only_four_at_most_and_stems() {
         for f in ImageFamily::ALL {
             assert_eq!(
                 f.takes_references(),
-                matches!(f, ImageFamily::Flux2Klein4b | ImageFamily::Flux2Klein9b),
+                matches!(
+                    f,
+                    ImageFamily::Flux2Klein4b
+                        | ImageFamily::Flux2Klein9b
+                        | ImageFamily::Flux3Klein
+                        | ImageFamily::Flux3KleinBase
+                ),
                 "{f:?}"
             );
         }

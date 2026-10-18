@@ -41,7 +41,7 @@ export const TOPICS = [
       <h3>One file, or several</h3>
       <p>An <b>SDXL or SD 1.5 checkpoint</b> is one file with everything inside.
       Drop it in <code>models/checkpoints</code> and pick it.</p>
-      <p>The newer models — <b>Flux, Klein, Z-Image, Krea 2, Qwen-Image</b> — come as
+      <p>The newer models — <b>Flux, Klein, FLUX.3, Z-Image, Krea 2, Qwen-Image</b> — come as
       a <b>diffusion model</b> plus separate <b>parts</b>:</p>
       ${table(['Part', 'What it does'], [
         ['Text encoder', 'Reads your prompt and turns it into something the model understands. Often a whole language model (Qwen3, T5), and often as large as the model itself.'],
@@ -99,7 +99,7 @@ export const TOPICS = [
       <h3>Where files go</h3>
       ${table(['Folder', 'What goes in it'], [
         ['models/checkpoints', 'One-file models: SDXL, SD 1.5, and their fine-tunes'],
-        ['models/diffusion_models', 'Diffusion models that need parts: Flux, Klein, Z-Image, Krea 2, Qwen-Image'],
+        ['models/diffusion_models', 'Diffusion models that need parts: Flux, Klein, FLUX.3, Z-Image, Krea 2, Qwen-Image'],
         ['models/text_encoders', 'Text encoders: Qwen, T5, CLIP-L'],
         ['models/vae', 'VAEs'],
         ['models/loras', 'LoRAs'],
@@ -197,7 +197,7 @@ export const TOPICS = [
         ['SD 1.5', '<code>dpm++2m</code> + <code>karras</code>, 20–25 steps'],
         ['SDXL Turbo, Lightning, Hyper', '<code>euler</code>, the steps on the model’s card (4–8), CFG 1–2'],
         ['Anything with an LCM LoRA', '<code>lcm</code>, 4–8 steps, CFG 1–2'],
-        ['Flux, Krea 2, Qwen-Image, Z-Image', '<code>euler</code>'],
+        ['Flux, FLUX.3, Krea 2, Qwen-Image, Z-Image', '<code>euler</code>'],
         ['Quick drafts on SDXL', '<code>ipndm</code>, 12–15 steps'],
       ], false)}
 
@@ -280,7 +280,7 @@ export const TOPICS = [
         ['SDXL, SD 1.5', '<code>dpm++2m</code> + <code>karras</code>, 25–30 steps'],
         ['Turbo, Lightning, Z-Image', '<code>euler</code> + Auto, at the model’s own steps'],
         ['LCM LoRA', '<code>lcm</code> + Auto, 4–8 steps, CFG 1–2'],
-        ['Flux, Krea 2, Qwen-Image', '<code>euler</code> + Auto'],
+        ['Flux, FLUX.3, Krea 2, Qwen-Image', '<code>euler</code> + Auto'],
       ], false)}`,
   },
   {
@@ -290,7 +290,7 @@ export const TOPICS = [
       <h2>References</h2>
       <p>Pictures the model looks at while it draws, so it can keep a person, a
       piece of clothing or a place from your own images. With a model that takes
-      them — <b>Flux.2 Klein</b> for now — a <b>References</b> button appears in
+      them — <b>Flux.2 Klein</b> and <b>FLUX.3 Klein</b> for now — a <b>References</b> button appears in
       the Generation section. Pick up to four images there (Choose, Upload, drag
       one in, or paste), then name them in the prompt by number:</p>
       <p><i>"the woman from image 1 wearing the jacket from image 2, walking
@@ -358,7 +358,7 @@ export const TOPICS = [
         ['0.9–0.95', 'Starts the area over. For removing or swapping an object.'],
       ])}
       <h3>Editing</h3>
-      <p>With a Flux.2 Klein image, <b>Edit</b> changes the whole picture by
+      <p>With a Flux.2 or FLUX.3 Klein image, <b>Edit</b> changes the whole picture by
       instruction, with no painting: type what to change — "make it night",
       "remove the hat", "turn the jacket red" — and press Edit. The image goes to
       the model as reference 1, so it keeps the picture and changes what you

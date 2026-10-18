@@ -139,7 +139,7 @@ impl<'a> SdRunner<'a> {
     /// attacks from the other side.
     ///
     /// `big_image` adds `--vae-tiling` and (unless the profile disables it)
-    /// `--diffusion-fa`. Both matter above ~1536²: measured on a 7900 XTX, a
+    /// flash attention in the diffusion model. Both matter above ~1536²: measured on a 7900 XTX, a
     /// 2048² pass takes 122 s without flash attention and 20 s with it.
     #[allow(clippy::too_many_arguments)]
     fn img2img_cmd(
@@ -203,9 +203,11 @@ impl<'a> SdRunner<'a> {
         );
         if big_image {
             cmd.arg("--vae-tiling");
-            // Not twice: a DiT family already runs with it at every size.
-            if p.hires_flash_attn && !p.family.flags().contains(&"--diffusion-fa") {
-                cmd.arg("--diffusion-fa");
+            // A DiT family already runs with it at every size. This lands after
+            // `extra_args`, and sd-cli takes the last `--flash-attn`, so a hand-
+            // written choice keeps ours out.
+            if p.hires_flash_attn && p.family.is_unet() && !crate::config::names_flash_attn(&p.extra_args) {
+                cmd.args(crate::config::DIFFUSION_FLASH_ATTN);
             }
         }
         cmd
@@ -440,7 +442,7 @@ impl<'a> SdRunner<'a> {
             cmd.arg("--vae-tiling");
         }
         if m.flash_attn {
-            cmd.arg("--diffusion-fa");
+            cmd.args(crate::config::DIFFUSION_FLASH_ATTN);
         }
         if let Some(wt) = &m.weight_type {
             cmd.args(["--type", wt]);
@@ -620,10 +622,13 @@ impl<'a> SdRunner<'a> {
         cmd.args(crate::config::memory_args(&p.memory, &p.extra_args));
         let settings = self.cfg.settings();
         cmd.args(crate::config::gpu_reserve_args(settings.gpu_reserve_gb, &p.extra_args));
-        // Every pass that decodes — which is all of them. Not twice when the
-        // flag is already in `extra_args`, where it was found by hand.
-        if settings.vae_conv_direct && !p.extra_args.iter().any(|a| a == "--vae-conv-direct") {
-            cmd.arg("--vae-conv-direct");
+        // Every pass that decodes — which is all of them. Pinned either way,
+        // the rest left to sd.cpp's `auto` probe. Not when `extra_args` names
+        // it, by hand: an explicit `--conv-direct` overrides the deprecated
+        // `--vae-conv-direct` whichever comes last.
+        if !p.extra_args.iter().any(|a| a == "--vae-conv-direct" || a == "--conv-direct") {
+            let vae = if settings.vae_conv_direct { "auto,vae=on" } else { "auto,vae=off" };
+            cmd.args(["--conv-direct", vae]);
         }
         cmd.args(["-s", &seed.to_string()]);
         cmd.args(["-o", &path_str(out)]);
@@ -1677,7 +1682,8 @@ flow_shift = 3.0
         // never the alias as well.
         assert_eq!(flag(&a, "--params-backend"), Some("*=cpu,te=disk"));
         assert!(!a.contains(&"--offload-to-cpu".to_string()));
-        assert!(a.contains(&"--diffusion-fa".to_string()));
+        assert_eq!(flag(&a, "--flash-attn"), Some("auto,diffusion=on"));
+        assert!(!a.iter().any(|x| x == "--diffusion-fa"), "deprecated upstream");
         // Off by default, and the OOM escalation that costs time.
         assert!(!a.contains(&"--vae-tiling".to_string()));
         // Nothing this model doesn't have.
@@ -1871,7 +1877,7 @@ binary = "/opt/sd-cli"
         };
         let a = cmd(&sdxl);
         assert_eq!(flag(&a, "-m"), Some("/models/sdxl.safetensors"));
-        assert!(!a.iter().any(|x| x == "--diffusion-model" || x == "--diffusion-fa"));
+        assert!(!a.iter().any(|x| x == "--diffusion-model" || x == "--flash-attn"));
 
         let z = Profile {
             model: PathBuf::from("/models/zimage.safetensors"),
@@ -1888,7 +1894,8 @@ binary = "/opt/sd-cli"
         assert_eq!(flag(&a, "--vae"), Some("/models/vae/ae.safetensors"));
         assert_eq!(flag(&a, "--llm"), Some("/models/text_encoders/qwen3.safetensors"));
         assert!(!a.iter().any(|x| x == "-m" || x == "--t5xxl" || x == "--clip_l"));
-        assert_eq!(a.iter().filter(|x| *x == "--diffusion-fa").count(), 1);
+        assert_eq!(a.iter().filter(|x| *x == "--flash-attn").count(), 1);
+        assert_eq!(flag(&a, "--flash-attn"), Some("auto,diffusion=on"));
     }
 
     /// A VAE picked for a bundled checkpoint is an override on `-m`, not a
@@ -2040,11 +2047,14 @@ binary = "/opt/sd-cli"
         let hand = cmd("ram", &["--params-backend", "te=cpu"]);
         assert_eq!((count(&hand), flag(&hand, "--params-backend")), (1, Some("te=cpu")));
         assert_eq!(count(&cmd("disk", &["--offload-to-cpu"])), 0);
-        // Fast VAE decode is on by default, and sent once even when it was
-        // also typed into extra_args by hand.
-        let direct = |a: &[String]| a.iter().filter(|x| *x == "--vae-conv-direct").count();
-        assert_eq!(direct(&auto), 1);
+        // Fast VAE decode is on by default, in the current spelling, and left
+        // out when extra_args names it by hand in either spelling.
+        let direct = |a: &[String]| {
+            a.iter().filter(|x| *x == "--conv-direct" || *x == "--vae-conv-direct").count()
+        };
+        assert_eq!((direct(&auto), flag(&auto, "--conv-direct")), (1, Some("auto,vae=on")));
         assert_eq!(direct(&cmd("auto", &["--vae-conv-direct"])), 1);
+        assert_eq!(flag(&cmd("auto", &["--conv-direct", "off"]), "--conv-direct"), Some("off"));
     }
 
     /// auto-fit's own line, in `backend_fit.cpp:474`'s format, read into words.

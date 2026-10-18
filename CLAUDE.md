@@ -173,11 +173,13 @@ Things that break silently:
 - **Video-dir parts are shared, its models aren't** — filtered by "some `slots()` row
   fits"; only when the video dir is inside the models dir.
 - **Klein 4B/9B are two families; Flux.1 dev/schnell are two** (steps differ;
-  `guidance_in`). `LoraBase::fits` lets a Flux LoRA fit both — hence `/loras` serves
-  `families`.
+  `guidance_in`); **so are FLUX.3 Klein/Klein Base** (`ref_time_in`, the distilled
+  one's flow map). `LoraBase::fits` lets a Flux LoRA fit both, a FLUX.3 one both
+  FLUX.3s — hence `/loras` serves `families`.
 - **`classify` order**: image models before either VAE branch (a bundled SDXL's VAE
   looks like Wan's); LDM-VAE before Wan VAE; unsupported markers before supported
-  families (Hunyuan Video has `double_blocks`, SVD is a UNet).
+  families (Hunyuan Video has `double_blocks`, SVD is a UNet); FLUX.3 before every
+  Flux arm (it keeps `single_blocks`), as in sd.cpp.
 - **UNet split by cross-attention width** (`attn2.to_k`: 768 SD1, 1024 SD2, 2048 SDXL)
   via `inner_dim(layout)` (rectangular; GGUF reverses shapes).
 - **`discover::identify` memoizes on `(path, len, mtime)`** — a finishing download is
@@ -322,7 +324,9 @@ Paste is a document listener per slot, gated to its visible tab.
 - **Flux LoRAs** (`discover::flux_lora`): block down-projection width first (6144
   Flux.2 dev, 4096 Klein 9B); at 3072, past double 4/single 19 or per-block modulation
   → Flux.1, `*_stream_modulation` → Klein, else `Unknown`. `block_index` must skip
-  `single_transformer_blocks` when looking for double blocks.
+  `single_transformer_blocks` when looking for double blocks. **FLUX.3 is tested
+  before it** (`txt_mode_blocks`/`content_mode_blocks`): it has `single_blocks` and
+  `*_stream_modulations` too.
 
 Wire: `/loras` entries carry `families` and `base`; `fits()` in `loras.js` is
 membership only.
@@ -770,7 +774,8 @@ item (`Store::favorite`/`delete`), so Delete all and Close server's clear reach 
 
 ## References
 
-sd-cli `-r` on families that take them (`ImageFamily::takes_references`: Klein).
+sd-cli `-r` on families that take them (`ImageFamily::takes_references`: the Flux.2
+and FLUX.3 Kleins).
 **References** button in Generation (shown from `references` on `/models`), and the
 dialog's Edit and Refine panels (`data-refs-open`, `openRefs`), open
 `#refsdlg`, four `sourceSlot`s (`web/js/refs.js`). `Profile.references` = output stems,
@@ -812,10 +817,18 @@ anything else. The page's lists are `#sampler`/`#scheduler` markup
 (`every_sampler_and_scheduler_option_is_one_sd_cpp_takes`). **Re-transcribe when sd.cpp
 is bumped.**
 
-**The clone is at `f89d9b1`** (bumped 2026-10-10). sd.cpp references here name
+**The clone is at `b13a482`** (bumped 2026-10-18; CI builds `SD_CPP_REF` in
+`release.yml` — bump both). sd.cpp references here name
 functions/files; line numbers drift — search by name. Log format is `[I] msg -
 file:line`; parsers match contents and have fixtures in both formats; unmeasured
 memory prints `unknown`/`unlimited` (hence `parse_shortfall` reads by label).
+
+- **Flash attention and direct convolution are `auto` per module** upstream
+  (benchmarked at load); `--diffusion-fa`/`--vae-conv-direct` are deprecated and
+  warn. We emit **one** `--flash-attn auto,diffusion=on` (`DIFFUSION_FLASH_ATTN`,
+  DiT `flags()`, big img2img on a UNet, video) and **one** `--conv-direct
+  auto,vae=on|off` (`Settings::vae_conv_direct`) — sd-cli takes the last of each,
+  so ours stays out when `extra_args` names either spelling (`names_flash_attn`).
 
 - **Auto is the absence of `--scheduler`** (sd.cpp's `default_scheduler` picks per
   model/sampler).

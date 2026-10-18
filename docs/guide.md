@@ -282,7 +282,7 @@ Everything else in `work/` is scratch and is still cleared at startup.
 
 ## References
 
-With a model that takes reference images — Flux.2 Klein 4B and 9B for now — a
+With a model that takes reference images — Flux.2 Klein 4B and 9B, FLUX.3 Klein and its base — a
 **References** button appears in the Generation section. It opens a small dialog with
 four numbered slots (Choose, Upload, drag in or paste); the prompt names them by
 number: *"the woman from image 1 wearing the jacket from image 2, in a market"*. They
@@ -358,6 +358,8 @@ The Flux LoRAs are the case where the names say least: Flux.1 and every Flux.2 s
 and Flux.2 dev are wider) and, for the two the same width, by which blocks it touches —
 Flux.1 has 19 double blocks, Klein 4B five. One that only touches blocks both have is
 offered for both rather than guessed. A Flux.1 LoRA fits dev and schnell alike.
+FLUX.3 has stacks of its own (`txt_mode_blocks`, `content_mode_blocks`), so its LoRAs
+are told apart by name, and one fits Klein and Klein Base alike.
 
 What you pick travels with the image. **Refine** and **Hi-res** run the same
 adapters, because they are passes over that picture and one that dropped the LoRA
@@ -532,7 +534,7 @@ split by a line you drag; *Compare with* picks the step. Both halves carry the s
 grade and sharpening, and a smaller earlier step is stretched to the same box, so what
 you see is what the pass changed.
 
-**Edit** (Flux.2 Klein images; its own panel, shown only for them) changes the whole
+**Edit** (Flux.2 and FLUX.3 Klein images; its own panel, shown only for them) changes the whole
 picture by instruction, with no painting: type what to change — "make it night", "remove the hat" — and press Edit.
 The image goes to the model as reference 1 and any References picks follow it (the
 panel's **References…** button opens the same dialog as the Generation panel's), so the
