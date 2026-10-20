@@ -124,12 +124,17 @@ models_dir = "models"
 # card — replace them once you have timings.
 # ---------------------------------------------------------------------------
 
-[[video]]
-name        = "wan2.2-ti2v-5b"
-description = "Wan 2.2 TI2V 5B — one file, the quick way to prove a clip runs"
-family      = "wan22_ti2v_5b"
-diffusion_model = "models/video/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors"
-vae             = "models/video/vae/wan2.2_vae.safetensors"   # NOT wan_2.1_vae
+# The two entries below were placeholders written before discovery could
+# assemble a video model from its files. Discovery now does (any Wan 2.2 or H3
+# in models/video/, with the encoder and VAE it finds there), and these named an
+# encoder that isn't on disk, shadowing the downloaded model. Kept as an example
+# of pinning one by hand; uncomment to use.
+# [[video]]
+# name        = "wan2.2-ti2v-5b"
+# description = "Wan 2.2 TI2V 5B — one file, the quick way to prove a clip runs"
+# family      = "wan22_ti2v_5b"
+# diffusion_model = "models/video/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors"
+# vae             = "models/video/vae/wan2.2_vae.safetensors"   # NOT wan_2.1_vae
 # Every Wan family shares this one encoder, so it downloads once. This is the
 # fp8 file that was already in models/video/: sd.cpp reads F8_E4M3 safetensors
 # directly, and its name table maps ComfyUI's `.scale_weight` suffix onto the
@@ -137,19 +142,19 @@ vae             = "models/video/vae/wan2.2_vae.safetensors"   # NOT wan_2.1_vae
 # has no fp8 matmul, so each tensor is cast to BF16 as the graph is built —
 # correct, but if it turns out slow or tight, the drop-in swap is
 # `umt5-xxl-encoder-Q8_0.gguf` from city96/umt5-xxl-encoder-gguf.
-t5xxl           = "models/video/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
-width      = 832
-height     = 480
-frames     = 33        # already on the 4k+1 grid: 1.4 s at 24 fps
-fps        = 24        # what this one is trained at
-steps      = 20
-cfg_scale  = 6.0
-flow_shift = 3.0       # every documented Wan run passes 3.0 rather than "auto"
+# t5xxl           = "models/video/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+# width      = 832
+# height     = 480
+# frames     = 33        # already on the 4k+1 grid: 1.4 s at 24 fps
+# fps        = 24        # what this one is trained at
+# steps      = 20
+# cfg_scale  = 6.0
+# flow_shift = 3.0       # every documented Wan run passes 3.0 rather than "auto"
 
-[[video]]
-name        = "wan2.2-i2v-a14b"
-description = "Wan 2.2 I2V A14B — the MoE pair; one expert resident per step"
-family      = "wan22_a14b"
+# [[video]]
+# name        = "wan2.2-i2v-a14b"
+# description = "Wan 2.2 I2V A14B — the MoE pair; one expert resident per step"
+# family      = "wan22_a14b"
 # Only one expert is active at a time, so one expert's worth of weights is what
 # the card holds — the 24 GB is not the limit. `memory = "ram"` (the default for
 # a video model, and the Video tab's Memory select) keeps *both* in
@@ -159,19 +164,19 @@ family      = "wan22_a14b"
 # during a run is the number that settles it. Q8_0 (~15 GB an expert) does not
 # fit at all. If 23 GB turns out to crowd the machine, Q3_K_M on the experts
 # and the Q8_0 GGUF encoder are the two levers, in that order.
-diffusion_model            = "models/video/diffusion_models/Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf"
-high_noise_diffusion_model = "models/video/diffusion_models/Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf"
-vae                        = "models/video/vae/wan_2.1_vae.safetensors"
-t5xxl                      = "models/video/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
-width      = 832
-height     = 480
-frames     = 33        # 2.1 s at 16 fps
-fps        = 16
-steps      = 10        # the low-noise expert's half of the schedule
-cfg_scale  = 3.5
-high_noise_steps     = 8
-high_noise_cfg_scale = 3.5
-flow_shift = 3.0
+# diffusion_model            = "models/video/diffusion_models/Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf"
+# high_noise_diffusion_model = "models/video/diffusion_models/Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf"
+# vae                        = "models/video/vae/wan_2.1_vae.safetensors"
+# t5xxl                      = "models/video/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+# width      = 832
+# height     = 480
+# frames     = 33        # 2.1 s at 16 fps
+# fps        = 16
+# steps      = 10        # the low-noise expert's half of the schedule
+# cfg_scale  = 3.5
+# high_noise_steps     = 8
+# high_noise_cfg_scale = 3.5
+# flow_shift = 3.0
 # Where the schedule hands over from the high-noise expert to the low-noise one.
 # sd.cpp only honours it when high_noise_steps is unset (its own flag help says
 # "only enabled if --high-noise-steps is set to -1"), so with the 8 above it
