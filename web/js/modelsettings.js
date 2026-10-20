@@ -2,6 +2,7 @@ import { $, esc, getJSON, post } from './dom.js';
 import { FIELDS, labelOf } from './settings.js';
 import { loadModels, upscalersReady, upscalerOptions } from './image.js';
 import { wireHints } from './hints.js';
+import { loadVideoModels } from './video.js';
 
 // The Settings tab's *Per model* section: `user/model-settings.toml` as a form.
 //
@@ -191,7 +192,42 @@ function fillSelect() {
   if (current) sel.value = current;
 }
 
+// The video models with saved defaults: what each keeps, and a Clear. Their
+// boxes are the Video tab's, which is where they are saved.
+function drawVideo(list) {
+  const el = $('pmvideo');
+  el.hidden = !list.length;
+  el.innerHTML = list.length ? `<h3 class="grouphead">Video models</h3>${list.map((v) => {
+    const keys = [...Object.entries(v.over).map(([k, x]) => `${k} ${x}`),
+      ...Object.keys(v.parts_over).map((k) => `own ${k}`)];
+    return `<div class="pmvrow"><div><b>${esc(v.name)}</b><br><span class="sub">${esc(keys.join(' · '))}</span></div>
+      <button type="button" class="btn" data-vclear="${esc(v.name)}">Clear</button></div>`;
+  }).join('')}<p class="sub">Saved with the Video tab's <i>Save as defaults for this model</i>.</p>` : '';
+}
+
+async function clearVideo(name) {
+  const knobs = ['width', 'height', 'frames', 'fps', 'steps', 'cfg_scale', 'sampler', 'flow_shift',
+    'high_noise_steps', 'high_noise_cfg_scale', 'vae_tiling', 'memory', 'negative_prompt'];
+  const v = videoListing.find((x) => x.name === name);
+  try {
+    await post('/model-settings', {
+      kind: 'video', model: name,
+      values: Object.fromEntries(knobs.map((k) => [k, null])),
+      parts: Object.fromEntries(Object.keys(v?.parts_over ?? {}).map((k) => [k, null])),
+    });
+    $('pmmsg').textContent = `Cleared ${name}.`;
+    await loadModelSettings();
+    loadVideoModels({ refill: false });
+  } catch (e) {
+    $('pmerr').textContent = String(e.message || e);
+  }
+}
+
+let videoListing = [];
+
 function take(data) {
+  videoListing = data.video ?? [];
+  drawVideo(videoListing);
   listing = data.models ?? [];
   fillSelect();
   fill();
@@ -232,6 +268,10 @@ export function initModelSettings() {
     fill();
   });
   $('pmsave').addEventListener('click', () => save(values(), partValues()));
+  $('pmvideo').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-vclear]');
+    if (b) clearVideo(b.dataset.vclear);
+  });
   $('pmclear').addEventListener('click', () =>
     save(Object.fromEntries(rows().map((f) => [f.key, null])),
       Object.fromEntries([...$('pmparts').querySelectorAll('select')]

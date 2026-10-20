@@ -1034,7 +1034,23 @@ pub fn models_json(
             }))
         })
         .collect::<Result<_>>()?;
-    let mut body = serde_json::json!({ "models": models });
+    // The video models with saved defaults, for the card's own list: their
+    // boxes are edited on the Video tab, so here they are only shown and cleared.
+    let video: Vec<serde_json::Value> = tuned
+        .video
+        .keys()
+        .chain(tuned.video_parts.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|name| {
+            serde_json::json!({
+                "name": name,
+                "over": tuned.video.get(name).cloned().unwrap_or_default(),
+                "parts_over": tuned.video_parts.get(name).cloned().unwrap_or_default(),
+            })
+        })
+        .collect();
+    let mut body = serde_json::json!({ "models": models, "video": video });
     if let Some(msg) = note {
         body["error"] = serde_json::Value::String(msg.to_string());
     }

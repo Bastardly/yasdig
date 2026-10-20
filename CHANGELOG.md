@@ -35,7 +35,8 @@ What changed in each release of yasdig. Each release's executables are on the
   - **Save as defaults for this model**, as on the Image tab: a video model opens
     with the size, frames, steps, CFG, sampler, shift, memory, negative prompt and
     parts you saved for it (only what differs from where it would start), and the
-    model list marks it *tuned*. *Clear* forgets them.
+    model list marks it *tuned*. *Clear* forgets them, and Settings → *Per model*
+    lists the video models that have some, each with its own *Clear*.
   - **A live preview** while a clip renders: every frame of it, looping in the
     status card. It is sd.cpp's cheap preview at the model's latent resolution, so
     it shows the composition and motion forming, blurry by nature.

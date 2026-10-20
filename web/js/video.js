@@ -8,6 +8,7 @@ import { initClipView } from './clipview.js';
 import { sourceSlot } from './source-slot.js';
 import { partRows } from './parts.js';
 import { loraPicker } from './loras.js';
+import { loadModelSettings } from './modelsettings.js';
 
 // ---- Video ------------------------------------------------------------------
 //
@@ -292,6 +293,8 @@ async function saveVideoDefaults(clear) {
         : 'Nothing to save: every box is where this model starts anyway.';
     // Clearing puts the boxes back where the model starts; a save leaves them.
     await loadVideoModels({ refill: clear });
+    // Settings → Per model lists what each video model keeps.
+    loadModelSettings();
   } catch (e) {
     $('vsavemodelmsg').textContent = String(e.message || e);
   }
