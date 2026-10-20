@@ -345,6 +345,10 @@ pub enum VaeKind {
     /// MiniMax H3's own video VAE: a convolutional encoder and a transformer
     /// decoder (`decoder.register_tokens`, `decoder.x_embedder`).
     MinimaxH3,
+    /// Qwen-Image 2.1's: the Wan layout with 2-D kernels, 64 latent channels,
+    /// and four image channels (RGBA). An image VAE that looks like a video
+    /// one, so it is a kind here, beside the VAE it is shaped like.
+    QwenImage21,
 }
 
 impl Role {
@@ -364,6 +368,7 @@ impl Role {
             Role::Vae(VaeKind::MinimaxH3) => "MiniMax H3 video VAE".into(),
             Role::Vae(VaeKind::Wan21) => "wan_2.1 VAE — Krea 2, Qwen-Image, and every Wan except the TI2V-5B".into(),
             Role::Vae(VaeKind::Wan22) => "wan2.2 VAE — TI2V-5B only".into(),
+            Role::Vae(VaeKind::QwenImage21) => "Qwen-Image 2.1 VAE (64 channels, RGBA)".into(),
             Role::Lora(LoraBase::Unknown) => "LoRA".into(),
             Role::Lora(base) => format!("LoRA for {}", base.label()),
             Role::Dit(DitKind::WanOther { dim }) => {
@@ -385,6 +390,7 @@ impl Role {
             Role::Llm(LlmKind::Qwen3 { dim: 4096 }) => "Qwen3-8B text encoder — Flux.2 Klein 9B".into(),
             Role::Llm(LlmKind::Qwen3 { dim }) => format!("Qwen3 text encoder ({dim} wide)"),
             Role::Llm(LlmKind::Qwen3Vl { dim: 2560 }) => "Qwen3-VL-4B text encoder — Krea 2".into(),
+            Role::Llm(LlmKind::Qwen3Vl { dim: 4096 }) => "Qwen3-VL-8B text encoder — Qwen-Image 2.1".into(),
             Role::Llm(LlmKind::Qwen3Vl { dim: 5120 }) => {
                 "Qwen3-VL-32B text encoder — MiniMax H3 (video)".into()
             }
@@ -777,6 +783,8 @@ pub fn classify(t: &Tensors) -> Role {
         return match z {
             Some(48) => Role::Vae(VaeKind::Wan22),
             Some(16) => Role::Vae(VaeKind::Wan21),
+            // Qwen-Image 2.1's, off Comfy-Org's release: `conv2.bias` [64].
+            Some(64) => Role::Vae(VaeKind::QwenImage21),
             Some(z) => Role::Unknown(format!("a Wan-shaped VAE with {z} latent channels")),
             None => Role::Unknown("a VAE whose latent width could not be read".into()),
         };
@@ -922,6 +930,11 @@ fn lora_base(t: &Tensors) -> LoraBase {
         || t.has("stream_modulation")
     {
         return flux_lora(t);
+    }
+    // Qwen-Image 2.1's fused up/gate projection, ahead of Qwen-Image's arm,
+    // whose `img_mlp` it would otherwise pass (Comfy-Org's turbo LoRA).
+    if either(".img_mlp.gate_up.", "_img_mlp_gate_up") || either(".txt_in.text_norm.", "_txt_in_text_norm") {
+        return LoraBase::Image(ImageFamily::QwenImage21);
     }
     // Qwen-Image's dual-stream MLPs. Flux's original naming has `img_mlp` too,
     // inside `double_blocks`, which is why this comes second.
@@ -1170,6 +1183,12 @@ fn image_model(t: &Tensors) -> Option<Role> {
             ))),
             None => Some(Role::Unknown("a Flux.2 transformer with no readable txt_in".into())),
         };
+    }
+    // Qwen-Image 2.1: sd.cpp's own marker, the text input's norm. Its blocks
+    // are single-stream (no `img_mod`), so the arm below never saw it; ahead
+    // of it anyway, as in `get_sd_version`.
+    if t.has("txt_in.text_norm.weight") {
+        return image(ImageFamily::QwenImage21);
     }
     if t.has("transformer_blocks.0.img_mod.1.weight") {
         // Mage-Flow shares Qwen-Image's block naming and differs in its patch
@@ -2300,6 +2319,49 @@ mod tests {
         assert!(matches!(classify(&gguf("llama")), Role::Unknown(_)));
     }
 
+    /// Qwen-Image 2.1's parts, off the released headers: leejet's GGUF (no
+    /// prefix, single-stream blocks with no `img_mod`), Comfy-Org's VAE (Wan's
+    /// layout at 64 channels) and turbo LoRA (whose `img_mlp` Qwen-Image's
+    /// arm would claim), and Qwen's Qwen3-VL-8B.
+    #[test]
+    fn qwen_image_21_and_its_parts_are_read() {
+        let dit = Tensors {
+            layout: Layout::Ggml,
+            ..t(&[
+                ("img_in.weight", &[64, 4096]),
+                ("transformer_blocks.0.attn.to_q.weight", &[4096, 4096]),
+                ("transformer_blocks.0.img_mlp.gate_up.weight", &[4096, 24576]),
+                ("txt_in.in_layer.weight", &[4096, 4096]),
+                ("txt_in.text_norm.weight", &[4096]),
+            ])
+        };
+        assert_eq!(classify(&dit), Role::Image { family: ImageFamily::QwenImage21, bundled: false });
+        let vae = t(&[
+            ("conv2.bias", &[64]),
+            ("conv2.weight", &[64, 64, 1, 1, 1]),
+            ("decoder.conv1.weight", &[1152, 64, 1, 3, 3]),
+            ("encoder.conv1.weight", &[96, 4, 1, 3, 3]),
+        ]);
+        assert_eq!(classify(&vae), Role::Vae(VaeKind::QwenImage21));
+        let lora = t(&[
+            ("diffusion_model.transformer_blocks.0.attn.to_q.lora_down.weight", &[145, 4096]),
+            ("diffusion_model.transformer_blocks.0.img_mlp.gate_up.lora_down.weight", &[190, 4096]),
+        ]);
+        assert_eq!(classify(&lora), Role::Lora(LoraBase::Image(ImageFamily::QwenImage21)));
+        // Three 4096-wide encoders, three families, no crossing.
+        let fits = |f: ImageFamily, r: Role| f.slots().iter().any(|s| s.key == "llm" && (s.fits)(&r));
+        let vl8 = Role::Llm(LlmKind::Qwen3Vl { dim: 4096 });
+        assert!(fits(ImageFamily::QwenImage21, vl8.clone()));
+        assert!(!fits(ImageFamily::Flux2Klein9b, vl8.clone()));
+        assert!(!fits(ImageFamily::MossImage, vl8));
+        assert!(!fits(ImageFamily::QwenImage21, Role::Llm(LlmKind::Qwen3 { dim: 4096 })));
+        assert!(!fits(ImageFamily::QwenImage21, Role::Llm(LlmKind::Qwen35 { dim: 4096 })));
+        // Nor do the VAEs: Qwen-Image's Wan 2.1 is not 2.1's.
+        let vae_fits = |f: ImageFamily, r: Role| f.slots().iter().any(|s| s.key == "vae" && (s.fits)(&r));
+        assert!(!vae_fits(ImageFamily::QwenImage21, Role::Vae(VaeKind::Wan21)));
+        assert!(!vae_fits(ImageFamily::QwenImage, Role::Vae(VaeKind::QwenImage21)));
+    }
+
     /// MOSS-Image's parts, off the released files' headers: leejet's SFT GGUF
     /// (no prefix) and unsloth's Qwen3.5-9B, whose first block is linear
     /// attention, so `.attn_q` matches only as part of `attn_qkv`.
@@ -2435,11 +2497,13 @@ mod tests {
             Role::ImageVae(ImageVaeKind::Flux),
             Role::ImageVae(ImageVaeKind::Flux2),
             Role::Vae(VaeKind::Wan21),
+            Role::Vae(VaeKind::QwenImage21),
             Role::ClipL,
             Role::T5xxl,
             Role::Llm(LlmKind::Qwen3 { dim: 2560 }),
             Role::Llm(LlmKind::Qwen3 { dim: 4096 }),
             Role::Llm(LlmKind::Qwen3Vl { dim: 2560 }),
+            Role::Llm(LlmKind::Qwen3Vl { dim: 4096 }),
             Role::Llm(LlmKind::Qwen25Vl { dim: 3584 }),
             Role::Llm(LlmKind::Qwen35 { dim: 4096 }),
             Role::Tokenizer(TokenizerKind::Qwen35),

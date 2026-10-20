@@ -565,6 +565,8 @@ impl Settings {
             references: Vec::new(),
             // And the layout boxes, drawn per picture.
             layout: None,
+            // And a turbo LoRA's schedule, which comes with the LoRA.
+            sigmas: String::new(),
             // Identity, like `model` above: the registry fills these from what
             // the file is. SDXL and bundled is what a profile with no file
             // behind it has always meant.

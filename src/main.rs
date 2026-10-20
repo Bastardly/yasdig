@@ -1995,6 +1995,9 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         /// MOSS-Image's layout boxes (`crate::layout`); absent or empty is none.
         #[serde(default)]
         layout: Option<layout::Layout>,
+        /// A turbo LoRA's named schedule (`config::SIGMA_PRESETS`).
+        #[serde(default)]
+        sigmas: Option<String>,
         /// How many images, and whether to keep going until stopped. One
         /// request is one queued run, whatever its length — see `crate::jobs`.
         #[serde(default)]
@@ -2059,6 +2062,7 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         references: dto.references,
         parts: dto.parts,
         layout: dto.layout,
+        sigmas: dto.sigmas,
     };
 
     let label = req.template.clone();

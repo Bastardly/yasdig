@@ -281,6 +281,35 @@ dest = "vae/qwen_image_vae.safetensors"
 bytes = 253806246
 sha256 = "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
 
+# Qwen-Image 2.1: leejet's GGUF and Comfy-Org's VAE, Qwen's own Qwen3-VL-8B
+# GGUF (checked 2026-10-20; Comfy's safetensors encoders don't load in sd-cli,
+# as Krea 2's didn't). Its turbo is Comfy-Org's LoRA, on the fixed 8-sigma
+# schedule sd-cli names `qwen-image-2.1-turbo`.
+[[entry]]
+id = "qwen-image-21-q8"
+family = "qwen_image_21"
+label = "Qwen-Image 2.1 (Q8_0 GGUF)"
+note = "About 18 GB on the card. A 7B model that letters well and was trained around 2048² — the Hi-res pass's size here. 40 steps at CFG 6 on its own, 8 with the Turbo LoRA the card fetches too. Read its licence before you use it."
+loras = ["qwen-image-21-turbo"]
+
+[[entry.file]]
+slot = "model"
+url = "https://huggingface.co/leejet/Qwen-Image-2.1-GGUF/resolve/main/qwen_image_2.1-Q8_0.gguf"
+dest = "diffusion_models/qwen_image_2.1-Q8_0.gguf"
+bytes = 7687155744
+
+[[entry.file]]
+slot = "llm"
+url = "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3VL-8B-Instruct-Q8_0.gguf"
+dest = "text_encoders/Qwen3VL-8B-Instruct-Q8_0.gguf"
+bytes = 8709519456
+
+[[entry.file]]
+slot = "vae"
+url = "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors"
+dest = "vae/qwen_image_2.1_vae_bf16.safetensors"
+bytes = 675509688
+
 # MOSS-Image: Comfy-Org's official repack, in two precisions (checked
 # 2026-10-20). The INT8 file is ComfyUI's `int8_tensorwise` + convrot, which
 # sd.cpp multiplies as INT8 on Vulkan (docs/int8_convrot.md) rather than
@@ -537,3 +566,15 @@ dest = "moss-image-sft-8steps-dmd.safetensors"
 bytes = 1189176800
 sha256 = "4abb14e39c1a59018907581e609f43616ec6810126144ec2b1d2e6f8969628fe"
 turbo = { steps = 8, cfg_scale = 1.0 }
+
+# Comfy-Org's Qwen-Image 2.1 turbo, extracted as a LoRA (rank ~178); the
+# schedule is sd-cli's preset of Qwen's own turbo (`docs/qwen_image_2.1.md`).
+[[lora]]
+id = "qwen-image-21-turbo"
+family = "qwen_image_21"
+label = "Qwen-Image 2.1 Turbo"
+url = "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors"
+dest = "qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors"
+bytes = 913314512
+sha256 = "208dd43250e1e01467ba190572ae2e7107a7870ec1ff026bc65f791fa1e80e95"
+turbo = { steps = 8, cfg_scale = 1.0, sigmas = "qwen-image-2.1-turbo" }

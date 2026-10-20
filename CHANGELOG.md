@@ -16,6 +16,11 @@ What changed in each release of yasdig. Each release's executables are on the
   offered to Flux.2 Klein 9B, or Klein's Qwen3-8B to it, although both are 4096 wide.
 - **Get models is grouped**: image models, video models and upscalers each under a
   heading, in the list and in its menu.
+- **Qwen-Image 2.1.** Qwen's 7B model, with its own VAE and Qwen3-VL-8B as the
+  encoder, and a Get models card that also fetches Comfy-Org's turbo LoRA: with
+  **Turbo** on it renders 8 steps at CFG 1 on the model's fixed turbo schedule,
+  instead of 40 at CFG 6. Its turbo LoRA is recognised as a Qwen-Image 2.1 one, not a
+  Qwen-Image one. Read its licence (Qwen's research licence) before you use it.
 - **Layout boxes for MOSS-Image.** Draw boxes on the picture to say where things go
   and what they are (an object, a character, or text with its exact words); the Prompt
   describes the whole scene. A **Picture | Layout** switch above the picture brings the

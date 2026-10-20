@@ -183,6 +183,12 @@ Things that break silently:
   `guidance_in`); **so are FLUX.3 Klein/Klein Base** (`ref_time_in`, the distilled
   one's flow map). `LoraBase::fits` lets a Flux LoRA fit both, a FLUX.3 one both
   FLUX.3s — hence `/loras` serves `families`.
+- **Qwen-Image 2.1 is not Qwen-Image**: `txt_in.text_norm` (sd.cpp's marker) is
+  tested before the `img_mod` arm, its VAE is `VaeKind::QwenImage21` (Wan's shape at
+  `conv2.bias` 64), its encoder `Qwen3Vl { dim: 4096 }`. Its LoRAs' `img_mlp.gate_up`
+  is tested before Qwen-Image's `img_mlp` LoRA arm. `sigmas` (`SIGMA_PRESETS`, each
+  tied to a family) is request-only, sent by Turbo, on txt2img only (a fixed list
+  can't be strength-trimmed).
 - **`classify` order**: image models before either VAE branch (a bundled SDXL's VAE
   looks like Wan's); LDM-VAE before Wan VAE; unsupported markers before supported
   families (Hunyuan Video has `double_blocks`, SVD is a UNet); FLUX.3 before every

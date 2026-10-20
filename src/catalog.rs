@@ -78,6 +78,10 @@ pub struct Lora {
 pub struct Turbo {
     pub steps: u32,
     pub cfg_scale: f32,
+    /// A named fixed schedule it was distilled on (`config::SIGMA_PRESETS`),
+    /// sent as `sigmas` with the LoRA. Its length is `steps`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sigmas: Option<String>,
 }
 
 /// One upscaler model. Not an [`Entry`]: it has no family and no parts, lives in
@@ -357,6 +361,11 @@ fn check_loras(c: &Catalog) -> Result<()> {
         }
         if l.bytes == 0 || l.turbo.steps == 0 || l.sha256.len() != 64 {
             bail!("catalog: lora {} needs a size, a sha256 and its steps", l.id);
+        }
+        if let Some(s) = &l.turbo.sigmas {
+            if !crate::config::SIGMA_PRESETS.contains(&(s.as_str(), l.family)) {
+                bail!("catalog: lora {}'s sigmas {s:?} is no {} preset", l.id, l.family.label());
+            }
         }
     }
     for e in c.entry.iter().chain(&c.video) {

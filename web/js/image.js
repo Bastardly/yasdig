@@ -1145,6 +1145,9 @@ function genPayload() {
     // Always sent: `""` is FSR, explicitly, which has to be sayable over a
     // saved default that names a model.
     upscaler: $('upscaler').value,
+    // A turbo LoRA's fixed schedule, while Turbo is on (Qwen-Image 2.1's). The
+    // generate pass only: a pass over a source trims its schedule by strength.
+    sigmas: turboOn() ? (turboOf(currentModel())?.turbo.sigmas ?? null) : null,
     // To a model that takes them, always, `[]` included — the picker is the
     // whole answer, as for `loras`. To one that doesn't, not at all: the picks
     // wait in the dialog for a model that does. A pass over a source doesn't

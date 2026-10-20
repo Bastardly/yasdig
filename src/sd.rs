@@ -116,6 +116,12 @@ impl<'a> SdRunner<'a> {
         cmd.args(["-W", &p.width.to_string()]);
         cmd.args(["-H", &p.height.to_string()]);
         cmd.args(["--steps", &p.steps.to_string()]);
+        // The generate pass only: an img2img trims its schedule by strength
+        // (invariant 2), which a fixed list doesn't survive. A finishing pass
+        // keeps the LoRA and runs sd.cpp's own schedule for its steps.
+        if !p.sigmas.is_empty() {
+            cmd.args(["--sigmas", &p.sigmas]);
+        }
         push_refs(&mut cmd, p, refs, ref_side);
         cmd
     }
@@ -2231,6 +2237,28 @@ binary = "/opt/sd-cli"
     /// References are `-r`, one each in order, and only the ones a command is
     /// handed: the img2img passes share `base_cmd`, and a refine must never
     /// pick up the generation's from the profile.
+    #[test]
+    fn a_turbo_schedule_reaches_the_generate_pass_only() {
+        let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
+        let p = Profile {
+            model: PathBuf::from("/models/q21.gguf"),
+            family: crate::config::ImageFamily::QwenImage21,
+            sigmas: "qwen-image-2.1-turbo".into(),
+            ..Default::default()
+        };
+        p.validate().unwrap();
+        let r = SdRunner::new(&cfg);
+        let a = argv(&r.txt2img_cmd(&p, "x", None, 1, Path::new("o.png"), &[], None));
+        assert_eq!(flag(&a, "--sigmas"), Some("qwen-image-2.1-turbo"));
+        let pass = argv(&r.img2img_cmd(&p, "x", None, 1, Path::new("i.png"), Path::new("o.png"), 0.3, 10, 1.0, false, "x", &[], None));
+        assert!(!pass.iter().any(|x| x == "--sigmas"), "a strength-trimmed pass can't take a fixed list");
+        let plain = Profile { sigmas: String::new(), ..p.clone() };
+        assert!(!argv(&r.txt2img_cmd(&plain, "x", None, 1, Path::new("o.png"), &[], None)).iter().any(|x| x == "--sigmas"));
+        // A preset is its own family's; anything else is refused.
+        assert!(Profile { family: crate::config::ImageFamily::MossImage, ..p.clone() }.validate().is_err());
+        assert!(Profile { sigmas: "1.0,0.5,0.0".into(), ..p }.validate().is_err());
+    }
+
     #[test]
     fn a_pass_carries_only_the_references_it_is_handed() {
         let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();

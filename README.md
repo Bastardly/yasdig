@@ -152,6 +152,7 @@ there and in the model list.
 | Flux.1 schnell / dev | 4-step drafts / detailed 20-step renders | about 18.5 GB |
 | Krea 2 Turbo | 8 steps | about 15 GB |
 | Qwen-Image | the largest here (20B); strong at text in pictures | about 17 GB |
+| Qwen-Image 2.1 | 7B, strong lettering, trained at 2048²; 8 steps with Turbo | about 18 GB |
 | MOSS-Image | layout and lettering; 50 steps at real CFG, so not fast | about 16 GB (INT8) / 21 GB (BF16) |
 | FLUX.1 Fill | powers **Extend**; not used for generating | about 18.5 GB |
 

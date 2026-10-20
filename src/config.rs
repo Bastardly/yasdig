@@ -183,6 +183,12 @@ pub const AUTO_SCHEDULER: &str = "auto";
 pub const CACHE_MODES: [&str; 3] = [CACHE_OFF, "spectrum", "adaptive"];
 pub const CACHE_OFF: &str = "off";
 
+/// [`Profile::sigmas`]'s values: sd-cli's named `--sigmas` presets, each a
+/// distilled model's fixed schedule and so the one family it belongs to. A
+/// list of numbers is never accepted from the page — the preset is the whole
+/// reason to send one.
+pub const SIGMA_PRESETS: [(&str, ImageFamily); 1] = [("qwen-image-2.1-turbo", ImageFamily::QwenImage21)];
+
 /// [`Profile::memory`]'s values: where the weights are kept while a pass runs.
 ///
 /// `auto` sends no flag, so sd.cpp's auto-fit places each part on the GPU, then
@@ -542,6 +548,12 @@ pub struct Profile {
     /// it, every finishing pass reads it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layout: Option<crate::layout::Layout>,
+    /// A named fixed sigma schedule for the generate pass ([`SIGMA_PRESETS`]),
+    /// or empty for sd.cpp's own. What a turbo LoRA was distilled on, so it
+    /// arrives with one: request-only, like `loras`, and set by the page's
+    /// Turbo switch. The schedule's length is the step count it runs.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub sigmas: String,
     /// Which architecture `model` is. A sidecar written before families existed
     /// reads as SDXL, which is what every one of them ran.
     pub family: ImageFamily,
@@ -821,6 +833,17 @@ impl Profile {
             }
         }
         check_sampling(&format!("'{}'", self.name), &self.sampler, &self.scheduler, Some(self.family))?;
+        if !self.sigmas.is_empty() {
+            match SIGMA_PRESETS.iter().find(|(name, _)| *name == self.sigmas) {
+                Some((_, f)) if *f == self.family => {}
+                Some((_, f)) => bail!("the '{}' schedule is {}'s, not {}'s", self.sigmas, f.label(), self.family.label()),
+                None => bail!(
+                    "'{}' is not a sigma schedule this build knows (one of: {})",
+                    self.sigmas,
+                    SIGMA_PRESETS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
+                ),
+            }
+        }
         if let Some(l) = &self.layout {
             if !l.items.is_empty() && !self.family.takes_layout() {
                 bail!(
@@ -1167,6 +1190,13 @@ pub enum ImageFamily {
     /// one lists here and runs as a text-to-image Qwen-Image.
     #[serde(rename = "qwen_image")]
     QwenImage,
+    /// Qwen-Image 2.1, 7B: a single-stream DiT of its own (`txt_in.text_norm`,
+    /// no `img_mod`), Qwen3-VL-8B as the text encoder, and its own 2-D VAE —
+    /// Wan-shaped, but 64 latent channels and RGBA in and out. Nothing of
+    /// Qwen-Image's fits it. Its Turbo is a LoRA (or separate weights) run on
+    /// a fixed 8-sigma schedule ([`SIGMA_PRESETS`]).
+    #[serde(rename = "qwen_image_21")]
+    QwenImage21,
     /// MOSS-Image (OpenMOSS), 5B. Qwen3.5-9B as the text encoder, the Flux.2
     /// VAE, and Qwen3.5's own `tokenizer.json`, which sd.cpp requires because
     /// its built-in Qwen vocabulary is Qwen3's. Base and SFT share every
@@ -1186,7 +1216,7 @@ pub enum ImageFamily {
 impl ImageFamily {
     /// Every variant. Tests hold across it, and [`Config::scan_images`] asks it
     /// which roles some family has a slot for.
-    pub const ALL: [ImageFamily; 14] = [
+    pub const ALL: [ImageFamily; 15] = [
         ImageFamily::Sd1,
         ImageFamily::Sd2,
         ImageFamily::Sdxl,
@@ -1199,6 +1229,7 @@ impl ImageFamily {
         ImageFamily::ZImage,
         ImageFamily::Krea2,
         ImageFamily::QwenImage,
+        ImageFamily::QwenImage21,
         ImageFamily::MossImage,
         ImageFamily::FluxFill,
     ];
@@ -1248,6 +1279,7 @@ impl ImageFamily {
             | ImageFamily::ZImage
             | ImageFamily::Krea2
             | ImageFamily::QwenImage
+            | ImageFamily::QwenImage21
             | ImageFamily::MossImage
             | ImageFamily::FluxFill => true,
         }
@@ -1300,7 +1332,10 @@ impl ImageFamily {
     /// at CFG 1, the base 20 at CFG 3.5; its flow shift of 6.93 is sd.cpp's
     /// own, applied by the default (discrete) schedule that Auto leaves it.
     /// MOSS-Image's is its model card's, the same for Base and SFT: 50 steps
-    /// at CFG 3. Its shift of 5 and the negative branch's skipped layer 22 are
+    /// at CFG 3. Qwen-Image 2.1's is its model card's 40 steps at
+    /// `docs/qwen_image_2.1.md`'s CFG 6; sd.cpp picks its resolution-dependent
+    /// flow schedule itself. It was trained around 2048², which here is the
+    /// hi-res pass's. Its shift of 5 and the negative branch's skipped layer 22 are
     /// sd.cpp's own for the family.
     ///
     /// Every size is 1024², the size each was trained around. Krea 2's card
@@ -1329,6 +1364,7 @@ impl ImageFamily {
             ImageFamily::Flux3KleinBase => dit(20, 3.5),
             ImageFamily::Krea2 => dit(8, 1.0),
             ImageFamily::QwenImage => dit(20, 2.5),
+            ImageFamily::QwenImage21 => dit(40, 6.0),
             ImageFamily::MossImage => dit(50, 3.0),
             // Black Forest Labs' reference for Fill: 28–50 steps at a distilled
             // guidance of 30 (`flags`), CFG 1.
@@ -1468,6 +1504,24 @@ impl ImageFamily {
             file: "tokenizer_qwen3.5.json",
             optional: false,
         };
+        // Qwen-Image 2.1's own VAE: Wan's shape at 64 latent channels, RGBA.
+        // Neither the Wan 2.1 nor 2.2 VAE decodes it (`docs/qwen_image_2.1.md`).
+        const QWEN21_VAE: PartSlot = PartSlot {
+            key: "vae",
+            label: "VAE",
+            fits: |r| matches!(r, Role::Vae(VaeKind::QwenImage21)),
+            dir: "vae",
+            file: "qwen_image_2.1_vae_bf16.safetensors",
+            optional: false,
+        };
+        const QWEN3_VL_8B: PartSlot = PartSlot {
+            key: "llm",
+            label: "Text encoder",
+            fits: |r| matches!(r, Role::Llm(LlmKind::Qwen3Vl { dim: 4096 })),
+            dir: "text_encoders",
+            file: "Qwen3VL-8B-Instruct-Q8_0.gguf",
+            optional: false,
+        };
         const QWEN25_VL_7B: PartSlot = PartSlot {
             key: "llm",
             label: "Text encoder",
@@ -1488,6 +1542,7 @@ impl ImageFamily {
             ImageFamily::ZImage => &[FLUX_VAE, QWEN3_4B],
             ImageFamily::Krea2 => &[WAN21_VAE, QWEN3_VL_4B],
             ImageFamily::QwenImage => &[WAN21_VAE, QWEN25_VL_7B],
+            ImageFamily::QwenImage21 => &[QWEN21_VAE, QWEN3_VL_8B],
             ImageFamily::MossImage => &[FLUX2_VAE, QWEN35_9B, QWEN35_TOKENIZER],
         }
     }
@@ -1507,6 +1562,7 @@ impl ImageFamily {
             ImageFamily::ZImage => "Z-Image",
             ImageFamily::Krea2 => "Krea 2",
             ImageFamily::QwenImage => "Qwen-Image",
+            ImageFamily::QwenImage21 => "Qwen-Image 2.1",
             ImageFamily::MossImage => "MOSS-Image",
             ImageFamily::FluxFill => "FLUX.1 Fill",
         }
@@ -1527,6 +1583,7 @@ impl ImageFamily {
             ImageFamily::ZImage => "z_image",
             ImageFamily::Krea2 => "krea2",
             ImageFamily::QwenImage => "qwen_image",
+            ImageFamily::QwenImage21 => "qwen_image_21",
             ImageFamily::MossImage => "moss_image",
             ImageFamily::FluxFill => "flux_fill",
         }

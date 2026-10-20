@@ -114,6 +114,20 @@ Forest Labs' own repos are gated, so these links are leejet's GGUFs:
 | the text encoder — Qwen2.5-VL-7B | [GGUF](https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/tree/main) (`Q4_K_M`, 4.7 GB) |
 | the VAE | [`qwen_image_vae.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/tree/main/split_files/vae) — the same file as Krea 2's |
 
+**Qwen-Image 2.1** — about 18 GB with these picks. A 7B model of its own, not a
+Qwen-Image finetune: none of Qwen-Image's files fit it. It renders 40 steps at CFG 6,
+or 8 at CFG 1 with the turbo LoRA (the Get models card fetches it, and the Models
+panel's **Turbo** switch adds its fixed `--sigmas qwen-image-2.1-turbo` schedule). It
+was trained around 2048²; here that is the Hi-res pass's size. Its licence is Qwen's
+research licence — read it on the model's page before you use it:
+
+| file | where to get it |
+|---|---|
+| the model | [GGUF](https://huggingface.co/leejet/Qwen-Image-2.1-GGUF/tree/main) (`Q8_0`, 7.7 GB) |
+| the text encoder — Qwen3-VL-8B | [GGUF](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/tree/main) (`Q8_0`, 8.7 GB; not the `mmproj` file) |
+| the VAE | [`qwen_image_2.1_vae_bf16.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/tree/main/vae) — its own; the Wan VAEs don't decode it |
+| the turbo LoRA (optional) | [`qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/tree/main/loras), into `models/loras/` |
+
 **MOSS-Image** (Base and SFT, which `doctor` can't tell apart: the same tensors) —
 about 16 GB with the INT8 model, about 21 GB with BF16. It runs 50 steps at CFG 3, its model card's settings, so a picture
 takes longer than the 5B size suggests. It is the one family with a fourth file: sd.cpp

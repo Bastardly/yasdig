@@ -390,6 +390,9 @@ pub struct GenRequest {
     /// Layout boxes, for a family that reads them. Replaces the profile's
     /// (which a model never has); empty is none. See [`Profile::layout`].
     pub layout: Option<crate::layout::Layout>,
+    /// A named sigma schedule (`config::SIGMA_PRESETS`), sent with a turbo
+    /// LoRA; empty or absent is sd.cpp's own. See [`Profile::sigmas`].
+    pub sigmas: Option<String>,
 }
 
 /// One image-to-image generation: a source image the user supplied instead of a
@@ -1497,6 +1500,7 @@ impl Engine {
             profile.references = v.clone();
         }
         profile.layout = req.layout.clone().filter(|l| !l.items.is_empty());
+        profile.sigmas = req.sigmas.clone().unwrap_or_default();
         if let Some(parts) = &req.parts {
             self.cfg.apply_parts(&mut profile, parts)?;
         }

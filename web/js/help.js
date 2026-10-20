@@ -99,7 +99,7 @@ export const TOPICS = [
       <h3>Where files go</h3>
       ${table(['Folder', 'What goes in it'], [
         ['models/checkpoints', 'One-file models: SDXL, SD 1.5, and their fine-tunes'],
-        ['models/diffusion_models', 'Diffusion models that need parts: Flux, Klein, FLUX.3, Z-Image, Krea 2, Qwen-Image'],
+        ['models/diffusion_models', 'Diffusion models that need parts: Flux, Klein, FLUX.3, Z-Image, Krea 2, Qwen-Image, MOSS-Image'],
         ['models/text_encoders', 'Text encoders: Qwen, T5, CLIP-L'],
         ['models/vae', 'VAEs'],
         ['models/loras', 'LoRAs'],
