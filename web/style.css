@@ -90,6 +90,10 @@
   --shadow-pop: 0 6px 20px rgba(0, 0, 0, .8);
   --scrim: rgba(0, 0, 0, .85);     /* the viewer's backdrop */
   --scrim-soft: rgba(0, 0, 0, .7); /* the picker's, and the close button's bed */
+  --ly-line: rgba(221, 217, 210, .85); /* a layout box's edge over the frame:
+                                   the bone of --state, a touch see-through */
+  --ly-fill: rgba(16, 16, 17, .35);  /* its inside, dark enough to read the tag on */
+  --ly-dim: .35;                   /* the last picture under the frame */
   --mask: rgba(220, 70, 60, .5);   /* a Redraw mask over the picture: the
                                       danger hue, see-through so you can aim */
 
@@ -701,6 +705,44 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 }
 .stage > img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--r-lg); cursor: zoom-in; }
 .stage:empty::after { content: attr(data-empty); color: var(--text-dim); }
+
+/* Layout boxes (layout.js): the Picture | Layout switch floats over the
+   stage's top edge, and the layout view covers the stage beside the rail —
+   both under the panels, which count up from 10. */
+.stagemode {
+  position: absolute; top: var(--sp-2); left: calc(50% + var(--railw) / 2); z-index: 6;
+  transform: translateX(-50%); display: flex; gap: var(--sp-1);
+}
+.layoutstage {
+  position: absolute; top: 0; bottom: 0; left: var(--railw); right: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: center; background: var(--ink-900);
+}
+.layoutstage[hidden] { display: none; }
+.lyframe {
+  position: relative; border: var(--line-strong); border-radius: var(--r-sm);
+  background: var(--ink-800); cursor: crosshair; touch-action: none; user-select: none;
+}
+.lyframe > img { position: absolute; inset: 0; width: 100%; height: 100%; opacity: var(--ly-dim); pointer-events: none; }
+.lybox {
+  position: absolute; border: 2px dashed var(--ly-line); background: var(--ly-fill);
+  cursor: move; overflow: hidden; display: flex; flex-direction: column; gap: 2px;
+  padding: 2px var(--sp-1); font-size: var(--fs-micro); color: var(--text);
+}
+.lybox.ly-text { border-style: dotted; }
+.lybox.sel { border-style: solid; border-color: var(--text); }
+.lytag { color: var(--text-dim); white-space: nowrap; }
+.lywhat { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The corner grips, on the selected box only. */
+.lyh { position: absolute; width: 10px; height: 10px; background: var(--text); display: none; }
+.lybox.sel .lyh { display: block; }
+.lyh-nw { left: -1px; top: -1px; cursor: nwse-resize; }
+.lyh-se { right: -1px; bottom: -1px; cursor: nwse-resize; }
+.lyh-ne { right: -1px; top: -1px; cursor: nesw-resize; }
+.lyh-sw { left: -1px; bottom: -1px; cursor: nesw-resize; }
+.lyrow { display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-2); border: var(--line); border-radius: var(--r-md); margin-top: var(--sp-2); }
+.lyrow.sel { border-color: var(--state); }
+.lyrowhead { display: flex; align-items: center; gap: var(--sp-2); }
+.lyrowhead select { flex: 1; }
 .fpbody > .wihead { margin-top: var(--sp-2); }
 
 /* The Video stage: the canvas, and the player's row under it. */

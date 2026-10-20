@@ -535,6 +535,13 @@ pub struct Profile {
     /// on the profile so a sidecar names them and a reopen restores them. Only
     /// a family that takes them may carry any ([`ImageFamily::takes_references`]).
     pub references: Vec<String>,
+    /// Where things go in the picture, for a family that reads a layout
+    /// ([`ImageFamily::takes_layout`]): composed around the prompt per pass, at
+    /// that pass's size (`crate::layout`). Request-only like `references`, and
+    /// on the profile for their reason — a sidecar keeps it, a reopen restores
+    /// it, every finishing pass reads it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout: Option<crate::layout::Layout>,
     /// Which architecture `model` is. A sidecar written before families existed
     /// reads as SDXL, which is what every one of them ran.
     pub family: ImageFamily,
@@ -814,6 +821,16 @@ impl Profile {
             }
         }
         check_sampling(&format!("'{}'", self.name), &self.sampler, &self.scheduler, Some(self.family))?;
+        if let Some(l) = &self.layout {
+            if !l.items.is_empty() && !self.family.takes_layout() {
+                bail!(
+                    "{} doesn't read layout boxes; only MOSS-Image does — pick a MOSS-Image \
+                     model, or remove the boxes",
+                    self.family.label()
+                );
+            }
+            l.validate()?;
+        }
         if !self.references.is_empty() && !self.family.takes_references() {
             bail!(
                 "'{}': a {} model doesn't take reference images — pick a Flux.2 Klein \
@@ -1201,6 +1218,12 @@ impl ImageFamily {
     /// runnable family here either has no reference path or needs an edit
     /// checkpoint or LoRA this build doesn't run yet. Served on `/models`, so
     /// the page's References button follows it rather than a copy of it.
+    /// Whether it reads a JSON layout as its prompt (`crate::layout`).
+    /// MOSS-Image alone: its encoder was trained on that schema.
+    pub fn takes_layout(self) -> bool {
+        matches!(self, ImageFamily::MossImage)
+    }
+
     pub fn takes_references(self) -> bool {
         matches!(
             self,
@@ -4077,6 +4100,23 @@ lora_dir = "adapters"
     /// Only the Kleins — Flux.2's and FLUX.3's — take reference images, and a
     /// profile refuses them anywhere else, past four, or under a name that
     /// isn't an output stem.
+    /// Layout boxes are MOSS-Image's alone, and checked by the layout's own
+    /// rules on the way in.
+    #[test]
+    fn a_layout_is_moss_only_and_well_formed() {
+        use crate::layout::{Item, Label, Layout};
+        let boxes = |caption: &str| Layout {
+            items: vec![Item { label: Label::Object, caption: caption.into(), text: None, rect: [0.0, 0.0, 0.5, 0.5] }],
+        };
+        let p = |family, l| Profile { family, layout: Some(l), ..Profile::default() };
+        assert!(p(ImageFamily::MossImage, boxes("a cat")).validate().is_ok());
+        assert!(p(ImageFamily::Sdxl, boxes("a cat")).validate().is_err());
+        assert!(p(ImageFamily::MossImage, boxes("")).validate().is_err());
+        // No boxes is no layout, on any family.
+        assert!(p(ImageFamily::Sdxl, Layout::default()).validate().is_ok());
+        assert!(ImageFamily::ALL.iter().filter(|f| f.takes_layout()).eq([&ImageFamily::MossImage]));
+    }
+
     #[test]
     fn references_are_klein_only_four_at_most_and_stems() {
         for f in ImageFamily::ALL {

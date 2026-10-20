@@ -42,6 +42,8 @@
   <div class="workspace" id="tab-image">
   <nav class="wsrail" aria-label="Image">
     <button type="button" class="btn btn-choice railbtn" data-panel="img-prompt">Prompts</button>
+    <!-- MOSS-Image only (`layout` on /models): shown by syncLayout. -->
+    <button type="button" class="btn btn-choice railbtn" data-panel="img-layout" hidden>Layout</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="img-models">Models</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="img-gen">Generation</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="img-src">Image to image</button>
@@ -79,6 +81,17 @@
   </nav>
   <!-- The picture: the latest result, fitted. A click opens Refine & adjust. -->
   <div class="stage" id="result" data-empty="Generate to see a picture here"></div>
+  <!-- MOSS-Image's layout boxes (layout.js): a switch over the stage between
+       the picture and a frame at the next Generate's shape, on which the boxes
+       are drawn — the last picture dimmed under it when the shapes match.
+       Beside #result, not in it: render() rewrites the stage's contents. -->
+  <div class="stagemode" id="stagemode" hidden>
+    <button type="button" class="btn btn-choice active" data-mode="picture">Picture</button>
+    <button type="button" class="btn btn-choice" data-mode="layout">Layout</button>
+  </div>
+  <div class="layoutstage" id="layoutstage" hidden>
+    <div class="lyframe" id="lyframe"><img id="lyimg" alt="" hidden></div>
+  </div>
   <!-- First, because it is what you reach for most. -->
   <section class="fpanel" id="fold-prompt" aria-label="Prompts" hidden>
     <header class="fphead"><b>Prompts</b> <span class="foldstate" id="sum-prompt"></span><button type="button" class="fpclose" aria-label="Close Prompts">&times;</button></header>
@@ -115,6 +128,18 @@
        rarely change, and the summary says what is in it. Refine and Hi-res
        pick their own model with their own pass. Above Generation: what runs
        is decided before how it runs. -->
+  <section class="fpanel" id="panel-img-layout" aria-label="Layout" hidden>
+    <header class="fphead"><b>Layout</b> <span class="foldstate" id="sum-layout"></span><button type="button" class="fpclose" aria-label="Close Layout">&times;</button></header>
+    <div class="fpbody">
+      <p class="sub" data-help="layout">Say where things go: switch the picture to
+        <b>Layout</b> and drag boxes on it. The Prompt is the whole scene; each box says
+        what is in it, and a <b>Text</b> box the exact words to letter there.</p>
+      <div id="lyrows"></div>
+    </div>
+    <div class="fpfoot">
+      <button type="button" id="lyclear" class="btn btn-block">Remove all boxes</button>
+    </div>
+  </section>
   <section class="fpanel" id="modelsbox" aria-label="Models" hidden>
     <header class="fphead"><b>Models</b> <span class="foldstate" id="modelsum"></span><button type="button" class="fpclose" aria-label="Close Models">&times;</button></header>
     <div class="fpbody">

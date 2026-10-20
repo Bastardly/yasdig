@@ -4,6 +4,7 @@ import { holdTurbo, imageLoras, imageSource, models, render, setParts, setUpscal
          syncOutSize, syncParts, syncSeedLine } from './image.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
 import { setReferences } from './refs.js';
+import { setLayout } from './layout.js';
 
 // Two shelves of the same thing, each its own panel and grid: Current is
 // `work/workitems/` (which lists starred items too, from user/favorite/),
@@ -214,6 +215,8 @@ export function applyWorkItem(item) {
   if (known) $('template').value = item.template;
   // Its LoRAs say whether Turbo was on, so no default may land over them.
   holdTurbo();
+  // Its boxes, or none: a reopened image is drawn from what it was made with.
+  setLayout(p.layout);
   // The fold's slots are the model's, so they are redrawn for it — and then set
   // to what this image ran with, which a sidecar records as absolute paths. Not
   // when its model is gone: the select kept another one, and that model's slots

@@ -76,6 +76,10 @@ pub struct EmbeddedProfile {
     pub source_strength: f32,
     /// Names relative to the LoRA folder — a name, not a path on this disk.
     pub loras: Vec<LoraRef>,
+    /// MOSS-Image's layout boxes: fractions of the frame and words, nothing
+    /// of this machine's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout: Option<crate::layout::Layout>,
 }
 
 impl EmbeddedProfile {
@@ -100,6 +104,7 @@ impl EmbeddedProfile {
         hires_model: p.hires_model.clone(),
         source_strength: p.source_strength,
         loras: p.loras.clone(),
+        layout: p.layout.clone(),
     }
     }
 }
@@ -439,6 +444,12 @@ pub fn read(png: &[u8], install: &Install) -> Result<Loaded> {
         if !crate::config::CACHE_MODES.contains(&p.cache_mode.as_str()) {
             p.cache_mode = Profile::default().cache_mode;
         }
+        // Hand-edited or from a newer build: dropped with a note rather than
+        // sent to a Generate that would refuse it.
+        if let Some(e) = p.layout.as_ref().and_then(|l| l.validate().err()) {
+            notes.push(format!("its layout boxes couldn't be read ({e}) — left out"));
+            p.layout = None;
+        }
         return Ok(Loaded { source: "yasdig", notes, item: Some(item), params: None });
     }
 
@@ -616,6 +627,15 @@ mod tests {
             height: 1216,
             refine_steps: 4,
             loras: vec![LoraRef { name: "sdxl/detail.safetensors".into(), strength: 0.8 }],
+            // Travels like the LoRAs: words and fractions of the frame.
+            layout: Some(crate::layout::Layout {
+                items: vec![crate::layout::Item {
+                    label: crate::layout::Label::Text,
+                    caption: "a sign".into(),
+                    text: Some("OPEN".into()),
+                    rect: [0.25, 0.1, 0.75, 0.3],
+                }],
+            }),
             ..Profile::default()
         };
         WorkItem {

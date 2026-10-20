@@ -387,6 +387,9 @@ pub struct GenRequest {
     /// is then used). Resolved by [`Config::apply_parts`] and retained on the
     /// profile like `loras`, so refine and hi-res decode with the same VAE.
     pub parts: Option<BTreeMap<String, Option<String>>>,
+    /// Layout boxes, for a family that reads them. Replaces the profile's
+    /// (which a model never has); empty is none. See [`Profile::layout`].
+    pub layout: Option<crate::layout::Layout>,
 }
 
 /// One image-to-image generation: a source image the user supplied instead of a
@@ -441,6 +444,8 @@ pub struct Img2ImgRequest {
     pub loras: Option<Vec<LoraRef>>,
     /// See [`GenRequest::parts`].
     pub parts: Option<BTreeMap<String, Option<String>>>,
+    /// See [`GenRequest::layout`].
+    pub layout: Option<crate::layout::Layout>,
 }
 
 /// One clip to generate.
@@ -1361,9 +1366,14 @@ impl Engine {
         // output's sidecar has to keep saying it after the swap that used them.
         let (refine_model, hires_model) =
             (p.profile.refine_model.clone(), p.profile.hires_model.clone());
+        // The layout is the picture's, not the checkpoint's, so it survives a
+        // swap to another model that reads one — and is dropped on one that
+        // doesn't, where `validate` would refuse it.
+        let layout = p.profile.layout.take().filter(|_| next.family.takes_layout());
         p.profile = next.clone();
         p.profile.refine_model = refine_model;
         p.profile.hires_model = hires_model;
+        p.profile.layout = layout;
         Ok(())
     }
 
@@ -1486,6 +1496,7 @@ impl Engine {
         if let Some(v) = &req.references {
             profile.references = v.clone();
         }
+        profile.layout = req.layout.clone().filter(|l| !l.items.is_empty());
         if let Some(parts) = &req.parts {
             self.cfg.apply_parts(&mut profile, parts)?;
         }
@@ -1560,7 +1571,8 @@ impl Engine {
         // 1) Distilled generation at base resolution.
         let t = Instant::now();
         let ref_side = Some(self.cfg.settings().reference_size);
-        sd.txt2img(tpl, &prompt, neg, seed, &lowres, &refs, ref_side)?;
+        let cond = crate::layout::conditioned(tpl, &prompt, (tpl.width, tpl.height), &vars, seed)?;
+        sd.txt2img(tpl, &cond, neg, seed, &lowres, &refs, ref_side)?;
         let gen_ms = t.elapsed().as_millis();
         // Read now: an ESRGAN enlarge below is another sd-cli run, which resets it.
         let (cache_skipped, cache_steps) = self.monitor.cache_skip().unwrap_or_default();
@@ -1751,6 +1763,7 @@ impl Engine {
         if let Some(v) = &req.loras {
             profile.loras = v.clone();
         }
+        profile.layout = req.layout.clone().filter(|l| !l.items.is_empty());
         if let Some(parts) = &req.parts {
             self.cfg.apply_parts(&mut profile, parts)?;
         }
@@ -1821,9 +1834,10 @@ impl Engine {
         //    run at, which after step 1 is the source's size and not the
         //    original's.
         let t = Instant::now();
+        let cond = crate::layout::conditioned(&profile, &prompt, (fw, fh), &vars, seed)?;
         self.sd().img2img(
             &profile,
-            &prompt,
+            &cond,
             negative.as_deref(),
             seed,
             &src,
@@ -2216,6 +2230,9 @@ impl Engine {
 
         let vars = self.cfg.settings().variables;
         let prompt = pass_prompt(over.refine_prompt.as_deref(), &p.prompt, &vars, p.seed)?;
+        // The boxes around whichever caption this pass runs, at the picture's
+        // own size (`crate::layout`).
+        let prompt = crate::layout::conditioned(&p.profile, &prompt, (p.raw_w, p.raw_h), &vars, p.seed)?;
 
         // Uncached: a finishing pass is the quality rung (`Profile::uncached`).
         let t = Instant::now();
@@ -2803,6 +2820,10 @@ impl Engine {
         //    Uncached, as refine is: see `Profile::uncached`.
         let vars = self.cfg.settings().variables;
         let prompt = pass_prompt(over.hires_prompt.as_deref(), &p.prompt, &vars, p.seed)?;
+        // At the size the diffusion runs at, which is the init's, not the
+        // picture's: a box is pixels of the canvas being drawn.
+        let size = image::image_dimensions(&init).with_context(|| format!("reading {}", init.display()))?;
+        let prompt = crate::layout::conditioned(&p.profile, &prompt, size, &vars, p.seed)?;
         let t = Instant::now();
         sd.img2img(
             &p.profile.uncached(),

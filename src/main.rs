@@ -121,6 +121,7 @@ mod fsr;
 mod home;
 mod http;
 mod jobs;
+mod layout;
 mod pipeline;
 mod pngmeta;
 mod redraw;
@@ -1991,6 +1992,9 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         /// — it means "empty this slot" — so no `double_option` is needed.
         #[serde(default)]
         parts: Option<std::collections::BTreeMap<String, Option<String>>>,
+        /// MOSS-Image's layout boxes (`crate::layout`); absent or empty is none.
+        #[serde(default)]
+        layout: Option<layout::Layout>,
         /// How many images, and whether to keep going until stopped. One
         /// request is one queued run, whatever its length — see `crate::jobs`.
         #[serde(default)]
@@ -2054,6 +2058,7 @@ fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> R
         loras: dto.loras,
         references: dto.references,
         parts: dto.parts,
+        layout: dto.layout,
     };
 
     let label = req.template.clone();
@@ -2216,6 +2221,9 @@ fn handle_img2img(
         /// — it means "empty this slot" — so no `double_option` is needed.
         #[serde(default)]
         parts: Option<std::collections::BTreeMap<String, Option<String>>>,
+        /// MOSS-Image's layout boxes (`crate::layout`); absent or empty is none.
+        #[serde(default)]
+        layout: Option<layout::Layout>,
         /// How many images, and whether to keep going until stopped. One
         /// request is one queued run, whatever its length — see `crate::jobs`.
         #[serde(default)]
@@ -2291,6 +2299,7 @@ fn handle_img2img(
         clarity: dto.clarity,
         loras: dto.loras,
         parts: dto.parts,
+        layout: dto.layout,
     };
 
     let label = req.template.clone();
@@ -3206,7 +3215,7 @@ fn build_models_json(cfg: &Config) -> String {
                 .unwrap_or_else(|_| "[]".into());
             format!(
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
-                 \"family\":{},\"family_label\":{},\"recommended\":{},\"references\":{},\"fill\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
+                 \"family\":{},\"family_label\":{},\"recommended\":{},\"layout\":{},\"references\":{},\"fill\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
                  \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\"scheduler\":{},\"cache_mode\":{},\"memory\":{},\
                  \"upscale_factor\":{},\"upscaler\":{},\
@@ -3222,6 +3231,8 @@ fn build_models_json(cfg: &Config) -> String {
                 json_str(p.family.label()),
                 // The catalog's mark, by family: the select says "(Recommended)".
                 catalog::Catalog::get().recommends(p.family),
+                // Whether the Layout panel and the stage's Layout view show.
+                p.family.takes_layout(),
                 // Whether the References button shows: the server's rule,
                 // served, so the page holds no copy of it.
                 p.family.takes_references(),

@@ -16,6 +16,11 @@ What changed in each release of yasdig. Each release's executables are on the
   offered to Flux.2 Klein 9B, or Klein's Qwen3-8B to it, although both are 4096 wide.
 - **Get models is grouped**: image models, video models and upscalers each under a
   heading, in the list and in its menu.
+- **Layout boxes for MOSS-Image.** Draw boxes on the picture to say where things go
+  and what they are (an object, a character, or text with its exact words); the Prompt
+  describes the whole scene. A **Picture | Layout** switch above the picture brings the
+  boxes back after a render. Every pass is told the boxes again at its own size, and
+  they're saved with the work item and in the PNG.
 - **Turbo for MOSS-Image.** The MOSS cards also fetch lodestones' 8-step DMD LoRA,
   and a **Turbo** switch in the Models panel turns it on with its 8 steps at CFG 1
   (on by default, remembered per model), several times faster than 50 steps at CFG 3.

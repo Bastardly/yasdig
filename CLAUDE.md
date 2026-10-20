@@ -278,6 +278,31 @@ rail foot and a status card instead (same rules for the preview and the caps).
 - **Growth is capped**: error box 40vh, preview `min(--preview-h, 35vh)` — or an OOM
   log pushes the button off-screen.
 
+## Layout boxes
+
+MOSS-Image's JSON layout prompt (`src/layout.rs`, `web/js/layout.js`). The model card's
+compiler (`skills/moss-image-prompt-enhancer/scripts/compile_prompt.py`) is the spec
+`layout::compose` follows byte for byte (compact JSON, key order, floor near / ceil far,
+`abs_centralized` `yxyx`); its `references/layout.md` cup is the fixture, in both
+test files.
+
+- **Boxes are stored as 0..1 fractions and composed per sd-cli call at that call's
+  size** (`layout::conditioned`: txt2img at `tpl.width/height`, the source pass at the
+  fitted size, Refine at `raw_w/raw_h`, Hi-res at the init's size). The JSON is never
+  stored as the prompt; `Pending.prompt` stays the caption.
+- **Redraw and Extend get the caption alone** (crops). Edit doesn't reach MOSS.
+- **`Profile.layout`, request-only like `references`**: refused off MOSS by
+  `Profile::validate` (`takes_layout`), lifted across `swap_model` to another MOSS
+  only. In `EmbeddedProfile`; an invalid one read from a PNG is dropped with a note.
+- **Variables roll inside boxes at compose time**, off the image's seed, so every pass
+  rolls the same words; the profile keeps them typed.
+- **MOSS skips sd.cpp's `(word:1.2)` parser** (`prompt_attn_range {0,0}`), which is
+  why JSON's brackets survive. A family that parses weights would mangle it.
+- Page: the stage's *Picture | Layout* switch (`#stagemode`) and `#layoutstage` are
+  **siblings of `#result`**, absolutely placed beside the rail (`render()` rewrites
+  `#result`, and its `:empty` placeholder must keep working). `render()` calls
+  `showPicture()`. `layoutPayload()` is `null` unless the family takes layouts.
+
 ## Image to image
 
 The *Image to image* fold (code says "Start from"): a picked source makes Generate run

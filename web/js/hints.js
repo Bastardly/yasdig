@@ -157,6 +157,14 @@ const HELP = [
         + 'finishes sooner, at some cost in exactness. Refine and Hi-res always '
         + 'run every step. Leave it Off for few-step models, which have nothing '
         + 'to skip; the Help tab says what the two modes do.' },
+  { ids: ['layout'],
+    text: 'MOSS-Image can be told where things go. Each box is placed on the '
+        + 'picture and says what is in it: an Object, a Character, or Text — whose '
+        + 'exact words it letters there. The Prompt stays the description of the '
+        + 'whole scene. Boxes are kept as shares of the frame, so they follow a '
+        + 'change of size, and every Refine and Hi-res pass is told them again at '
+        + 'its own size. The model card calls this experimental: it guides, it '
+        + 'doesn’t trace.' },
   { ids: ['turbo'],
     text: 'A LoRA that teaches this model to finish in a few steps, from its Get '
         + 'models card. On, it renders in the few steps at CFG 1 the label says, '

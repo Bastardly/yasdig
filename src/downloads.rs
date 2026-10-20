@@ -359,8 +359,9 @@ impl Downloads {
                 let l = Catalog::get().lora(id).expect("tasks come from the catalog");
                 if !lora_is(dest, l) {
                     bail!(
-                        "downloaded, but it reads as {} — not a LoRA for {}",
+                        "downloaded, but it reads as {} — not {}, a LoRA for {}",
                         discover::identify(dest).describe(),
+                        l.label,
                         l.family.label()
                     );
                 }

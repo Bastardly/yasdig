@@ -563,6 +563,8 @@ impl Settings {
             // Request-only too, and for the same reason: references are picked
             // per picture.
             references: Vec::new(),
+            // And the layout boxes, drawn per picture.
+            layout: None,
             // Identity, like `model` above: the registry fills these from what
             // the file is. SDXL and bundled is what a profile with no file
             // behind it has always meant.

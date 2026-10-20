@@ -219,6 +219,31 @@ Click the picture to open **Refine & adjust** — Hi-res, Refine, Edit, Extend, 
 the sliders, and *Save to output* are all there (see *Refine*). The Video tab is laid
 out the same way.
 
+## Layout boxes (MOSS-Image)
+
+MOSS-Image can be told **where things go**. With a MOSS-Image model picked, a
+**Layout** button appears in the rail and a **Picture | Layout** switch above the
+picture. Switch to *Layout* and the stage becomes a frame in the shape of the next
+picture (the last one dimmed under it, when it has that shape); drag on it to draw a
+box, drag a box to move it, pull a selected box's corners to resize it, Delete to
+remove it. The Layout panel lists the boxes: each is an **Object**, a **Character** or
+**Text**, with a caption saying what is in it — and for Text, the exact words to
+letter there. The Prompt stays the description of the whole scene.
+
+When the picture lands, the stage shows it again; the switch brings the boxes back
+over it, to see where things landed and move them for the next one.
+
+Behind it, MOSS-Image reads a JSON layout as its prompt — the model card's format, with
+boxes in pixels from the centre of the canvas. yasdig keeps the boxes as shares of the
+frame and writes that JSON for every pass at the size of that pass, so a box drawn for
+a 1024² render still covers the same part of a 2048² Hi-res. A Refine or Extend over an
+area works on a crop, where boxes mean nothing, so it gets the plain prompt.
+`{variables}` roll inside the boxes too, off the same seed. The boxes are saved with
+the work item and in the PNG, and come back when you reopen either.
+
+The model card calls layout control experimental: it steers the composition, and
+lettering lands best in a box roughly the shape of the words.
+
 ## Work items
 
 Every image you generate is kept, in `work/workitems/`: the unsharpened

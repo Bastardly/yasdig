@@ -12,6 +12,7 @@ import { openGetModels } from './getmodels.js';
 import { floatPanels } from './panels.js';
 import { partRows } from './parts.js';
 import { showError, MEMORY_LABELS } from './memory.js';
+import { initLayout, layoutPayload, relayout, showPicture, syncLayout } from './layout.js';
 
 // The checkpoint list the server published. Exported because the work-item
 // grid looks a name up in it; only this module refills it.
@@ -247,6 +248,7 @@ export function syncSeedLine() {
 let wsPanels = null;
 const PANEL_DEFS = [
   { id: 'img-prompt', el: 'fold-prompt', open: true },
+  { id: 'img-layout' },
   { id: 'img-models', el: 'modelsbox' },
   { id: 'img-gen', el: 'fold-gen', open: true },
   { id: 'img-src', el: 'fold-src' },
@@ -300,6 +302,8 @@ function syncSummaries() {
   // hear, so this is also where the loop is told.
   syncLoop();
   syncSeedLine();
+  // The layout frame has the base size's shape, which may just have changed.
+  relayout();
   // Before `/models` answers every box is empty, and "× · steps" says nothing.
   if (!currentModel()) return;
   // The line is cut to fit (`.fold > summary`), so the whole of it is the title.
@@ -388,8 +392,10 @@ function syncAdvanced() {
     if (turboOf(m) && turboWanted(m.name)) setTurbo(true);
     syncTurboBox();
   });
-  // The References button is the model's to show (`references` on /models).
+  // The References button is the model's to show (`references` on /models),
+  // and so are the layout boxes (`layout`).
   syncRefs(m);
+  syncLayout(m.layout);
   syncParts();
   $('steps').value = m.steps;
   $('cfg').value = m.cfg_scale;
@@ -807,6 +813,9 @@ function stageLine(t) {
 }
 
 export function render(data) {
+  // A picture landed, so the stage shows it rather than the layout frame;
+  // the switch above it brings the boxes back.
+  showPicture();
   // A different picture from the one under the sliders: a re-filter of the
   // old one still in flight must not land on top of it. A run's image can
   // arrive mid-drag now that the sliders stay live during one.
@@ -1110,6 +1119,9 @@ function genPayload() {
     // The Models fold. Retained like `loras`, so Refine and Hi-res decode with
     // the VAE this image was made with.
     parts: partsPicked(),
+    // The boxes, to a model that reads them; null otherwise (layout.js).
+    // Retained like `loras`: every pass on the image recomposes them.
+    layout: layoutPayload(),
     // Not sharpness/clarity: those are post-process, not generation settings,
     // so a new image starts from the model's values rather than inheriting
     // wherever the last one's sliders were left.
@@ -1405,6 +1417,15 @@ function initPngSettings() {
 export function initImage() {
   initPngSettings();
   imageLoras.init();
+  initLayout({
+    // The frame is the next Generate's shape; a pass over a source takes the
+    // source's, which the last picture is the nearest stand-in for.
+    size: () => (imageSource.get() && lastImage
+      ? [lastImage.width, lastImage.height]
+      : [numOr('w') ?? 1024, numOr('h') ?? 1024]),
+    picture: () => (lastImage ? { src: S.currentSrc, w: lastImage.width, h: lastImage.height } : null),
+    onChange: () => syncSummaries(),
+  });
   onRefsChange(syncSummaries);
   initFolds();
   $('go').addEventListener('click', startRun);

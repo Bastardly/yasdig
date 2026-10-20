@@ -65,7 +65,9 @@ pub struct Lora {
     /// LoRA picker and the `<lora:…>` tag carry.
     pub dest: String,
     pub bytes: u64,
-    pub sha256: Option<String>,
+    /// Hugging Face's `X-Linked-Etag`, required: the record of which file the
+    /// steps and CFG in `turbo` were checked against.
+    pub sha256: String,
     pub turbo: Turbo,
 }
 
@@ -353,8 +355,8 @@ fn check_loras(c: &Catalog) -> Result<()> {
         if !hf_resolve(&l.url) {
             bail!("catalog: lora {}'s url must be a huggingface.co resolve link: {}", l.id, l.url);
         }
-        if l.bytes == 0 || l.turbo.steps == 0 {
-            bail!("catalog: lora {} needs a size and its steps", l.id);
+        if l.bytes == 0 || l.turbo.steps == 0 || l.sha256.len() != 64 {
+            bail!("catalog: lora {} needs a size, a sha256 and its steps", l.id);
         }
     }
     for e in c.entry.iter().chain(&c.video) {
@@ -564,7 +566,7 @@ mod tests {
         for e in moss {
             assert_eq!(c.loras_of(e).count(), 1, "{} fetches its turbo LoRA", e.id);
         }
-        let lora = "[[lora]]\nid = \"l\"\nfamily = \"z_image\"\nlabel = \"l\"\nurl = \"https://huggingface.co/a/b/resolve/main/l.safetensors\"\ndest = \"l.safetensors\"\nbytes = 1\nturbo = { steps = 8, cfg_scale = 1.0 }\n";
+        let lora = "[[lora]]\nid = \"l\"\nfamily = \"z_image\"\nlabel = \"l\"\nurl = \"https://huggingface.co/a/b/resolve/main/l.safetensors\"\ndest = \"l.safetensors\"\nbytes = 1\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\nturbo = { steps = 8, cfg_scale = 1.0 }\n";
         assert!(parse(lora).is_ok());
         let card = |family: &str| {
             format!("[[entry]]\nid = \"x\"\nfamily = \"{family}\"\nlabel = \"x\"\nnote = \"\"\nloras = [\"l\"]\n[[entry.file]]\nslot = \"model\"\nurl = \"https://huggingface.co/a/b/resolve/main/m.gguf\"\ndest = \"m.gguf\"\nbytes = 1\n")
