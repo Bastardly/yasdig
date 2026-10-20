@@ -746,6 +746,12 @@ motion can change direction there; write shots that agree. TI2V-5B, A14B and H3 
 do it (the others don't take a first frame). Stop, or a failing shot, keeps the shots
 already made.
 
+You can also build a clip without planning it: the clip dialog's **Extend** adds one
+shot to the clip from its last frame, with the clip's own prompt and settings. Not
+right? *Regenerate last shot* draws it again with a new seed (and the new text, if you
+changed it); *Undo last shot* takes it off. The clip stays one tile; its enlarged
+versions are removed when it changes, since they no longer cover it.
+
 **The clip dialog.** Click the clip on the stage. *Enlarge* runs FSR over every frame
 into a new version (sharpness and clarity are fixed kernels, so they don't flicker),
 *History* lists the original and each version — click to play one, *Compare* to split
