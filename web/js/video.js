@@ -4,7 +4,7 @@ import { MEMORY_LABELS, showError } from './memory.js';
 import { setBusy, setIdle, cancelRun } from './busy.js';
 import { soonJobs } from './jobs.js';
 import { clip, renderClip } from './player.js';
-import { initClipView } from './clipview.js';
+import { initClipView, openClipView } from './clipview.js';
 import { sourceSlot } from './source-slot.js';
 import { partRows } from './parts.js';
 import { loraPicker } from './loras.js';
@@ -443,7 +443,7 @@ function renderClips() {
   }
   grid.innerHTML = clips.map((c) => `
     <button type="button" data-id="${esc(c.id)}"
-      title="${esc(c.prompt)}&#10;${c.width}×${c.height} · ${c.frames} frames @ ${c.fps} fps · seed ${c.seed}">
+      title="${esc(c.prompt)}&#10;${c.width}×${c.height} · ${c.frames} frames @ ${c.fps} fps · seed ${c.seed}&#10;Click to show it; click again to open it (Extend, Enlarge, History)">
       <img src="/videos/${esc(c.id)}/thumb.png" alt="" loading="lazy"
         width="${c.thumb_width}" height="${c.thumb_height}"></button>`).join('');
   for (const b of grid.querySelectorAll('button')) {
@@ -477,6 +477,12 @@ function clickClip(id) {
   // Allowed while a clip renders: opening one only reads disk, and setting up
   // the next job from another clip is exactly what the wait is for.
   const c = clips.find((x) => x.id === id);
+  // A second click on the clip already on the stage opens the clip dialog —
+  // Extend, Enlarge, History — as a click on the stage does.
+  if (c && clip?.id === id) {
+    openClipView(clip);
+    return;
+  }
   if (!c) return;
   $('verr').textContent = '';
   applyClip(c);
@@ -641,8 +647,10 @@ export function initVideo() {
   // An enlarge in the clip dialog adds a version: the grid's copy of the
   // clip, and the stage's, are the record it changed.
   initClipView({
-    // Only a family that chains can go on from a clip's last frame.
-    canContinue: (c) => !!videoModels.find((m) => m.name === c.model)?.chains,
+    // Only a family that chains can go on from a clip's last frame — by the
+    // clip's own family, since the model it was made with may be listed under
+    // another name now (or be a [[video]] entry since removed).
+    canContinue: (c) => videoModels.some((m) => m.family === c.video?.family && m.chains),
     onContinue: continueClip,
     onClipChange: (c) => {
       const i = clips.findIndex((x) => x.id === c.id);

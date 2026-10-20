@@ -211,8 +211,23 @@ export function openClipView(clip) {
   show((clip.versions ?? []).at(-1)?.n ?? 0);
 }
 
-// Open a clip saved to output, from the Outputs tab: it plays, nothing more.
+// Open a clip saved to output, from the Outputs tab. Saved as `{id}` or
+// `{id}-v{n}`, so while the clip it came from is still in the Clips grid it
+// opens as that clip — Extend, Enlarge and History and all — on that version;
+// otherwise the file only plays.
 export async function openOutputClip(stem) {
+  const [, id, v] = stem.match(/^(.*?)(?:-v(\d+))?$/);
+  try {
+    const clips = await getJSON('/videos');
+    const c = Array.isArray(clips) ? clips.find((x) => x.id === id) : null;
+    if (c) {
+      view = { kind: 'clip', clip: c };
+      open();
+      const n = Number(v ?? 0);
+      show((c.versions ?? []).some((x) => x.n === n) ? n : 0);
+      return;
+    }
+  } catch { /* the file alone, below */ }
   try {
     const info = await getJSON(`/outputs/${encodeURIComponent(stem)}/video.json`);
     view = { kind: 'output', stem, info };
