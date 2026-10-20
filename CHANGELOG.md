@@ -7,7 +7,10 @@ What changed in each release of yasdig. Each release's executables are on the
 
 ### New
 
-- **Video tab (nightly)**:
+- **The Video tab is no longer a nightly feature**: it shows for everyone, Get models
+  lists the video models, and Settings → *Nightly features* is gone (its *Save clips
+  as* is under *Video*).
+- **Video tab**:
   - **LoRAs**, picked as on the Image tab from `models/loras/`. Only the ones that fit
     the video model are offered: Wan LoRAs are read by their size, so a TI2V-5B LoRA
     never reaches a 14B. On the Wan 2.2 A14B pair each LoRA says which expert it
@@ -41,7 +44,7 @@ What changed in each release of yasdig. Each release's executables are on the
 
 ### Fixed
 
-- **Video tab (nightly)**: finishing a clip no longer resets the settings to the
+- **Video tab**: finishing a clip no longer resets the settings to the
   model's defaults, and another clip can be opened — and a new one set up from it —
   while one is rendering.
 

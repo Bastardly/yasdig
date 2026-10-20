@@ -23,8 +23,7 @@ import { loadVideoModels } from './video.js';
 // list of its own on the wire (`entries`, `videos`, `upscalers`) and a group of
 // its own in the nav, because one flat list stopped being readable. Separate
 // on the wire too, because Help's family table reads `entries` and neither a
-// video model nor an upscaler belongs in it. `videos` is empty unless the
-// nightly Video tab is on.
+// video model nor an upscaler belongs in it.
 
 let view = null;
 let timer = null;

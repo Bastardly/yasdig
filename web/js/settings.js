@@ -138,11 +138,8 @@ export const FIELDS = [
   { key: 'weight_type', label: 'Weight type', help: 'setwtype', kind: 'text', blank: BLANK },
   { key: 'extra_args', label: 'Extra sd-cli arguments', help: 'setargs', kind: 'lines' },
 
-  // Features a release ships hidden because they are unfinished. Off by
-  // default; ticking one shows it at once (`applyNightly`).
-  SECTION('Nightly features', { rail: 'Nightly' }),
-  NOTE('Very much a work in progress: these can change or break between releases.'),
-  { key: 'nightly_video', page: true, label: 'Video tab (work in progress)', help: 'setnightlyvideo', kind: 'check' },
+  // The Video tab's own: what a finished clip leaves behind.
+  SECTION('Video', { rail: 'Video' }),
   { key: 'video_save', page: true, label: 'Save clips as', help: 'setvideosave', kind: 'choice',
     options: [['file', 'A video file (.avi), and the frames'], ['frames', 'Frames only (PNG)']] },
 ];
@@ -408,27 +405,6 @@ function applyPageDefaults(s) {
   if (s.hires_scale) setUpFactor(s.hires_scale);
 }
 
-// What a nightly feature's setting shows or hides, applied from what the server
-// stored — on load and after every save, so ticking it is enough. The Video tab
-// and the *Clear videos* row go together: a setting for clips you can't make
-// would be a question nobody can answer. Leaving the tab while it hides is the
-// one move it makes for you.
-function applyNightly(s) {
-  const on = !!s.nightly_video;
-  const tab = document.querySelector('.tab[data-tab="video"]');
-  if (tab) {
-    if (!on && tab.classList.contains('active')) {
-      document.querySelector('.tab[data-tab="image"]')?.click();
-    }
-    tab.hidden = !on;
-  }
-  const clear = $(fieldId(FIELDS.find((f) => f.key === 'clear_videos_on_close')));
-  if (clear) clear.closest('.checks').hidden = !on;
-  // A select row is its label and the select, siblings.
-  const save = $(fieldId(FIELDS.find((f) => f.key === 'video_save')));
-  if (save) save.hidden = save.previousElementSibling.hidden = !on;
-}
-
 // ---- Unsaved changes --------------------------------------------------------
 
 // What the form looked like the last time it agreed with the file. Compared as
@@ -468,7 +444,6 @@ export function adoptSaved(key, value) {
 function settle(s) {
   fill(s);
   applyPageDefaults(s);
-  applyNightly(s);
   saved = JSON.stringify(body());
   markDirty();
 }

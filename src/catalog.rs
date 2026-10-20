@@ -24,7 +24,7 @@
 //! shape: a [`VideoFamily`], its [`VideoFamily::slots`] keys, `"high_noise"`
 //! for the A14B's second expert, and every `dest` under the **video dir**. Kept
 //! apart so the Help tab's family table and the image cards never meet one,
-//! and served only while the Video tab is (nightly).
+//! and kept out of the image cards' listing.
 
 use crate::config::{ImageFamily, PartSlot, VideoFamily};
 use crate::discover::{DitKind, Role};

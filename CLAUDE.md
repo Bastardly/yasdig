@@ -8,7 +8,7 @@ one job queue and one diffusion worker; the viewer's re-filters run on a display
 sharing the one FSR device behind a lock (*## The job queue*).
 
 **`README.md` is short and for users** (why escalation, install, what's supported —
-keep video out while it is nightly). **`docs/` is the reference**: `configuration.md`
+and video). **`docs/` is the reference**: `configuration.md`
 (folders, model files, `models.toml`/`user/settings.toml` field tables), `guide.md`
 (features), `api.md` (CLI and HTTP routes), `building.md`, `architecture.md`. This
 file holds only what they don't: the traps.
@@ -543,8 +543,7 @@ they are `upscalers`, beside `entries`, so Help's family table never meets one.
 under `Config::video_dir`, `slot` a `VideoFamily::slots` key, `"model"` or the A14B's
 `"high_noise"` (`parse` requires it exactly for `is_moe`). `Entry::fits` takes the path,
 since only `noise_marker` tells the experts apart. "Have" scans the video dir alone —
-what discovery assembles from — and `/catalog` serves `videos` only while
-`nightly_video` is on.
+what discovery assembles from.
 
 Cards link source repos (`File::page`). **No licence names in the catalog**, on purpose.
 Page: cards and nav are grouped by category (`categories()` in `getmodels.js`: image,
@@ -1028,12 +1027,11 @@ Break silently:
 on the inner control), light DOM. Tabs are deliberately not components (shadow DOM
 would break `setBusy`/the poll/`style.css`). `showTab` clears the pane it leaves.
 
-## Nightly features, website, licences
+## Website, licences
 
-- **Nightly**: Settings → *Nightly features*, today `Settings::nightly_video`
-  (page-level, off). `applyNightly` in `settings.js` hides the Video tab, *Clear
-  videos* and the clips line in Close server's confirm. **Hidden, not removed** —
-  routes and server rules stay.
+- **Video left nightly**: `nightly_video` is gone from `Settings` (an old file
+  with it still loads — no `deny_unknown_fields` — and the key drops on the next save).
+  A future unfinished feature can bring the section back.
 - **Website**: `site/` (yasdig.com), deployed by `.github/workflows/pages.yml`, kept
   out of `docs/`. Short and download-first; tokens hand-copied from `web/style.css`.
   Buttons repoint via `api.github.com/…/releases` (not `releases/latest`, which skips
@@ -1377,7 +1375,7 @@ from `family` goes on `VideoModelDto`.
   churn), `serde_json` for anything struct-backed.
 - **Batch/loop are a queued job** (*## The job queue*). `#stop` is not in
   `IDLE_LABELS`; the Jobs poll drives it.
-- **Video** (nightly):
+- **Video**:
   - **Discovered by reading headers** (`src/discover.rs`), discriminators from sd.cpp's
     `ModelLoader::get_sd_version`. **Read shapes off square tensors only**
     (`Tensors::square_dim`) — PyTorch vs GGUF order.

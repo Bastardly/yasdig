@@ -497,8 +497,7 @@ needs a Vulkan device and nothing else.
   `finished` counts files landed since start; the page reloads its models when it moves.
   `upscalers` has the same shape, one file each, with `family` `"upscaler"`, `slot_label`
   the architecture (`ESRGAN`, `Compact`, `SPAN`), `dest` under the upscaler dir, and
-  `have` only when that file is there and reads as that architecture. `videos` (empty
-  unless `nightly_video` is on) is the video models' sets in the `entries` shape, `dest`
+  `have` only when that file is there and reads as that architecture. `videos` is the video models' sets in the `entries` shape, `dest`
   under the video dir, `slot` a `VideoFamily::slots` key, `"model"` or the A14B's
   `"high_noise"`; a part counts as had only from the video dir, which is where discovery
   assembles a video model from.

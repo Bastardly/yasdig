@@ -18,7 +18,7 @@ reload.
 The sections, in the rail's order: **Default prompt** (the prompt boxes' starting
 text, and *Prompt variables*), **Generation**, **Image to image**, **Hi-res pass**,
 **Refine pass**, **Per model**, **General** (Models, Speed and limits, Saved images,
-When the server is closed, Advanced) and **Nightly**. The Default prompt panel can be
+When the server is closed, Advanced) and **Video**. The Default prompt panel can be
 made wider as well as taller, by its corner, since a variable's words can be whole
 phrases — one per line or separated by commas.
 
@@ -31,8 +31,7 @@ sections are named after what they belong to, which is why *Steps* appears
 twice — once for the Image tab and once under *Starting from an image*, where it
 is a different pass. The three under **Advanced** are the ones with no control
 anywhere else: flash attention, the weight type and extra sd-cli arguments.
-**Nightly** holds features still in the works, which can change or break between
-releases.
+**Video** holds what a finished clip leaves in the output folder.
 
 Edits you haven't saved are marked on the Settings tab itself, so walking away
 mid-change says so from wherever you walked to, and reloading the page asks
@@ -726,6 +725,34 @@ don't want from the grid. Only the newest image per place it is shown is kept wa
 `work/current/`, which is emptied on start and on *Close server*: a refined or hi-res
 image you want to keep is one **Save to output** away (or tick **Save Output** in the rail).
 
+
+## Video
+
+The Video tab makes clips with Wan 2.2 (TI2V-5B, the I2V-A14B pair), Wan 2.1 VACE
+and dense models, and MiniMax H3 (with sound). Get models has cards for the first two
+and H3. It is laid out like the Image tab: the seed in the rail with Reset, the size
+with a swap button (snapped to what the model runs), LoRAs picked from
+`models/loras/` (only the ones for the model's size; on the A14B pair each says which
+expert it patches), a first frame from your outputs or an upload, and *Save as
+defaults for this model*. While a clip renders the status card loops a blurry
+preview of it, and you can open other clips and set up the next one.
+
+**Long clips are shots.** A model of this size runs out of memory a few seconds in,
+so a longer clip is made a shot at a time: the Prompts panel's *Shots* list, one line
+per shot, each a segment of the Frames box made from the previous shot's last frame.
+The Prompt stays the scene — who, where, the look — and a shot says what happens next;
+five shots of 3 s are a 15 s clip, up to 20. Only one frame carries across a seam, so
+motion can change direction there; write shots that agree. TI2V-5B, A14B and H3 can
+do it (the others don't take a first frame). Stop, or a failing shot, keeps the shots
+already made.
+
+**The clip dialog.** Click the clip on the stage. *Enlarge* runs FSR over every frame
+into a new version (sharpness and clarity are fixed kernels, so they don't flicker),
+*History* lists the original and each version — click to play one, *Compare* to split
+the frame between it and the original — and *Save to output* writes the version on
+screen to the output folder, where it shows in Outputs with a play mark and opens in
+the same dialog. *Continue this clip* sets up a new clip that starts with this one and
+goes on from its last frame.
 
 ## Convert
 

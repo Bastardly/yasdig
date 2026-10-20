@@ -386,10 +386,6 @@ const HELP = [
         + 'PNG on the prompt box loads them back. Turn it off if you share pictures '
         + 'and would rather your prompts did not travel with them. No file paths are '
         + 'ever written.' },
-  { ids: ['setnightlyvideo'],
-    text: 'Shows the Video tab. Video generation works but is unfinished: models, '
-        + 'settings and results may change or break between versions. Your clips stay '
-        + 'on disk whether the tab is shown or not.' },
   { ids: ['setvideosave'],
     text: 'What each finished clip leaves in the output folder. A video file is an '
         + '.avi that any video player opens (with sound, for a model that makes it), '

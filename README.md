@@ -157,6 +157,11 @@ Not sure where to start? The ones marked *Recommended* there and in the model li
 | MOSS-Image | layout and lettering; 50 steps at real CFG, so not fast | about 16 GB (INT8) / 21 GB (BF16) |
 | FLUX.1 Fill | powers **Extend**; not used for generating | about 18.5 GB |
 
+**Video.** Wan 2.2 (TI2V-5B and the I2V-A14B pair), Wan 2.1 VACE and dense models, and
+MiniMax H3 with sound — text or a first frame to video, LoRAs, a live preview, and
+long clips made a shot at a time from each shot's last frame. Clips enlarge (FSR, no
+flicker) and save to Outputs as video files.
+
 **Model files** can be `.safetensors`, `.gguf` or `.ckpt`, and are recognised by what
 is inside them, so file names and folders don't matter. The Get models tab fetches the
 parts a model needs beside it (text encoder, VAE); your own downloads can go anywhere

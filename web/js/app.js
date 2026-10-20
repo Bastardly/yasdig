@@ -101,8 +101,7 @@ async function closeServer() {
   const doomed = [
     s.clear_workitems_on_close && 'work items (Current, not Favorites)',
     s.clear_outputs_on_close && 'outputs in work/output/ (not Favorites)',
-    // Only while the Video tab is on: a hidden feature isn't mentioned.
-    s.nightly_video && s.clear_videos_on_close && 'video clips',
+    s.clear_videos_on_close && 'video clips',
   ].filter(Boolean);
   const queued = jobCount();
   const msg = 'Close the yasdig server?\n\n'

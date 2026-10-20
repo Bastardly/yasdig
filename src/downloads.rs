@@ -373,12 +373,9 @@ impl Downloads {
     /// The catalog with every file's state, for `GET /catalog`.
     pub fn status(&self, cfg: &Config) -> CatalogView {
         let c = Catalog::get();
-        // The video cards only while the Video tab shows: hidden, not removed,
-        // like the tab itself.
-        let nightly = crate::settings::Settings::load_or_default(&cfg.user_dir()).nightly_video;
         let found = cfg.scan_images();
         let vram = crate::sd::vram();
-        let video_found = if nightly { crate::discover::scan(&cfg.video_dir()) } else { Vec::new() };
+        let video_found = crate::discover::scan(&cfg.video_dir());
         let st = self.lock();
         let view = |e: &'static Entry, found: &[Found]| EntryView {
             id: &e.id,
@@ -397,7 +394,7 @@ impl Downloads {
                 .collect(),
         };
         let entries = c.entry.iter().map(|e| view(e, &found)).collect();
-        let videos = if nightly { c.video.iter().map(|e| view(e, &video_found)).collect() } else { Vec::new() };
+        let videos = c.video.iter().map(|e| view(e, &video_found)).collect();
         let upscalers = Catalog::get()
             .upscaler
             .iter()
@@ -438,7 +435,7 @@ pub struct CatalogView {
     upscaler_dir: String,
     video_dir: String,
     entries: Vec<EntryView>,
-    /// Video models, empty unless the Video tab is on (nightly). Their own
+    /// Video models. Their own
     /// list for the reason `upscalers` has one.
     videos: Vec<EntryView>,
     /// A list of their own, so the Help tab's family table — which reads
