@@ -128,6 +128,16 @@ research licence — read it on the model's page before you use it:
 | the VAE | [`qwen_image_2.1_vae_bf16.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/tree/main/vae) — its own; the Wan VAEs don't decode it |
 | the turbo LoRA (optional) | [`qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/tree/main/loras), into `models/loras/` |
 
+**Iris-3B** — about 8 GB. A 3B model that draws in pixel space, so it has no VAE: the
+model and its text encoder are all it needs. It ships as one 12 GB fp32 file, which
+its recipe loads as q8_0 (`weight_type`); the Convert tab can write that q8_0 file
+once, which then loads faster. 100 steps at CFG 3, its model card's default:
+
+| file | where to get it |
+|---|---|
+| the model | [`model.safetensors`](https://huggingface.co/speridlabs/iris-3b/tree/main) (fp32, 12 GB; the root one, not `turbo/`, `depth/` or `upscaler/`) |
+| the text encoder — Qwen3-VL-4B | the same file as Krea 2's, above |
+
 **MOSS-Image** (Base and SFT, which `doctor` can't tell apart: the same tensors) —
 about 16 GB with the INT8 model, about 21 GB with BF16. It runs 50 steps at CFG 3, its model card's settings, so a picture
 takes longer than the 5B size suggests. It is the one family with a fourth file: sd.cpp

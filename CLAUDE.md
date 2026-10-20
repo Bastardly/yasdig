@@ -183,6 +183,10 @@ Things that break silently:
   `guidance_in`); **so are FLUX.3 Klein/Klein Base** (`ref_time_in`, the distilled
   one's flow map). `LoraBase::fits` lets a Flux LoRA fit both, a FLUX.3 one both
   FLUX.3s — hence `/loras` serves `families`.
+- **Iris is pixel space**: no VAE slot (so no `--vae`), sd.cpp's marker pair
+  (`y_embedder.layer_pool` + `modulation_cores.adaln_img`); its recipe carries
+  `weight_type = q8_0` because the release is a 12 GB fp32 file. `--preview proj`
+  only logs that it has no projection.
 - **Qwen-Image 2.1 is not Qwen-Image**: `txt_in.text_norm` (sd.cpp's marker) is
   tested before the `img_mod` arm, its VAE is `VaeKind::QwenImage21` (Wan's shape at
   `conv2.bias` 64), its encoder `Qwen3Vl { dim: 4096 }`. Its LoRAs' `img_mlp.gate_up`

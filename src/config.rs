@@ -1203,6 +1203,12 @@ pub enum ImageFamily {
     /// tensor, so one family.
     #[serde(rename = "moss_image")]
     MossImage,
+    /// Iris-3B (Sperid Labs): a **pixel-space** DiT — no VAE at all, it draws
+    /// RGB directly (`pixel_embedder`, `pixel_blocks`) — with Qwen3-VL-4B,
+    /// Krea 2's encoder. Shipped as one 12 GB fp32 file, which its recipe
+    /// loads as q8_0 (`weight_type`), so it suits a small card.
+    #[serde(rename = "iris")]
+    Iris,
     /// FLUX.1 Fill: Flux.1 dev's layout with `img_in` 384 wide, trained to fill
     /// a masked region from the rest of the picture. sd.cpp feeds it the masked
     /// image and the mask beside the noise (`VERSION_FLUX_FILL`,
@@ -1216,7 +1222,7 @@ pub enum ImageFamily {
 impl ImageFamily {
     /// Every variant. Tests hold across it, and [`Config::scan_images`] asks it
     /// which roles some family has a slot for.
-    pub const ALL: [ImageFamily; 15] = [
+    pub const ALL: [ImageFamily; 16] = [
         ImageFamily::Sd1,
         ImageFamily::Sd2,
         ImageFamily::Sdxl,
@@ -1231,6 +1237,7 @@ impl ImageFamily {
         ImageFamily::QwenImage,
         ImageFamily::QwenImage21,
         ImageFamily::MossImage,
+        ImageFamily::Iris,
         ImageFamily::FluxFill,
     ];
 
@@ -1281,6 +1288,7 @@ impl ImageFamily {
             | ImageFamily::QwenImage
             | ImageFamily::QwenImage21
             | ImageFamily::MossImage
+            | ImageFamily::Iris
             | ImageFamily::FluxFill => true,
         }
     }
@@ -1335,7 +1343,9 @@ impl ImageFamily {
     /// at CFG 3. Qwen-Image 2.1's is its model card's 40 steps at
     /// `docs/qwen_image_2.1.md`'s CFG 6; sd.cpp picks its resolution-dependent
     /// flow schedule itself. It was trained around 2048², which here is the
-    /// hi-res pass's. Its shift of 5 and the negative branch's skipped layer 22 are
+    /// hi-res pass's. Iris-3B's is its model card's 100 steps at CFG 3, plus
+    /// `weight_type` q8_0: the release is fp32, 12 GB, and the model exists
+    /// for small cards — sd.cpp converts it as it loads, to about 3.3 GB. Its shift of 5 and the negative branch's skipped layer 22 are
     /// sd.cpp's own for the family.
     ///
     /// Every size is 1024², the size each was trained around. Krea 2's card
@@ -1366,6 +1376,7 @@ impl ImageFamily {
             ImageFamily::QwenImage => dit(20, 2.5),
             ImageFamily::QwenImage21 => dit(40, 6.0),
             ImageFamily::MossImage => dit(50, 3.0),
+            ImageFamily::Iris => PartialSettings { weight_type: Some("q8_0".into()), ..dit(100, 3.0) },
             // Black Forest Labs' reference for Fill: 28–50 steps at a distilled
             // guidance of 30 (`flags`), CFG 1.
             ImageFamily::FluxFill => dit(28, 1.0),
@@ -1544,6 +1555,8 @@ impl ImageFamily {
             ImageFamily::QwenImage => &[WAN21_VAE, QWEN25_VL_7B],
             ImageFamily::QwenImage21 => &[QWEN21_VAE, QWEN3_VL_8B],
             ImageFamily::MossImage => &[FLUX2_VAE, QWEN35_9B, QWEN35_TOKENIZER],
+            // Pixel space: no VAE slot, so sd-cli is never handed `--vae`.
+            ImageFamily::Iris => &[QWEN3_VL_4B],
         }
     }
 
@@ -1564,6 +1577,7 @@ impl ImageFamily {
             ImageFamily::QwenImage => "Qwen-Image",
             ImageFamily::QwenImage21 => "Qwen-Image 2.1",
             ImageFamily::MossImage => "MOSS-Image",
+            ImageFamily::Iris => "Iris",
             ImageFamily::FluxFill => "FLUX.1 Fill",
         }
     }
@@ -1585,6 +1599,7 @@ impl ImageFamily {
             ImageFamily::QwenImage => "qwen_image",
             ImageFamily::QwenImage21 => "qwen_image_21",
             ImageFamily::MossImage => "moss_image",
+            ImageFamily::Iris => "iris",
             ImageFamily::FluxFill => "flux_fill",
         }
     }

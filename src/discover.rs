@@ -1152,6 +1152,11 @@ fn image_model(t: &Tensors) -> Option<Role> {
     if t.has("video_embedder.weight") && t.has("shared_block_modulation.weight") {
         return image(ImageFamily::MossImage);
     }
+    // Iris, sd.cpp's pair: its text embedder's layer pool and the shared
+    // modulation cores. Pixel space, so nothing here looks like a VAE.
+    if t.has("y_embedder.layer_pool.weight") && t.has("modulation_cores.adaln_img.weight") {
+        return image(ImageFamily::Iris);
+    }
     if t.has("cap_embedder.0.weight") {
         return image(ImageFamily::ZImage);
     }
@@ -2317,6 +2322,21 @@ mod tests {
         assert_eq!(classify(&gguf("qwen3")), Role::Llm(LlmKind::Qwen3 { dim: 2560 }));
         assert_eq!(classify(&gguf("qwen2vl")), Role::Llm(LlmKind::Qwen25Vl { dim: 2560 }));
         assert!(matches!(classify(&gguf("llama")), Role::Unknown(_)));
+    }
+
+    /// Iris-3B's released `model.safetensors` (fp32, no prefix): read as Iris,
+    /// and runnable with an encoder alone — it has no VAE to wait for.
+    #[test]
+    fn iris_is_read_and_needs_only_its_encoder() {
+        let dit = t(&[
+            ("blocks.0.attn.q_proj_x.weight", &[2560, 2560]),
+            ("modulation_cores.adaln_img.weight", &[15360, 2560]),
+            ("pixel_embedder.proj.weight", &[16, 3]),
+            ("y_embedder.layer_pool.weight", &[1, 12]),
+        ]);
+        assert_eq!(classify(&dit), Role::Image { family: ImageFamily::Iris, bundled: false });
+        assert!(ImageFamily::Iris.slots().iter().all(|s| s.key != "vae"));
+        assert!(ImageFamily::Iris.slots().iter().any(|s| (s.fits)(&Role::Llm(LlmKind::Qwen3Vl { dim: 2560 }))));
     }
 
     /// Qwen-Image 2.1's parts, off the released headers: leejet's GGUF (no
