@@ -134,7 +134,10 @@ function renderInfo(c, ms, saved) {
     ${saved ? `<p class="sub">Saved <code>${esc(saved)}</code></p>` : ''}`;
   // Opt-in, as on the Image tab: the box keeps what was typed until this is
   // clicked.
-  $('vseedval').addEventListener('click', () => { $('vseed').value = c.seed; });
+  $('vseedval').addEventListener('click', () => {
+    $('vseed').value = c.seed;
+    $('vseed').dispatchEvent(new Event('input', { bubbles: true }));
+  });
 }
 
 // The clip, rebuilt per clip: the player on the stage, what is known about it

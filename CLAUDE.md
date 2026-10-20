@@ -1395,6 +1395,13 @@ from `family` goes on `VideoModelDto`.
   - **A clip is a PNG sequence**, not a container (no decoder here; escalations need
     frames). Playback is `<canvas>`.
   - Video Stop is `POST /cancel` and kills; error ends in `sd::CANCELLED` → "Stopped".
+  - **A finished clip never refills the boxes**: `startClip`'s `finally` calls
+    `syncReady()`, not `syncVideo()` (which puts the model's defaults back), and
+    `loadVideoModels({refill:false})` after a download. Only a model `change` refills.
+  - **Clips open while one renders** (`clickClip` has no busy gate); a clip landing
+    while another is open joins the grid without taking the stage.
+  - The size boxes snap up to `size_multiple` on `change` (`snapSize`); the seed has
+    the Image tab's rail line (`#vseedline`) and Reset.
 - **Convert tab** (`src/convert.rs`, `-M convert`): a file's on-disk type isn't its run
   cost — Vulkan has no fp8 matmul, so `Linear::forward` casts to BF16 in-graph; `q4_K`
   is the first type actually multiplied.

@@ -173,7 +173,7 @@ async function refresh() {
   // file landed, so the model list may have a new runnable entry.
   if (finished !== null && view.finished !== finished) {
     loadModels({ refill: false });
-    if (view.videos?.length) loadVideoModels();
+    if (view.videos?.length) loadVideoModels({ refill: false });
   }
   finished = view.finished;
   draw();

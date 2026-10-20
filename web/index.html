@@ -568,6 +568,8 @@
       <!-- Not the image tab's Stop, which finishes the image in flight and then
            ends the run. There is only ever one clip in flight, so stopping it
            means killing it — POST /cancel. -->
+      <!-- The seed the next clip uses, the Image tab's line (`syncVSeedLine`). -->
+      <div class="seedline" id="vseedline"></div>
       <div class="runstop">
         <button id="vstop" class="btn btn-danger btn-block" hidden>Stop</button>
       </div>
@@ -596,16 +598,18 @@
   <section class="fpanel" id="vfold-gen" aria-label="Generation" hidden>
     <header class="fphead"><b>Generation</b> <span class="foldstate" id="vsum-gen"></span><button type="button" class="fpclose" aria-label="Close Generation">&times;</button></header>
     <div class="fpbody">
-      <div class="row">
-        <div>
-          <label for="vmodel">Model</label>
-          <select id="vmodel"></select>
-        </div>
-        <div>
-          <label for="vseed">Seed (-1 = random)</label>
+      <!-- The seed first, as on the Image tab: the setting reached for
+           between clips, one click back to random. -->
+      <div class="genseed">
+        <label for="vseed">Seed</label>
+        <div class="withbtn">
           <input id="vseed" type="number" value="-1">
+          <button type="button" id="vseedrandom" class="btn" title="Back to -1: a new seed every clip"
+                  aria-label="Reset seed to -1">Reset</button>
         </div>
       </div>
+      <label for="vmodel">Model</label>
+      <select id="vmodel"></select>
       <p class="sub" id="vmodelnote"></p>
       <!-- One select per separate file the model's family runs with (its VAE,
            text encoder, H3's audio VAE), drawn by parts.js from the slots
@@ -631,10 +635,16 @@
         <input type="file" id="vsrcfile" accept="image/*" hidden>
       </div>
 
-      <div class="row">
+      <!-- The Image tab's size row: snapped to the model's multiple on change
+           (`snapSize`), so the boxes say what runs. -->
+      <div class="row sizerow">
         <div>
           <label for="vw">Width</label>
           <input id="vw" type="number" min="64">
+        </div>
+        <div class="swapcol">
+          <button type="button" id="vswapwh" class="btn" title="Swap width and height"
+                  aria-label="Swap width and height">⇄</button>
         </div>
         <div>
           <label for="vh">Height</label>

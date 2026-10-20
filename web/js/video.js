@@ -100,8 +100,29 @@ function alignFrames(v, g) {
   return Math.max(g.min, Math.floor((f - g.offset) / g.multiple) * g.multiple + g.offset);
 }
 
-// What the boxes add up to, before anything runs: the size and frame count after
+// A size box, snapped on `change` the way the server rounds it — up, to the
+// model's multiple — so the boxes show what will run rather than a note
+// beside them explaining the difference.
+function snapSize(id) {
+  const m = currentVideoModel();
+  const v = parseInt($(id).value, 10);
+  if (!m || !Number.isFinite(v)) return;
+  const snapped = alignSize(v, m.size_multiple);
+  if (snapped !== v) $(id).value = snapped;
+}
+
+// The rail's seed line, the Image tab's `syncSeedLine`: amber when pinned.
+function syncVSeedLine() {
+  const v = $('vseed').value.trim() || '-1';
+  const el = $('vseedline');
+  el.textContent = `Seed: ${v}`;
+  el.title = el.textContent;
+  el.classList.toggle('on', v !== '-1');
+}
+
+// What the boxes add up to, before anything runs: the frame count after
 // rounding, the fps the model will actually use, and the duration that implies.
+// The size is snapped in its boxes; a half-typed one is still rounded here.
 function syncVideoNote() {
   const m = currentVideoModel();
   if (!m) { $('vgridnote').textContent = ''; return; }
@@ -110,8 +131,6 @@ function syncVideoNote() {
   const frames = alignFrames(parseInt($('vframes').value, 10), m.frame_grid);
   const fps = m.forced_fps ?? (parseInt($('vfps').value, 10) || 1);
   const asked = [
-    parseInt($('vw').value, 10) !== w || parseInt($('vh').value, 10) !== h
-      ? `rounded to ${w}×${h} (multiples of ${m.size_multiple})` : null,
     parseInt($('vframes').value, 10) !== frames
       ? `${frames} frames (the grid is ${m.frame_grid.multiple}k+${m.frame_grid.offset})` : null,
     m.forced_fps ? `${fps} fps — this model overrides anything else` : null,
@@ -153,7 +172,11 @@ function syncVideo() {
   syncVideoSummaries();
 }
 
-export async function loadVideoModels() {
+// `refill: false` keeps the boxes as they are unless the selected model itself
+// changed — the Image tab's rule: a download landing in the background must not
+// reset a clip being set up.
+export async function loadVideoModels({ refill = true } = {}) {
+  const before = $('vmodel').value;
   try {
     const data = await getJSON('/video-models');
     if (!Array.isArray(data)) throw new Error('unexpected response');
@@ -166,6 +189,8 @@ export async function loadVideoModels() {
       opt.textContent = `${m.name}${m.exists ? '' : ' — not downloaded'}`;
       sel.appendChild(opt);
     }
+    // A rebuilt select falls back to its first option: put the pick back.
+    if (videoModels.some((m) => m.name === before)) sel.value = before;
     if (!videoModels.length) {
       $('verr').textContent =
         'No video models configured. Add a [[video]] entry to models.toml — '
@@ -173,7 +198,8 @@ export async function loadVideoModels() {
       $('vgo').disabled = true;
       return;
     }
-    syncVideo();
+    if (refill || sel.value !== before) syncVideo();
+    else syncReady();
   } catch (e) {
     $('verr').textContent = 'Could not load video models: ' + (e.message || e);
   }
@@ -216,11 +242,14 @@ async function startClip() {
   $('vstop').disabled = false;
   $('vstop').textContent = 'Stop';
   setBusy('vgo', 'Generating clip…', 'video');
+  const shownAtStart = clip?.id;
   try {
     const pending = post('/video', vidPayload());
     soonJobs();
     const data = await pending;
-    renderClip(data.clip, data.gen_ms, data.saved);
+    // Onto the stage unless another clip was opened while this one rendered:
+    // then it only joins the grid, and the one being looked at stays.
+    if (!clip || clip.id === shownAtStart) renderClip(data.clip, data.gen_ms, data.saved);
     loadClips();
   } catch (e) {
     const msg = String(e.message || e);
@@ -236,7 +265,9 @@ async function startClip() {
     vrunning = false;
     $('vstop').hidden = true;
     setIdle('vgo');
-    syncVideo();
+    // Only the button: the boxes keep what made this clip, so the next one
+    // starts from it. `syncVideo` here used to put the model's defaults back.
+    syncReady();
   }
 }
 
@@ -323,7 +354,8 @@ function clickClip(id) {
     markClips();
     return;
   }
-  if (vrunning) return;
+  // Allowed while a clip renders: opening one only reads disk, and setting up
+  // the next job from another clip is exactly what the wait is for.
   const c = clips.find((x) => x.id === id);
   if (!c) return;
   $('verr').textContent = '';
@@ -341,6 +373,7 @@ function applyClip(c) {
   $('vprompt').value = c.typed_prompt ?? c.prompt;
   $('vnegative').value = c.typed_negative ?? c.negative ?? '';
   $('vseed').value = c.seed;
+  syncVSeedLine();
   if (videoModels.some((m) => m.name === c.model)) $('vmodel').value = c.model;
   // Deliberately not firing `change`: that listener is syncVideo, which would
   // overwrite everything below with the model's defaults. The rows are redrawn
@@ -435,6 +468,22 @@ export function initVideo() {
   for (const id of ['vw', 'vh', 'vframes', 'vfps']) {
     $(id).addEventListener('input', syncVideoNote);
   }
+  for (const id of ['vw', 'vh']) {
+    $(id).addEventListener('change', () => {
+      snapSize(id);
+      syncVideoNote();
+    });
+  }
+  $('vswapwh').addEventListener('click', () => {
+    [$('vw').value, $('vh').value] = [$('vh').value, $('vw').value];
+    $('vw').dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  $('vseedrandom').addEventListener('click', () => {
+    $('vseed').value = -1;
+    $('vseed').dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  $('vseed').addEventListener('input', syncVSeedLine);
+  syncVSeedLine();
   for (const r of document.querySelectorAll('input[name=vmode]')) {
     r.addEventListener('change', () => {
       if (!vDeleteMode()) vselected.clear();
