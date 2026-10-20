@@ -196,9 +196,15 @@ impl Slot {
             // `vae.` prefix, and the classifier reads it back by contents (its
             // width off a one-dimensional bias), so the converted GGUF lands in
             // the same Models-fold slot as the file it came from.
+            //
+            // Not H3's: its decoder is a transformer and nobody has measured
+            // what a quantized one decodes to, nor has sd.cpp a converter path
+            // for its audio VAE. A tokenizer is JSON.
+            Role::Vae(VaeKind::MinimaxH3) => None,
             Role::Vae(_) | Role::ImageVae(_) => Some(Slot::Vae),
             Role::Umt5 | Role::T5xxl => Some(Slot::T5xxl),
             Role::ClipL | Role::ClipVision | Role::Lora(_) | Role::Unknown(_) => None,
+            Role::AudioVae | Role::Tokenizer(_) => None,
             // Image models reach this list through the registry (`candidates`).
             // An `--llm` text encoder can't be converted at all: sd.cpp's
             // `convert_with_components` takes no such path.

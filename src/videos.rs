@@ -33,6 +33,17 @@ use std::path::{Path, PathBuf};
 /// practical ceiling is 81.
 const FRAME_PATTERN: &str = "frame_%03d.png";
 
+/// What sd-cli writes instead for a model with a soundtrack (MiniMax H3 with
+/// its audio VAE). sd-cli writes audio **only** into a container: with a
+/// `%03d` pattern it saves the frames and drops the sound without a word. So
+/// such a clip arrives as an MJPEG AVI, and [`VideoStore::unpack`] splits it
+/// into the frames everything else reads plus `audio.wav`. The cost is that
+/// its frames are sd-cli's JPEGs at quality 90 rather than lossless PNGs.
+const CONTAINER: &str = "clip.avi";
+
+/// A clip's soundtrack, beside its frames, when it has one.
+const AUDIO: &str = "audio.wav";
+
 /// Everything needed to put a clip back on screen with the controls that made
 /// it — the `WorkItem` of the video side.
 ///
@@ -71,6 +82,10 @@ pub struct Clip {
     /// generated from the prompt alone.
     #[serde(default)]
     pub source: Option<String>,
+    /// Whether the clip has a soundtrack (`audio.wav` beside its frames), so
+    /// the player knows to fetch one. Set by [`VideoStore::finish`].
+    #[serde(default)]
+    pub audio: bool,
     pub video: VideoModel,
 }
 
@@ -111,15 +126,72 @@ impl VideoStore {
         self.dir(id).join(format!("frame_{n:03}.png"))
     }
 
-    /// Make the directory and hand back the `-o` pattern to generate into, plus
-    /// the guard that removes it again if the pass doesn't finish.
-    pub fn prepare(&self, id: &str) -> Result<(PathBuf, ClipDir)> {
+    /// The soundtrack, for a clip that has one.
+    pub fn audio_path(&self, id: &str) -> Option<PathBuf> {
+        Some(self.dir(id).join(AUDIO)).filter(|p| p.is_file())
+    }
+
+    /// Make the directory and hand back the `-o` to generate into — the frame
+    /// pattern, or for a clip with sound ([`CONTAINER`]) one AVI — plus the
+    /// guard that removes it again if the pass doesn't finish.
+    pub fn prepare(&self, id: &str, sound: bool) -> Result<(PathBuf, ClipDir)> {
         if !valid_id(id) {
             bail!("'{id}' is not a clip id");
         }
         let dir = self.dir(id);
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        Ok((dir.join(FRAME_PATTERN), ClipDir { dir, keep: false }))
+        let out = dir.join(if sound { CONTAINER } else { FRAME_PATTERN });
+        Ok((out, ClipDir { dir, keep: false }))
+    }
+
+    /// Split the AVI sd-cli wrote for a clip with sound into numbered PNG
+    /// frames and `audio.wav`, so playback, *Enlarge* and [`VideoStore::finish`]
+    /// see what they see for every other clip. The AVI is kept: it is the
+    /// soundtrack's own container, and [`VideoStore::export`] hands it out as
+    /// it is rather than re-encoding its JPEGs a second time.
+    pub fn unpack(&self, id: &str) -> Result<()> {
+        let avi = crate::avi::read(&self.dir(id).join(CONTAINER))?;
+        for (n, jpeg) in avi.frames.iter().enumerate() {
+            let img = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)
+                .with_context(|| format!("decoding frame {n} of the clip sd-cli wrote"))?;
+            img.save(self.frame_path(id, n as u32))
+                .with_context(|| format!("writing frame {n}"))?;
+        }
+        if let Some(audio) = &avi.audio {
+            crate::avi::write_wav(&self.dir(id).join(AUDIO), audio)?;
+        }
+        Ok(())
+    }
+
+    /// A video file of the clip for the player's *Download*: sd-cli's own AVI
+    /// when it wrote one, or one encoded once into the clip's folder — which
+    /// [`VideoStore::delete`] and the sweep take with the rest of it.
+    pub fn download_file(&self, clip: &Clip) -> Result<PathBuf> {
+        let own = self.dir(&clip.id).join(CONTAINER);
+        if own.is_file() {
+            return Ok(own);
+        }
+        let path = self.dir(&clip.id).join("download.avi");
+        if !path.is_file() {
+            self.export(clip, &path)?;
+        }
+        Ok(path)
+    }
+
+    /// The clip as one video file at `dest`: sd-cli's own AVI for a clip that
+    /// came as one, otherwise its frames (and soundtrack) encoded by
+    /// [`crate::avi::write`].
+    pub fn export(&self, clip: &Clip, dest: &Path) -> Result<()> {
+        let own = self.dir(&clip.id).join(CONTAINER);
+        if own.is_file() {
+            std::fs::copy(&own, dest).with_context(|| format!("writing {}", dest.display()))?;
+            return Ok(());
+        }
+        let audio = match self.audio_path(&clip.id) {
+            Some(p) => Some(crate::avi::read_wav(&p)?),
+            None => None,
+        };
+        crate::avi::write(dest, &self.frames(&clip.id), clip.fps, audio.as_ref())
     }
 
     /// Every frame of a clip, in order.
@@ -165,6 +237,7 @@ impl VideoStore {
         clip.width = first.width();
         clip.height = first.height();
         clip.frames = frames.len() as u32;
+        clip.audio = self.audio_path(&clip.id).is_some();
 
         // Width from the height, as on the image side: the grid fixes height.
         let tw = ((first.width() as f32) * (THUMB_HEIGHT as f32) / (first.height().max(1) as f32))
@@ -297,8 +370,38 @@ t5xxl = "t.gguf"
             thumb_width: 0,
             thumb_height: 0,
             source: Some("100-7-s0".to_string()),
+            audio: false,
             video: model(),
         }
+    }
+
+    /// A clip with sound comes from sd-cli as one AVI and leaves as frames,
+    /// `audio.wav`, and the AVI itself for its download.
+    #[test]
+    fn a_clip_with_sound_is_unpacked_into_frames_and_a_soundtrack() {
+        let dir = std::env::temp_dir().join(format!("yasdig-vid-snd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = VideoStore::new(&dir);
+        let (out, mut guard) = store.prepare("100-7", true).unwrap();
+        assert!(out.ends_with(CONTAINER));
+        // What sd-cli would have written: frames and a soundtrack in one AVI.
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        write_frames(&src, 3, 64, 32);
+        let frames: Vec<PathBuf> = (0..3).map(|i| src.join(format!("frame_{i:03}.png"))).collect();
+        let audio = crate::avi::Audio { sample_rate: 32_000, channels: 2, pcm: vec![1, 2, 3, 4] };
+        crate::avi::write(&out, &frames, 24, Some(&audio)).unwrap();
+
+        store.unpack("100-7").unwrap();
+        let mut c = clip("100-7", 100);
+        store.finish(&mut c).unwrap();
+        guard.keep();
+        assert_eq!((c.width, c.height, c.frames), (64, 32, 3));
+        assert!(c.audio);
+        assert_eq!(crate::avi::read_wav(&store.audio_path("100-7").unwrap()).unwrap(), audio);
+        // The download is sd-cli's own file, not a second encode of its JPEGs.
+        assert_eq!(store.download_file(&c).unwrap(), out);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn write_frames(dir: &Path, n: u32, w: u32, h: u32) {
@@ -314,7 +417,7 @@ t5xxl = "t.gguf"
         let dir = std::env::temp_dir().join(format!("yasdig-vid-{}", std::process::id()));
         let store = VideoStore::new(&dir);
 
-        let (pattern, mut guard) = store.prepare("100-7").unwrap();
+        let (pattern, mut guard) = store.prepare("100-7", false).unwrap();
         assert!(pattern.ends_with("frame_%03d.png"), "{}", pattern.display());
         write_frames(&store.dir("100-7"), 5, 300, 100);
 
@@ -353,18 +456,18 @@ t5xxl = "t.gguf"
         let store = VideoStore::new(&dir);
 
         for (id, ms) in [("100-7", 100u128), ("200-7", 200)] {
-            let (_, mut guard) = store.prepare(id).unwrap();
+            let (_, mut guard) = store.prepare(id, false).unwrap();
             write_frames(&store.dir(id), 2, 8, 8);
             let mut c = clip(id, ms);
             store.finish(&mut c).unwrap();
             guard.keep();
         }
         // Frames but no sidecar: a pass that died at frame 1.
-        let (_, mut orphan) = store.prepare("300-7").unwrap();
+        let (_, mut orphan) = store.prepare("300-7", false).unwrap();
         write_frames(&store.dir("300-7"), 1, 8, 8);
         orphan.keep();
         // A sidecar but no frames: the other half of the same accident.
-        let (_, mut empty) = store.prepare("400-7").unwrap();
+        let (_, mut empty) = store.prepare("400-7", false).unwrap();
         let mut c = clip("400-7", 400);
         c.frames = 0;
         std::fs::write(
@@ -396,7 +499,7 @@ t5xxl = "t.gguf"
         let dir = std::env::temp_dir().join(format!("yasdig-vid3-{}", std::process::id()));
         let store = VideoStore::new(&dir);
         {
-            let (_, _guard) = store.prepare("100-7").unwrap();
+            let (_, _guard) = store.prepare("100-7", false).unwrap();
             write_frames(&store.dir("100-7"), 3, 8, 8);
             assert_eq!(store.frames("100-7").len(), 3);
         }
@@ -415,7 +518,7 @@ t5xxl = "t.gguf"
     fn finishing_an_empty_clip_is_an_error() {
         let dir = std::env::temp_dir().join(format!("yasdig-vid4-{}", std::process::id()));
         let store = VideoStore::new(&dir);
-        let (_, _guard) = store.prepare("100-7").unwrap();
+        let (_, _guard) = store.prepare("100-7", false).unwrap();
         let err = store
             .finish(&mut clip("100-7", 100))
             .unwrap_err()

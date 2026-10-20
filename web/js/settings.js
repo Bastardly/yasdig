@@ -143,6 +143,8 @@ export const FIELDS = [
   SECTION('Nightly features', { rail: 'Nightly' }),
   NOTE('Very much a work in progress: these can change or break between releases.'),
   { key: 'nightly_video', page: true, label: 'Video tab (work in progress)', help: 'setnightlyvideo', kind: 'check' },
+  { key: 'video_save', page: true, label: 'Save clips as', help: 'setvideosave', kind: 'choice',
+    options: [['file', 'A video file (.avi), and the frames'], ['frames', 'Frames only (PNG)']] },
 ];
 
 // The label of the control this is the default for, without the (i) `wireHints`
@@ -217,7 +219,8 @@ function control(f) {
     // here is only the option that needs no file.
     case 'upscaler':
       return `<select id="${id}"><option value="">FSR (EASU)</option></select>`;
-    // A fixed list that belongs to no other control, values numeric.
+    // A fixed list that belongs to no other control, its values numbers or
+    // words as its options' are (`read` follows the first).
     case 'choice':
       return `<select id="${id}">${f.options.map(([v, label]) =>
         `<option value="${v}">${esc(label)}</option>`).join('')}</select>`;
@@ -350,7 +353,7 @@ function take(f) {
   }
   // The empty option is FSR, which the file spells as no key at all.
   if (f.kind === 'upscaler') return $(fieldId(f)).value || null;
-  if (f.kind === 'choice') return Number(el.value);
+  if (f.kind === 'choice') return typeof f.options[0][0] === 'number' ? Number(el.value) : el.value;
   if (f.kind === 'textarea' || f.kind === 'text' || f.kind === 'mirror') {
     const s = el.value;
     return f.blank ? (s.trim() || null) : s;
@@ -421,6 +424,9 @@ function applyNightly(s) {
   }
   const clear = $(fieldId(FIELDS.find((f) => f.key === 'clear_videos_on_close')));
   if (clear) clear.closest('.checks').hidden = !on;
+  // A select row is its label and the select, siblings.
+  const save = $(fieldId(FIELDS.find((f) => f.key === 'video_save')));
+  if (save) save.hidden = save.previousElementSibling.hidden = !on;
 }
 
 // ---- Unsaved changes --------------------------------------------------------

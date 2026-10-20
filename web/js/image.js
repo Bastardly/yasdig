@@ -10,6 +10,7 @@ import { wireHints } from './hints.js';
 import { onRefsChange, references, refsActive, syncRefs } from './refs.js';
 import { openGetModels } from './getmodels.js';
 import { floatPanels } from './panels.js';
+import { partRows } from './parts.js';
 import { showError, MEMORY_LABELS } from './memory.js';
 
 // The checkpoint list the server published. Exported because the work-item
@@ -99,64 +100,28 @@ function smallerSize() {
 // `frame_grid` rule. A slot is `optional` on a bundled checkpoint, where the
 // empty choice is the one built into it; otherwise it must name a file.
 
-const partSelects = () => [...$('partrows').querySelectorAll('select')];
 const baseName = (name) => name.split('/').pop();
-
-function partOptions(part) {
-  const opts = part.optional
-    ? ['<option value="">Built into the checkpoint</option>'] : [];
-  for (const o of part.options) {
-    opts.push(`<option value="${esc(o.name)}" data-path="${esc(o.path)}">${esc(o.name)}</option>`);
-  }
-  // What the model holds and nothing on disk offers: a saved choice whose file
-  // was deleted, or a required part not downloaded yet. Listed so the select
-  // names it rather than silently showing another file.
-  if (part.current && !part.options.some((o) => o.name === part.current)) {
-    opts.push(`<option value="${esc(part.current)}" data-path="${esc(part.current_path ?? '')}">`
-      + `${esc(part.current)} (missing)</option>`);
-  }
-  return opts.join('');
-}
+const imageParts = partRows({
+  el: 'partrows', prefix: 'part', none: 'Built into the checkpoint', onChange: () => syncModelsSummary(),
+});
+const partSelects = imageParts.selects;
 
 // Redrawn from the selected model. Exported for `applyWorkItem`, which sets the
 // model without firing `change` and then puts back the parts the image ran with.
 export function syncParts() {
-  const parts = currentModel()?.parts ?? [];
-  $('partrows').innerHTML = parts.map((p) => `
-    <label for="part-${p.slot}">${esc(p.label)}</label>
-    <select id="part-${p.slot}" data-slot="${p.slot}">${partOptions(p)}</select>`).join('');
-  for (const p of parts) $(`part-${p.slot}`).value = p.current ?? '';
-  for (const sel of partSelects()) sel.addEventListener('change', syncModelsSummary);
+  imageParts.draw(currentModel()?.parts ?? []);
   wireHints($('partrows'));
   syncModelsSummary();
 }
 
 // Put back the files a work item ran with, from its profile's absolute paths —
-// what a sidecar records. A path no option carries anymore is added as missing
-// rather than dropped, the way `setUpscaler` treats a deleted upscaler.
+// what a sidecar records.
 export function setParts(components) {
-  for (const sel of partSelects()) {
-    const path = components?.[sel.dataset.slot] ?? null;
-    if (!path) {
-      if ([...sel.options].some((o) => o.value === '')) sel.value = '';
-      continue;
-    }
-    let opt = [...sel.options].find((o) => o.dataset.path === path);
-    if (!opt) {
-      opt = new Option(`${path} (missing)`, path);
-      opt.dataset.path = path;
-      sel.add(opt);
-    }
-    sel.value = opt.value;
-  }
+  imageParts.set(components);
   syncModelsSummary();
 }
 
-// Every slot, including an emptied one as `null`: the fold is the complete
-// answer to what the model runs with, the same argument `loras` makes.
-function partsPicked() {
-  return Object.fromEntries(partSelects().map((s) => [s.dataset.slot, s.value || null]));
-}
+const partsPicked = imageParts.picked;
 
 // The summary says what is in the fold, so folding it hides nothing.
 function syncModelsSummary() {

@@ -363,6 +363,12 @@ const HELP = [
     text: 'Shows the Video tab. Video generation works but is unfinished: models, '
         + 'settings and results may change or break between versions. Your clips stay '
         + 'on disk whether the tab is shown or not.' },
+  { ids: ['setvideosave'],
+    text: 'What each finished clip leaves in the output folder. A video file is an '
+        + '.avi that any video player opens (with sound, for a model that makes it), '
+        + 'saved beside the frames the Video tab plays. Frames only keeps the PNG '
+        + 'frames, one file each, which is what an editor wants. Enlarge follows the '
+        + 'same choice.' },
   { ids: ['setvaedirect'],
     text: 'Computes the VAE — the step that turns the result into pixels — without '
         + 'first unrolling the whole image into a huge temporary buffer. Same picture, '

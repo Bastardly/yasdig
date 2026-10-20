@@ -114,6 +114,19 @@ Forest Labs' own repos are gated, so these links are leejet's GGUFs:
 | the text encoder — Qwen2.5-VL-7B | [GGUF](https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/tree/main) (`Q4_K_M`, 4.7 GB) |
 | the VAE | [`qwen_image_vae.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/tree/main/split_files/vae) — the same file as Krea 2's |
 
+**MOSS-Image** (Base and SFT, which `doctor` can't tell apart: the same tensors) —
+about 16 GB at Q8. It runs 50 steps at CFG 3, its model card's settings, so a picture
+takes longer than the 5B size suggests. It is the one family with a fourth file: sd.cpp
+requires Qwen3.5's own `tokenizer.json`, which is recognised by its contents like the
+rest and can go anywhere under `models/`:
+
+| file | where to get it |
+|---|---|
+| the model | SFT [GGUF](https://huggingface.co/leejet/MOSS-Image-SFT-GGUF/tree/main) (`Q8_0`, 5.7 GB); Base [GGUF](https://huggingface.co/leejet/MOSS-Image-Base-GGUF/tree/main) |
+| the text encoder — Qwen3.5-9B | [GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/main) (`Q8_0`, 9.5 GB; not an `mmproj` file) |
+| the tokenizer | [`tokenizer.json`](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/tree/main/tokenizer) |
+| the VAE — Flux.2's | the same file as Flux.2 Klein's, above |
+
 If a model runs out of memory, the error says which memory and when, and offers the
 ways out as buttons — chiefly the **Memory** setting in the *Models* fold: *System RAM*
 keeps the weights in RAM and leaves the card for the work, *Stream from SSD* re-reads
@@ -246,6 +259,7 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `vae_conv_direct` | sd-cli's `--conv-direct auto,vae=on` (off: `vae=off`), default **on**: the VAE's convolutions computed directly instead of through an im2col buffer gigabytes long. Klein 9B's decode went from 9.3 s to 0.9 s and Krea 2's from 3.3 s to 1.2 s, the same picture. Page-level |
 | `embed_png_settings` | Write the settings that made a picture into the PNG when it is saved to output: A1111's `parameters` text, which Civitai, A1111 and Forge read, plus yasdig's own record of the Image tab's settings. Default **on**; no file paths are ever written. Page-level |
 | `nightly_video` | Show the Video tab, default **off** — the video workflow is unfinished. Hidden is not removed: clips on disk and every route stay. Page-level |
+| `video_save` | What a finished clip leaves in `work/output/`: `"file"` (default), an `{id}.avi` (MJPEG, with the soundtrack for MiniMax H3) beside the frames, or `"frames"`, the PNG frames in `work/videos/{id}/` only. *Enlarge* writes `{id}-x{N}.avi` or a frames folder to match. Page-level |
 | `cache_mode` | Step caching for the generate pass: `off` (default), `spectrum` or `adaptive` — UCache on SD 1.x, SD 2.x and SDXL, EasyCache on the DiT families, chosen by the server since each only works on its own kind. Refine and Hi-res always run uncached. The result says how many steps it skipped |
 | `upscale_factor` | the enlarge every base render goes through, default `1` (no enlarge: the picture comes out at the size it was drawn) — not a diffusion pass. `2` makes a 768 render 1536. Also a box at the foot of the Image tab's *Generation* panel |
 | `upscaler` *(opt)* | what does that enlarge: unset (the default) is FSR's EASU; a file name under the upscaler dir, extension included, is an ESRGAN model. See [Upscalers](guide.md#upscalers) |

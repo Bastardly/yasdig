@@ -448,6 +448,8 @@ Each is used under the licence named — where a choice is offered, any of them.
 | zerocopy | 0.8.57 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | zerocopy-derive | 0.8.57 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | zmij | 1.0.23 | MIT |
+| zune-core | 0.5.1 | MIT OR Apache-2.0 OR Zlib |
+| zune-jpeg | 0.5.13 | MIT OR Apache-2.0 OR Zlib |
 
 ## Not distributed with yasdig
 

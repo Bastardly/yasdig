@@ -463,7 +463,9 @@ needs a Vulkan device and nothing else.
   without a restart. Each entry is the config verbatim plus what the
   page would otherwise have to re-derive from `family`: `size_multiple`, `frame_grid`
   (`{multiple, offset, min, round_up}`), `forced_fps`, `is_moe`, `missing` (the component
-  files not on disk) and `duration`. Served rather than reimplemented in the page on
+  files not on disk), `duration`, and `parts`: one row per separate file its family runs
+  with (`VideoFamily::slots`), in `/models`' `parts` shape — `slot`, `label`, `optional`,
+  `current`, `auto` and `options`, every file under the models dir that fits. Served rather than reimplemented in the page on
   purpose — the page rounds the frame count to show a duration and the command builder
   rounds it to run the model, and two implementations of `4k+1` are how those start
   disagreeing.
@@ -484,7 +486,7 @@ needs a Vulkan device and nothing else.
   saturates the cores and the disk for minutes and must not do that underneath a render.
   Going through the worker is also what gives it `/progress` and `/cancel` for free.
 - `GET /catalog` — the Get models tab: `{curl, finished, models_dir, upscaler_dir,
-  entries, upscalers}`. Each
+  video_dir, entries, videos, upscalers}`. Each
   entry is a recommended set from `src/catalog.toml` (`id`, `family`, `family_label`,
   `label`, `note`, `bytes`) with its `files`, each carrying `slot`, `slot_label`, `dest`
   (under the models dir), `bytes`, `page` (its Hugging Face repository, where its
@@ -495,7 +497,11 @@ needs a Vulkan device and nothing else.
   `finished` counts files landed since start; the page reloads its models when it moves.
   `upscalers` has the same shape, one file each, with `family` `"upscaler"`, `slot_label`
   the architecture (`ESRGAN`, `Compact`, `SPAN`), `dest` under the upscaler dir, and
-  `have` only when that file is there and reads as that architecture.
+  `have` only when that file is there and reads as that architecture. `videos` (empty
+  unless `nightly_video` is on) is the video models' sets in the `entries` shape, `dest`
+  under the video dir, `slot` a `VideoFamily::slots` key, `"model"` or the A14B's
+  `"high_noise"`; a part counts as had only from the video dir, which is where discovery
+  assembles a video model from.
 - `POST /downloads/start`, `/downloads/cancel`, `/downloads/clear` — `{entry}`, a catalog
   id and nothing else: the page never names a URL or a path. Start queues the entry's
   files that nothing on disk fills yet; cancel drops queued ones and kills a running
@@ -508,17 +514,25 @@ needs a Vulkan device and nothing else.
     "source": "1758104523000-12345-s3",
     "width": 832, "height": 480, "frames": 33, "fps": 24,
     "steps": 20, "cfg_scale": 6.0, "high_noise_steps": 8, "high_noise_cfg_scale": 3.5,
-    "flow_shift": 3.0, "sampler": "euler", "vae_tiling": false }
+    "flow_shift": 3.0, "sampler": "euler", "vae_tiling": true,
+    "parts": { "vae": "video/vae/wan2.2_vae.safetensors", "audio_vae": null } }
   ```
+  `parts` picks the model's separate files, by name under the models dir as `/video-models`
+  lists them; `null` leaves out an optional one (H3's audio VAE, VACE's CLIP-Vision), and
+  an absent key keeps the model's own.
   `source` is a `work/output/` stem to use as the first frame; absent or empty runs plain
   text-to-video. `negative` absent inherits the model's (Wan's own published one);
   `negative: ""` means no negative at all. The overrides land on a *clone* of the config
   entry, which is then stored in the clip's sidecar, so a clip is reproducible from its
   own record. Takes **minutes** — poll `/progress`. Response:
   ```json
-  { "clip": { "id": "…", "frames": 33, "fps": 24, "width": 832, "height": 480, … },
-    "gen_ms": 214000 }
+  { "clip": { "id": "…", "frames": 33, "fps": 24, "width": 832, "height": 480, "audio": false, … },
+    "gen_ms": 214000, "saved": "…/work/output/1758104523000-12345.avi" }
   ```
+  `saved` is the video file `video_save = "file"` writes (MJPEG AVI, `null` for
+  `"frames"`). A model with a soundtrack (MiniMax H3 with its audio VAE) is generated
+  into an AVI by sd-cli — the only way it keeps the sound — and split into the frames
+  and `audio.wav`, so `clip.audio` is true.
   `clip.width`, `height` and `frames` are measured from the frames on disk rather than
   echoed from the request, because sd.cpp aligns a size up and a frame count down and
   only warns about it.
@@ -528,8 +542,13 @@ needs a Vulkan device and nothing else.
 - `GET /videos/{id}/frames/{n}.png` — one frame, numbered from 0. The page fetches all of
   them and plays the sequence on a canvas. A non-numeric `{n}` is `404`, not the
   thumbnail.
+- `GET /videos/{id}/audio.wav` — the clip's soundtrack, for one that has one.
+- `GET /videos/{id}/clip.avi` — the clip as one video file, as an attachment: sd-cli's
+  own AVI for a clip with sound, otherwise its frames encoded on first request and kept
+  in the clip's folder.
 - `POST /videos/enlarge` — `{ "id": "…", "upscale": 2.0, "sharpness": 0.0, "clarity": 0.0 }`.
-  FSR over every frame into `work/output/{id}-x{factor}/`. Returns
+  FSR over every frame into `work/output/{id}-x{factor}/` — or, with `video_save =
+  "file"`, encoded with the clip's sound into `work/output/{id}-x{factor}.avi`. Returns
   `{ "dir": "…", "frames": 33, "width": 1664, "height": 960, "ms": 1820 }`. Filters only
   — it never re-diffuses, for the reason under "Video" above.
 - `POST /videos/delete` — `{ "ids": ["…"] }`. Removes each clip's whole directory.

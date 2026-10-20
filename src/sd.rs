@@ -1684,8 +1684,8 @@ flow_shift = 3.0
         assert!(!a.contains(&"--offload-to-cpu".to_string()));
         assert_eq!(flag(&a, "--flash-attn"), Some("auto,diffusion=on"));
         assert!(!a.iter().any(|x| x == "--diffusion-fa"), "deprecated upstream");
-        // Off by default, and the OOM escalation that costs time.
-        assert!(!a.contains(&"--vae-tiling".to_string()));
+        // On by default: the decode is where a clip runs out of memory.
+        assert!(a.contains(&"--vae-tiling".to_string()));
         // Nothing this model doesn't have.
         assert!(flag(&a, "--llm").is_none());
         assert!(flag(&a, "--clip_vision").is_none());

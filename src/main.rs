@@ -105,6 +105,7 @@
 //! them arrive only once there was nothing left to report or to stop.
 
 mod area;
+mod avi;
 mod brush;
 mod colorrange;
 mod bundle;
@@ -986,6 +987,12 @@ fn route(
                 None => conn.respond(404, "text/plain", b"not found"),
             }
         }
+        ("GET", p) if p.starts_with("/videos/") && p.ends_with("/audio.wav") => {
+            handle_clip_media(conn, cfg, p.trim_start_matches("/videos/").trim_end_matches("/audio.wav"), false)
+        }
+        ("GET", p) if p.starts_with("/videos/") && p.ends_with("/clip.avi") => {
+            handle_clip_media(conn, cfg, p.trim_start_matches("/videos/").trim_end_matches("/clip.avi"), true)
+        }
         ("POST", "/videos/delete") => handle_delete_clips(conn, cfg, &req.body),
         ("GET", "/outputs") => handle_list_outputs(conn, cfg, Gallery::Output),
         ("POST", "/outputs/open") => handle_open_output(conn, lanes, &req.body),
@@ -1159,6 +1166,9 @@ struct VideoModelDto {
     /// Seconds, from the rounded frame count and the fps that will really be
     /// used — the number the page shows before anything has run.
     duration: f32,
+    /// The separate files, for the Video tab's *Models* rows — the image
+    /// side's `parts`, from [`config::VideoFamily::slots`].
+    parts: Vec<config::PartView>,
 }
 
 /// Everything in the LoRA dir, usable or not.
@@ -1354,10 +1364,12 @@ fn handle_download(
 }
 
 fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
+    let scan = cfg.video_scan();
     let models: Vec<VideoModelDto> = cfg
         .video_models()
         .into_iter()
         .map(|m| VideoModelDto {
+            parts: cfg.video_part_views(&m, &scan),
             family: m.family.as_str(),
             size_multiple: m.family.size_multiple(),
             frame_grid: m.family.frame_grid(),
@@ -1416,6 +1428,8 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         vae_tiling: Option<bool>,
         #[serde(default)]
         memory: Option<String>,
+        #[serde(default)]
+        parts: Option<std::collections::BTreeMap<String, Option<String>>>,
     }
 
     let dto: Dto = match parse_json::<Dto>(conn, body)? {
@@ -1441,6 +1455,7 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         sampler: dto.sampler,
         vae_tiling: dto.vae_tiling,
         memory: dto.memory,
+        parts: dto.parts,
     };
 
     let label = req.model.clone();
@@ -1575,6 +1590,38 @@ fn handle_clip_file(
     };
     match std::fs::read(path) {
         Ok(body) => conn.respond(200, "image/png", &body),
+        Err(_) => conn.respond(404, "text/plain", b"not found"),
+    }
+}
+
+/// A clip's soundtrack (for the player), or the clip as one video file (its
+/// *Download*). The file is the one [`videos::VideoStore::download_file`]
+/// names, encoded on first request — a second or so of JPEG encoding, on the
+/// connection thread like every other file route.
+fn handle_clip_media(conn: &mut http::Connection, cfg: &Config, id: &str, video: bool) -> Result<()> {
+    let store = video_store(cfg);
+    let Ok(clip) = store.load(id) else {
+        return conn.respond(404, "text/plain", b"not found");
+    };
+    let path = if video {
+        match store.download_file(&clip) {
+            Ok(p) => p,
+            Err(e) => return conn.respond(500, "application/json", error_json(&format!("{e:#}")).as_bytes()),
+        }
+    } else {
+        match store.audio_path(id) {
+            Some(p) => p,
+            None => return conn.respond(404, "text/plain", b"not found"),
+        }
+    };
+    match std::fs::read(&path) {
+        Ok(body) if video => conn.respond_with(
+            200,
+            "video/x-msvideo",
+            &format!("Content-Disposition: attachment; filename=\"{id}.avi\"\r\n"),
+            &body,
+        ),
+        Ok(body) => conn.respond(200, "audio/wav", &body),
         Err(_) => conn.respond(404, "text/plain", b"not found"),
     }
 }

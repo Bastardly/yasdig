@@ -1,5 +1,6 @@
 import { $, esc, getJSON, post } from './dom.js';
 import { loadModels } from './image.js';
+import { loadVideoModels } from './video.js';
 
 // The Get models tab: the server's catalog (`src/catalog.toml`), one card per
 // recommended set, and what each of its files is on this disk.
@@ -15,9 +16,12 @@ import { loadModels } from './image.js';
 // and with it the upscaler list — so a file that just landed is pickable
 // without a reload.
 //
-// Upscalers are a list of their own on the wire (`upscalers`), drawn after the
-// families under one nav button. Separate because Help's family table reads
-// `entries` and an upscaler is no family.
+// The cards come in categories — image models, video models, upscalers — each a
+// list of its own on the wire (`entries`, `videos`, `upscalers`) and a group of
+// its own in the nav, because one flat list stopped being readable. Separate
+// on the wire too, because Help's family table reads `entries` and neither a
+// video model nor an upscaler belongs in it. `videos` is empty unless the
+// nightly Video tab is on.
 
 let view = null;
 let timer = null;
@@ -72,10 +76,22 @@ function pages(e) {
     + `${esc(u.replace('https://huggingface.co/', ''))}</a>`).join(', ');
 }
 
-// Every card, families first — the one list the poll and the buttons care about.
-const allEntries = () => [...view.entries, ...(view.upscalers ?? [])];
+// Every card, in the order drawn — the one list the poll and the buttons care
+// about.
+const allEntries = () => [...view.entries, ...(view.videos ?? []), ...(view.upscalers ?? [])];
 
-function card(e, i) {
+// What the tab shows, by category: a nav heading and a run of cards each.
+// `where` is what a finished card says to do next.
+const categories = () => [
+  { id: 'image', title: 'Image models', entries: view.entries,
+    where: 'Everything is here. Pick it in the Image tab’s model list.' },
+  { id: 'video', title: 'Video models', entries: view.videos ?? [],
+    where: 'Everything is here. Pick it in the Video tab’s model list.' },
+  { id: 'upscaler', title: 'Upscalers', entries: view.upscalers ?? [],
+    where: 'Everything is here. Pick it under Output upscale, or in Refine & adjust’s Scale.' },
+].filter((c) => c.entries.length);
+
+function card(e, i, where) {
   const left = e.files.filter(needed).reduce((s, f) => s + f.bytes - f.got, 0);
   const busy = e.files.some(active);
   const partial = !busy && e.files.some((f) => f.got > 0 && (f.state === 'partial' || f.state === 'failed'));
@@ -90,9 +106,6 @@ function card(e, i) {
   const upscaler = e.family === 'upscaler';
   // The upscalers share one anchor, on the first of them.
   const anchor = upscaler ? (i === 0 ? 'id="gm-upscaler"' : '') : `id="gm-${e.family}"`;
-  const where = upscaler
-    ? 'Everything is here. Pick it under Output upscale, or in Refine & adjust’s Scale.'
-    : 'Everything is here. Pick it in the Image tab’s model list.';
   return `<div class="card gmcard" ${anchor} data-entry="${esc(e.id)}">
     <div class="gmhead"><b>${esc(e.label)}</b><span class="sub">${esc(e.family_label)} · ${gb(e.bytes)}</span></div>
     <p class="sub">${esc(e.note)}</p>
@@ -111,11 +124,16 @@ function draw() {
   $('gmerr').textContent = view.curl ? ''
     : 'curl was not found, so nothing can be downloaded from here. Install curl, or fetch the files '
       + 'by hand (docs/configuration.md, Get a model) into the folders each card names.';
-  const ups = view.upscalers ?? [];
-  $('gmnav').innerHTML = view.entries.map((e) =>
-    `<button type="button" class="btn btn-choice" data-family="${e.family}">${esc(e.family_label)}</button>`).join('')
-    + (ups.length ? '<button type="button" class="btn btn-choice" data-family="upscaler">Upscalers</button>' : '');
-  $('gmlist').innerHTML = view.entries.map((e) => card(e)).join('') + ups.map(card).join('');
+  if (view.videos?.length) $('gmdir').innerHTML += ` Video models go in <code>${esc(view.video_dir)}</code>.`;
+  // The upscalers are one button: they have no families to tell apart.
+  const navButton = (e) =>
+    `<button type="button" class="btn btn-choice" data-family="${e.family}">${esc(e.family_label)}</button>`;
+  $('gmnav').innerHTML = categories().map((c) => `<span class="grouphead">${c.title}</span>`
+    + (c.id === 'upscaler'
+      ? '<button type="button" class="btn btn-choice" data-family="upscaler">Upscalers</button>'
+      : c.entries.map(navButton).join(''))).join('');
+  $('gmlist').innerHTML = categories().map((c) => `<h2 class="gmgroup">${c.title}</h2>`
+    + c.entries.map((e, i) => card(e, i, c.where)).join('')).join('');
 }
 
 async function refresh() {
@@ -129,7 +147,10 @@ async function refresh() {
   }
   // The first answer only sets the baseline; a later one that moved means a
   // file landed, so the model list may have a new runnable entry.
-  if (finished !== null && view.finished !== finished) loadModels({ refill: false });
+  if (finished !== null && view.finished !== finished) {
+    loadModels({ refill: false });
+    if (view.videos?.length) loadVideoModels();
+  }
   finished = view.finished;
   draw();
   if (allEntries().some((e) => e.files.some(active))) timer = setTimeout(refresh, 1000);

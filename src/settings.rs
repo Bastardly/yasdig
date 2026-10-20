@@ -156,6 +156,11 @@ pub struct Settings {
     /// removed: the routes, the models and the clips on disk are all still
     /// there. Page-level.
     pub nightly_video: bool,
+    /// What a finished clip leaves in `work/output/`, one of [`VIDEO_SAVES`]:
+    /// `file`, an `{id}.avi` beside the frames (`crate::avi`), or `frames`,
+    /// nothing more than the PNG frames in `work/videos/{id}/` — what a clip
+    /// always was. *Enlarge* follows it too. Page-level.
+    pub video_save: String,
     /// Write the settings that made a picture into the PNG when it is saved to
     /// output: A1111's `parameters` text and yasdig's own record
     /// ([`crate::pngmeta`]). On by default, as in A1111; off for someone who
@@ -330,6 +335,7 @@ impl Default for Settings {
             // picture; direct convolution computes the same sums.
             vae_conv_direct: true,
             nightly_video: false,
+            video_save: VIDEO_FILE.into(),
             embed_png_settings: true,
             // What the default prompt names. A file with no `[variables]`
             // table gets these too, which is what keeps that prompt from being
@@ -396,6 +402,7 @@ impl Settings {
             reference_size: self.reference_size,
             vae_conv_direct: self.vae_conv_direct,
             nightly_video: self.nightly_video,
+            video_save: self.video_save.clone(),
             embed_png_settings: self.embed_png_settings,
             variables: self.variables.clone(),
         }
@@ -491,6 +498,9 @@ impl Settings {
                 "max_image_side is {}, must be between 1024 and {MAX_IMAGE_SIDE_CEILING}",
                 self.max_image_side
             );
+        }
+        if !VIDEO_SAVES.contains(&self.video_save.as_str()) {
+            bail!("video_save is '{}', must be one of {}", self.video_save, VIDEO_SAVES.join(", "));
         }
         if self.reference_size != 0 && !(256..=2048).contains(&self.reference_size) {
             bail!(
@@ -856,8 +866,14 @@ const PAGE_ONLY: &[&str] = &[
     "reference_size",
     "vae_conv_direct",
     "nightly_video",
+    "video_save",
     "embed_png_settings",
 ];
+
+/// [`Settings::video_save`]'s values: a video file beside the frames, or the
+/// frames alone.
+pub const VIDEO_FILE: &str = "file";
+pub const VIDEO_SAVES: &[&str] = &[VIDEO_FILE, "frames"];
 
 /// The most of the card [`Settings::gpu_reserve_gb`] may keep free. Past this
 /// a 24 GB card has too little left to draw with, and a smaller one none.

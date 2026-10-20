@@ -1,9 +1,9 @@
 # The Get models tab's catalog: one recommended set per family, the only URLs the
 # downloader will fetch (src/catalog.rs, src/downloads.rs).
 #
-# Every URL and `bytes` here was checked against Hugging Face on 2026-10-10 — the
-# repo's file listing for the exact name, and a HEAD request through the redirect
-# for a 200 and its Content-Length. Ungated repos only, so no account or token is
+# Every URL and `bytes` here was checked against Hugging Face on 2026-10-10
+# (MOSS-Image on 2026-10-20) — the repo's file listing for the exact name, and a
+# HEAD request through the redirect for a 200 and its Content-Length. Ungated repos only, so no account or token is
 # needed. A file several families share — Flux's `ae`, the Flux.2 VAE, the Wan
 # 2.1 VAE Krea 2 and Qwen-Image decode with — is fetched from a repo *of the
 # card's own model*, because the card links that repo as where the licence is,
@@ -14,8 +14,8 @@
 # `ae` comes from second-state's mirrors, the same bytes.
 #
 # `slot` is "model", or a key of that family's `ImageFamily::slots()` ("vae",
-# "llm", "clip_l", "t5xxl"). A part that some file on disk already fits counts as
-# had, whatever its name, so a shared encoder is downloaded once. The picks are
+# "llm", "clip_l", "t5xxl", "tokenizer" — the one `.json` dest allowed). A part
+# that some file on disk already fits counts as had, whatever its name, so a shared encoder is downloaded once. The picks are
 # docs/configuration.md's: what fits a 24 GB card with the model and its encoders resident.
 
 [[entry]]
@@ -277,6 +277,37 @@ bytes = 253806246
 sha256 = "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
 
 [[entry]]
+id = "moss-image-sft-q8"
+family = "moss_image"
+label = "MOSS-Image SFT (Q8_0 GGUF)"
+note = "About 16 GB on the card. A 5B model that runs 50 steps at real CFG, so slower per image than its size suggests; strong at layout and text. Its encoder is Qwen3.5-9B, and it needs Qwen3.5's tokenizer.json beside it."
+
+[[entry.file]]
+slot = "model"
+url = "https://huggingface.co/leejet/MOSS-Image-SFT-GGUF/resolve/main/MOSS-Image-SFT-Q8_0.gguf"
+dest = "diffusion_models/MOSS-Image-SFT-Q8_0.gguf"
+bytes = 5705571168
+
+[[entry.file]]
+slot = "llm"
+url = "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q8_0.gguf"
+dest = "text_encoders/Qwen3.5-9B-Q8_0.gguf"
+bytes = 9527502048
+
+[[entry.file]]
+slot = "tokenizer"
+url = "https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/resolve/main/tokenizer/tokenizer.json"
+dest = "tokenizers/tokenizer_qwen3.5.json"
+bytes = 19989325
+
+[[entry.file]]
+slot = "vae"
+url = "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/vae/flux2-vae.safetensors"
+dest = "vae/flux2-vae.safetensors"
+bytes = 336211292
+sha256 = "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
+
+[[entry]]
 id = "flux1-fill-q8"
 family = "flux_fill"
 label = "FLUX.1 Fill (Q8_0 GGUF)"
@@ -306,6 +337,99 @@ url = "https://huggingface.co/second-state/FLUX.1-dev-GGUF/resolve/main/ae.safet
 dest = "vae/ae.safetensors"
 bytes = 335304388
 sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+
+# ---------------------------------------------------------------------------
+# Video models (nightly): the Video tab's families, served only while that tab
+# is on. Same shape as `[[entry]]`, with three differences: `family` is a
+# `VideoFamily` name, `dest` is relative to the video dir (`[sd].video_dir`,
+# `models/video/` by default) — where discovery assembles a video model from —
+# and the A14B's second expert is `slot = "high_noise"`, its file name keeping
+# the `HighNoise`/`LowNoise` marker that pairs the two (`discover::noise_marker`).
+# Checked 2026-10-20 the same way as above.
+
+[[video]]
+id = "wan22-ti2v-5b-q8"
+family = "wan22_ti2v_5b"
+label = "Wan 2.2 TI2V-5B (Q8_0 GGUF)"
+note = "The small Wan: text to video, or animates a first frame. About 13 GB of files; the one to start with."
+
+[[video.file]]
+slot = "model"
+url = "https://huggingface.co/QuantStack/Wan2.2-TI2V-5B-GGUF/resolve/main/Wan2.2-TI2V-5B-Q8_0.gguf"
+dest = "diffusion_models/Wan2.2-TI2V-5B-Q8_0.gguf"
+bytes = 5400179040
+
+[[video.file]]
+slot = "t5xxl"
+url = "https://huggingface.co/city96/umt5-xxl-encoder-gguf/resolve/main/umt5-xxl-encoder-Q8_0.gguf"
+dest = "text_encoders/umt5-xxl-encoder-Q8_0.gguf"
+bytes = 6043068256
+
+[[video.file]]
+slot = "vae"
+url = "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan2.2_vae.safetensors"
+dest = "vae/wan2.2_vae.safetensors"
+bytes = 1409400960
+
+[[video]]
+id = "wan22-i2v-a14b-q4"
+family = "wan22_a14b"
+label = "Wan 2.2 I2V-A14B (Q4_K_M GGUF pair)"
+note = "The large Wan, two 9.7 GB experts that take turns; animates a first frame. About 26 GB of files. Not yet measured on a 24 GB card: if System RAM runs out, pick Stream from SSD under Advanced."
+
+[[video.file]]
+slot = "model"
+url = "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf"
+dest = "diffusion_models/Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf"
+bytes = 9651728896
+
+[[video.file]]
+slot = "high_noise"
+url = "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf"
+dest = "diffusion_models/Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf"
+bytes = 9651728896
+
+[[video.file]]
+slot = "t5xxl"
+url = "https://huggingface.co/city96/umt5-xxl-encoder-gguf/resolve/main/umt5-xxl-encoder-Q8_0.gguf"
+dest = "text_encoders/umt5-xxl-encoder-Q8_0.gguf"
+bytes = 6043068256
+
+[[video.file]]
+slot = "vae"
+url = "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+dest = "vae/wan_2.1_vae.safetensors"
+bytes = 253815318
+
+[[video]]
+id = "minimax-h3-pruned-q4"
+family = "minimax_h3"
+label = "MiniMax H3 (pruned, Q4_K_M GGUF)"
+note = "Video with sound, at 24 fps. About 35 GB of files, the largest here: its text encoder alone is an 18 GB Qwen3-VL-32B, so it streams from the SSD rather than sitting in RAM. Its licence restricts where it may be used; read it on the model's page before downloading."
+
+[[video.file]]
+slot = "model"
+url = "https://huggingface.co/leejet/MiniMax-H3-GGUF/resolve/main/minimax_h3_fl2va_pruned-Q4_K_M.gguf"
+dest = "diffusion_models/minimax_h3_fl2va_pruned-Q4_K_M.gguf"
+bytes = 11420663904
+
+[[video.file]]
+slot = "llm"
+url = "https://huggingface.co/leejet/MiniMax-H3-GGUF/resolve/main/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+dest = "text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+bytes = 18218065024
+
+[[video.file]]
+slot = "vae"
+url = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors"
+dest = "vae/minimax_h3_video_vae_fp16.safetensors"
+bytes = 5207808496
+
+[[video.file]]
+slot = "audio_vae"
+url = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors"
+dest = "vae/minimax_h3_audio_vae_fp32.safetensors"
+bytes = 605254808
 
 # ---------------------------------------------------------------------------
 # Upscalers: the models an Output upscale or the Refine dialog's Upscale can

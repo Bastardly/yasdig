@@ -6,6 +6,7 @@ import { setBusy, setIdle, cancelRun } from './busy.js';
 import { soonJobs } from './jobs.js';
 import { clip, renderClip } from './player.js';
 import { sourceSlot } from './source-slot.js';
+import { partRows } from './parts.js';
 
 // ---- Video ------------------------------------------------------------------
 //
@@ -33,6 +34,45 @@ function currentVideoModel() {
   return videoModels.find((m) => m.name === $('vmodel').value);
 }
 
+// The model's separate files, the Image tab's rows from the same factory. An
+// optional part (H3's audio VAE, VACE's CLIP-Vision) can be left out.
+const videoParts = partRows({
+  el: 'vpartrows', prefix: 'vpart', none: 'None', onChange: () => syncReady(),
+});
+
+// The model's missing files, less any a pick replaced: a Wan VAE that only
+// exists under models/vae/ is a missing part until it is picked in its row.
+function missingNow(m) {
+  const swapped = new Set();
+  for (const s of videoParts.selects()) {
+    const p = m.parts.find((x) => x.slot === s.dataset.slot);
+    if (p?.current_path && s.value !== (p.current ?? '')) swapped.add(p.current_path);
+  }
+  return m.missing.filter((f) => !swapped.has(f));
+}
+
+// A video model is several files and tens of gigabytes, so "not downloaded
+// yet" is a normal state to be in for an hour. Say which file is missing.
+function syncReady() {
+  const m = currentVideoModel();
+  if (!m) return;
+  const missing = missingNow(m);
+  $('vmodelnote').textContent = missing.length
+    ? `Not ready — missing ${missing.length} file(s): ${missing.join(', ')}`
+    : (m.description || '');
+  $('vgo').disabled = !!missing.length || vrunning;
+}
+
+// Which rows hold something other than what discovery picked — said in the
+// Generation line, since a clip made with another VAE looks different.
+function partsDeparted() {
+  const m = currentVideoModel();
+  return videoParts.selects().filter((s) => {
+    const p = m?.parts.find((x) => x.slot === s.dataset.slot);
+    return p && (s.value || null) !== (p.auto ?? null);
+  }).map((s) => m.parts.find((x) => x.slot === s.dataset.slot).label);
+}
+
 // Each fold's summary says what is inside, the Image tab's rule, so a folded
 // section still reads. Run from a delegated listener on the tab, and after
 // anything that sets the boxes without an event (`syncVideo`, `applyClip`).
@@ -40,10 +80,13 @@ function syncVideoSummaries() {
   const p = $('vprompt').value.trim();
   $('vsum-prompt').textContent = p ? `— ${p.length > 60 ? p.slice(0, 60) + '…' : p}` : '';
   const m = $('vmodel').value;
+  const picked = partsDeparted();
   $('vsum-gen').textContent = m
-    ? `— ${m} · ${$('vw').value}×${$('vh').value} · ${$('vframes').value} frames` : '';
+    ? `— ${m} · ${$('vw').value}×${$('vh').value} · ${$('vframes').value} frames`
+      + (picked.length ? ` · own ${picked.join(', ')}` : '') : '';
+  $('vsum-gen').classList.toggle('on', picked.length > 0);
   $('vsum-adv').textContent = `— Memory: ${MEMORY_LABELS[$('vmemory').value] ?? $('vmemory').value}`
-    + ($('vtiling').checked ? ' · VAE tiling' : '');
+    + ($('vtiling').checked ? '' : ' · VAE tiling off');
 }
 
 // Round the way the server will. Both rules come from /video-models rather than
@@ -83,6 +126,7 @@ function syncVideo() {
   const m = currentVideoModel();
   if (!m) return;
   $('vnegative').value = m.negative_prompt ?? '';
+  videoParts.draw(m.parts);
   $('vw').value = m.width;
   $('vh').value = m.height;
   $('vw').step = m.size_multiple;
@@ -104,17 +148,12 @@ function syncVideo() {
   // a number here pins it and quietly stops it following the CFG above.
   $('vhcfg').value = m.high_noise_cfg_scale ?? '';
   $('vhcfg').placeholder = m.cfg_scale;
-  // A video model is several files and tens of gigabytes, so "not downloaded
-  // yet" is a normal state to be in for an hour. Say which file is missing.
-  $('vmodelnote').textContent = m.missing.length
-    ? `Not ready — missing ${m.missing.length} file(s): ${m.missing.join(', ')}`
-    : (m.description || '');
-  $('vgo').disabled = !!m.missing.length || vrunning;
+  syncReady();
   syncVideoNote();
   syncVideoSummaries();
 }
 
-async function loadVideoModels() {
+export async function loadVideoModels() {
   try {
     const data = await getJSON('/video-models');
     if (!Array.isArray(data)) throw new Error('unexpected response');
@@ -165,6 +204,7 @@ function vidPayload() {
     sampler: $('vsampler').value || null,
     vae_tiling: $('vtiling').checked,
     memory: $('vmemory').value || null,
+    parts: videoParts.picked(),
   };
 }
 
@@ -180,7 +220,7 @@ async function startClip() {
     const pending = post('/video', vidPayload());
     soonJobs();
     const data = await pending;
-    renderClip(data.clip, data.gen_ms);
+    renderClip(data.clip, data.gen_ms, data.saved);
     loadClips();
   } catch (e) {
     const msg = String(e.message || e);
@@ -303,7 +343,12 @@ function applyClip(c) {
   $('vseed').value = c.seed;
   if (videoModels.some((m) => m.name === c.model)) $('vmodel').value = c.model;
   // Deliberately not firing `change`: that listener is syncVideo, which would
-  // overwrite everything below with the model's defaults.
+  // overwrite everything below with the model's defaults. The rows are redrawn
+  // for the model, then set to the files the clip ran with — `c.video` keys its
+  // paths by the slot names.
+  videoParts.draw(currentVideoModel()?.parts);
+  videoParts.set(c.video);
+  syncReady();
   $('vw').value = v.width;
   $('vh').value = v.height;
   $('vframes').value = v.frames;
@@ -356,6 +401,7 @@ const PANEL_DEFS = [
   { id: 'vid-prompt', el: 'vfold-prompt', open: true },
   { id: 'vid-gen', el: 'vfold-gen', open: true },
   { id: 'vid-adv', el: 'vfold-adv' },
+  { id: 'vid-info' },
   { id: 'vid-clip' },
   { id: 'vid-clips', open: true, corner: 'bottom-right' },
 ];

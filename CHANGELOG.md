@@ -3,6 +3,36 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### New
+
+- **MOSS-Image.** OpenMOSS's 5B model, Base and SFT, with a Get models card for the
+  SFT at Q8. It renders 50 steps at CFG 3, as its model card does. It needs a fourth
+  file beside the model, encoder and VAE: Qwen3.5's `tokenizer.json`, which the card
+  fetches and the Models panel lists as *Tokenizer*. Its Qwen3.5-9B encoder is never
+  offered to Flux.2 Klein 9B, or Klein's Qwen3-8B to it, although both are 4096 wide.
+- **Get models is grouped**: image models, video models and upscalers each under a
+  heading, in the list and in its menu.
+- **Video tab (nightly)**:
+  - **Video models in Get models**: Wan 2.2 TI2V-5B, the Wan 2.2 I2V-A14B pair, and
+    MiniMax H3.
+  - **MiniMax H3 runs**, with its own VAE (it was handed Wan's) and its sound. Its
+    recipe is sd.cpp's (CFG 1), and it streams from the SSD because its 18 GB text
+    encoder doesn't fit in System RAM's share. Check its licence before you use it.
+  - **Pick a model's parts** (VAE, text encoder, H3's audio VAE) like on the Image
+    tab. A reopened clip puts back the parts it was made with.
+  - **Clips are saved as a video file** (`.avi`, with sound when the model makes it)
+    in the output folder, beside the frames. *Settings → Save clips as* switches back
+    to frames only. The player has a *Download* button and plays H3's sound, and
+    *Enlarge* follows the same setting.
+  - **An Info panel**, like the Image tab's: the clip's size, frames, seed (click
+    to reuse it), how long it took, its settings, the files it ran with and where
+    it was saved.
+  - **VAE tiling is on by default**, since a clip is likelier to run out of memory in
+    the VAE decode than anywhere else. Turn it off under Advanced for a faster decode
+    when the card has room.
+
 ## 0.2.4 — 2026-10-18
 
 ### New

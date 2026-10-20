@@ -84,6 +84,8 @@ pub struct Downloads(Arc<Inner>);
 
 struct Inner {
     models: PathBuf,
+    /// Where a `[[video]]` entry's files go — `Config::video_dir`.
+    videos: PathBuf,
     upscalers: PathBuf,
     state: Mutex<State>,
     wake: Condvar,
@@ -93,6 +95,7 @@ impl Downloads {
     pub fn start(cfg: &Config) -> Result<Downloads> {
         let d = Downloads(Arc::new(Inner {
             models: cfg.models_dir(),
+            videos: cfg.video_dir(),
             upscalers: cfg.upscaler_dir(),
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
@@ -102,6 +105,11 @@ impl Downloads {
             .name("downloads".into())
             .spawn(move || worker.work())?;
         Ok(d)
+    }
+
+    /// The dir an entry's `dest`s are relative to.
+    fn root(&self, e: &Entry) -> &Path {
+        if e.family.is_video() { &self.0.videos } else { &self.0.models }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -119,7 +127,7 @@ impl Downloads {
                 .iter()
                 .enumerate()
                 .map(|(index, f)| {
-                    let dest = self.0.models.join(&f.dest);
+                    let dest = self.root(e).join(&f.dest);
                     Task {
                         key: key(&dest),
                         dest,
@@ -150,8 +158,11 @@ impl Downloads {
         if !curl_available() {
             bail!("curl was not found on the PATH; install it, or download the files by hand (docs/configuration.md, Get a model)");
         }
-        let found = cfg.scan_images();
         let c = Catalog::get();
+        let found = match c.entry(id) {
+            Some(e) => scan_for(cfg, e),
+            None => Vec::new(),
+        };
         let mut st = self.lock();
         let mut n = 0;
         for t in tasks {
@@ -159,7 +170,7 @@ impl Downloads {
             let had = match &t.want {
                 Want::Part { entry, index } => {
                     let e = c.entry(entry).expect("tasks come from the catalog");
-                    present(&self.0.models, e, &e.file[*index], &found).is_some()
+                    present(self.root(e), e, &e.file[*index], &found).is_some()
                 }
                 Want::Upscaler { id } => {
                     upscaler_is(&t.dest, c.upscaler(id).expect("tasks come from the catalog"))
@@ -316,7 +327,7 @@ impl Downloads {
                 let entry = Catalog::get().entry(entry).expect("tasks come from the catalog");
                 let f = &entry.file[*index];
                 let role = discover::identify(dest);
-                if !entry.fits(f, &role) {
+                if !entry.fits(f, dest, &role) {
                     bail!(
                         "downloaded, but it reads as {} — not the {} {} takes",
                         role.describe(),
@@ -338,25 +349,24 @@ impl Downloads {
 
     /// The catalog with every file's state, for `GET /catalog`.
     pub fn status(&self, cfg: &Config) -> CatalogView {
+        let c = Catalog::get();
+        // The video cards only while the Video tab shows: hidden, not removed,
+        // like the tab itself.
+        let nightly = crate::settings::Settings::load_or_default(&cfg.user_dir()).nightly_video;
         let found = cfg.scan_images();
+        let video_found = if nightly { crate::discover::scan(&cfg.video_dir()) } else { Vec::new() };
         let st = self.lock();
-        let entries = Catalog::get()
-            .entry
-            .iter()
-            .map(|e| EntryView {
-                id: &e.id,
-                family: e.family.as_str(),
-                family_label: e.family.label(),
-                label: &e.label,
-                note: &e.note,
-                bytes: e.bytes(),
-                files: e
-                    .file
-                    .iter()
-                    .map(|f| file_state(&self.0.models, e, f, &found, &st))
-                    .collect(),
-            })
-            .collect();
+        let view = |e: &'static Entry, found: &[Found]| EntryView {
+            id: &e.id,
+            family: e.family.as_str(),
+            family_label: e.family.label(),
+            label: &e.label,
+            note: &e.note,
+            bytes: e.bytes(),
+            files: e.file.iter().map(|f| file_state(self.root(e), e, f, found, &st)).collect(),
+        };
+        let entries = c.entry.iter().map(|e| view(e, &found)).collect();
+        let videos = if nightly { c.video.iter().map(|e| view(e, &video_found)).collect() } else { Vec::new() };
         let upscalers = Catalog::get()
             .upscaler
             .iter()
@@ -375,7 +385,9 @@ impl Downloads {
             finished: st.finished,
             models_dir: self.0.models.display().to_string(),
             upscaler_dir: self.0.upscalers.display().to_string(),
+            video_dir: self.0.videos.display().to_string(),
             entries,
+            videos,
             upscalers,
         }
     }
@@ -387,7 +399,11 @@ pub struct CatalogView {
     finished: u64,
     models_dir: String,
     upscaler_dir: String,
+    video_dir: String,
     entries: Vec<EntryView>,
+    /// Video models, empty unless the Video tab is on (nightly). Their own
+    /// list for the reason `upscalers` has one.
+    videos: Vec<EntryView>,
     /// A list of their own, so the Help tab's family table — which reads
     /// `entries` — never meets one.
     upscalers: Vec<EntryView>,
@@ -424,12 +440,20 @@ struct FileView {
 
 /// The file that already fills `f`, if any: its own `dest` first, then any
 /// scanned file the slot's test accepts.
-fn present(models: &Path, e: &Entry, f: &File, found: &[Found]) -> Option<PathBuf> {
-    let dest = models.join(&f.dest);
+fn present(root: &Path, e: &Entry, f: &File, found: &[Found]) -> Option<PathBuf> {
+    let dest = root.join(&f.dest);
     if dest.exists() {
-        return e.fits(f, &discover::identify(&dest)).then_some(dest);
+        return e.fits(f, &dest, &discover::identify(&dest)).then_some(dest);
     }
-    found.iter().find(|x| e.fits(f, &x.role)).map(|x| x.path.clone())
+    found.iter().find(|x| e.fits(f, &x.path, &x.role)).map(|x| x.path.clone())
+}
+
+/// The files that may already fill an entry's parts: the image scan for an
+/// image entry, and for a video one the video dir alone — what discovery
+/// assembles a video model from, so a part counted as had is one the model
+/// will actually use.
+fn scan_for(cfg: &Config, e: &Entry) -> Vec<Found> {
+    if e.family.is_video() { discover::scan(&cfg.video_dir()) } else { cfg.scan_images() }
 }
 
 fn file_state(models: &Path, e: &'static Entry, f: &'static File, found: &[Found], st: &State) -> FileView {
@@ -570,7 +594,7 @@ mod tests {
     }
 
     fn klein9() -> &'static Entry {
-        Catalog::get().entry.iter().find(|e| e.family == ImageFamily::Flux2Klein9b).unwrap()
+        Catalog::get().entry.iter().find(|e| e.family == crate::catalog::Family::Image(ImageFamily::Flux2Klein9b)).unwrap()
     }
 
     fn file(e: &'static Entry, slot: &str) -> &'static File {
@@ -693,6 +717,7 @@ mod tests {
     fn downloads(models: &Path, upscalers: &Path) -> Downloads {
         Downloads(Arc::new(Inner {
             models: models.to_path_buf(),
+            videos: models.join("video"),
             upscalers: upscalers.to_path_buf(),
             state: Mutex::new(State::default()),
             wake: Condvar::new(),

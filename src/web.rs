@@ -74,6 +74,7 @@ pub const WEB_FILES: &[WebFile] = &[
     row!("js/colorrange.js", "text/javascript; charset=utf-8"),
     row!("js/colorwheel.js", "text/javascript; charset=utf-8"),
     row!("js/panels.js", "text/javascript; charset=utf-8"),
+    row!("js/parts.js", "text/javascript; charset=utf-8"),
     row!("js/mirror.js", "text/javascript; charset=utf-8"),
     row!("js/texttool.js", "text/javascript; charset=utf-8"),
     row!("js/workitems.js", "text/javascript; charset=utf-8"),

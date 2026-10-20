@@ -186,6 +186,13 @@ pub enum Role {
     ClipL,
     /// A CLIP-Vision tower, wanted by Wan 2.1 I2V and FLF2V.
     ClipVision,
+    /// MiniMax H3's audio VAE (`--audio-vae`), a BigVGAN-style decoder. Without
+    /// it H3 still runs and its clip is silent.
+    AudioVae,
+    /// A Hugging Face `tokenizer.json` handed to sd-cli as `--tokenizer` — not a
+    /// model at all, and the one part read as JSON rather than tensors. See
+    /// [`read_tokenizer`].
+    Tokenizer(TokenizerKind),
     /// A LoRA, and the base it was trained against — read off the names of the
     /// weights it patches, the same way a checkpoint's family is. See
     /// [`lora_base`].
@@ -293,6 +300,20 @@ pub enum LlmKind {
     /// Qwen2.5-VL — Qwen-Image's encoder, the 7B (3584 wide). Told from Qwen3
     /// by having no `q_norm` on its attention.
     Qwen25Vl { dim: u64 },
+    /// Qwen3.5 — MOSS-Image's encoder, the 9B. Three in four of its layers are
+    /// linear attention (`linear_attn.` in Hugging Face's names, `ssm_*` in
+    /// llama.cpp's), which nothing else here has. Its 9B is 4096 wide, the
+    /// width of Klein 9B's Qwen3-8B, so the kind is what keeps each out of the
+    /// other's slot.
+    Qwen35 { dim: u64 },
+}
+
+/// Which tokenizer a `tokenizer.json` is, by its vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenizerKind {
+    /// Qwen3.5's BPE, a vocabulary of 248 044 — what MOSS-Image requires,
+    /// since sd.cpp's built-in Qwen tokenizer is Qwen3's 151 643.
+    Qwen35,
 }
 
 /// The transformer architectures worth telling apart.
@@ -321,6 +342,9 @@ pub enum VaeKind {
     Wan21,
     /// `wan2.2_vae`, 48 latent channels. TI2V-5B only.
     Wan22,
+    /// MiniMax H3's own video VAE: a convolutional encoder and a transformer
+    /// decoder (`decoder.register_tokens`, `decoder.x_embedder`).
+    MinimaxH3,
 }
 
 impl Role {
@@ -335,6 +359,9 @@ impl Role {
             Role::T5xxl => "T5-XXL text encoder — Flux.1".into(),
             Role::ClipL => "CLIP-L text encoder — Flux.1".into(),
             Role::ClipVision => "CLIP-Vision tower (Wan 2.1 I2V/FLF2V)".into(),
+            Role::AudioVae => "MiniMax H3 audio VAE (video)".into(),
+            Role::Tokenizer(TokenizerKind::Qwen35) => "Qwen3.5 tokenizer.json — MOSS-Image".into(),
+            Role::Vae(VaeKind::MinimaxH3) => "MiniMax H3 video VAE".into(),
             Role::Vae(VaeKind::Wan21) => "wan_2.1 VAE — Krea 2, Qwen-Image, and every Wan except the TI2V-5B".into(),
             Role::Vae(VaeKind::Wan22) => "wan2.2 VAE — TI2V-5B only".into(),
             Role::Lora(LoraBase::Unknown) => "LoRA".into(),
@@ -366,6 +393,8 @@ impl Role {
                 "Qwen2.5-VL-7B text encoder — Qwen-Image".into()
             }
             Role::Llm(LlmKind::Qwen25Vl { dim }) => format!("Qwen2.5-VL text encoder ({dim} wide)"),
+            Role::Llm(LlmKind::Qwen35 { dim: 4096 }) => "Qwen3.5-9B text encoder — MOSS-Image".into(),
+            Role::Llm(LlmKind::Qwen35 { dim }) => format!("Qwen3.5 text encoder ({dim} wide)"),
             Role::Unsupported(what) => format!("{what}, which this build doesn't run yet"),
             Role::Unknown(why) => why.clone(),
         }
@@ -638,8 +667,8 @@ pub(crate) fn skip_gguf_value(r: &mut impl Read, ty: u32) -> Result<()> {
 /// transformer, and a Wan VAE also has tensors under `encoder.` just as the umt5
 /// encoder does.
 pub fn classify(t: &Tensors) -> Role {
-    // H3 is the pair of patch projections, which nothing else has.
-    // `model_loader.cpp:520`.
+    // H3 is the pair of patch projections, which nothing else has
+    // (`get_sd_version` in `model_loader.cpp`).
     if t.has("video_patch_proj.weight") && t.has("audio_patch_proj.weight") {
         return Role::Dit(DitKind::MinimaxH3);
     }
@@ -713,6 +742,18 @@ pub fn classify(t: &Tensors) -> Role {
             None => Role::Unknown("an LDM-style VAE with no encoder to read its width from".into()),
         };
     }
+    // H3's video VAE, ahead of the Wan arm below: its encoder is
+    // convolutional (`encoder.down.N.block.N.conv2`), so it has the Wan shape
+    // and read as one with 128 latent channels. The decoder is a transformer,
+    // and its register tokens and patch embedder are the marker.
+    if t.has("decoder.register_tokens") && t.has("decoder.x_embedder.") {
+        return Role::Vae(VaeKind::MinimaxH3);
+    }
+    // H3's audio VAE: a BigVGAN decoder (`activation_post`, its anti-aliased
+    // activation) behind a latent projection. Read off Comfy-Org's release.
+    if t.has("dec_in_proj.weight") && t.has("decoder.activation_post.") {
+        return Role::AudioVae;
+    }
     // The Wan VAE. `decoder.` plus `conv2` is the shape of it, and the latent
     // width is what separates the two — 16 for 2.1, 48 for the TI2V-5B's — which
     // is the same `z_dim` sd.cpp switches the whole block on
@@ -767,20 +808,21 @@ pub fn classify(t: &Tensors) -> Role {
     // model, not from this file — and conditions on nonsense.
     if (t.has("embed_tokens.weight") && t.has("self_attn.q_")) || (t.has("token_embd.weight") && t.has(".attn_q")) {
         // The final norm is one-dimensional and as wide as the model. Qwen3-VL
-        // nests its language half under `language_model.`.
-        let dim = t
-            .tensors
-            .iter()
-            .find(|x| {
-                matches!(
-                    x.name.as_str(),
-                    "model.norm.weight" | "norm.weight" | "output_norm.weight" | "model.language_model.norm.weight"
-                )
-            })
-            .and_then(|x| match x.shape.as_slice() {
-                [n] => Some(*n),
-                _ => None,
-            });
+        // nests its language half under `language_model.`. MiniMax H3's encoder
+        // is exported *without* its final norm (sd.cpp's `docs/minimax_h3.md`),
+        // and leejet's GGUF of it carries no metadata either, so the first
+        // layer's input norm — the same width — is the fallback.
+        let norm = |names: &[&str]| {
+            t.tensors
+                .iter()
+                .find(|x| names.contains(&x.name.as_str()))
+                .and_then(|x| match x.shape.as_slice() {
+                    [n] => Some(*n),
+                    _ => None,
+                })
+        };
+        let dim = norm(&["model.norm.weight", "norm.weight", "output_norm.weight", "model.language_model.norm.weight"])
+            .or_else(|| norm(&["model.layers.0.input_layernorm.weight", "blk.0.attn_norm.weight"]));
         let Some(dim) = dim else {
             return Role::Unknown("a Qwen language model whose width could not be read".into());
         };
@@ -802,6 +844,13 @@ pub fn classify(t: &Tensors) -> Role {
                 "a Qwen-VL text encoder ({dim} wide) in the nested `model.language_model.` layout, \
                  which stable-diffusion.cpp can't load — use a GGUF of the same model instead"
             ));
+        }
+        // Qwen3.5's linear-attention layers, in either container's names.
+        // Before the match, which would otherwise read a safetensors Qwen3.5
+        // (no `arch`, `q_norm` on its full-attention layers) as a Qwen3 of the
+        // same width — Klein 9B's encoder.
+        if matches!(t.arch.as_deref(), Some("qwen35" | "qwen3.5")) || t.has("linear_attn.") || t.has(".ssm_a") {
+            return Role::Llm(LlmKind::Qwen35 { dim });
         }
         let vision = t.has("visual.");
         return match (t.arch.as_deref(), q_norm, vision) {
@@ -1080,6 +1129,11 @@ fn image_model(t: &Tensors) -> Option<Role> {
             ImageFamily::Flux3KleinBase
         });
     }
+    // MOSS-Image, sd.cpp's pair (checked right after FLUX.3 there too).
+    // Base and SFT share every tensor, so they are one family.
+    if t.has("video_embedder.weight") && t.has("shared_block_modulation.weight") {
+        return image(ImageFamily::MossImage);
+    }
     if t.has("cap_embedder.0.weight") {
         return image(ImageFamily::ZImage);
     }
@@ -1223,10 +1277,17 @@ fn walk(dir: &Path, depth: usize, skip: &[PathBuf], out: &mut Vec<Found>) {
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase())
             .unwrap_or_default();
-        if !matches!(ext.as_str(), "safetensors" | "gguf" | "ckpt" | "pt" | "pth") {
-            continue;
-        }
-        let role = identify(&path);
+        let role = match ext.as_str() {
+            "safetensors" | "gguf" | "ckpt" | "pt" | "pth" => identify(&path),
+            // Only a tokenizer is listed. A model folder is full of other JSON
+            // — configs, indexes, scheduler files — and every one of them as
+            // an `Unknown` row in `doctor` would bury what matters.
+            "json" => match identify(&path) {
+                role @ Role::Tokenizer(_) => role,
+                _ => continue,
+            },
+            _ => continue,
+        };
         out.push(Found { path, role });
     }
 }
@@ -1258,8 +1319,10 @@ pub fn identify(path: &Path) -> Role {
             }
         }
     }
-    let role = match read_tensors(path) {
-        Ok(t) => classify(&t),
+    let json = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"));
+    let read = if json { read_tokenizer(path) } else { read_tensors(path).map(|t| classify(&t)) };
+    let role = match read {
+        Ok(role) => role,
         // The message is kept: "is not JSON" and "too short" are what a
         // partial download looks like, and that is worth telling apart from
         // a file whose architecture we don't know.
@@ -1271,6 +1334,37 @@ pub fn identify(path: &Path) -> Role {
             .insert(path.to_path_buf(), (len, mtime, role.clone()));
     }
     role
+}
+
+/// A Hugging Face `tokenizer.json`'s kind, or [`Role::Unknown`] for any other
+/// JSON — which the walk then leaves out.
+///
+/// The vocabulary size is what tells tokenizers apart, and the one sd.cpp
+/// needs right: MOSS-Image loads any `--tokenizer` it is handed into Qwen3.5's
+/// 248 320-row embedding. A 20 MB parse, once per file thanks to the memo in
+/// [`identify`]; anything over 64 MB is not a tokenizer and isn't read.
+fn read_tokenizer(path: &Path) -> Result<Role> {
+    #[derive(serde::Deserialize)]
+    struct File {
+        model: Model,
+    }
+    #[derive(serde::Deserialize)]
+    struct Model {
+        #[serde(rename = "type")]
+        kind: String,
+        vocab: std::collections::HashMap<String, u32>,
+    }
+    const MAX: u64 = 64 << 20;
+    if std::fs::metadata(path)?.len() > MAX {
+        return Ok(Role::Unknown("a JSON file too large to be a tokenizer".into()));
+    }
+    let Ok(f) = serde_json::from_slice::<File>(&std::fs::read(path)?) else {
+        return Ok(Role::Unknown("a JSON file that is not a tokenizer".into()));
+    };
+    Ok(match (f.model.kind.as_str(), f.model.vocab.len()) {
+        ("BPE", 248_044) => Role::Tokenizer(TokenizerKind::Qwen35),
+        (kind, n) => Role::Unknown(format!("a {kind} tokenizer with a {n}-entry vocabulary, which no family here uses")),
+    })
 }
 
 /// Which half of a mixture-of-experts pair this file is, if the name says.
@@ -1390,39 +1484,10 @@ pub struct Discovery {
 /// so a half-downloaded model is a checklist rather than a silence.
 pub fn build(dir: &Path, found: &[Found]) -> Discovery {
     let mut d = Discovery::default();
-
-    let pick = |want: &dyn Fn(&Role) -> bool| -> Option<PathBuf> {
-        found
-            .iter()
-            .find(|f| want(&f.role))
-            .map(|f| f.path.clone())
-    };
-    let umt5 = pick(&|r: &Role| matches!(r, Role::Umt5));
-    let vae21 = pick(&|r: &Role| matches!(r, Role::Vae(VaeKind::Wan21)));
-    let vae22 = pick(&|r: &Role| matches!(r, Role::Vae(VaeKind::Wan22)));
-    // H3 conditions on Qwen3-VL-32B; the 4B is Krea 2's, and the width is
-    // what tells them apart.
-    let qwen = pick(&|r: &Role| matches!(r, Role::Llm(LlmKind::Qwen3Vl { dim: 5120 })));
-    let clip_vision = pick(&|r: &Role| matches!(r, Role::ClipVision));
-
-    // Where a component we don't have would go. The role subdirectories are the
-    // layout `docs/configuration.md` documents, so naming a missing file inside one is also
-    // telling the reader where to put it.
-    let expect = |sub: &str, file: &str| dir.join(sub).join(file);
-    let umt5_path = umt5
-        .clone()
-        .unwrap_or_else(|| expect("text_encoders", "umt5-xxl-encoder-Q8_0.gguf"));
-    let vae21_path = vae21
-        .clone()
-        .unwrap_or_else(|| expect("vae", "wan_2.1_vae.safetensors"));
-    let vae22_path = vae22
-        .clone()
-        .unwrap_or_else(|| expect("vae", "wan2.2_vae.safetensors"));
-
     for f in found {
         match &f.role {
             Role::Dit(kind) => {
-                if let Some(m) = model_for(f, kind, &umt5_path, &vae21_path, &vae22_path, &qwen, &clip_vision, found) {
+                if let Some(m) = model_for(f, kind, dir, found) {
                     d.models.push(m);
                 }
             }
@@ -1441,19 +1506,38 @@ pub fn build(dir: &Path, found: &[Found]) -> Discovery {
     d
 }
 
+/// The separate files a video family runs with, picked from a scan: one per
+/// [`VideoFamily::slots`] row, the first file that fits, or — for a part the
+/// model can't run without — the conventional path in its role folder, so the
+/// model lists greyed out and the missing path is also the instruction. An
+/// optional part nobody has stays empty. [`image_components`]'s rule.
+///
+/// The VAE is picked by kind, which is what used to go wrong silently: H3 was
+/// handed the Wan 2.2 VAE because there was no other.
+pub fn video_components(family: VideoFamily, found: &[Found], dir: &Path) -> Vec<(&'static str, Option<PathBuf>)> {
+    family
+        .slots()
+        .iter()
+        .map(|slot| {
+            let path = found.iter().find(|f| (slot.fits)(&f.role)).map(|f| f.path.clone());
+            let path = match path {
+                Some(p) => Some(p),
+                None if slot.optional => None,
+                None => Some(dir.join(slot.dir).join(slot.file)),
+            };
+            (slot.key, path)
+        })
+        .collect()
+}
+
 /// One transformer to one `VideoModel`, or `None` when the file is part of
 /// another model rather than a model itself.
-#[allow(clippy::too_many_arguments)]
-fn model_for(
-    f: &Found,
-    kind: &DitKind,
-    umt5: &Path,
-    vae21: &Path,
-    vae22: &Path,
-    qwen: &Option<PathBuf>,
-    clip_vision: &Option<PathBuf>,
-    found: &[Found],
-) -> Option<VideoModel> {
+fn model_for(f: &Found, kind: &DitKind, dir: &Path, found: &[Found]) -> Option<VideoModel> {
+    let fill = |m: &mut VideoModel| {
+        for (key, path) in video_components(m.family, found, dir) {
+            m.set_part(key, path);
+        }
+    };
     let stem = f
         .path
         .file_stem()
@@ -1499,8 +1583,7 @@ fn model_for(
                         moe_sibling(&f.path, false),
                     );
                     m.high_noise_diffusion_model = Some(f.path.clone());
-                    m.vae = vae21.to_path_buf();
-                    m.t5xxl = Some(umt5.to_path_buf());
+                    fill(&mut m);
                     m.description = Some(describe(kind, &f.path));
                     return Some(m);
                 }
@@ -1518,27 +1601,10 @@ fn model_for(
 
     let mut m = VideoModel::discovered(name, family, f.path.clone());
     m.high_noise_diffusion_model = high_noise;
-    match family {
-        VideoFamily::Wan22Ti2v5b => {
-            m.vae = vae22.to_path_buf();
-            m.t5xxl = Some(umt5.to_path_buf());
-        }
-        VideoFamily::MinimaxH3 => {
-            m.vae = vae22.to_path_buf();
-            m.llm = qwen.clone();
-        }
-        _ => {
-            m.vae = vae21.to_path_buf();
-            m.t5xxl = Some(umt5.to_path_buf());
-        }
-    }
-    // Wan 2.1 I2V wants a CLIP-Vision tower; 2.2 doesn't. Attaching it whenever
-    // one is present would add a component that then reads as "missing" for
-    // every 2.2 model in the folder, so it is only offered to the family that
-    // takes one.
-    if matches!(family, VideoFamily::Wan21Vace) && clip_vision.is_some() {
-        m.clip_vision = clip_vision.clone();
-    }
+    // Wan 2.1 I2V wants a CLIP-Vision tower and 2.2 doesn't, which is why only
+    // VACE's slots list one — and as optional, so a 2.2 model in the same
+    // folder never reads as missing it.
+    fill(&mut m);
     m.description = Some(describe(kind, &f.path));
     Some(m)
 }
@@ -2217,6 +2283,94 @@ mod tests {
         assert!(matches!(classify(&gguf("llama")), Role::Unknown(_)));
     }
 
+    /// MOSS-Image's parts, off the released files' headers: leejet's SFT GGUF
+    /// (no prefix) and unsloth's Qwen3.5-9B, whose first block is linear
+    /// attention, so `.attn_q` matches only as part of `attn_qkv`.
+    #[test]
+    fn moss_image_and_its_qwen35_are_read() {
+        let dit = t(&[
+            ("video_embedder.weight", &[128, 3072]),
+            ("shared_block_modulation.weight", &[3072, 18432]),
+            ("text_embedder.proj.weight", &[4096, 3072]),
+            ("layers.0.proj.qkv.weight", &[3072, 9216]),
+        ]);
+        assert_eq!(classify(&dit), Role::Image { family: ImageFamily::MossImage, bundled: false });
+        let gguf = Tensors {
+            arch: Some("qwen35".into()),
+            layout: Layout::Ggml,
+            ..t(&[
+                ("token_embd.weight", &[4096, 248320]),
+                ("blk.0.attn_qkv.weight", &[4096, 8192]),
+                ("blk.0.ssm_a", &[32]),
+                ("output_norm.weight", &[4096]),
+            ])
+        };
+        assert_eq!(classify(&gguf), Role::Llm(LlmKind::Qwen35 { dim: 4096 }));
+        // A safetensors has no architecture string and does have Qwen3's
+        // `q_norm` on its full-attention layers; the linear ones decide.
+        let hf = t(&[
+            ("model.embed_tokens.weight", &[248320, 4096]),
+            ("model.layers.0.linear_attn.in_proj_qkv.weight", &[8192, 4096]),
+            ("model.layers.3.self_attn.q_proj.weight", &[8192, 4096]),
+            ("model.layers.3.self_attn.q_norm.weight", &[256]),
+            ("model.norm.weight", &[4096]),
+        ]);
+        assert_eq!(classify(&hf), Role::Llm(LlmKind::Qwen35 { dim: 4096 }));
+    }
+
+    /// H3's two VAEs, off Comfy-Org's headers. The video one has a
+    /// convolutional encoder with `conv2`, which the Wan arm would claim.
+    #[test]
+    fn the_h3_vaes_are_their_own() {
+        let video = t(&[
+            ("decoder.register_tokens", &[1, 4, 2048]),
+            ("decoder.x_embedder.weight", &[2048, 24]),
+            ("encoder.down.0.block.0.conv2.bias", &[128]),
+            ("encoder.down.0.block.0.conv2.weight", &[128, 128, 3, 3, 3]),
+        ]);
+        assert_eq!(classify(&video), Role::Vae(VaeKind::MinimaxH3));
+        let audio = t(&[
+            ("dec_in_proj.weight", &[2048, 32, 1]),
+            ("decoder.activation_post.act.alpha", &[8]),
+            ("decoder.resblocks.0.convs2.0.weight", &[512, 512, 3]),
+            ("encoder.block.0.weight", &[64, 1, 7]),
+        ]);
+        assert_eq!(classify(&audio), Role::AudioVae);
+    }
+
+    /// A tokenizer is found by what it holds, and any other JSON in a model
+    /// folder is left out of the scan rather than listed as unknown.
+    #[test]
+    fn a_tokenizer_json_is_a_part_and_other_json_is_skipped() {
+        let dir = std::env::temp_dir().join(format!("yasdig-disc-tok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let vocab: Vec<String> = (0..248_044).map(|i| format!("\"t{i}\":{i}")).collect();
+        let tok = format!(r#"{{"version":"1.0","model":{{"type":"BPE","vocab":{{{}}},"merges":[]}}}}"#, vocab.join(","));
+        std::fs::write(dir.join("tokenizer.json"), tok).unwrap();
+        std::fs::write(dir.join("config.json"), r#"{"model_type":"qwen3"}"#).unwrap();
+        let small = r#"{"model":{"type":"BPE","vocab":{"a":0}}}"#;
+        std::fs::write(dir.join("other_tokenizer.json"), small).unwrap();
+        let found = scan(&dir);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].role, Role::Tokenizer(TokenizerKind::Qwen35));
+        assert!(matches!(identify(&dir.join("other_tokenizer.json")), Role::Unknown(_)));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// leejet's GGUF of H3's encoder, off its header: Hugging Face names, no
+    /// `general.architecture`, and no final norm — its width is the layers'.
+    #[test]
+    fn the_h3_encoder_without_a_final_norm_is_read() {
+        let te = t(&[
+            ("model.embed_tokens.weight", &[5120, 151936]),
+            ("model.layers.0.input_layernorm.weight", &[5120]),
+            ("model.layers.0.self_attn.q_norm.weight", &[128]),
+            ("model.layers.0.self_attn.q_proj.weight", &[5120, 8192]),
+            ("visual.blocks.0.attn.qkv.weight", &[1152, 3456]),
+        ]);
+        assert_eq!(classify(&te), Role::Llm(LlmKind::Qwen3Vl { dim: 5120 }));
+    }
+
     /// Flux.1's two encoders. T5-XXL is umt5's shape with a smaller
     /// vocabulary, which is the whole difference, in either container.
     #[test]
@@ -2259,6 +2413,8 @@ mod tests {
             Role::Llm(LlmKind::Qwen3 { dim: 4096 }),
             Role::Llm(LlmKind::Qwen3Vl { dim: 2560 }),
             Role::Llm(LlmKind::Qwen25Vl { dim: 3584 }),
+            Role::Llm(LlmKind::Qwen35 { dim: 4096 }),
+            Role::Tokenizer(TokenizerKind::Qwen35),
         ];
         for f in ImageFamily::ALL {
             for s in f.slots() {
@@ -2271,6 +2427,11 @@ mod tests {
         assert!(!fits(ImageFamily::ZImage, &Role::Llm(LlmKind::Qwen3 { dim: 4096 })));
         assert!(!fits(ImageFamily::Flux2Klein4b, &Role::Llm(LlmKind::Qwen3Vl { dim: 2560 })));
         assert!(fits(ImageFamily::Flux2Klein4b, &Role::Llm(LlmKind::Qwen3 { dim: 2560 })));
+        // Qwen3.5-9B and Qwen3-8B are both 4096 wide, and neither fits the
+        // other's family.
+        assert!(!fits(ImageFamily::Flux2Klein9b, &Role::Llm(LlmKind::Qwen35 { dim: 4096 })));
+        assert!(!fits(ImageFamily::MossImage, &Role::Llm(LlmKind::Qwen3 { dim: 4096 })));
+        assert!(fits(ImageFamily::MossImage, &Role::Llm(LlmKind::Qwen35 { dim: 4096 })));
     }
 
     #[test]
@@ -2361,6 +2522,28 @@ mod tests {
             m.t5xxl,
             Some(PathBuf::from("/m/text_encoders/umt5-xxl-encoder-Q8_0.gguf"))
         );
+    }
+
+    /// H3 takes its own VAE, never the Wan 2.2 one it was once handed, and
+    /// its audio VAE is optional: absent, it is left empty rather than named
+    /// as missing.
+    #[test]
+    fn h3_is_assembled_from_its_own_parts() {
+        let f = |p: &str, role: Role| Found { path: PathBuf::from(p), role };
+        let found = [
+            f("/m/diffusion_models/h3.gguf", Role::Dit(DitKind::MinimaxH3)),
+            f("/m/vae/wan2.2_vae.safetensors", Role::Vae(VaeKind::Wan22)),
+            f("/m/vae/h3_vae.safetensors", Role::Vae(VaeKind::MinimaxH3)),
+            f("/m/te/qwen32.gguf", Role::Llm(LlmKind::Qwen3Vl { dim: 5120 })),
+        ];
+        let d = build(Path::new("/m"), &found);
+        let m = &d.models[0];
+        assert_eq!(m.vae, PathBuf::from("/m/vae/h3_vae.safetensors"));
+        assert_eq!(m.llm, Some(PathBuf::from("/m/te/qwen32.gguf")));
+        assert_eq!(m.audio_vae, None);
+        assert_eq!(m.t5xxl, None);
+        assert!(m.validate().is_ok());
+        assert!(m.missing().iter().all(|p| !p.ends_with("minimax_h3_audio_vae_fp32.safetensors")));
     }
 
     #[test]

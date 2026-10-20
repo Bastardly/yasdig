@@ -198,6 +198,8 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   background: var(--ink-600); color: var(--text); border: var(--line);
 }
 .btn:hover { background: var(--ink-500); }
+/* A link dressed as a button: the player's Download, a plain `<a download>`. */
+a.btn, a.btn:hover { text-decoration: none; color: var(--text); }
 .btn-run { background: var(--accent); color: var(--on-accent); border-color: transparent; }
 .btn-run:hover { background: var(--accent-hi); }
 .btn-danger { background: var(--danger); color: #fff; border-color: transparent; }
@@ -982,6 +984,8 @@ a:hover { color: var(--accent-hi); }
 /* The Get models tab: a card per catalog entry. The file table borrows
    `.helptable`; its first column is a slot name, not a third of the width. */
 .gmcard { margin-bottom: var(--sp-4); }
+.gmgroup { font-size: var(--fs-title); color: var(--text); margin: var(--sp-4) 0 var(--sp-2); }
+.gmgroup:first-child { margin-top: 0; }
 .gmhead { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-3); }
 .gmhead .sub { margin: 0; }
 .gmfiles td:first-child { width: 22%; }

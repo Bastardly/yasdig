@@ -78,6 +78,16 @@ fn clear_in(store: &Store, videos: &VideoStore, s: &Settings) -> Cleared {
                         log(anyhow::Error::new(err).context(format!("deleting {}", path.display())));
                     }
                 }
+                // A clip's video file, `{id}.avi`, and an enlargement's,
+                // `{id}-x{factor}.avi` (`Settings::video_save`).
+                let clip_file = name
+                    .strip_suffix(".avi")
+                    .is_some_and(|stem| is_clip_id(stem) || is_enlarged_clip(stem));
+                if path.is_file() && clip_file {
+                    if let Err(err) = std::fs::remove_file(&path) {
+                        log(anyhow::Error::new(err).context(format!("deleting {}", path.display())));
+                    }
+                }
             }
         }
     }
@@ -89,9 +99,13 @@ fn clear_in(store: &Store, videos: &VideoStore, s: &Settings) -> Cleared {
 /// `valid_id` alone also takes `holiday-x2`, a folder somebody made.
 fn is_enlarged_clip(name: &str) -> bool {
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    name.rsplit_once("-x").is_some_and(|(id, pct)| {
-        digits(pct) && id.split_once('-').is_some_and(|(ms, seed)| digits(ms) && digits(seed))
-    })
+    name.rsplit_once("-x").is_some_and(|(id, pct)| digits(pct) && is_clip_id(id))
+}
+
+/// A clip id as `workitems::new_id` makes one: `{ms}-{seed}`.
+fn is_clip_id(name: &str) -> bool {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    name.split_once('-').is_some_and(|(ms, seed)| digits(ms) && digits(seed))
 }
 
 #[cfg(test)]
@@ -148,5 +162,7 @@ mod tests {
         assert!(!is_enlarged_clip("123-xabc"));
         assert!(!is_enlarged_clip("holiday-x2"), "a folder the user made");
         assert!(!is_enlarged_clip("my-holiday-x2"));
+        assert!(is_clip_id("1758104523000-12345"));
+        assert!(!is_clip_id("holiday-2"));
     }
 }

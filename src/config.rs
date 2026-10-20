@@ -570,7 +570,8 @@ impl Default for Profile {
 
 /// The files a bare diffusion model is handed beside itself, one per sd.cpp
 /// flag. Only what the runnable families use: Z-Image takes `vae` and `llm`,
-/// and Flux will take `clip_l` and `t5xxl`.
+/// Flux `clip_l` and `t5xxl`, and MOSS-Image a `tokenizer` — a JSON file, the
+/// one part that isn't weights.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Components {
@@ -578,6 +579,7 @@ pub struct Components {
     pub llm: Option<PathBuf>,
     pub clip_l: Option<PathBuf>,
     pub t5xxl: Option<PathBuf>,
+    pub tokenizer: Option<PathBuf>,
 }
 
 impl Components {
@@ -588,6 +590,7 @@ impl Components {
             "llm" => self.llm.as_ref(),
             "clip_l" => self.clip_l.as_ref(),
             "t5xxl" => self.t5xxl.as_ref(),
+            "tokenizer" => self.tokenizer.as_ref(),
             _ => None,
         }
     }
@@ -600,6 +603,7 @@ impl Components {
             "llm" => &mut self.llm,
             "clip_l" => &mut self.clip_l,
             "t5xxl" => &mut self.t5xxl,
+            "tokenizer" => &mut self.tokenizer,
             _ => return,
         };
         *slot = path;
@@ -612,6 +616,7 @@ impl Components {
             ("--llm", &self.llm),
             ("--clip_l", &self.clip_l),
             ("--t5xxl", &self.t5xxl),
+            ("--tokenizer", &self.tokenizer),
         ]
         .into_iter()
         .filter_map(|(flag, p)| p.as_deref().map(|p| (flag, p)))
@@ -636,10 +641,16 @@ pub struct PartSlot {
     /// Whether a discovered file can fill it — the check that keeps a Flux VAE
     /// off an SDXL, which would decode to noise rather than fail.
     pub fits: fn(&crate::discover::Role) -> bool,
-    /// Where it conventionally lives under the models dir, named when nothing
-    /// is on disk so the missing path is also the instruction.
+    /// Where it conventionally lives under the models dir (the video dir, for
+    /// a [`VideoFamily::slots`] row), named when nothing is on disk so the
+    /// missing path is also the instruction.
     pub dir: &'static str,
     pub file: &'static str,
+    /// A part the model runs without — H3's audio VAE (a silent clip), VACE's
+    /// CLIP-Vision tower. Left empty rather than named as missing when the
+    /// scan has none. Every image slot is `false`: there it is
+    /// [`Profile::parts_optional`] that decides.
+    pub optional: bool,
 }
 
 impl Profile {
@@ -1134,6 +1145,12 @@ pub enum ImageFamily {
     /// one lists here and runs as a text-to-image Qwen-Image.
     #[serde(rename = "qwen_image")]
     QwenImage,
+    /// MOSS-Image (OpenMOSS), 5B. Qwen3.5-9B as the text encoder, the Flux.2
+    /// VAE, and Qwen3.5's own `tokenizer.json`, which sd.cpp requires because
+    /// its built-in Qwen vocabulary is Qwen3's. Base and SFT share every
+    /// tensor, so one family.
+    #[serde(rename = "moss_image")]
+    MossImage,
     /// FLUX.1 Fill: Flux.1 dev's layout with `img_in` 384 wide, trained to fill
     /// a masked region from the rest of the picture. sd.cpp feeds it the masked
     /// image and the mask beside the noise (`VERSION_FLUX_FILL`,
@@ -1147,7 +1164,7 @@ pub enum ImageFamily {
 impl ImageFamily {
     /// Every variant. Tests hold across it, and [`Config::scan_images`] asks it
     /// which roles some family has a slot for.
-    pub const ALL: [ImageFamily; 13] = [
+    pub const ALL: [ImageFamily; 14] = [
         ImageFamily::Sd1,
         ImageFamily::Sd2,
         ImageFamily::Sdxl,
@@ -1160,6 +1177,7 @@ impl ImageFamily {
         ImageFamily::ZImage,
         ImageFamily::Krea2,
         ImageFamily::QwenImage,
+        ImageFamily::MossImage,
         ImageFamily::FluxFill,
     ];
 
@@ -1202,6 +1220,7 @@ impl ImageFamily {
             | ImageFamily::ZImage
             | ImageFamily::Krea2
             | ImageFamily::QwenImage
+            | ImageFamily::MossImage
             | ImageFamily::FluxFill => true,
         }
     }
@@ -1252,6 +1271,9 @@ impl ImageFamily {
     /// for the family already. FLUX.3's are `docs/flux3.md`'s: Klein 16 steps
     /// at CFG 1, the base 20 at CFG 3.5; its flow shift of 6.93 is sd.cpp's
     /// own, applied by the default (discrete) schedule that Auto leaves it.
+    /// MOSS-Image's is its model card's, the same for Base and SFT: 50 steps
+    /// at CFG 3. Its shift of 5 and the negative branch's skipped layer 22 are
+    /// sd.cpp's own for the family.
     ///
     /// Every size is 1024², the size each was trained around. Krea 2's card
     /// shows 2048², which here is what the hi-res pass is for.
@@ -1279,6 +1301,7 @@ impl ImageFamily {
             ImageFamily::Flux3KleinBase => dit(20, 3.5),
             ImageFamily::Krea2 => dit(8, 1.0),
             ImageFamily::QwenImage => dit(20, 2.5),
+            ImageFamily::MossImage => dit(50, 3.0),
             // Black Forest Labs' reference for Fill: 28–50 steps at a distilled
             // guidance of 30 (`flags`), CFG 1.
             ImageFamily::FluxFill => dit(28, 1.0),
@@ -1323,13 +1346,14 @@ impl ImageFamily {
     /// whatever file it is handed into it. A Qwen3-VL in a Z-Image's slot
     /// would load, condition on the wrong embedding space, and render.
     pub fn slots(self) -> &'static [PartSlot] {
-        use crate::discover::{ImageVaeKind, LlmKind, Role, VaeKind};
+        use crate::discover::{ImageVaeKind, LlmKind, Role, TokenizerKind, VaeKind};
         const SD_VAE: PartSlot = PartSlot {
             key: "vae",
             label: "VAE",
             fits: |r| matches!(r, Role::ImageVae(ImageVaeKind::Sd)),
             dir: "vae",
             file: "sdxl_vae.safetensors",
+            optional: false,
         };
         const FLUX_VAE: PartSlot = PartSlot {
             key: "vae",
@@ -1337,6 +1361,7 @@ impl ImageFamily {
             fits: |r| matches!(r, Role::ImageVae(ImageVaeKind::Flux)),
             dir: "vae",
             file: "ae.safetensors",
+            optional: false,
         };
         const FLUX2_VAE: PartSlot = PartSlot {
             key: "vae",
@@ -1344,6 +1369,7 @@ impl ImageFamily {
             fits: |r| matches!(r, Role::ImageVae(ImageVaeKind::Flux2)),
             dir: "vae",
             file: "flux2-vae.safetensors",
+            optional: false,
         };
         // Krea 2 and Qwen-Image both decode with the Wan 2.1 VAE — the one the
         // Video tab uses, which `scan_images` shares from the video dir.
@@ -1355,6 +1381,7 @@ impl ImageFamily {
             fits: |r| matches!(r, Role::Vae(VaeKind::Wan21)),
             dir: "vae",
             file: "qwen_image_vae.safetensors",
+            optional: false,
         };
         const CLIP_L: PartSlot = PartSlot {
             key: "clip_l",
@@ -1362,6 +1389,7 @@ impl ImageFamily {
             fits: |r| matches!(r, Role::ClipL),
             dir: "text_encoders",
             file: "clip_l.safetensors",
+            optional: false,
         };
         const T5XXL: PartSlot = PartSlot {
             key: "t5xxl",
@@ -1369,6 +1397,7 @@ impl ImageFamily {
             fits: |r| matches!(r, Role::T5xxl),
             dir: "text_encoders",
             file: "t5xxl_fp16.safetensors",
+            optional: false,
         };
         const QWEN3_4B: PartSlot = PartSlot {
             key: "llm",
@@ -1376,6 +1405,7 @@ impl ImageFamily {
             fits: |r| matches!(r, Role::Llm(LlmKind::Qwen3 { dim: 2560 })),
             dir: "text_encoders",
             file: "qwen_3_4b.safetensors",
+            optional: false,
         };
         const QWEN3_8B: PartSlot = PartSlot {
             key: "llm",
@@ -1383,6 +1413,7 @@ impl ImageFamily {
             fits: |r| matches!(r, Role::Llm(LlmKind::Qwen3 { dim: 4096 })),
             dir: "text_encoders",
             file: "qwen_3_8b.safetensors",
+            optional: false,
         };
         const QWEN3_VL_4B: PartSlot = PartSlot {
             key: "llm",
@@ -1390,6 +1421,24 @@ impl ImageFamily {
             fits: |r| matches!(r, Role::Llm(LlmKind::Qwen3Vl { dim: 2560 })),
             dir: "text_encoders",
             file: "Qwen3VL-4B-Instruct-Q8_0.gguf",
+            optional: false,
+        };
+        const QWEN35_9B: PartSlot = PartSlot {
+            key: "llm",
+            label: "Text encoder",
+            fits: |r| matches!(r, Role::Llm(LlmKind::Qwen35 { dim: 4096 })),
+            dir: "text_encoders",
+            file: "Qwen3.5-9B-Q8_0.gguf",
+            optional: false,
+        };
+        // Not weights: sd-cli's `--tokenizer`, found by the scan's JSON branch.
+        const QWEN35_TOKENIZER: PartSlot = PartSlot {
+            key: "tokenizer",
+            label: "Tokenizer",
+            fits: |r| matches!(r, Role::Tokenizer(TokenizerKind::Qwen35)),
+            dir: "tokenizers",
+            file: "tokenizer_qwen3.5.json",
+            optional: false,
         };
         const QWEN25_VL_7B: PartSlot = PartSlot {
             key: "llm",
@@ -1397,6 +1446,7 @@ impl ImageFamily {
             fits: |r| matches!(r, Role::Llm(LlmKind::Qwen25Vl { dim: 3584 })),
             dir: "text_encoders",
             file: "qwen_2.5_vl_7b.safetensors",
+            optional: false,
         };
         match self {
             ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl => &[SD_VAE],
@@ -1410,6 +1460,7 @@ impl ImageFamily {
             ImageFamily::ZImage => &[FLUX_VAE, QWEN3_4B],
             ImageFamily::Krea2 => &[WAN21_VAE, QWEN3_VL_4B],
             ImageFamily::QwenImage => &[WAN21_VAE, QWEN25_VL_7B],
+            ImageFamily::MossImage => &[FLUX2_VAE, QWEN35_9B, QWEN35_TOKENIZER],
         }
     }
 
@@ -1428,6 +1479,7 @@ impl ImageFamily {
             ImageFamily::ZImage => "Z-Image",
             ImageFamily::Krea2 => "Krea 2",
             ImageFamily::QwenImage => "Qwen-Image",
+            ImageFamily::MossImage => "MOSS-Image",
             ImageFamily::FluxFill => "FLUX.1 Fill",
         }
     }
@@ -1447,6 +1499,7 @@ impl ImageFamily {
             ImageFamily::ZImage => "z_image",
             ImageFamily::Krea2 => "krea2",
             ImageFamily::QwenImage => "qwen_image",
+            ImageFamily::MossImage => "moss_image",
             ImageFamily::FluxFill => "flux_fill",
         }
     }
@@ -1503,10 +1556,11 @@ pub enum VideoFamily {
     /// emit them.
     #[serde(rename = "wan_dense")]
     WanDense,
-    /// MiniMax H3. Listed, not runnable here — a 19.9 GB DiT plus a 14.6 GB
-    /// Qwen3-VL-32B text encoder at Q4_K_M doesn't fit 24 GB of VRAM or 30 GB
-    /// of RAM. It exists as a variant so the day the quantization or the
-    /// hardware changes is a `models.toml` edit and nothing more.
+    /// MiniMax H3: video with a stereo soundtrack, from one transformer. Its
+    /// own video VAE, a separate audio VAE (optional — without it the clip is
+    /// silent) and a Qwen3-VL-32B text encoder. The pruned Q4_K_M DiT is
+    /// 11.4 GB and the encoder 18.2 GB: each fits a 24 GB card, not both, so
+    /// they load one after the other and stream from the SSD.
     #[serde(rename = "minimax_h3")]
     MinimaxH3,
 }
@@ -1629,6 +1683,7 @@ impl VideoFamily {
                 cfg_scale: 6.0,
                 high_noise_steps: None,
                 flow_shift: Some(3.0),
+                memory: "ram",
             },
             // The pair splits its schedule: 8 steps of high-noise then 10 of
             // low, at the lower CFG the MoE recipe wants.
@@ -1638,6 +1693,7 @@ impl VideoFamily {
                 cfg_scale: 3.5,
                 high_noise_steps: Some(8),
                 flow_shift: Some(3.0),
+                memory: "ram",
             },
             // A lone Wan transformer wants the full 20-step schedule, since
             // there is no second expert to hand the rest of it to.
@@ -1647,14 +1703,107 @@ impl VideoFamily {
                 cfg_scale: 6.0,
                 high_noise_steps: None,
                 flow_shift: Some(3.0),
+                memory: "ram",
             },
+            // sd.cpp's `docs/minimax_h3.md`: every example runs at CFG 1 and
+            // leaves the steps and the flow shift (12, audio 3) to sd.cpp.
+            // Streamed from the SSD: System RAM pins its weights inside the
+            // GTT, half of RAM by default (15.2 GiB on a 30 GB box), and the
+            // 18 GB encoder alone is past that.
             VideoFamily::MinimaxH3 => FamilyRecipe {
                 fps: 24,
                 steps: 20,
-                cfg_scale: 6.0,
+                cfg_scale: 1.0,
                 high_noise_steps: None,
                 flow_shift: None,
+                memory: "disk",
             },
+        }
+    }
+
+    /// Human-readable name, for the Get models tab and error messages.
+    pub fn label(self) -> &'static str {
+        match self {
+            VideoFamily::Wan22Ti2v5b => "Wan 2.2 TI2V-5B",
+            VideoFamily::Wan22A14b => "Wan 2.2 A14B",
+            VideoFamily::Wan21Vace => "Wan 2.1 VACE",
+            VideoFamily::WanDense => "Wan",
+            VideoFamily::MinimaxH3 => "MiniMax H3",
+        }
+    }
+
+    /// The separate files this family runs with — the video side of
+    /// [`ImageFamily::slots`], and the one table discovery fills a model from
+    /// and the Video tab's *Models* rows are drawn from. `dir`/`file` are under
+    /// the **video dir**.
+    ///
+    /// The A14B's second expert is not a row: it is paired by filename
+    /// ([`crate::discover::moe_sibling`]), and offering any other A14B file in
+    /// its place would be offering the wrong half as often as the right one.
+    pub fn slots(self) -> &'static [PartSlot] {
+        use crate::discover::{LlmKind, Role, VaeKind};
+        const UMT5: PartSlot = PartSlot {
+            key: "t5xxl",
+            label: "Text encoder",
+            fits: |r| matches!(r, Role::Umt5),
+            dir: "text_encoders",
+            file: "umt5-xxl-encoder-Q8_0.gguf",
+            optional: false,
+        };
+        const WAN21_VAE: PartSlot = PartSlot {
+            key: "vae",
+            label: "VAE",
+            fits: |r| matches!(r, Role::Vae(VaeKind::Wan21)),
+            dir: "vae",
+            file: "wan_2.1_vae.safetensors",
+            optional: false,
+        };
+        const WAN22_VAE: PartSlot = PartSlot {
+            key: "vae",
+            label: "VAE",
+            fits: |r| matches!(r, Role::Vae(VaeKind::Wan22)),
+            dir: "vae",
+            file: "wan2.2_vae.safetensors",
+            optional: false,
+        };
+        const CLIP_VISION: PartSlot = PartSlot {
+            key: "clip_vision",
+            label: "CLIP-Vision",
+            fits: |r| matches!(r, Role::ClipVision),
+            dir: "clip_vision",
+            file: "clip_vision_h.safetensors",
+            optional: true,
+        };
+        // H3's are Comfy-Org's and leejet's release names.
+        const H3_VAE: PartSlot = PartSlot {
+            key: "vae",
+            label: "VAE",
+            fits: |r| matches!(r, Role::Vae(VaeKind::MinimaxH3)),
+            dir: "vae",
+            file: "minimax_h3_video_vae_fp16.safetensors",
+            optional: false,
+        };
+        const H3_LLM: PartSlot = PartSlot {
+            key: "llm",
+            label: "Text encoder",
+            fits: |r| matches!(r, Role::Llm(LlmKind::Qwen3Vl { dim: 5120 })),
+            dir: "text_encoders",
+            file: "qwen3vl_32b_minimax_h3-Q4_K_M.gguf",
+            optional: false,
+        };
+        const H3_AUDIO_VAE: PartSlot = PartSlot {
+            key: "audio_vae",
+            label: "Audio VAE",
+            fits: |r| matches!(r, Role::AudioVae),
+            dir: "vae",
+            file: "minimax_h3_audio_vae_fp32.safetensors",
+            optional: true,
+        };
+        match self {
+            VideoFamily::Wan22Ti2v5b => &[WAN22_VAE, UMT5],
+            VideoFamily::Wan22A14b | VideoFamily::WanDense => &[WAN21_VAE, UMT5],
+            VideoFamily::Wan21Vace => &[WAN21_VAE, UMT5, CLIP_VISION],
+            VideoFamily::MinimaxH3 => &[H3_VAE, H3_LLM, H3_AUDIO_VAE],
         }
     }
 
@@ -1732,6 +1881,8 @@ pub struct FamilyRecipe {
     pub cfg_scale: f32,
     pub high_noise_steps: Option<u32>,
     pub flow_shift: Option<f32>,
+    /// Where a discovered model's weights live, one of [`MEMORY_MODES`].
+    pub memory: &'static str,
 }
 
 /// Legal frame counts, as `multiple * k + offset` no lower than `min`, rounded
@@ -1846,10 +1997,11 @@ pub struct VideoModel {
     /// `memory` keeps its meaning — `false` is `auto` — and never written back.
     #[serde(default, skip_serializing)]
     pub offload_to_cpu: Option<bool>,
-    /// `--vae-tiling`. Off by default because it costs time, but it is the
-    /// *first* thing to turn on if a clip dies in the decode — Wan's VAEs are
-    /// the memory-hungry part of the pipeline, not the transformer.
-    #[serde(default)]
+    /// `--vae-tiling`. On by default: a clip's decode is the memory-hungry end
+    /// of the pipeline — Wan's VAEs, not the transformer, are what run a card
+    /// out — and tiling costs time, not quality. Off is for a card with room
+    /// to spare that wants the decode faster.
+    #[serde(default = "default_true")]
     pub vae_tiling: bool,
     /// Flash attention in the diffusion model ([`DIFFUSION_FLASH_ATTN`]). On,
     /// like every documented Wan invocation.
@@ -1974,9 +2126,9 @@ impl VideoModel {
             negative_prompt: default_video_negative(),
             loras: Vec::new(),
             lora_dir: None,
-            memory: Some("ram".into()),
+            memory: Some(r.memory.into()),
             offload_to_cpu: None,
-            vae_tiling: false,
+            vae_tiling: true,
             flash_attn: true,
             weight_type: None,
             extra_args: Vec::new(),
@@ -2034,19 +2186,14 @@ impl VideoModel {
                 self.family.as_str()
             );
         }
-        match self.family {
-            VideoFamily::MinimaxH3 => {
-                if self.llm.is_none() {
-                    bail!("video '{n}': family minimax_h3 needs llm (its Qwen3-VL text encoder)");
-                }
-            }
-            _ => {
-                if self.t5xxl.is_none() {
-                    bail!(
-                        "video '{n}': family {} needs t5xxl (the umt5 text encoder)",
-                        self.family.as_str()
-                    );
-                }
+        for slot in self.family.slots() {
+            if !slot.optional && self.part(slot.key).is_none() {
+                bail!(
+                    "video '{n}': family {} needs {} (its {})",
+                    self.family.as_str(),
+                    slot.key,
+                    slot.label.to_lowercase()
+                );
             }
         }
         if self.frames == 0 {
@@ -2081,6 +2228,32 @@ impl VideoModel {
             }
         }
         Ok(())
+    }
+
+    /// The file in slot `key` — a [`VideoFamily::slots`] key, which is the
+    /// field name. The VAE is the one required field, so an empty path is
+    /// "none".
+    pub fn part(&self, key: &str) -> Option<&PathBuf> {
+        match key {
+            "vae" => Some(&self.vae).filter(|p| !p.as_os_str().is_empty()),
+            "t5xxl" => self.t5xxl.as_ref(),
+            "llm" => self.llm.as_ref(),
+            "audio_vae" => self.audio_vae.as_ref(),
+            "clip_vision" => self.clip_vision.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Fill or empty slot `key`; a key that is no slot does nothing.
+    pub fn set_part(&mut self, key: &str, path: Option<PathBuf>) {
+        match key {
+            "vae" => self.vae = path.unwrap_or_default(),
+            "t5xxl" => self.t5xxl = path,
+            "llm" => self.llm = path,
+            "audio_vae" => self.audio_vae = path,
+            "clip_vision" => self.clip_vision = path,
+            _ => {}
+        }
     }
 
     /// Every component file this entry names, for the existence check and for
@@ -2629,17 +2802,31 @@ impl Config {
         name: &str,
         scan: &[crate::discover::Found],
     ) -> Result<PathBuf> {
-        let Some(slot) = family.slots().iter().find(|s| s.key == key) else {
-            bail!("a {} model has no '{key}' to choose", family.label());
+        self.resolve_slot(family.slots(), family.label(), key, name, scan)
+    }
+
+    /// [`Config::resolve_part`] for any slot table — the image families' or
+    /// [`VideoFamily::slots`]. Names are relative to the models dir on both
+    /// sides (the video dir is normally inside it, and one outside it is named
+    /// by its whole path), so only the table and the scan differ.
+    fn resolve_slot(
+        &self,
+        slots: &[PartSlot],
+        owner: &str,
+        key: &str,
+        name: &str,
+        scan: &[crate::discover::Found],
+    ) -> Result<PathBuf> {
+        let Some(slot) = slots.iter().find(|s| s.key == key) else {
+            bail!("a {owner} model has no '{key}' to choose");
         };
         let path = self.models_dir().join(name);
         match scan.iter().find(|f| f.path == path) {
             Some(f) if (slot.fits)(&f.role) => Ok(path),
             Some(f) => bail!(
-                "'{name}' is a {}, not a {} for a {} model",
+                "'{name}' is a {}, not a {} for a {owner} model",
                 f.role.describe(),
-                slot.label,
-                family.label()
+                slot.label
             ),
             None => {
                 let fitting: Vec<String> = self.part_options(slot, scan).into_iter().map(|o| o.name).collect();
@@ -2763,7 +2950,7 @@ impl Config {
                 PartView {
                     slot: slot.key,
                     label: slot.label,
-                    optional: p.parts_optional(),
+                    optional: slot.optional || p.parts_optional(),
                     current: name(p.components.as_ref()),
                     current_path: p.components.as_ref().and_then(|c| c.get(slot.key)).cloned(),
                     auto: name(auto.as_ref()),
@@ -2771,6 +2958,64 @@ impl Config {
                 }
             })
             .collect()
+    }
+
+    /// What a video part may be: the video dir's scan, plus any file under the
+    /// models dir the image side found — the Wan 2.1 VAE Krea 2's card fetched
+    /// into `models/vae/` is the same file every dense Wan decodes with.
+    pub fn video_scan(&self) -> Vec<crate::discover::Found> {
+        let mut scan = crate::discover::scan(&self.video_dir());
+        for f in self.scan_images() {
+            if !scan.iter().any(|o| o.path == f.path) {
+                scan.push(f);
+            }
+        }
+        scan
+    }
+
+    /// A video model's slots as `/video-models` publishes them, the
+    /// [`Config::part_views`] of the Video tab. *Auto* is what discovery puts
+    /// there from the video dir alone.
+    pub fn video_part_views(&self, m: &VideoModel, scan: &[crate::discover::Found]) -> Vec<PartView> {
+        let dir = self.video_dir();
+        let own: Vec<_> = scan.iter().filter(|f| f.path.starts_with(&dir)).cloned().collect();
+        let auto = crate::discover::video_components(m.family, &own, &dir);
+        m.family
+            .slots()
+            .iter()
+            .map(|slot| {
+                let auto = auto.iter().find(|(k, _)| *k == slot.key).and_then(|(_, p)| p.as_deref());
+                PartView {
+                    slot: slot.key,
+                    label: slot.label,
+                    optional: slot.optional,
+                    current: m.part(slot.key).map(|x| self.part_name(x)),
+                    current_path: m.part(slot.key).cloned(),
+                    auto: auto.map(|x| self.part_name(x)),
+                    options: self.part_options(slot, scan),
+                }
+            })
+            .collect()
+    }
+
+    /// Lay a `/video` request's part choices onto its model — a name picks,
+    /// `null` empties an optional part.
+    pub fn apply_video_parts(&self, m: &mut VideoModel, parts: &BTreeMap<String, Option<String>>) -> Result<()> {
+        let scan = self.video_scan();
+        let owner = m.family.label();
+        for (key, name) in parts {
+            let slot = m.family.slots().iter().find(|s| s.key == key);
+            match (name, slot) {
+                (Some(name), _) => {
+                    let path = self.resolve_slot(m.family.slots(), owner, key, name, &scan)?;
+                    m.set_part(key, Some(path));
+                }
+                (None, Some(slot)) if slot.optional => m.set_part(key, None),
+                (None, Some(slot)) => bail!("a {owner} model can't run without its {}", slot.label.to_lowercase()),
+                (None, None) => bail!("a {owner} model has no '{key}' to choose"),
+            }
+        }
+        Ok(())
     }
 
     /// What one model starts at *without* the user's per-model overrides — the
@@ -3450,7 +3695,7 @@ lora_dir = "adapters"
         let m = &cfg.video[0];
         assert_eq!(m.family, VideoFamily::Wan22Ti2v5b);
         assert_eq!((m.width, m.height, m.frames), (832, 480, 33));
-        assert!(m.memory_mode() == "ram" && m.flash_attn && !m.vae_tiling);
+        assert!(m.memory_mode() == "ram" && m.flash_attn && m.vae_tiling);
         // The negative prompt is inherited rather than retyped, which is the
         // whole reason it defaults in code.
         assert!(m.negative_prompt.contains("最差质量"));

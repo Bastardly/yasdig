@@ -531,6 +531,7 @@
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-prompt">Prompts</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-gen">Generation</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-adv">Advanced</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="vid-info">Info</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-clip">Clip</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-clips">Clips</button>
     <div class="railfoot">
@@ -576,6 +577,10 @@
         </div>
       </div>
       <p class="sub" id="vmodelnote"></p>
+      <!-- One select per separate file the model's family runs with (its VAE,
+           text encoder, H3's audio VAE), drawn by parts.js from the slots
+           `/video-models` serves — the Image tab's Models rows. -->
+      <div id="vpartrows"></div>
 
       <!-- The first frame comes from work/output/ — the images that were worth
            keeping are the ones worth animating. Clearing it makes the same model
@@ -657,10 +662,10 @@
         </div>
       </div>
       <div class="checks">
-        <!-- The first OOM escalation, and the one worth reaching for before the
-             others: Wan's VAE is the memory-hungry end of the pipeline, and
-             tiling it costs time rather than quality. -->
-        <label><input type="checkbox" id="vtiling"> VAE tiling (if the decode runs out of VRAM)</label>
+        <!-- On by default (`VideoModel::vae_tiling`): Wan's VAE is the
+             memory-hungry end of the pipeline, and tiling it costs time rather
+             than quality. -->
+        <label><input type="checkbox" id="vtiling"> VAE tiling (on by default; off decodes faster with room to spare)</label>
       </div>
       <label for="vmemory">Memory</label>
       <select id="vmemory">
@@ -670,7 +675,14 @@
       </select>
     </div>
   </section>
-  <!-- The clip's size, frames and seed, and Enlarge frames (`renderClip`). -->
+  <!-- What is known about the clip on screen, the Image tab's Info panel:
+       its size, seed, timing, what ran and the prompt as it was conditioned
+       (`renderClip`). -->
+  <section class="fpanel" id="panel-vid-info" aria-label="Info" hidden>
+    <header class="fphead"><b>Info</b><button type="button" class="fpclose" aria-label="Close Info">&times;</button></header>
+    <div class="fpbody" id="vresultinfo"><p class="sub">No clip yet.</p></div>
+  </section>
+  <!-- Enlarge frames for the clip on screen (`renderClip`). -->
   <section class="fpanel" id="panel-vid-clip" aria-label="Clip" hidden>
     <header class="fphead"><b>Clip</b><button type="button" class="fpclose" aria-label="Close Clip">&times;</button></header>
     <div class="fpbody" id="vclipinfo"><p class="sub">No clip yet.</p></div>
@@ -771,7 +783,7 @@
     what has arrived, so <b>Resume</b> carries on from there.</p>
     <p class="sub" id="gmdir"></p>
     <div id="gmerr" class="err"></div>
-    <nav class="helpnav spaced" id="gmnav" aria-label="Model families and upscalers"></nav>
+    <nav class="helpnav spaced" id="gmnav" aria-label="Model families by category"></nav>
     <p class="sub">More models, and LoRAs: Help → Intro to models.</p>
   </div>
   <div class="col-result" id="gmlist"></div>

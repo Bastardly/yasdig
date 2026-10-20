@@ -188,9 +188,10 @@ flow_shift = 3.0
 # ]
 # lora_dir = "models/loras"
 #
-# If a clip dies in the VAE decode rather than the sampler — the likelier of the
-# two on a Wan model — turn this on first. It costs time, not quality.
-# vae_tiling = true
+# VAE tiling is on by default: a clip is likelier to die in the VAE decode than
+# in the sampler, and tiling costs time, not quality. With room to spare on the
+# card, turn it off for a faster decode.
+# vae_tiling = false
 #
 # Further OOM escalations, in the order worth trying. `disk` re-reads the
 # experts and the encoder from their files, which is what to try when RAM —

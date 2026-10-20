@@ -13,9 +13,15 @@
 //! is the same `fits` test the Models fold uses, not a name comparison. That is
 //! what makes a Qwen3-4B you already have under another name count, and stops
 //! a second 4 GB download of it.
+//!
+//! Video models are a table of their own, `[[video]]`, of the same [`Entry`]
+//! shape: a [`VideoFamily`], its [`VideoFamily::slots`] keys, `"high_noise"`
+//! for the A14B's second expert, and every `dest` under the **video dir**. Kept
+//! apart so the Help tab's family table and the image cards never meet one,
+//! and served only while the Video tab is (nightly).
 
-use crate::config::{ImageFamily, PartSlot};
-use crate::discover::Role;
+use crate::config::{ImageFamily, PartSlot, VideoFamily};
+use crate::discover::{DitKind, Role};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::path::{Component, Path};
@@ -27,6 +33,9 @@ const SOURCE: &str = include_str!("catalog.toml");
 pub struct Catalog {
     #[serde(default)]
     pub entry: Vec<Entry>,
+    /// Video models: [`Entry`]s whose family is a [`VideoFamily`].
+    #[serde(default)]
+    pub video: Vec<Entry>,
     /// Upscaler models, a table of their own: see [`Upscaler`].
     #[serde(default)]
     pub upscaler: Vec<Upscaler>,
@@ -50,10 +59,47 @@ pub struct Upscaler {
     pub bytes: u64,
 }
 
+/// An entry's family: an image one under `[[entry]]`, a video one under
+/// `[[video]]` (`parse` holds each table to its kind). Untagged, since the two
+/// enums' wire names don't overlap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum Family {
+    Image(ImageFamily),
+    Video(VideoFamily),
+}
+
+impl Family {
+    pub fn slots(self) -> &'static [PartSlot] {
+        match self {
+            Family::Image(f) => f.slots(),
+            Family::Video(f) => f.slots(),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Family::Image(f) => f.label(),
+            Family::Video(f) => f.label(),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Family::Image(f) => f.as_str(),
+            Family::Video(f) => f.as_str(),
+        }
+    }
+
+    pub fn is_video(self) -> bool {
+        matches!(self, Family::Video(_))
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Entry {
     pub id: String,
-    pub family: ImageFamily,
+    pub family: Family,
     pub label: String,
     pub note: String,
     pub file: Vec<File>,
@@ -81,8 +127,9 @@ impl Catalog {
         CATALOG.get_or_init(|| parse(SOURCE).expect("src/catalog.toml is checked by cargo test"))
     }
 
+    /// An image or a video entry.
     pub fn entry(&self, id: &str) -> Option<&Entry> {
-        self.entry.iter().find(|e| e.id == id)
+        self.entry.iter().chain(&self.video).find(|e| e.id == id)
     }
 
     pub fn upscaler(&self, id: &str) -> Option<&Upscaler> {
@@ -126,41 +173,78 @@ impl Entry {
     }
 
     pub fn slot_label(&self, f: &File) -> &'static str {
-        match self.slot(f) {
-            Some(s) => s.label,
-            None => "Model",
+        match (self.slot(f), f.slot.as_str()) {
+            (Some(s), _) => s.label,
+            (None, "high_noise") => "High-noise model",
+            (None, _) => "Model",
         }
     }
 
     /// Whether a discovered file can stand in for `f` — for a part the slot's
-    /// own test, for the model any image model of this family. The second is
+    /// own test, for the model any model of this family. The second is
     /// deliberately loose: someone with a Klein 9B in another quantization
-    /// wants its encoder, not a second copy of the transformer.
-    pub fn fits(&self, f: &File, role: &Role) -> bool {
-        match self.slot(f) {
-            Some(s) => (s.fits)(role),
-            None => matches!(role, Role::Image { family, .. } if *family == self.family),
+    /// wants its encoder, not a second copy of the transformer. The path is
+    /// for the A14B, whose two experts only their names tell apart.
+    pub fn fits(&self, f: &File, path: &Path, role: &Role) -> bool {
+        if let Some(s) = self.slot(f) {
+            return (s.fits)(role);
         }
+        match self.family {
+            Family::Image(fam) => matches!(role, Role::Image { family, .. } if *family == fam),
+            Family::Video(fam) => video_model_fits(fam, &f.slot, path, role),
+        }
+    }
+}
+
+/// [`Entry::fits`] for a video model's transformer: the [`DitKind`] discovery
+/// would make this family of, and for the A14B the half its name says.
+fn video_model_fits(family: VideoFamily, slot: &str, path: &Path, role: &Role) -> bool {
+    let Role::Dit(kind) = role else {
+        return false;
+    };
+    let half = crate::discover::noise_marker(path);
+    match (family, kind, slot) {
+        (VideoFamily::Wan22Ti2v5b, DitKind::Wan22Ti2v5b, "model") => true,
+        (VideoFamily::Wan22A14b, DitKind::Wan22A14b, "model") => half == Some(false),
+        (VideoFamily::Wan22A14b, DitKind::Wan22A14b, "high_noise") => half == Some(true),
+        (VideoFamily::Wan21Vace, DitKind::WanVace { .. }, "model") => true,
+        (VideoFamily::WanDense, DitKind::WanOther { .. }, "model") => true,
+        (VideoFamily::WanDense, DitKind::Wan22A14b, "model") => half.is_none(),
+        (VideoFamily::MinimaxH3, DitKind::MinimaxH3, "model") => true,
+        _ => false,
     }
 }
 
 fn parse(src: &str) -> Result<Catalog> {
     let c: Catalog = toml::from_str(src).context("parsing src/catalog.toml")?;
-    for (i, e) in c.entry.iter().enumerate() {
-        if c.entry[..i].iter().any(|o| o.id == e.id) {
+    let all: Vec<&Entry> = c.entry.iter().chain(&c.video).collect();
+    for (i, e) in all.iter().enumerate() {
+        if all[..i].iter().any(|o| o.id == e.id) {
             bail!("catalog: id {:?} is listed twice", e.id);
         }
-        if !e.family.runnable() {
-            bail!("catalog: {} is a family this build doesn't run", e.id);
+        match e.family {
+            Family::Image(f) if !f.runnable() => bail!("catalog: {} is a family this build doesn't run", e.id),
+            Family::Image(_) if c.video.iter().any(|v| v.id == e.id) => {
+                bail!("catalog: {} is under [[video]] with an image family", e.id)
+            }
+            Family::Video(_) if c.entry.iter().any(|v| v.id == e.id) => {
+                bail!("catalog: {} is under [[entry]] with a video family", e.id)
+            }
+            _ => {}
         }
         if e.file.iter().filter(|f| f.slot == "model").count() != 1 {
             bail!("catalog: {} needs exactly one file with slot = \"model\"", e.id);
         }
+        // The second expert, exactly for the pair that has one.
+        let moe = matches!(e.family, Family::Video(f) if f.is_moe());
+        if e.file.iter().filter(|f| f.slot == "high_noise").count() != usize::from(moe) {
+            bail!("catalog: {} needs {} file with slot = \"high_noise\"", e.id, if moe { "exactly one" } else { "no" });
+        }
         for f in &e.file {
-            if f.slot != "model" && e.slot(f).is_none() {
+            if !matches!(f.slot.as_str(), "model" | "high_noise") && e.slot(f).is_none() {
                 bail!("catalog: {} names slot {:?}, which {} has no row for", e.id, f.slot, e.family.label());
             }
-            if !safe_dest(&f.dest) {
+            if !safe_dest(&f.dest, &f.slot) {
                 bail!("catalog: {}'s dest {:?} must be a plain relative path", e.id, f.dest);
             }
             if !hf_resolve(&f.url) {
@@ -174,9 +258,17 @@ fn parse(src: &str) -> Result<Catalog> {
     // One destination is one file. Entries sharing a VAE may each fetch it
     // from their own model's repo — the card links it as where the licence is
     // — but then both copies must carry the same `sha256`, or a resume could
-    // splice two different files and the second card would read "wrong".
-    for f in c.entry.iter().flat_map(|e| &e.file) {
-        for o in c.entry.iter().flat_map(|o| &o.file) {
+    // splice two different files and the second card would read "wrong". Per
+    // table, since the two tables' dests are under different dirs.
+    for table in [&c.entry, &c.video] {
+        check_shared_dests(table)?;
+    }
+    check_upscalers(c)
+}
+
+fn check_shared_dests(table: &[Entry]) -> Result<()> {
+    for f in table.iter().flat_map(|e| &e.file) {
+        for o in table.iter().flat_map(|o| &o.file) {
             if o.dest != f.dest {
                 continue;
             }
@@ -188,8 +280,12 @@ fn parse(src: &str) -> Result<Catalog> {
             }
         }
     }
+    Ok(())
+}
+
+fn check_upscalers(c: Catalog) -> Result<Catalog> {
     for (i, u) in c.upscaler.iter().enumerate() {
-        if c.entry.iter().any(|e| e.id == u.id) || c.upscaler[..i].iter().any(|o| o.id == u.id) {
+        if c.entry(&u.id).is_some() || c.upscaler[..i].iter().any(|o| o.id == u.id) {
             bail!("catalog: id {:?} is listed twice", u.id);
         }
         if !safe_upscaler_dest(&u.dest) {
@@ -222,11 +318,19 @@ fn safe_upscaler_dest(dest: &str) -> bool {
 /// the scan will read — `valid_lora_name`'s rule plus an extension check, so a
 /// finished download can't land somewhere discovery won't look. A `.part` name
 /// is refused outright: it is the downloader's in-flight spelling.
-fn safe_dest(dest: &str) -> bool {
+///
+/// The `tokenizer` slot is the one place `.json` is allowed: the scan reads a
+/// JSON file only to see whether it is a tokenizer, so nothing else would be
+/// found after the download.
+fn safe_dest(dest: &str, slot: &str) -> bool {
     let p = Path::new(dest);
+    let ext = p.extension().and_then(|x| x.to_str());
     crate::config::valid_lora_name(dest)
         && p.components().all(|c| matches!(c, Component::Normal(_)))
-        && matches!(p.extension().and_then(|x| x.to_str()), Some("safetensors" | "gguf"))
+        && match slot {
+            "tokenizer" => ext == Some("json"),
+            _ => matches!(ext, Some("safetensors" | "gguf")),
+        }
 }
 
 #[cfg(test)]
@@ -243,13 +347,13 @@ mod tests {
             if matches!(fam, ImageFamily::Sd1 | ImageFamily::Sd2) {
                 continue; // superseded; docs/configuration.md's manual list still covers them
             }
-            assert!(c.entry.iter().any(|e| e.family == *fam), "{} has no catalog entry", fam.label());
+            assert!(c.entry.iter().any(|e| e.family == Family::Image(*fam)), "{} has no catalog entry", fam.label());
         }
         // A DiT entry carries every part its family needs, so one Download
         // makes it runnable.
         for e in &c.entry {
             for s in e.family.slots() {
-                let bundled = matches!(e.family, ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl);
+                let bundled = matches!(e.family, Family::Image(f) if f.is_unet());
                 if !bundled {
                     assert!(e.file.iter().any(|f| f.slot == s.key), "{} lacks its {}", e.id, s.label);
                 }
@@ -262,6 +366,41 @@ mod tests {
         for u in &c.upscaler {
             assert!(runnable.contains(&u.arch.as_str()), "{} names arch {:?}", u.id, u.arch);
         }
+    }
+
+    /// A video card carries every part its family can't run without, so one
+    /// Download makes it runnable, and only its own kind of family.
+    #[test]
+    fn the_video_cards_are_complete() {
+        let c = parse(SOURCE).unwrap();
+        assert!(!c.video.is_empty());
+        for e in &c.video {
+            assert!(e.family.is_video(), "{}", e.id);
+            for s in e.family.slots().iter().filter(|s| !s.optional) {
+                assert!(e.file.iter().any(|f| f.slot == s.key), "{} lacks its {}", e.id, s.label);
+            }
+        }
+        // An image family under [[video]] is refused, and the reverse.
+        let wrong = "[[video]]\nid = \"v\"\nfamily = \"z_image\"\nlabel = \"v\"\nnote = \"\"\n[[video.file]]\nslot = \"model\"\nurl = \"https://huggingface.co/a/b/resolve/main/m.gguf\"\ndest = \"m.gguf\"\nbytes = 1\n";
+        assert!(parse(wrong).is_err());
+        assert!(parse(&wrong.replace("z_image", "wan22_ti2v_5b").replace("[[video", "[[entry")).is_err());
+        assert!(parse(&wrong.replace("z_image", "wan22_ti2v_5b")).is_ok());
+    }
+
+    /// The A14B's two experts have the same tensors; only the name says which
+    /// slot a file fills.
+    #[test]
+    fn each_expert_fits_only_its_own_slot() {
+        let c = Catalog::get();
+        let pair = c.video.iter().find(|e| e.family == Family::Video(VideoFamily::Wan22A14b)).unwrap();
+        let slot = |k: &str| pair.file.iter().find(|f| f.slot == k).unwrap();
+        let role = Role::Dit(DitKind::Wan22A14b);
+        let low = Path::new("/m/Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf");
+        let high = Path::new("/m/Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf");
+        assert!(pair.fits(slot("model"), low, &role));
+        assert!(!pair.fits(slot("model"), high, &role));
+        assert!(pair.fits(slot("high_noise"), high, &role));
+        assert!(!pair.fits(slot("high_noise"), Path::new("/m/unmarked.gguf"), &role));
     }
 
     #[test]
@@ -317,14 +456,14 @@ mod tests {
     fn a_part_fits_by_role_not_by_name() {
         use crate::discover::LlmKind;
         let c = Catalog::get();
-        let klein9 = c.entry.iter().find(|e| e.family == ImageFamily::Flux2Klein9b).unwrap();
+        let klein9 = c.entry.iter().find(|e| e.family == Family::Image(ImageFamily::Flux2Klein9b)).unwrap();
         let llm = klein9.file.iter().find(|f| f.slot == "llm").unwrap();
-        assert!(klein9.fits(llm, &Role::Llm(LlmKind::Qwen3 { dim: 4096 })));
+        assert!(klein9.fits(llm, Path::new("x"), &Role::Llm(LlmKind::Qwen3 { dim: 4096 })));
         // The 4B is the encoder people reach for by mistake.
-        assert!(!klein9.fits(llm, &Role::Llm(LlmKind::Qwen3 { dim: 2560 })));
+        assert!(!klein9.fits(llm, Path::new("x"), &Role::Llm(LlmKind::Qwen3 { dim: 2560 })));
         let model = klein9.file.iter().find(|f| f.slot == "model").unwrap();
-        assert!(klein9.fits(model, &Role::Image { family: ImageFamily::Flux2Klein9b, bundled: false }));
-        assert!(!klein9.fits(model, &Role::Image { family: ImageFamily::Flux2Klein4b, bundled: false }));
+        assert!(klein9.fits(model, Path::new("x"), &Role::Image { family: ImageFamily::Flux2Klein9b, bundled: false }));
+        assert!(!klein9.fits(model, Path::new("x"), &Role::Image { family: ImageFamily::Flux2Klein4b, bundled: false }));
     }
 
     #[test]

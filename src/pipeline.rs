@@ -478,6 +478,10 @@ pub struct VideoRequest {
     pub vae_tiling: Option<bool>,
     /// Where the weights live; `None` keeps the model's.
     pub memory: Option<String>,
+    /// The Video tab's *Models* rows: slot key to a file under the models dir,
+    /// or `null` to leave an optional part out. Absent keys keep the model's.
+    /// See [`Config::apply_video_parts`].
+    pub parts: Option<std::collections::BTreeMap<String, Option<String>>>,
 }
 
 /// A finished clip, plus how long it took. The timing is the point on this
@@ -486,6 +490,11 @@ pub struct VideoRequest {
 pub struct VideoResult {
     pub clip: Clip,
     pub gen_ms: u128,
+    /// The video file [`Settings::video_save`] asked for, under `work/output/`;
+    /// `None` when frames were asked for.
+    ///
+    /// [`Settings::video_save`]: crate::settings::Settings::video_save
+    pub saved: Option<PathBuf>,
 }
 
 /// What [`Engine::convert`] produced, and how well the estimate held.
@@ -1967,6 +1976,11 @@ impl Engine {
         if let Some(v) = req.memory.as_deref().filter(|v| !v.is_empty()) {
             m.memory = Some(v.to_string());
         }
+        if let Some(parts) = &req.parts {
+            self.cfg.apply_video_parts(&mut m, parts)?;
+            // `exists` was the model's own files; a pick replaces some.
+            m.exists = m.missing().is_empty();
+        }
         m.validate()?;
 
         if !m.exists {
@@ -2010,7 +2024,9 @@ impl Engine {
         let typed_negative = variables::typed(&negative, &rolled);
         let negative = rolled;
         let id = workitems::new_id(seed);
-        let (pattern, mut dir) = self.videos.prepare(&id)?;
+        // A soundtrack only survives in a container — see `videos::CONTAINER`.
+        let sound = m.audio_vae.is_some();
+        let (pattern, mut dir) = self.videos.prepare(&id, sound)?;
 
         let t = Instant::now();
         self.sd().video(
@@ -2025,6 +2041,9 @@ impl Engine {
             },
         )?;
         let gen_ms = t.elapsed().as_millis();
+        if sound {
+            self.videos.unpack(&id)?;
+        }
 
         let (_, _, frames) = m.aligned();
         let mut clip = Clip {
@@ -2046,6 +2065,7 @@ impl Engine {
             thumb_width: 0,
             thumb_height: 0,
             source: req.source.clone(),
+            audio: false,
             video: m,
         };
         self.videos.finish(&mut clip)?;
@@ -2053,7 +2073,18 @@ impl Engine {
         // this point leaves no half-written clip behind — which is the ordinary
         // path, not the rare one, because that is what Stop does.
         dir.keep();
-        Ok(VideoResult { clip, gen_ms })
+        // After `keep`: a clip whose file couldn't be written is still a clip,
+        // and the error says what went wrong with the file alone.
+        let saved = if self.cfg.settings().video_save == crate::settings::VIDEO_FILE {
+            let dest = self.items.output_dir().join(format!("{}.avi", clip.id));
+            self.videos
+                .export(&clip, &dest)
+                .with_context(|| format!("the clip is in the Clips grid, but its video file wasn't written ({})", dest.display()))?;
+            Some(dest)
+        } else {
+            None
+        };
+        Ok(VideoResult { clip, gen_ms, saved })
     }
 
     /// Run every frame of a finished clip through the FSR passes and write the
@@ -2109,6 +2140,22 @@ impl Engine {
             let dest = out_dir.join(format!("frame_{i:03}.png"));
             size = self.fsr().process(frame, &dest, factor, filters)?;
         }
+        // Saved the way a clip is (`Settings::video_save`): as a file, the
+        // frames encoded with the clip's soundtrack and then let go of, or as
+        // the folder of frames.
+        let out_dir = if self.cfg.settings().video_save == crate::settings::VIDEO_FILE {
+            let file = self.items.output_dir().join(format!("{name}.avi"));
+            let audio = match self.videos.audio_path(id) {
+                Some(p) => Some(crate::avi::read_wav(&p)?),
+                None => None,
+            };
+            let enlarged: Vec<PathBuf> = (0..frames.len()).map(|i| out_dir.join(format!("frame_{i:03}.png"))).collect();
+            crate::avi::write(&file, &enlarged, clip.fps, audio.as_ref())?;
+            std::fs::remove_dir_all(&out_dir).with_context(|| format!("removing {}", out_dir.display()))?;
+            file
+        } else {
+            out_dir
+        };
         Ok(EnlargeResult {
             dir: out_dir,
             frames: frames.len() as u32,

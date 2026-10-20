@@ -168,6 +168,13 @@ Things that break silently:
 - **A text-only GGUF's architecture is in its metadata** (`general.architecture`,
   `Tensors::arch`); llama.cpp writes Qwen3-VL's language half with Qwen3's names. T5:
   umt5 vs T5-XXL differ only in token embedding rows (256384 vs 32128).
+- **Qwen3.5 is tested before the Qwen3 arm** (`qwen35` arch, or `linear_attn.`/`ssm_a`):
+  MOSS-Image's 9B is 4096 wide like Klein 9B's Qwen3-8B, and a safetensors one has
+  `q_norm` too.
+- **A tokenizer is a part** (MOSS-Image's `--tokenizer`, `Role::Tokenizer`): `walk`
+  reads `.json` files only through `read_tokenizer` (BPE vocabulary size) and lists only
+  tokenizers, so config JSONs never become `doctor` rows. The catalog allows a `.json`
+  dest only on `slot = "tokenizer"` (`safe_dest`).
 - **What a slot accepts is what sd-cli *loads*.** Transformers' nested
   `model.language_model.` Qwen-VL layout is `Unknown` naming the GGUF as the fix.
 - **Video-dir parts are shared, its models aren't** — filtered by "some `slots()` row
@@ -465,9 +472,17 @@ that `dest` exists and `sr::identify` names its `arch` — never a name-free mat
 state is keyed by full path, since the two tables have different roots. On the wire
 they are `upscalers`, beside `entries`, so Help's family table never meets one.
 
+**Video cards are `[[video]]`** (`catalog::Family::Video`, the same `Entry`): `dest`
+under `Config::video_dir`, `slot` a `VideoFamily::slots` key, `"model"` or the A14B's
+`"high_noise"` (`parse` requires it exactly for `is_moe`). `Entry::fits` takes the path,
+since only `noise_marker` tells the experts apart. "Have" scans the video dir alone —
+what discovery assembles from — and `/catalog` serves `videos` only while
+`nightly_video` is on.
+
 Cards link source repos (`File::page`). **No licence names in the catalog**, on purpose.
-Page: `finished` moving triggers `loadModels()`; `#getparts` opens the family's card
-(`openGetModels`).
+Page: cards and nav are grouped by category (`categories()` in `getmodels.js`: image,
+video, upscalers); `finished` moving triggers `loadModels()` (and `loadVideoModels()`);
+`#getparts` opens the family's card (`openGetModels`).
 
 ## Settings in the PNG
 
@@ -1294,6 +1309,23 @@ from `family` goes on `VideoModelDto`.
     (`Tensors::square_dim`) — PyTorch vs GGUF order.
   - **`[[video]]` entries replace a discovered model** (by `name` or same
     `diffusion_model`); omitted fields come from `VideoFamily::recipe`.
+  - **Parts are `VideoFamily::slots()`** (`PartSlot`, `dir`/`file` under the video dir,
+    `optional` for H3's audio VAE and VACE's CLIP-Vision): `discover::video_components`
+    fills a model, `Config::video_part_views`/`apply_video_parts` serve and apply picks.
+    Names are relative to the **models dir** like image parts, so `resolve_slot` is
+    shared; `video_scan` adds the image scan's files (Krea's Wan VAE in `models/vae/`).
+    Picks are per run and restored from `Clip.video` (keys = field names); no saved
+    defaults, like every video knob. Page rows are `parts.js`, shared with the Image tab.
+  - **H3 has its own VAE** (`VaeKind::MinimaxH3`, tested before the Wan VAE arm: its
+    convolutional encoder has `conv2`) and `Role::AudioVae`. Recipe: CFG 1, `disk`
+    memory (`FamilyRecipe::memory`; the 18 GB encoder is past the GTT).
+  - **Sound only survives in a container**: sd-cli drops audio with a `%03d` `-o`. A
+    model with `audio_vae` generates into `clip.avi` (`VideoStore::prepare(id, true)`),
+    `unpack` splits it into frames + `audio.wav`; the AVI is kept for download.
+  - **`Settings::video_save`** (`file` default | `frames`, page-level): `file` writes
+    `work/output/{id}.avi` after `keep()` (`crate::avi`, MJPEG + PCM, our encoder at q95)
+    and Enlarge writes `{id}-x{N}.avi` instead of its frames folder. Close server's clear
+    takes both (`is_clip_id`). The output gallery lists PNGs only.
   - **MoE expert halves are told apart by filename only** (`noise_marker`); no marker →
     `wan_dense`, not a guess.
   - A missing component is listed greyed out with the conventional path in its role
