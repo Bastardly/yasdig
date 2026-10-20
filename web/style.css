@@ -1028,12 +1028,12 @@ a:hover { color: var(--accent-hi); }
 .gmcard { margin-bottom: var(--sp-4); }
 .gmgroup { font-size: var(--fs-title); color: var(--text); margin: var(--sp-4) 0 var(--sp-2); }
 .gmgroup:first-child { margin-top: 0; }
-.gmhead { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-3); }
-.gmhead .sub { margin: 0; }
+.gmhead { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); }
+.gmhead .sub { margin: 0 0 0 auto; }
 /* Green, the "this one" colour the family table uses for done; amber is the
    Download button's. */
 .gmbadge {
-  margin-right: auto; padding: 0 var(--sp-2);
+  padding: 0 var(--sp-2); white-space: nowrap;
   border: 1px solid var(--go); border-radius: var(--r-sm);
   color: var(--go); font-size: var(--fs-micro); line-height: 1.6;
 }

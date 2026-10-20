@@ -140,8 +140,8 @@ vulnerability*) rather than in a public issue.
 ## What's supported
 
 **Model families.** Each but SD 1.x/2.x has a one-click card on the Get models tab.
-Not sure where to start? FLUX.3 Klein, MOSS-Image and Krea 2 are marked *Recommended*
-there and in the model list.
+Not sure where to start? The ones marked *Recommended* there and in the model list
+(FLUX.3 Klein, MOSS-Image and Krea 2, or Iris-3B on a GPU under 12 GB) fit your GPU.
 
 | family | good for | on the card |
 |---|---|---|

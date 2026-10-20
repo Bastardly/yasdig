@@ -496,8 +496,12 @@ Get models tab: `src/catalog.toml` (compiled in), `src/catalog.rs`, `src/downloa
 per runnable family, each file keyed by its `slots()` key (or `"model"`); **a family
 may have two cards** (MOSS INT8 + BF16), so its anchor, nav button and Help's family
 row take its *first* card (`firstPerFamily`) — keep the default first in the toml.
-`recommended = true` sorts a card first and marks its family in the model select
-(`Catalog::recommends`, by family). Help's *Intro to models* draws from `/catalog`. **curl is a subprocess** (no TLS stack in the
+A card's model is had **only at its own dest** when its family has several cards
+(`has_several` in `downloads::present`), or the BF16 card reads as had beside the INT8.
+`recommended = true` is curated; `Catalog::recommended` adds "fits the GPU"
+(`card_gb` ≤ `sd::vram()` in GiB, `recommend_below_gb` for the small-card pick; VRAM
+unknown → the curated large-GPU set). `/catalog` serves the result per card plus
+`vram`; `/models` per family. Cards stay in catalog order. Help's *Intro to models* draws from `/catalog`. **curl is a subprocess** (no TLS stack in the
 binary); `doctor` warns when missing.
 
 - **The catalog is the only source of a URL or destination**; routes take an `id`.

@@ -4,7 +4,9 @@ import { loadVideoModels } from './video.js';
 
 // The Get models tab: the server's catalog (`src/catalog.toml`), one card per
 // set of files — a family may have two, in different precisions — and what
-// each of its files is on this disk. Recommended cards come first and say so.
+// each of its files is on this disk. A recommended card says so, on the card
+// and on its family's nav button; the server decides which are, against this
+// GPU's VRAM (`Catalog::recommended`). The cards stay in catalog order.
 //
 // The page sends a catalog id and nothing else — never a URL, never a path —
 // so all it can ask for is what the catalog lists. Whether a file is "had" is
@@ -30,6 +32,8 @@ let finished = null;
 let pending = null;
 
 const gb = (b) => (b / 1e9).toFixed(b < 1e9 ? 2 : 1) + ' GB';
+// A GPU's memory as it is sold: 24 GiB is a "24 GB" card.
+const vramGb = (b) => `${Math.round(b / 2 ** 30)} GB`;
 const active = (f) => f.state === 'queued' || f.state === 'downloading';
 const needed = (f) => f.state === 'missing' || f.state === 'partial' || f.state === 'failed';
 const fileName = (dest) => dest.split('/').pop();
@@ -81,10 +85,6 @@ function pages(e) {
 // about.
 const allEntries = () => [...view.entries, ...(view.videos ?? []), ...(view.upscalers ?? [])];
 
-// Recommended cards first, the rest in catalog order (a stable sort keeps a
-// family's cards together within each half).
-const byRecommended = (list) => [...list].sort((a, b) => b.recommended - a.recommended);
-
 // A family's first card, once each: the nav buttons, and the anchor
 // `openGetModels` scrolls to.
 export const firstPerFamily = (list) =>
@@ -93,7 +93,7 @@ export const firstPerFamily = (list) =>
 // What the tab shows, by category: a nav heading and a run of cards each.
 // `where` is what a finished card says to do next.
 const categories = () => [
-  { id: 'image', title: 'Image models', entries: byRecommended(view.entries),
+  { id: 'image', title: 'Image models', entries: view.entries,
     where: 'Everything is here. Pick it in the Image tab’s model list.' },
   { id: 'video', title: 'Video models', entries: view.videos ?? [],
     where: 'Everything is here. Pick it in the Video tab’s model list.' },
@@ -118,9 +118,13 @@ function card(e, i, where, first) {
   // A family with two cards anchors on the first of them, like the upscalers.
   const anchor = upscaler ? (i === 0 ? 'id="gm-upscaler"' : '') : (first ? `id="gm-${e.family}"` : '');
   const badge = e.recommended ? '<span class="gmbadge">Recommended</span>' : '';
+  // More than the GPU holds: it still runs, with part of it in system RAM.
+  const big = view.vram && e.card_gb && e.card_gb * 2 ** 30 > view.vram
+    ? `<p class="sub">Needs about ${e.card_gb} GB on the GPU, more than this one’s ${vramGb(view.vram)}:`
+      + ' part of it will sit in system RAM, which is slower.</p>' : '';
   return `<div class="card gmcard" ${anchor} data-entry="${esc(e.id)}">
     <div class="gmhead"><b>${esc(e.label)}</b>${badge}<span class="sub">${esc(e.family_label)} · ${gb(e.bytes)}</span></div>
-    <p class="sub">${esc(e.note)}</p>
+    <p class="sub">${esc(e.note)}</p>${big}
     <p class="sub">Licence: each file has its own — see ${pages(e)}.</p>
     <table class="helptable gmfiles"><tbody>${e.files.map(fileRow).join('')}</tbody></table>
     ${done ? `<p class="sub">${where}</p>` : ''}
@@ -137,9 +141,14 @@ function draw() {
     : 'curl was not found, so nothing can be downloaded from here. Install curl, or fetch the files '
       + 'by hand (docs/configuration.md, Get a model) into the folders each card names.';
   if (view.videos?.length) $('gmdir').innerHTML += ` Video models go in <code>${esc(view.video_dir)}</code>.`;
+  // What the recommendations were picked for, when the server could read it.
+  if (view.vram) $('gmdir').innerHTML += ` <b>Recommended</b> is picked for this GPU’s ${vramGb(view.vram)}.`;
   // The upscalers are one button: they have no families to tell apart.
+  // A family is recommended when any of its cards is.
+  const recommended = (fam) => view.entries.some((e) => e.family === fam && e.recommended);
   const navButton = (e) =>
-    `<button type="button" class="btn btn-choice" data-family="${e.family}">${esc(e.family_label)}</button>`;
+    `<button type="button" class="btn btn-choice" data-family="${e.family}">${esc(e.family_label)}`
+    + `${recommended(e.family) ? ' <span class="gmbadge">Recommended</span>' : ''}</button>`;
   $('gmnav').innerHTML = categories().map((c) => `<span class="grouphead">${c.title}</span>`
     + (c.id === 'upscaler'
       ? '<button type="button" class="btn btn-choice" data-family="upscaler">Upscalers</button>'

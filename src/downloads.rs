@@ -377,6 +377,7 @@ impl Downloads {
         // like the tab itself.
         let nightly = crate::settings::Settings::load_or_default(&cfg.user_dir()).nightly_video;
         let found = cfg.scan_images();
+        let vram = crate::sd::vram();
         let video_found = if nightly { crate::discover::scan(&cfg.video_dir()) } else { Vec::new() };
         let st = self.lock();
         let view = |e: &'static Entry, found: &[Found]| EntryView {
@@ -384,7 +385,8 @@ impl Downloads {
             family: e.family.as_str(),
             family_label: e.family.label(),
             label: &e.label,
-            recommended: e.recommended,
+            recommended: Catalog::recommended(e, vram),
+            card_gb: e.card_gb,
             note: &e.note,
             bytes: e.bytes() + c.loras_of(e).map(|l| l.bytes).sum::<u64>(),
             files: e
@@ -405,6 +407,7 @@ impl Downloads {
                 family_label: "Upscaler",
                 label: &u.label,
                 recommended: false,
+                card_gb: None,
                 note: &u.note,
                 bytes: u.bytes,
                 files: vec![upscaler_state(&self.0.upscalers, u, &st)],
@@ -412,6 +415,7 @@ impl Downloads {
             .collect();
         CatalogView {
             curl: curl_available(),
+            vram,
             finished: st.finished,
             models_dir: self.0.models.display().to_string(),
             upscaler_dir: self.0.upscalers.display().to_string(),
@@ -426,6 +430,9 @@ impl Downloads {
 #[derive(Serialize)]
 pub struct CatalogView {
     curl: bool,
+    /// The GPU's VRAM in bytes, which the recommendations were checked
+    /// against; `null` where it can't be read.
+    vram: Option<u64>,
     finished: u64,
     models_dir: String,
     upscaler_dir: String,
@@ -445,7 +452,9 @@ struct EntryView {
     family: &'static str,
     family_label: &'static str,
     label: &'static str,
+    /// Curated and fitting this GPU (`Catalog::recommended`).
     recommended: bool,
+    card_gb: Option<f32>,
     note: &'static str,
     bytes: u64,
     files: Vec<FileView>,
@@ -471,10 +480,18 @@ struct FileView {
 
 /// The file that already fills `f`, if any: its own `dest` first, then any
 /// scanned file the slot's test accepts.
+///
+/// Not for the model of a family with several cards (MOSS-Image's INT8 and
+/// BF16): there "any file of the family" would be the other card's, and each
+/// card would read as had the moment one was. Its model is had at its own
+/// `dest` only.
 fn present(root: &Path, e: &Entry, f: &File, found: &[Found]) -> Option<PathBuf> {
     let dest = root.join(&f.dest);
     if dest.exists() {
         return e.fits(f, &dest, &discover::identify(&dest)).then_some(dest);
+    }
+    if e.slot(f).is_none() && Catalog::get().has_several(e.family) {
+        return None;
     }
     found.iter().find(|x| e.fits(f, &x.path, &x.role)).map(|x| x.path.clone())
 }
@@ -692,6 +709,27 @@ mod tests {
         assert_eq!(llm.name.as_deref(), Some("te/my-qwen3-8b.gguf"));
         // An SD VAE is not a Flux.2 VAE, whatever it is called.
         assert_eq!(file_state(dir.as_path(), e, file(e, "vae"), &found, &st).state, "missing");
+    }
+
+    /// MOSS-Image has two cards, INT8 and BF16: one installed is not the
+    /// other, though both are "a MOSS-Image model". Its shared parts still
+    /// count wherever they are.
+    #[test]
+    fn one_precision_of_a_two_card_family_is_not_the_other() {
+        let dir = tmpdir("two");
+        let c = Catalog::get();
+        let (int8, bf16) = (c.entry("moss-image-sft-int8").unwrap(), c.entry("moss-image-sft-bf16").unwrap());
+        let moss = Role::Image { family: ImageFamily::MossImage, bundled: false };
+        let found = vec![
+            Found { path: dir.join("diffusion_models/moss_image_sft_int8_convrot.safetensors"), role: moss.clone() },
+            Found { path: dir.join("te/q35.gguf"), role: Role::Llm(LlmKind::Qwen35 { dim: 4096 }) },
+        ];
+        let st = State::default();
+        assert_eq!(file_state(&dir, bf16, file(bf16, "model"), &found, &st).state, "missing");
+        assert_eq!(file_state(&dir, bf16, file(bf16, "llm"), &found, &st).state, "have");
+        // Nor the other way: only a file at the INT8 card's own dest is it.
+        let other = vec![Found { path: dir.join("diffusion_models/moss_image_sft_bf16.safetensors"), role: moss }];
+        assert_eq!(file_state(&dir, int8, file(int8, "model"), &other, &st).state, "missing");
     }
 
     #[test]

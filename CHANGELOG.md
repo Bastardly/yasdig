@@ -34,9 +34,11 @@ What changed in each release of yasdig. Each release's executables are on the
   (on by default, remembered per model), several times faster than 50 steps at CFG 3.
   Off puts the model's own steps and CFG back. MOSS LoRAs are now recognised as MOSS
   ones, so they're no longer offered to other models.
-- **Recommended models.** FLUX.3 Klein, MOSS-Image and Krea 2 are marked
-  *Recommended* on their Get models cards, which come first, and their families lead
-  the Image tab's model list.
+- **Recommended models, for your GPU.** FLUX.3 Klein, MOSS-Image and Krea 2 are
+  marked *Recommended* on their Get models cards and menu buttons and in the Image
+  tab's model list — where they fit the GPU's memory, which yasdig reads on Linux. On a
+  card under 12 GB, Iris-3B is the recommendation instead. A card that needs more than
+  the GPU has says so.
 - **Video tab (nightly)**:
   - **Video models in Get models**: Wan 2.2 TI2V-5B, the Wan 2.2 I2V-A14B pair, and
     MiniMax H3.

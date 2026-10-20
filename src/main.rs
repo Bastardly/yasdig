@@ -3201,6 +3201,9 @@ fn build_models_json(cfg: &Config) -> String {
     let tuned = settings::ModelSettings::load_or_default(&cfg.user_dir());
     // Every header here is memoized, so a second walk is a directory listing.
     let scan = cfg.scan_images();
+    // What "(Recommended)" is checked against: a family marked for a 24 GB
+    // card is no recommendation on an 8 GB one.
+    let vram = sd::vram();
     let items: Vec<String> = cfg
         .registry()
         .values()
@@ -3234,7 +3237,7 @@ fn build_models_json(cfg: &Config) -> String {
                 json_str(p.family.as_str()),
                 json_str(p.family.label()),
                 // The catalog's mark, by family: the select says "(Recommended)".
-                catalog::Catalog::get().recommends(p.family),
+                catalog::Catalog::get().recommends(p.family, vram),
                 // Whether the Layout panel and the stage's Layout view show.
                 p.family.takes_layout(),
                 // Whether the References button shows: the server's rule,

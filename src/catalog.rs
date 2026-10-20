@@ -144,10 +144,16 @@ pub struct Entry {
     pub id: String,
     pub family: Family,
     pub label: String,
-    /// A card a newcomer should start from: listed first on the tab, and its
-    /// family marked in the Image tab's model list ([`Catalog::recommends`]).
+    /// A card a newcomer should start from, marked on the tab and its family
+    /// in the Image tab's model list — where it fits ([`Catalog::recommended`]).
     #[serde(default)]
     pub recommended: bool,
+    /// Roughly what the set occupies on the GPU, in GB: what a recommendation
+    /// is checked against.
+    pub card_gb: Option<f32>,
+    /// Recommended only on a GPU with less VRAM than this: the pick for a card
+    /// the others don't fit.
+    pub recommend_below_gb: Option<f32>,
     pub note: String,
     pub file: Vec<File>,
     /// [`Lora`] ids fetched with this card, shown as rows of it.
@@ -195,11 +201,30 @@ impl Catalog {
         e.loras.iter().filter_map(|id| self.lora(id))
     }
 
+    /// Whether `e` is a recommendation on a GPU with `vram` bytes: curated,
+    /// and fitting it. With the VRAM unknown (no amdgpu sysfs — Windows), the
+    /// curated cards for a large GPU, since nothing says otherwise.
+    pub fn recommended(e: &Entry, vram: Option<u64>) -> bool {
+        // In GiB, the unit a card is sold by: a "24 GB" card is 24 GiB.
+        let gb = vram.map(|b| b as f32 / (1u64 << 30) as f32);
+        e.recommended
+            && match (gb, e.card_gb, e.recommend_below_gb) {
+                (None, _, below) => below.is_none(),
+                (Some(have), need, below) => need.is_none_or(|n| n <= have) && below.is_none_or(|b| have < b),
+            }
+    }
+
     /// Whether some recommended card is of this family — what the Image tab's
     /// model list marks. By family, since the installed file may be any
     /// quantization of it.
-    pub fn recommends(&self, family: ImageFamily) -> bool {
-        self.entry.iter().any(|e| e.recommended && e.family == Family::Image(family))
+    pub fn recommends(&self, family: ImageFamily, vram: Option<u64>) -> bool {
+        self.entry.iter().any(|e| e.family == Family::Image(family) && Catalog::recommended(e, vram))
+    }
+
+    /// Whether `family` has more than one card — two precisions of one model,
+    /// whose model files must then be told apart by name (`downloads::present`).
+    pub fn has_several(&self, family: Family) -> bool {
+        self.entry.iter().chain(&self.video).filter(|e| e.family == family).count() > 1
     }
 }
 
@@ -463,6 +488,11 @@ mod tests {
             }
             assert!(c.entry.iter().any(|e| e.family == Family::Image(*fam)), "{} has no catalog entry", fam.label());
         }
+        // Every image card says what it needs on the GPU, which is what a
+        // recommendation is checked against.
+        for e in &c.entry {
+            assert!(e.card_gb.is_some_and(|g| g > 0.0), "{} has no card_gb", e.id);
+        }
         // A DiT entry carries every part its family needs, so one Download
         // makes it runnable.
         for e in &c.entry {
@@ -564,6 +594,25 @@ mod tests {
         assert!(two("sha256 = \"ab\"\n", "sha256 = \"ab\"\n").is_ok());
         assert!(two("sha256 = \"ab\"\n", "sha256 = \"cd\"\n").is_err());
         assert!(two("", "").is_err());
+    }
+
+    /// A recommendation fits the GPU: the 21 GB BF16 MOSS is never one, the
+    /// INT8 on a 24 GB card is and on a 12 GB one isn't, and Iris only below
+    /// 12 GB — and with the VRAM unknown, the curated large-GPU set.
+    #[test]
+    fn a_recommendation_fits_the_gpu() {
+        let c = Catalog::get();
+        let e = |id: &str| c.entry(id).unwrap();
+        let gb = |g: u64| Some(g << 30);
+        assert!(Catalog::recommended(e("moss-image-sft-int8"), gb(24)));
+        assert!(!Catalog::recommended(e("moss-image-sft-int8"), gb(12)));
+        assert!(!Catalog::recommended(e("moss-image-sft-bf16"), gb(24)));
+        assert!(!Catalog::recommended(e("iris-3b"), gb(24)));
+        assert!(Catalog::recommended(e("iris-3b"), gb(8)));
+        assert!(Catalog::recommended(e("flux3-klein-q8"), None));
+        assert!(!Catalog::recommended(e("iris-3b"), None));
+        assert!(c.has_several(Family::Image(ImageFamily::MossImage)));
+        assert!(!c.has_several(Family::Image(ImageFamily::Krea2)));
     }
 
     /// A speed LoRA is a plain `.safetensors` name a `<lora:…>` tag can carry,

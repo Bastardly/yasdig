@@ -684,11 +684,10 @@ export async function loadModels({ refill = true } = {}) {
       // A fill-only model (FLUX.1 Fill) is never something to generate, refine or
       // hi-res with; it is what Extend draws with, found by the server itself.
       const pickable = models.filter((m) => !m.fill);
-      // The catalog's recommended families lead, each marked: most people
-      // can't tell from a file name which model to start with.
+      // The catalog's recommended families, for this GPU, are marked: most
+      // people can't tell from a file name which model to start with.
       const recommended = (f) => pickable.some((m) => m.family_label === f && m.recommended);
-      const families = [...new Set(pickable.map((m) => m.family_label))].sort()
-        .sort((a, b) => recommended(b) - recommended(a));
+      const families = [...new Set(pickable.map((m) => m.family_label))].sort();
       for (const family of families) {
         const group = families.length > 1 ? document.createElement('optgroup') : sel;
         if (group !== sel) {

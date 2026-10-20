@@ -1049,6 +1049,17 @@ pub fn gtt() -> Option<(u64, u64)> {
         .map(|(_, total, used)| (total, used))
 }
 
+/// The discrete GPU's VRAM in bytes, from amdgpu's sysfs — the card with the
+/// most, as [`gtt`] picks it. `None` where there is no amdgpu (Windows).
+pub fn vram() -> Option<u64> {
+    let read = |p: PathBuf| -> Option<u64> { std::fs::read_to_string(p).ok()?.trim().parse().ok() };
+    std::fs::read_dir("/sys/class/drm")
+        .ok()?
+        .flatten()
+        .filter_map(|e| read(e.path().join("device").join("mem_info_vram_total")))
+        .max()
+}
+
 /// `MemAvailable` from `/proc/meminfo`, in bytes — what sd.cpp's auto-fit
 /// plans RAM with (`backend_fit.cpp`, `available_ram_bytes`). `None` where
 /// there is no such file.

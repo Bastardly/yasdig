@@ -1,8 +1,10 @@
 # The Get models tab's catalog: a set of files per family — sometimes two, in
 # different precisions, the first being the one Help's family table names — and
 # the only URLs the downloader will fetch (src/catalog.rs, src/downloads.rs).
-# `recommended = true` marks the cards a newcomer should start from: the tab
-# lists them first and the Image tab's model list says so.
+# `recommended = true` marks the cards a newcomer should start from, and
+# `card_gb` is roughly what a card's set occupies on the GPU: a recommended card
+# is marked only where it fits the GPU's VRAM (`Catalog::recommended`), and one
+# with `recommend_below_gb` only on a GPU smaller than that.
 #
 # Every URL and `bytes` here was checked against Hugging Face on 2026-10-10
 # (MOSS-Image on 2026-10-20) — the repo's file listing for the exact name, and a
@@ -25,6 +27,7 @@
 id = "sdxl-base"
 family = "sdxl"
 label = "SDXL base 1.0"
+card_gb = 8
 note = "The original SDXL, one 6.9 GB file, plus the fp16-fix VAE, which runs at half precision without overflowing."
 
 [[entry.file]]
@@ -43,6 +46,7 @@ bytes = 334641162
 id = "z-image-turbo-q8"
 family = "z_image"
 label = "Z-Image Turbo (Q8_0 GGUF)"
+card_gb = 11
 note = "About 11 GB on the card. Fast: 8 steps at CFG 1."
 
 [[entry.file]]
@@ -68,6 +72,7 @@ sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
 id = "flux1-schnell-q8"
 family = "flux_schnell"
 label = "Flux.1 schnell (Q8_0 GGUF)"
+card_gb = 18.5
 note = "About 18.5 GB on the card. Four steps."
 
 [[entry.file]]
@@ -99,6 +104,7 @@ sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
 id = "flux1-dev-q8"
 family = "flux"
 label = "Flux.1 dev (Q8_0 GGUF)"
+card_gb = 18.5
 note = "About 18.5 GB on the card. The detailed Flux.1, around 20 steps."
 
 [[entry.file]]
@@ -130,6 +136,7 @@ sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
 id = "klein-4b-q8"
 family = "flux2_klein_4b"
 label = "Flux.2 Klein 4B (Q8_0 GGUF)"
+card_gb = 9
 note = "About 9 GB on the card. Fast, takes reference images and can edit."
 
 [[entry.file]]
@@ -155,6 +162,7 @@ sha256 = "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
 id = "klein-9b-q8"
 family = "flux2_klein_9b"
 label = "Flux.2 Klein 9B (Q8_0 GGUF)"
+card_gb = 19
 note = "About 19 GB on the card. Takes reference images and can edit; its text encoder is Qwen3-8B, not the 4B."
 
 [[entry.file]]
@@ -183,6 +191,7 @@ sha256 = "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
 id = "flux3-klein-q8"
 family = "flux3_klein"
 label = "FLUX.3 Klein (Q8_0 GGUF)"
+card_gb = 11
 recommended = true
 note = "About 11 GB on the card. 16 steps; takes reference images and can edit."
 
@@ -209,6 +218,7 @@ sha256 = "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
 id = "flux3-klein-base-q8"
 family = "flux3_klein_base"
 label = "FLUX.3 Klein Base (Q8_0 GGUF)"
+card_gb = 11
 note = "The undistilled base: slower (20 steps at CFG 3.5), for finetuning and LoRAs. Most people want FLUX.3 Klein."
 
 [[entry.file]]
@@ -234,6 +244,7 @@ sha256 = "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
 id = "krea2-turbo-q6"
 family = "krea2"
 label = "Krea 2 Turbo (Q6_K GGUF)"
+card_gb = 15
 recommended = true
 note = "About 15 GB on the card. Its text encoder is the Qwen3-VL-4B GGUF, not Comfy's safetensors, which sd.cpp can't load."
 
@@ -260,6 +271,7 @@ sha256 = "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
 id = "qwen-image-q4"
 family = "qwen_image"
 label = "Qwen-Image (Q4_K_S GGUF)"
+card_gb = 17
 note = "About 17 GB on the card. A 20B model, the largest here; strong at text in images."
 
 [[entry.file]]
@@ -289,6 +301,7 @@ sha256 = "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
 id = "qwen-image-21-q8"
 family = "qwen_image_21"
 label = "Qwen-Image 2.1 (Q8_0 GGUF)"
+card_gb = 18
 note = "About 18 GB on the card. A 7B model that letters well and was trained around 2048² — the Hi-res pass's size here. 40 steps at CFG 6 on its own, 8 with the Turbo LoRA the card fetches too. Read its licence before you use it."
 loras = ["qwen-image-21-turbo"]
 
@@ -318,6 +331,7 @@ bytes = 675509688
 id = "moss-image-sft-int8"
 family = "moss_image"
 label = "MOSS-Image SFT (INT8)"
+card_gb = 16
 recommended = true
 note = "About 16 GB on the card. A 5B model strong at layout and rendered text. 50 steps at CFG 3 on its own, 8 with the Turbo LoRA the card fetches too (switch it in the Models panel). Its encoder is Qwen3.5-9B, and it needs Qwen3.5's tokenizer.json beside it."
 loras = ["moss-image-sft-dmd8"]
@@ -351,6 +365,7 @@ sha256 = "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
 id = "moss-image-sft-bf16"
 family = "moss_image"
 label = "MOSS-Image SFT (BF16)"
+card_gb = 21
 note = "The unquantized original, twice the INT8 file: about 21 GB on the card, so a 24 GB card's. Same encoder, tokenizer, VAE and Turbo LoRA."
 loras = ["moss-image-sft-dmd8"]
 
@@ -386,6 +401,10 @@ sha256 = "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
 id = "iris-3b"
 family = "iris"
 label = "Iris-3B (fp32, loaded as Q8_0)"
+card_gb = 8
+# The pick for a card the curated three don't fit: recommended only below 12 GB.
+recommended = true
+recommend_below_gb = 12
 note = "The small one: about 8 GB on the card, since it loads at q8_0, with no VAE at all — it draws in pixels. 100 steps at CFG 3 (fewer is faster, with less detail). The download is 12 GB at full precision; the Convert tab can turn it into a q8_0 file once, which then loads faster."
 
 [[entry.file]]
@@ -404,6 +423,7 @@ bytes = 4280406144
 id = "flux1-fill-q8"
 family = "flux_fill"
 label = "FLUX.1 Fill (Q8_0 GGUF)"
+card_gb = 18.5
 note = "Powers Extend in the Refine dialog: it continues a picture past its edges, on any image. Not a model to generate with. About 18.5 GB on the card; shares Flux.1's text encoders and VAE."
 
 [[entry.file]]
