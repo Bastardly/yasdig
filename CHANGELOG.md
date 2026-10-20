@@ -12,6 +12,14 @@ What changed in each release of yasdig. Each release's executables are on the
     the video model are offered: Wan LoRAs are read by their size, so a TI2V-5B LoRA
     never reaches a 14B. On the Wan 2.2 A14B pair each LoRA says which expert it
     patches (both, low noise or high noise). A reopened clip puts its LoRAs back.
+  - **Long clips, in shots.** The Prompts panel's *Shots* list makes a clip one
+    segment per shot, each going on from the previous shot's last frame: the Prompt
+    is the scene, a shot what happens next, and five shots of 3 s make 15 s (up to
+    20 shots). On TI2V-5B, A14B and H3, whose first frame can be given. Stopping —
+    or a shot failing — after the first keeps the shots already made. *Continue this
+    clip* in the clip dialog sets up a new clip that starts with one and goes on
+    from its last frame. Only one frame carries across a seam, so motion can change
+    direction there.
   - **The clip dialog.** Click the clip on the stage to open it full size, as a
     picture opens Refine & adjust. *Enlarge* makes a new version of it (FSR on every
     frame, sharpness and clarity), *History* lists the original and each version —

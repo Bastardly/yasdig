@@ -127,6 +127,9 @@ function renderInfo(c, ms, saved) {
     <p class="sub">${esc(c.model)} · ${v.steps} steps · CFG ${v.cfg_scale} · ${esc(v.sampler)}${shift}${moe}
       ${v.vae_tiling ? ' · VAE tiling' : ''}${c.audio ? ' · with sound' : ''}</p>
     ${c.source ? `<p class="sub">First frame: <code>${esc(c.source)}</code></p>` : ''}
+    ${c.continues ? `<p class="sub">Continues <code>${esc(c.continues)}</code></p>` : ''}
+    ${(c.shots ?? []).length > 1 ? `<ol class="sub">${c.shots.map((s, i) =>
+      `<li>${esc(s)}${c.shot_starts?.[i] != null ? ` <span class="val">· from ${(c.shot_starts[i] / Math.max(1, c.fps)).toFixed(1)} s</span>` : ''}</li>`).join('')}</ol>` : ''}
     <table class="helptable"><tbody>${files}</tbody></table>
     ${saved ? `<p class="sub">Saved <code>${esc(saved)}</code></p>` : ''}`;
   // Opt-in, as on the Image tab: the box keeps what was typed until this is

@@ -1188,6 +1188,9 @@ struct VideoModelDto {
     /// True for the mixture-of-experts pair: the page shows the second set of
     /// step/CFG boxes only when they mean something.
     is_moe: bool,
+    /// Whether a clip can go on from its last frame: shots and *Continue this
+    /// clip* ([`config::VideoFamily::chains`]).
+    chains: bool,
     /// The memory mode the model runs with, resolved — `memory` beside it is
     /// the raw entry, which an old `offload_to_cpu` key leaves unset.
     memory_mode: String,
@@ -1470,6 +1473,7 @@ fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> 
             frame_grid: m.family.frame_grid(),
             forced_fps: m.family.forced_fps(),
             is_moe: m.family.is_moe(),
+            chains: m.family.chains(),
             memory_mode: m.memory_mode().to_string(),
             missing: m.missing().iter().map(|p| p.display().to_string()).collect(),
             duration: m.duration(),

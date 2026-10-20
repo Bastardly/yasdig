@@ -394,6 +394,10 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   gap: var(--sp-2); margin-top: var(--sp-2);
 }
 .lorarow .btn { padding: var(--sp-2); }
+/* A long clip's shot: its number, its text, remove. */
+.shotrow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--sp-2); align-items: start; margin-top: var(--sp-2); }
+.shotrow b { padding-top: var(--sp-2); color: var(--text-dim); }
+.shotrow .btn { padding: var(--sp-2); }
 /* The A14B pair's expert choice, under its row. */
 .loraexpert { width: 100%; margin-top: var(--sp-1); }
 

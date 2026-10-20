@@ -50,6 +50,68 @@ const videoLoras = loraPicker({
   onChange: () => syncVideoSummaries(),
 });
 
+// ---- Shots -------------------------------------------------------------------
+//
+// A long clip is one segment per shot, each made from the last one's final
+// frame (`Engine::video`); the Prompt is the scene and a shot what happens in
+// it. The rows hold their own text, so a redraw is only for adding or removing.
+// `continueFrom` is a clip id the next one starts with — *Continue this clip*.
+let continueFrom = null;
+
+function shotList() {
+  return [...$('vshots').querySelectorAll('textarea')].map((t) => t.value.trim()).filter(Boolean);
+}
+
+function drawShots(list) {
+  $('vshots').innerHTML = list.map((text, i) => `
+    <div class="shotrow">
+      <b>${i + 1}</b>
+      <textarea class="short" aria-label="Shot ${i + 1}" placeholder="what happens in this shot">${esc(text)}</textarea>
+      <button type="button" class="btn btn-danger" data-del="${i}" title="Remove this shot">&times;</button>
+    </div>`).join('');
+  syncShots();
+}
+
+// What the shots add up to: their count times one segment's length, the
+// segment being the Frames box after the model's rounding.
+function syncShots() {
+  const m = currentVideoModel();
+  const rows = $('vshots').querySelectorAll('textarea').length;
+  const n = shotList().length;
+  const note = $('vshotnote');
+  note.classList.remove('err');
+  if (!m) { note.textContent = ''; return; }
+  const frames = alignFrames(parseInt($('vframes').value, 10), m.frame_grid);
+  const fps = m.forced_fps ?? (parseInt($('vfps').value, 10) || 1);
+  const seg = frames / fps;
+  if ((rows || continueFrom) && !m.chains) {
+    note.textContent = `${m.name} can't go on from a clip's last frame, so it makes one clip at a time — `
+      + 'TI2V-5B, A14B and H3 can.';
+    note.classList.add('err');
+  } else if (n > 1 || (n && continueFrom)) {
+    note.textContent = `${n} shots × ${seg.toFixed(1)} s ≈ ${(n * seg).toFixed(1)} s`
+      + (continueFrom ? ', after the clip it continues' : '');
+  } else {
+    note.textContent = rows ? 'One shot is one clip; add another to make it longer.' : '';
+  }
+  $('vcontinue').hidden = !continueFrom;
+  if (continueFrom) {
+    $('vcontinue').innerHTML = `Continues <code>${esc(continueFrom)}</code> from its last frame `
+      + '<button type="button" class="btn" id="vcontinueclear" title="Make a fresh clip instead">Don’t</button>';
+    $('vcontinueclear').onclick = () => { continueFrom = null; syncShots(); syncVideoSummaries(); };
+  }
+}
+
+// Set up the next clip to go on from `c` — the clip dialog's *Continue this
+// clip*: its settings back in the boxes, its shots cleared for new ones.
+export function continueClip(c) {
+  applyClip(c);
+  continueFrom = c.id;
+  drawShots(['']);
+  $('vfold-prompt').open = true;
+  $('vshots').querySelector('textarea')?.focus();
+}
+
 // The model's missing files, less any a pick replaced: a Wan VAE that only
 // exists under models/vae/ is a missing part until it is picked in its row.
 function missingNow(m) {
@@ -88,7 +150,11 @@ function partsDeparted() {
 // anything that sets the boxes without an event (`syncVideo`, `applyClip`).
 function syncVideoSummaries() {
   const p = $('vprompt').value.trim();
-  $('vsum-prompt').textContent = p ? `— ${p.length > 60 ? p.slice(0, 60) + '…' : p}` : '';
+  const shots = shotList().length;
+  $('vsum-prompt').textContent = (p ? `— ${p.length > 60 ? p.slice(0, 60) + '…' : p}` : '')
+    + (shots > 1 ? ` · ${shots} shots` : '') + (continueFrom ? ' · continues a clip' : '');
+  // A long clip is a departure from one clip a Generate: the rail's dot says so.
+  $('vsum-prompt').classList.toggle('on', shots > 1 || !!continueFrom);
   const m = $('vmodel').value;
   const picked = partsDeparted();
   const loras = videoLoras.get();
@@ -185,6 +251,7 @@ function syncVideo() {
   $('vclearmodel').hidden = !m.tuned;
   syncReady();
   syncVideoNote();
+  syncShots();
   syncVideoSummaries();
 }
 
@@ -295,6 +362,8 @@ function vidPayload() {
     parts: videoParts.picked(),
     // Always sent, `[]` included: the picker is the whole answer.
     loras: videoLoras.get(),
+    shots: shotList(),
+    continue_from: continueFrom,
   };
 }
 
@@ -314,6 +383,11 @@ async function startClip() {
     // Onto the stage unless another clip was opened while this one rendered:
     // then it only joins the grid, and the one being looked at stays.
     if (!clip || clip.id === shownAtStart) renderClip(data.clip, data.gen_ms, data.saved);
+    // A long clip cut short says why — a Stop or a failed shot — and is kept.
+    if (data.note) $('verr').textContent = data.note;
+    // Continuing is for one clip: the next Generate starts afresh.
+    continueFrom = null;
+    syncShots();
     loadClips();
   } catch (e) {
     const msg = String(e.message || e);
@@ -440,6 +514,9 @@ function applyClip(c) {
   $('vhsteps').value = v.high_noise_steps ?? '';
   $('vhcfg').value = v.high_noise_cfg_scale ?? '';
   vSource.set(c.source);
+  // Its shots, to make it again or to edit; a reopen is not a continuation.
+  continueFrom = null;
+  drawShots(c.shots ?? []);
   // Its picked LoRAs; a clip from before picks has none.
   videoLoras.set(v.picked_loras ?? []);
   syncVideoNote();
@@ -505,6 +582,22 @@ export function initVideo() {
   for (const ev of ['input', 'change']) $('tab-video').addEventListener(ev, syncVideoSummaries);
   $('vgo').addEventListener('click', startClip);
   $('vsavemodel').addEventListener('click', () => saveVideoDefaults(false));
+  $('vshotadd').addEventListener('click', () => {
+    const list = [...$('vshots').querySelectorAll('textarea')].map((t) => t.value);
+    drawShots([...list, '']);
+    [...$('vshots').querySelectorAll('textarea')].at(-1)?.focus();
+    syncVideoSummaries();
+  });
+  $('vshots').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-del]');
+    if (!b) return;
+    const list = [...$('vshots').querySelectorAll('textarea')].map((t) => t.value);
+    list.splice(Number(b.dataset.del), 1);
+    drawShots(list);
+    syncVideoSummaries();
+  });
+  $('vshots').addEventListener('input', syncShots);
+  for (const id of ['vframes', 'vfps']) $(id).addEventListener('input', syncShots);
   $('vclearmodel').addEventListener('click', () => saveVideoDefaults(true));
   $('vstop').addEventListener('click', cancelClip);
   vSource.init();
@@ -545,6 +638,9 @@ export function initVideo() {
   // An enlarge in the clip dialog adds a version: the grid's copy of the
   // clip, and the stage's, are the record it changed.
   initClipView({
+    // Only a family that chains can go on from a clip's last frame.
+    canContinue: (c) => !!videoModels.find((m) => m.name === c.model)?.chains,
+    onContinue: continueClip,
     onClipChange: (c) => {
       const i = clips.findIndex((x) => x.id === c.id);
       if (i >= 0) clips[i] = c;

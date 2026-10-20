@@ -1432,6 +1432,14 @@ from `family` goes on `VideoModelDto`.
     save compares against (`update_video_model`: typed round trip first, `memory`
     against `memory_mode()`); a saved part is kept only when it isn't discovery's.
     `POST /model-settings {kind: "video"}`; `reconcile` takes a video `exists` too.
+  - **Long clips are shots** (`VideoRequest.shots`, `continue_from`): one sd-cli
+    run per shot in one job, seed `seed + k`, conditioned `"{prompt}. {shot}"`.
+    Shot 1 of a fresh clip renders into the clip; every other into `seg{k}/` from
+    the clip's last frame, then `append_segment` drops its first frame (the seam,
+    redrawn from `-i`) and its sound's first frame. Only `VideoFamily::chains()`
+    (5B, A14B, H3 — `-i` is a first frame there; VACE reads it as a reference, T2V
+    ignores it). Failure or Stop at shot k>1 keeps 1..k-1 with `VideoResult.note`.
+    A multi-shot clip drops sd-cli's `clip.avi` (it is shot 1 alone).
   - **A saved clip is an output**: `list_outputs` lists `{stem}.avi` with
     `video: true`; `find_output` stays PNG-only (it resolves image sources), and
     `find_clip_output` finds the clip; `free_stem` checks both; delete, star

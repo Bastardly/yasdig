@@ -165,6 +165,12 @@ const HELP = [
         + 'change of size, and every Refine and Hi-res pass is told them again at '
         + 'its own size. The model card calls this experimental: it guides, it '
         + 'doesn’t trace.' },
+  { ids: ['vshots'],
+    text: 'A longer clip, one shot at a time. Each shot is a segment of the '
+        + 'Frames above, made from the previous shot’s last frame, and says what '
+        + 'happens next — the Prompt stays the scene: who, where, the look. Five '
+        + 'shots of 3 s make a 15 s clip. Only one frame carries across a seam, so '
+        + 'motion can change direction there. TI2V-5B, A14B and H3 can do it.' },
   { ids: ['vloras'],
     text: 'LoRAs for the video model, from models/loras/ — only the ones for this '
         + 'model’s size are offered (a TI2V-5B LoRA does nothing to a 14B). On the '

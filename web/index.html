@@ -592,6 +592,14 @@
       <prompt-box>
         <textarea id="vnegative" class="short"></textarea>
       </prompt-box>
+
+      <!-- A long clip: one segment per shot, each going on from the last one's
+           final frame. The Prompt is the scene, a shot what happens in it. -->
+      <label class="grouphead" data-help="vshots">Shots</label>
+      <div id="vshots"></div>
+      <button type="button" id="vshotadd" class="btn spaced">+ Add shot</button>
+      <p class="sub" id="vshotnote"></p>
+      <p class="sub" id="vcontinue" hidden></p>
     </div>
   </section>
   <section class="fpanel" id="vfold-gen" aria-label="Generation" hidden>
@@ -938,6 +946,8 @@
     <button type="button" class="btn btn-choice railbtn" data-panel="cb-enlarge">Enlarge</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="cb-history">History</button>
     <div class="railfoot">
+      <button type="button" id="cbcontinue" class="btn btn-block" hidden
+        title="Set up a new clip that starts with this one and goes on from its last frame">Continue this clip</button>
       <a id="cbdownload" class="btn btn-block" download
         title="The version on screen as one .avi file, to your computer">Download</a>
       <button type="button" id="cbsave" class="btn btn-run btn-block"

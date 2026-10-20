@@ -32,6 +32,8 @@ let panels = null;
 // Told when a clip's versions change, so the Video tab's grid and stage hold
 // the clip as it now is.
 let onClip = () => {};
+let canContinue = () => false;
+let onContinue = () => {};
 
 const isClip = () => view?.kind === 'clip';
 const fps = () => Math.max(1, isClip() ? view.clip.fps : view.info.fps);
@@ -165,6 +167,7 @@ function syncRail() {
   const clip = isClip();
   for (const b of $('clipbox').querySelectorAll('.lbrail .railbtn')) b.hidden = !clip;
   $('cbsave').hidden = !clip;
+  $('cbcontinue').hidden = !clip || !canContinue(view.clip);
   if (!clip) {
     for (const id of ['panel-cb-enlarge', 'panel-cb-history']) if ($(id).open) $(id).open = false;
   }
@@ -272,8 +275,10 @@ function dragSplit(e) {
   cv.addEventListener('pointerup', up);
 }
 
-export function initClipView({ onClipChange } = {}) {
+export function initClipView({ onClipChange, canContinue: can, onContinue: cont } = {}) {
   if (onClipChange) onClip = onClipChange;
+  if (can) canContinue = can;
+  if (cont) onContinue = cont;
   panels = floatPanels({
     host: $('clipbox'),
     rail: $('clipbox').querySelector('.lbrail'),
@@ -302,6 +307,13 @@ export function initClipView({ onClipChange } = {}) {
   $('cbcanvas').addEventListener('pointerdown', dragSplit);
   $('cbenlarge').addEventListener('click', enlarge);
   $('cbsave').addEventListener('click', save);
+  // The new clip is set up on the Video tab, where Generate is.
+  $('cbcontinue').addEventListener('click', () => {
+    if (!isClip()) return;
+    const c = view.clip;
+    $('clipbox').close();
+    onContinue(c);
+  });
   $('cbclose').addEventListener('click', () => $('clipbox').close());
   // Closing stops playback and lets the decoded frames go.
   $('clipbox').addEventListener('close', () => {
