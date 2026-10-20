@@ -4,6 +4,7 @@ import { setBusy, setIdle, onIdle } from './busy.js';
 import { cancelPost, guardClose, lookKey, onPassResult, onViewerResult, setLook, showFullSize, setViewerImage } from './viewer.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
 import { passRunning } from './jobs.js';
+import { openOutputClip } from './clipview.js';
 
 // ---- Outputs ----------------------------------------------------------------
 //
@@ -57,11 +58,13 @@ const edited = new Map();
 export function outputGrid(el, list, { height = 200, empty = '', onPick, star: stars }) {
   el.innerHTML = list.map((o) => {
     const w = o.height ? Math.round(height * o.width / o.height) : height;
-    const tile = `<button type="button" data-stem="${esc(o.stem)}"
-      title="${esc(o.prompt || o.stem)}&#10;${o.width}×${o.height} · seed ${o.seed}${
-        o.template ? ` · ${esc(o.template)}` : ''}">
+    // A saved clip has no size or seed in its listing, and a play mark.
+    const tip = o.video ? `${esc(o.stem)}&#10;a clip` : `${esc(o.prompt || o.stem)}&#10;${o.width}×${o.height} · seed ${o.seed}${
+      o.template ? ` · ${esc(o.template)}` : ''}`;
+    const tile = `<button type="button" data-stem="${esc(o.stem)}"${o.video ? ' class="vidtile"' : ''}
+      title="${tip}">
       <img src="/outputs/${esc(o.stem)}/thumb.png${edited.has(o.stem) ? `?v=${edited.get(o.stem)}` : ''}" alt="" loading="lazy"
-        width="${w}" height="${height}"></button>`;
+        ${o.video ? '' : `width="${w}" `}height="${height}">${o.video ? '<span class="playmark" aria-hidden="true">▶</span>' : ''}</button>`;
     return stars ? `<span class="tile">${tile}${star(o.favorite)}</span>` : tile;
   }).join('') || empty;
   for (const b of el.querySelectorAll('button[data-stem]')) {
@@ -187,6 +190,11 @@ function pick(stem) {
     markGrid();
     return;
   }
+  // A saved clip plays in the clip dialog; Refine & adjust is for pictures.
+  if (outputs.find((o) => o.stem === stem)?.video) {
+    openOutputClip(stem);
+    return;
+  }
   openAt(outputs.findIndex((o) => o.stem === stem));
 }
 
@@ -275,7 +283,10 @@ function mayLeave() {
 // Clamped rather than wrapped: running off the end of a gallery and reappearing
 // at the other one loses your place in it.
 function step(d) {
-  const i = Math.min(outputs.length - 1, Math.max(0, index + d));
+  // Over the saved clips, which Refine & adjust can't open.
+  let i = index + d;
+  while (i >= 0 && i < outputs.length && outputs[i].video) i += d;
+  if (i < 0 || i >= outputs.length) return;
   // `index` is already the in-flight target while one is opening, so a second
   // press computes the one after it and coalesces rather than repeating.
   // Not while a pass runs on this picture: its answer is for the one open.

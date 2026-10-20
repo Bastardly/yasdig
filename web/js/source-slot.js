@@ -81,7 +81,8 @@ async function drawPicker() {
   $('pickfavorites').classList.toggle('active', fav);
   grid.innerHTML = '<p class="sub">Loading…</p>';
   const from = pickGallery;
-  const list = await fetchOutputs(from);
+  // Pictures only: a saved clip is never a picture to start from.
+  const list = (await fetchOutputs(from)).filter((o) => !o.video);
   if (from !== pickGallery) return;
   outputGrid(grid, list, {
     height: 140,

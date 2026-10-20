@@ -436,6 +436,7 @@ impl Store {
         let dir = self.gallery_dir(gallery);
         for p in [
             dir.join(format!("{stem}.png")),
+            dir.join(format!("{stem}.avi")),
             dir.join(format!("{stem}-thumb.png")),
             dir.join(format!("{stem}.json")),
         ] {
@@ -458,7 +459,7 @@ impl Store {
             bail!("'{stem}' is not an output name");
         }
         let (out, fav) = (self.gallery_dir(Gallery::Output), self.gallery_dir(Gallery::Favorites));
-        if !self.output_path(stem).is_file() && fav.join(format!("{stem}.png")).is_file() {
+        if media(out, stem).is_none() && media(fav, stem).is_some() {
             return Ok(());
         }
         copy_picture(out, fav, stem, false)?;
@@ -472,10 +473,10 @@ impl Store {
             bail!("'{stem}' is not an output name");
         }
         let (out, fav) = (self.gallery_dir(Gallery::Output), self.gallery_dir(Gallery::Favorites));
-        if !fav.join(format!("{stem}.png")).is_file() {
+        if media(fav, stem).is_none() {
             return Ok(());
         }
-        if !self.output_path(stem).is_file() {
+        if media(out, stem).is_none() {
             copy_picture(fav, out, stem, false)?;
         }
         self.delete_output(Gallery::Favorites, stem)
@@ -527,7 +528,8 @@ impl Store {
     fn free_stem(&self, base: &str) -> String {
         let mut stem = base.to_string();
         for n in 2.. {
-            if self.find_output(&stem).is_none() {
+            // A picture or a saved clip: one stem, one thing, in either gallery.
+            if self.find_output(&stem).is_none() && self.find_clip_output(&stem).is_none() {
                 break;
             }
             stem = format!("{base}-{n}");
@@ -611,6 +613,7 @@ impl Store {
         &self.output
     }
 
+    #[cfg(test)]
     pub fn output_path(&self, stem: &str) -> PathBuf {
         self.output.join(format!("{stem}.png"))
     }
@@ -632,6 +635,19 @@ impl Store {
         [&self.output, &self.favorite_outputs]
             .into_iter()
             .map(|d| d.join(format!("{stem}.png")))
+            .find(|p| p.is_file())
+    }
+
+    /// A saved clip (`{stem}.avi`) in either gallery — the clip dialog's
+    /// *Save to output*. Apart from [`Store::find_output`], which every image
+    /// route resolves a source through and a clip must never answer.
+    pub fn find_clip_output(&self, stem: &str) -> Option<PathBuf> {
+        if !valid_id(stem) {
+            return None;
+        }
+        [&self.output, &self.favorite_outputs]
+            .into_iter()
+            .map(|d| d.join(format!("{stem}.avi")))
             .find(|p| p.is_file())
     }
 
@@ -664,7 +680,7 @@ impl Store {
         }
         // Beside whichever copy was found, so a favourite whose original has
         // been deleted still gets — and keeps — a tile.
-        let Some(src) = self.find_output(stem) else {
+        let Some(src) = self.find_output(stem).or_else(|| self.find_clip_output(stem)) else {
             bail!("no saved image '{stem}'");
         };
         let dir = src.parent().unwrap_or(&self.output);
@@ -749,8 +765,14 @@ pub fn output_bytes(display: &Path, item: Option<&WorkItem>) -> Result<Vec<u8>> 
 fn write_output_thumb(src: &Path, stem: &str) -> Result<PathBuf> {
     let dir = src.parent().context("an output has a folder")?;
     let thumb = dir.join(format!("{stem}-thumb.png"));
-    let img = image::open(src)
-        .with_context(|| format!("loading {} for a thumbnail", src.display()))?;
+    // A clip's tile is its first frame, the JPEG its MJPEG AVI holds.
+    let img = if src.extension().is_some_and(|e| e == "avi") {
+        let avi = crate::avi::read(src)?;
+        let first = avi.frames.first().with_context(|| format!("{} has no frames", src.display()))?;
+        image::load_from_memory(first).with_context(|| format!("decoding {}'s first frame", src.display()))?
+    } else {
+        image::open(src).with_context(|| format!("loading {} for a thumbnail", src.display()))?
+    };
     let tw = ((img.width() as f32) * (THUMB_HEIGHT as f32) / (img.height().max(1) as f32))
         .round() as u32;
     let small = img.thumbnail(tw.max(1), THUMB_HEIGHT);
@@ -800,9 +822,11 @@ impl Store {
             .filter_map(|e| e.ok())
             .filter_map(|e| {
                 let path = e.path();
-                if path.extension()?.to_str()? != "png" {
-                    return None;
-                }
+                let video = match path.extension()?.to_str()? {
+                    "png" => false,
+                    "avi" => true,
+                    _ => return None,
+                };
                 let stem = path.file_stem()?.to_str()?;
                 // `{stem}-thumb.png` is a companion, not an entry — the same
                 // trap the work item listing avoids by filtering on `.json`.
@@ -811,6 +835,7 @@ impl Store {
                 }
                 let mut entry = self.output_entry(stem, &path);
                 entry.favorite = gallery == Gallery::Favorites;
+                entry.video = video;
                 Some(entry)
             })
             .collect();
@@ -856,6 +881,7 @@ impl Store {
                 .map(|i| i.template.clone())
                 .unwrap_or_default(),
             favorite: false,
+            video: false,
         }
     }
 }
@@ -903,10 +929,19 @@ fn remove_edits(dir: &Path) -> Result<()> {
     std::fs::remove_dir(dir).with_context(|| format!("deleting {}", dir.display()))
 }
 
+/// `{stem}.png` or `{stem}.avi` in `dir`: a saved picture or a saved clip.
+fn media(dir: &Path, stem: &str) -> Option<PathBuf> {
+    ["png", "avi"].into_iter().map(|x| dir.join(format!("{stem}.{x}"))).find(|p| p.is_file())
+}
+
 fn copy_picture(from: &Path, to: &Path, stem: &str, sidecar: bool) -> Result<()> {
     std::fs::create_dir_all(to).with_context(|| format!("creating {}", to.display()))?;
+    // The picture, or a saved clip in its place: one of the two is required.
+    let main = media(from, stem)
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| format!("{stem}.png"));
     for (name, required) in [
-        (format!("{stem}.png"), true),
+        (main, true),
         (format!("{stem}.json"), sidecar),
         (format!("{stem}-thumb.png"), false),
     ] {
@@ -955,6 +990,9 @@ pub struct Output {
     pub template: String,
     /// It lives in `user/favorite_outputs/` — the tile's star is filled.
     pub favorite: bool,
+    /// A saved clip (`{stem}.avi`), opened in the clip dialog rather than
+    /// Refine & adjust. Its tile carries a play mark.
+    pub video: bool,
 }
 
 fn write_sidecar(path: &Path, item: &WorkItem) -> Result<()> {
@@ -1147,6 +1185,32 @@ mod tests {
 
         assert!(store.overwrite_output("../x", &new, false).is_err());
         assert!(store.overwrite_output("999-gone", &new, false).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A clip saved to output is listed beside the pictures, marked as video,
+    /// with a tile made from its first frame; it takes its stem from a picture
+    /// of the same name, never shares it, and is deleted and starred like one.
+    /// It is never an image source.
+    #[test]
+    fn a_saved_clip_is_an_output_of_its_own_kind() {
+        let dir = std::env::temp_dir().join(format!("yasdig-clipout-{}", new_id(3)));
+        let store = Store::new(&dir, &dir.join("user"));
+        let frame = dir.join("f.png");
+        image::RgbImage::from_pixel(64, 32, image::Rgb([200, 40, 40])).save(&frame).unwrap();
+        let avi = store.output_dir().join("500-1.avi");
+        crate::avi::write(&avi, &[frame.clone(), frame.clone()], 8, None).unwrap();
+        let listed = store.list_outputs(Gallery::Output);
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].video && listed[0].stem == "500-1");
+        let thumb = store.ensure_output_thumb("500-1").unwrap();
+        assert!(image::open(&thumb).is_ok_and(|t| t.width() > t.height()));
+        assert!(store.find_output("500-1").is_none(), "a clip is never a picture to start from");
+        assert_eq!(store.free_stem("500-1"), "500-1-2");
+        store.favorite_output("500-1").unwrap();
+        assert!(store.find_clip_output("500-1").is_some_and(|p| p.starts_with(store.gallery_dir(Gallery::Favorites))));
+        store.delete_output(Gallery::Favorites, "500-1").unwrap();
+        assert!(store.find_clip_output("500-1").is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 

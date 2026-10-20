@@ -562,7 +562,6 @@
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-gen">Generation</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-adv">Advanced</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-info">Info</button>
-    <button type="button" class="btn btn-choice railbtn" data-panel="vid-clip">Clip</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-clips">Clips</button>
     <div class="railfoot">
       <!-- Not the image tab's Stop, which finishes the image in flight and then
@@ -726,11 +725,6 @@
   <section class="fpanel" id="panel-vid-info" aria-label="Info" hidden>
     <header class="fphead"><b>Info</b><button type="button" class="fpclose" aria-label="Close Info">&times;</button></header>
     <div class="fpbody" id="vresultinfo"><p class="sub">No clip yet.</p></div>
-  </section>
-  <!-- Enlarge frames for the clip on screen (`renderClip`). -->
-  <section class="fpanel" id="panel-vid-clip" aria-label="Clip" hidden>
-    <header class="fphead"><b>Clip</b><button type="button" class="fpclose" aria-label="Close Clip">&times;</button></header>
-    <div class="fpbody" id="vclipinfo"><p class="sub">No clip yet.</p></div>
   </section>
   <section class="fpanel" id="panel-vid-clips" aria-label="Clips" hidden>
     <header class="fphead"><b>Clips</b><button type="button" class="fpclose" aria-label="Close Clips">&times;</button></header>
@@ -925,6 +919,72 @@
      dismissed on any click, which is fine for something you only look at and
      hostile for something you edit in — one stray click on the picture and the
      picture is gone. So: an explicit x, plus Escape, which <dialog> gives free. -->
+<!-- The clip dialog (clipview.js): a clip played full size, its enlarged
+     versions as History with Compare, Enlarge, and Save to output — Refine &
+     adjust's shape (`.lbrail`, floating panels). A clip from the Clips grid
+     has all of it; one saved to output only plays. -->
+<dialog id="clipbox">
+  <nav class="lbrail" aria-label="Clip">
+    <b class="railtitle">Clip</b>
+    <button type="button" class="btn btn-choice railbtn" data-panel="cb-enlarge">Enlarge</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="cb-history">History</button>
+    <div class="railfoot">
+      <a id="cbdownload" class="btn btn-block" download
+        title="The version on screen as one .avi file, to your computer">Download</a>
+      <button type="button" id="cbsave" class="btn btn-run btn-block"
+        title="Save the version on screen to work/output/ — the Outputs tab">Save to output</button>
+    </div>
+  </nav>
+  <div class="cbpane">
+    <canvas id="cbcanvas" title="Drag the line to compare, when Compare is on"></canvas>
+    <div class="player">
+      <button type="button" id="cbplay" class="btn">Play</button>
+      <input id="cbscrub" type="range" min="0" max="0" step="1" value="0" aria-label="Frame">
+      <span class="val" id="cbat"></span>
+    </div>
+    <audio id="cbaudio" preload="auto" hidden></audio>
+  </div>
+  <section class="fpanel" id="panel-cb-enlarge" aria-label="Enlarge" hidden>
+    <header class="fphead"><b>Enlarge</b> <span class="foldstate" id="sum-cb-enlarge"></span><button type="button" class="fpclose" aria-label="Close Enlarge">&times;</button></header>
+    <div class="fpbody">
+      <label for="cbfactor">Enlarge by</label>
+      <select id="cbfactor"></select>
+      <div class="row">
+        <div>
+          <label for="cbsharp">Sharpness</label>
+          <input id="cbsharp" type="number" step="0.05" min="0" max="1" value="0">
+        </div>
+        <div>
+          <label for="cbclarity">Clarity</label>
+          <input id="cbclarity" type="number" step="0.05" min="-1" max="1" value="0">
+        </div>
+      </div>
+      <p class="sub">FSR on every frame of the original, into a new version in
+        History. A fixed kernel can't flicker, so the frames stay stable — unlike
+        a per-frame diffusion, which invents new detail each frame and boils.</p>
+    </div>
+    <div class="fpfoot">
+      <button type="button" id="cbenlarge" class="btn btn-run btn-block">Enlarge</button>
+    </div>
+  </section>
+  <section class="fpanel" id="panel-cb-history" aria-label="History" hidden>
+    <header class="fphead"><b>History</b> <span class="foldstate" id="sum-cb-history"></span><button type="button" class="fpclose" aria-label="Close History">&times;</button></header>
+    <div class="fpbody">
+      <p class="sub">The original and each enlarge. Click one to play it; Compare
+        splits the frame between it and the original.</p>
+      <div class="checks" id="cbcmprow" hidden>
+        <label><input type="checkbox" id="cbcompare"> Compare with the original</label>
+      </div>
+      <ol id="cbhistory" class="rdhistory"></ol>
+    </div>
+  </section>
+  <div class="statuscard">
+    <div id="cberr" class="err"></div>
+    <p class="sub" id="cbprog"></p>
+  </div>
+  <button type="button" id="cbclose" aria-label="Close">&times;</button>
+</dialog>
+
 <dialog id="lightbox">
   <!-- The rail: a toggle per panel, and what acts on the whole picture —
        the view, Download and the Outputs saves. A toggle carries a

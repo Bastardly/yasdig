@@ -1,8 +1,5 @@
 import { $, esc } from './dom.js';
-import { S } from './state.js';
-import { wireHints } from './hints.js';
-import { upOptions, setUpFactor } from './image.js';
-import { enlargeClip } from './video.js';
+import { openClipView } from './clipview.js';
 
 // ---- The frame player -------------------------------------------------------
 //
@@ -140,8 +137,8 @@ function renderInfo(c, ms, saved) {
   });
 }
 
-// The clip, rebuilt per clip: the player on the stage, what is known about it
-// in the Info panel and Enlarge frames in the Clip panel. `ms` and `saved` are
+// The clip, rebuilt per clip: the player on the stage and what is known about
+// it in the Info panel; the clip dialog does the rest. `ms` and `saved` are
 // only there for a clip that was just generated — opening one from the grid
 // has no timing to report, and inventing one would be worse than leaving it out.
 export function renderClip(c, ms, saved) {
@@ -157,42 +154,15 @@ export function renderClip(c, ms, saved) {
     </div>
     ${c.audio ? `<audio id="vaudio" preload="auto" src="/videos/${encodeURIComponent(c.id)}/audio.wav"></audio>` : ''}`;
   renderInfo(c, ms, saved);
-  $('vclipinfo').innerHTML = `
-    <div class="actions">
-      <select id="vfactor" title="FSR enlarge every frame">${upOptions()}</select>
-      <button type="button" id="venlarge" class="btn btn-run">Enlarge frames</button>
-    </div>
-    <div class="row">
-      <div>
-        <label for="vsharp">Sharpness</label>
-        <input id="vsharp" type="number" step="0.05" min="0" max="1" value="0">
-      </div>
-      <div>
-        <label for="vclarity">Clarity</label>
-        <input id="vclarity" type="number" step="0.05" min="-1" max="1" value="0">
-      </div>
-    </div>
-    <!-- Their own boxes rather than the Image tab's sliders. Those live under
-         the still on the other tab, so reading them here would apply a filter
-         the user can neither see nor set — and every clip would inherit
-         whatever the last image was left at. -->
-    <p class="sub" id="venlargenote">
-      Writes the filtered clip to work/output/, as a video file or a folder of
-      frames — Settings → Save clips as. A fixed kernel can't flicker, so the
-      frames stay stable — unlike a per-frame diffusion, which invents new
-      detail each frame and boils.</p>
-    <div id="vsaved" class="meta"></div>`;
-  $('vfactor').value = S.upFactor;
-  $('vfactor').addEventListener('change', (e) => setUpFactor(parseFloat(e.target.value)));
+  // The canvas opens the clip dialog — Enlarge, History, Save to output — as
+  // the Image tab's picture opens Refine & adjust.
+  $('vcanvas').title = 'Click to enlarge, compare and save';
+  $('vcanvas').addEventListener('click', () => openClipView(clip));
   $('vplay').addEventListener('click', togglePlay);
   $('vscrub').addEventListener('input', (e) => {
     stopPlayback();
     drawFrame(parseInt(e.target.value, 10) || 0);
   });
-  $('venlarge').addEventListener('click', enlargeClip);
-  // The only labelled controls on the page built after load, so the only place
-  // that has to ask for its (i) icons itself.
-  wireHints($('vclipinfo'));
   loadFrames(c);
 }
 

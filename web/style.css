@@ -588,7 +588,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    fitted preview a few hundred pixels wide — so this is the only place the
    sliders can honestly live. Nothing here scrolls but the rail, the pane and
    each panel's body. */
-#lightbox {
+#lightbox, #clipbox {
   width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh;
   margin: 0; padding: 0; border: 0; overflow: hidden;
   background: var(--ink-900); color: var(--text);
@@ -597,11 +597,11 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    by the UA rule `dialog:not([open]) { display: none }`, which an id selector
    outranks — so declaring `display: flex` on #lightbox alone shows the viewer
    from page load, permanently, with close() having no attribute to remove. */
-#lightbox[open] { display: flex; }
-#lightbox::backdrop { background: var(--scrim); }
+#lightbox[open], #clipbox[open] { display: flex; }
+#lightbox::backdrop, #clipbox::backdrop { background: var(--scrim); }
 /* The rail: a narrow column of panel toggles, and at its foot what acts on
    the whole picture. Fixed width; it scrolls on its own on a short window. */
-#lightbox { --railw: var(--rail-w); }
+#lightbox, #clipbox { --railw: var(--rail-w); }
 .lbrail, .wsrail {
   flex: 0 0 var(--railw); display: flex; flex-direction: column; gap: var(--sp-2);
   overflow-y: auto; padding: var(--sp-3); background: var(--ink-700); border-right: var(--line);
@@ -770,7 +770,21 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* Positioned against the dialog, which is fixed while modal — not against the
    viewport pane, which scrolls and would carry the button away with it. Above
    the panels, so one dragged to the corner never hides it. */
-#lbclose {
+/* The clip dialog's pane: the player, fitted. */
+.cbpane {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: var(--sp-4);
+}
+.cbpane canvas { max-width: 100%; max-height: calc(100% - 56px); border-radius: var(--r-lg); cursor: ew-resize; }
+.cbpane .player { width: min(100%, 720px); }
+#clipbox .statuscard { bottom: calc(var(--foot-h) + var(--sp-3)); }
+/* A saved clip's tile: a play mark over its first frame. */
+.vidtile { position: relative; }
+.playmark {
+  position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+  color: var(--text); font-size: var(--fs-title); text-shadow: 0 1px 4px var(--ink-900);
+}
+#lbclose, #cbclose {
   z-index: 1002;
   position: absolute; top: 10px; right: 14px;
   padding: 2px var(--sp-3); font-size: var(--fs-display); line-height: 1.1;

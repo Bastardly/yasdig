@@ -5,7 +5,7 @@ import { onJobs, runningKind, stopKind } from './jobs.js';
 export const IDLE_LABELS = {
   go: 'Generate', redrawgo: 'Refine image', rdedit: 'Edit', rdupscale: 'Scale', rdextendgo: 'Extend', rdhires: 'Hi-res',
   saveout: 'Save to output', lbsave: 'Save as new output', lbsavechanges: 'Save changes',
-  vgo: 'Generate clip', venlarge: 'Enlarge frames',
+  vgo: 'Generate clip', cbenlarge: 'Enlarge', cbsave: 'Save to output',
   cgo: 'Convert',
 };
 

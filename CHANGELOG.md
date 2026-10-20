@@ -12,6 +12,15 @@ What changed in each release of yasdig. Each release's executables are on the
     the video model are offered: Wan LoRAs are read by their size, so a TI2V-5B LoRA
     never reaches a 14B. On the Wan 2.2 A14B pair each LoRA says which expert it
     patches (both, low noise or high noise). A reopened clip puts its LoRAs back.
+  - **The clip dialog.** Click the clip on the stage to open it full size, as a
+    picture opens Refine & adjust. *Enlarge* makes a new version of it (FSR on every
+    frame, sharpness and clarity), *History* lists the original and each version —
+    click one to play it, *Compare* splits the frame between it and the original —
+    and *Save to output* writes the version on screen to the output folder. The Clip
+    panel is gone; Enlarge no longer writes into the output folder by itself.
+  - **Clips in Outputs.** A saved clip shows in the Outputs tab with a play mark and
+    opens in the clip dialog, where it plays with its sound. It can be starred and
+    deleted like a picture, and is never offered as a picture to start from.
   - **A live preview** while a clip renders: every frame of it, looping in the
     status card. It is sd.cpp's cheap preview at the model's latent resolution, so
     it shows the composition and motion forming, blurry by nature.

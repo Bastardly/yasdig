@@ -1418,6 +1418,20 @@ from `family` goes on `VideoModelDto`.
     while another is open joins the grid without taking the stage.
   - The size boxes snap up to `size_multiple` on `change` (`snapSize`); the seed has
     the Image tab's rail line (`#vseedline`) and Reset.
+  - **The clip dialog** (`#clipbox`, `web/js/clipview.js`, its own player — the
+    stage keeps playing): opened from the stage's canvas, or an Outputs ▶ tile
+    (`openOutputClip`, play only). **Enlarges are versions inside the clip**
+    (`work/videos/{id}/v{n}/`, `Clip.versions`, always from the original's frames),
+    served at `/videos/{id}/v{n}/frames/{k}.png` and `…/v{n}/clip.avi`
+    (`clip_version` parses `{id}` or `{id}/v{n}`; `v0` is refused). *Save to output*
+    is `POST /videos/save {id, version}` → `{id}[-v{n}].avi` (or a frames folder).
+  - **A saved clip is an output**: `list_outputs` lists `{stem}.avi` with
+    `video: true`; `find_output` stays PNG-only (it resolves image sources), and
+    `find_clip_output` finds the clip; `free_stem` checks both; delete, star
+    (`copy_picture`'s `media`) and the tile (`write_output_thumb` decodes the first
+    JPEG) handle either. Frames come out of the AVI (`/outputs/{stem}/frames/{k}.jpg`,
+    one parsed file cached, `OUTPUT_CLIP`). The source picker filters `video`, and
+    Refine & adjust's ←/→ steps over them.
 - **Convert tab** (`src/convert.rs`, `-M convert`): a file's on-disk type isn't its run
   cost — Vulkan has no fp8 matmul, so `Linear::forward` casts to BF16 in-graph; `q4_K`
   is the first type actually multiplied.

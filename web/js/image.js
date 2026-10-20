@@ -770,7 +770,7 @@ export const upOptions = () => {
 
 export function setUpFactor(v) {
   S.upFactor = v;
-  for (const id of ['hiresscale', 'dl-hiresscale', 'vfactor']) {
+  for (const id of ['hiresscale', 'dl-hiresscale', 'cbfactor']) {
     const el = $(id);
     if (!el || parseFloat(el.value) === v) continue;
     if (el.tagName === 'SELECT' && ![...el.options].some((o) => parseFloat(o.value) === v)) {

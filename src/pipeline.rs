@@ -524,13 +524,12 @@ pub struct ConvertResult {
     pub folded: usize,
 }
 
-/// Where [`Engine::enlarge_clip`] put the frames it wrote.
+/// What [`Engine::enlarge_clip`] made: a new version of the clip, and the clip
+/// as it now stands (its `versions` listing the new one).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EnlargeResult {
-    pub dir: PathBuf,
-    pub frames: u32,
-    pub width: u32,
-    pub height: u32,
+    pub clip: Clip,
+    pub version: u32,
     pub ms: u128,
 }
 
@@ -2098,6 +2097,7 @@ impl Engine {
             source: req.source.clone(),
             audio: false,
             video: m,
+            versions: Vec::new(),
         };
         self.videos.finish(&mut clip)?;
         // Past every `?`, so the guard stops being a sweeper. Everything before
@@ -2109,7 +2109,7 @@ impl Engine {
         let saved = if self.cfg.settings().video_save == crate::settings::VIDEO_FILE {
             let dest = self.items.output_dir().join(format!("{}.avi", clip.id));
             self.videos
-                .export(&clip, &dest)
+                .export(&clip, 0, &dest)
                 .with_context(|| format!("the clip is in the Clips grid, but its video file wasn't written ({})", dest.display()))?;
             Some(dest)
         } else {
@@ -2118,39 +2118,17 @@ impl Engine {
         Ok(VideoResult { clip, gen_ms, saved })
     }
 
-    /// Run every frame of a finished clip through the FSR passes and write the
-    /// result into `work/output/{id}-x{factor}/`.
-    ///
-    /// This is the clip's analogue of the hi-res button, and it is the reason
-    /// the generator writes frames rather than a container. Two properties make
-    /// it work on video, and they are worth stating because "AI upscaling" is
-    /// assumed to shimmer:
-    ///
-    /// * **A fixed kernel cannot flicker.** EASU, RCAS and clarity are
-    ///   deterministic functions of the pixels, so two near-identical frames
-    ///   produce two near-identical outputs. Stability is by construction.
-    /// * **Invariant 6 covers the size change**: both display filters size their
-    ///   band from the image, so a sharpness setting means the same thing after
-    ///   the enlargement as before it.
-    ///
-    /// What must *not* happen here is re-diffusion. A per-frame img2img draws
-    /// its own noise and invents its own detail with no knowledge of its
-    /// neighbours; adjacent frames then diverge structurally and the eye reads
-    /// that as boiling. Refining a clip properly is a video-native pass —
-    /// `--control-video` over this same frame directory — not this function
-    /// with a sampler bolted on.
-    ///
-    /// Output goes to a *subdirectory* rather than flat into `work/output/`,
-    /// which the picker lists: 33 near-identical tiles would bury the images
-    /// someone actually wants to animate, and a folder of frames is what an
-    /// editor wants anyway.
+    /// FSR every frame of clip `id` into a new version of it (`v{n}/` inside
+    /// the clip's folder), listed in its record — the clip dialog's History.
+    /// Invariant 9: the frames are filtered, never re-diffused. Always from the
+    /// original's frames, so a 2× of a 2× isn't a second resample.
     pub fn enlarge_clip(
         &mut self,
         id: &str,
         factor: f32,
         filters: &Filters,
     ) -> Result<EnlargeResult> {
-        let clip = self.videos.load(id)?;
+        let mut clip = self.videos.load(id)?;
         if !(1.0..=MAX_UPSCALE).contains(&factor) {
             bail!("upscale factor must be between 1.0 and {MAX_UPSCALE}");
         }
@@ -2159,41 +2137,29 @@ impl Engine {
         if frames.is_empty() {
             bail!("clip '{id}' has no frames on disk");
         }
-
-        let name = format!("{id}-x{}", (factor * 100.0).round() as u32);
-        let out_dir = self.items.output_dir().join(&name);
+        let n = clip.versions.iter().map(|v| v.n).max().unwrap_or(0) + 1;
+        let out_dir = self.videos.version_root(id, n);
+        // A half-written version is swept by its guard, as a clip's is.
+        let mut guard = crate::videos::ClipDir::at(out_dir.clone());
         std::fs::create_dir_all(&out_dir)
             .with_context(|| format!("creating {}", out_dir.display()))?;
 
         let t = Instant::now();
         let mut size = (0, 0);
         for (i, frame) in frames.iter().enumerate() {
-            let dest = out_dir.join(format!("frame_{i:03}.png"));
-            size = self.fsr().process(frame, &dest, factor, filters)?;
+            size = self.fsr().process(frame, &self.videos.version_frame(id, n, i as u32), factor, filters)?;
         }
-        // Saved the way a clip is (`Settings::video_save`): as a file, the
-        // frames encoded with the clip's soundtrack and then let go of, or as
-        // the folder of frames.
-        let out_dir = if self.cfg.settings().video_save == crate::settings::VIDEO_FILE {
-            let file = self.items.output_dir().join(format!("{name}.avi"));
-            let audio = match self.videos.audio_path(id) {
-                Some(p) => Some(crate::avi::read_wav(&p)?),
-                None => None,
-            };
-            let enlarged: Vec<PathBuf> = (0..frames.len()).map(|i| out_dir.join(format!("frame_{i:03}.png"))).collect();
-            crate::avi::write(&file, &enlarged, clip.fps, audio.as_ref())?;
-            std::fs::remove_dir_all(&out_dir).with_context(|| format!("removing {}", out_dir.display()))?;
-            file
-        } else {
-            out_dir
-        };
-        Ok(EnlargeResult {
-            dir: out_dir,
-            frames: frames.len() as u32,
+        clip.versions.push(crate::videos::ClipVersion {
+            n,
+            factor,
+            sharpness: filters.sharpness,
+            clarity: filters.clarity,
             width: size.0,
             height: size.1,
-            ms: t.elapsed().as_millis(),
-        })
+        });
+        self.videos.save(&clip)?;
+        guard.keep();
+        Ok(EnlargeResult { clip, version: n, ms: t.elapsed().as_millis() })
     }
 
     /// Low-denoise img2img on the current image, at its current resolution and

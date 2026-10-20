@@ -997,7 +997,7 @@ fn route(
         }
         ("GET", p) if p.starts_with("/videos/") && p.contains("/frames/") => {
             match clip_frame(p) {
-                Some((id, n)) => handle_clip_file(conn, cfg, id, Some(n)),
+                Some((id, version, n)) => handle_clip_file(conn, cfg, id, Some((version, n))),
                 None => conn.respond(404, "text/plain", b"not found"),
             }
         }
@@ -1007,6 +1007,7 @@ fn route(
         ("GET", p) if p.starts_with("/videos/") && p.ends_with("/clip.avi") => {
             handle_clip_media(conn, cfg, p.trim_start_matches("/videos/").trim_end_matches("/clip.avi"), true)
         }
+        ("POST", "/videos/save") => handle_save_clip(conn, cfg, &req.body),
         ("POST", "/videos/delete") => handle_delete_clips(conn, cfg, &req.body),
         ("GET", "/outputs") => handle_list_outputs(conn, cfg, Gallery::Output),
         ("POST", "/outputs/open") => handle_open_output(conn, lanes, &req.body),
@@ -1030,6 +1031,12 @@ fn route(
                 .trim_start_matches("/outputs/")
                 .trim_end_matches("/thumb.png");
             handle_output_thumb(conn, cfg, stem)
+        }
+        // A saved clip, for the clip dialog: what it is, its frames, its sound
+        // and the file itself.
+        ("GET", p) if p.starts_with("/outputs/") && (p.ends_with("/video.json")
+            || p.ends_with("/audio.wav") || p.ends_with("/clip.avi") || p.contains("/frames/")) => {
+            handle_output_clip(conn, cfg, p.trim_start_matches("/outputs/"))
         }
 
         _ => conn.respond(404, "text/plain", b"not found"),
@@ -1140,10 +1147,19 @@ fn handle_thumb(conn: &mut http::Connection, cfg: &Config, shelf: Shelf, id: &st
 /// The id is not validated here — [`handle_clip_file`] does that with
 /// [`workitems::valid_id`], which is the traversal guard and should stay the
 /// single place that decision is made.
-fn clip_frame(path: &str) -> Option<(&str, u32)> {
-    let (id, frame) = path.trim_start_matches("/videos/").split_once("/frames/")?;
+fn clip_frame(path: &str) -> Option<(&str, u32, u32)> {
+    let (head, frame) = path.trim_start_matches("/videos/").split_once("/frames/")?;
     let n = frame.strip_suffix(".png")?.parse::<u32>().ok()?;
-    Some((id, n))
+    let (id, version) = clip_version(head)?;
+    Some((id, version, n))
+}
+
+/// `{id}` or `{id}/v{n}` — the original, or an enlarged version of it.
+fn clip_version(head: &str) -> Option<(&str, u32)> {
+    match head.split_once("/v") {
+        Some((id, n)) => Some((id, n.parse::<u32>().ok().filter(|&n| n > 0)?)),
+        None => Some((head, 0)),
+    }
 }
 
 /// The clip archive, for a connection thread. Same reasoning as [`store`].
@@ -1595,14 +1611,14 @@ fn handle_clip_file(
     conn: &mut http::Connection,
     cfg: &Config,
     id: &str,
-    frame: Option<u32>,
+    frame: Option<(u32, u32)>,
 ) -> Result<()> {
     if !workitems::valid_id(id) {
         return conn.respond(404, "text/plain", b"not found");
     }
     let store = video_store(cfg);
     let path = match frame {
-        Some(n) => store.frame_path(id, n),
+        Some((version, n)) => store.version_frame(id, version, n),
         None => store.thumb_path(id),
     };
     match std::fs::read(path) {
@@ -1615,13 +1631,19 @@ fn handle_clip_file(
 /// *Download*). The file is the one [`videos::VideoStore::download_file`]
 /// names, encoded on first request — a second or so of JPEG encoding, on the
 /// connection thread like every other file route.
-fn handle_clip_media(conn: &mut http::Connection, cfg: &Config, id: &str, video: bool) -> Result<()> {
+fn handle_clip_media(conn: &mut http::Connection, cfg: &Config, head: &str, video: bool) -> Result<()> {
     let store = video_store(cfg);
+    let Some((id, version)) = clip_version(head) else {
+        return conn.respond(404, "text/plain", b"not found");
+    };
     let Ok(clip) = store.load(id) else {
         return conn.respond(404, "text/plain", b"not found");
     };
+    if version > 0 && !clip.versions.iter().any(|v| v.n == version) {
+        return conn.respond(404, "text/plain", b"not found");
+    }
     let path = if video {
-        match store.download_file(&clip) {
+        match store.download_file(&clip, version) {
             Ok(p) => p,
             Err(e) => return conn.respond(500, "application/json", error_json(&format!("{e:#}")).as_bytes()),
         }
@@ -1640,6 +1662,53 @@ fn handle_clip_media(conn: &mut http::Connection, cfg: &Config, id: &str, video:
         ),
         Ok(body) => conn.respond(200, "audio/wav", &body),
         Err(_) => conn.respond(404, "text/plain", b"not found"),
+    }
+}
+
+/// `POST /videos/save {id, version}`: a version of a clip into `work/output/`
+/// — the clip dialog's *Save to output*. As a video file or a folder of
+/// frames, `Settings::video_save`'s choice; named `{id}` for the original and
+/// `{id}-v{n}` for a version. A file already there is the same clip saved
+/// before, and is answered rather than written twice.
+fn handle_save_clip(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        id: String,
+        #[serde(default)]
+        version: u32,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else {
+        return Ok(());
+    };
+    let videos = video_store(cfg);
+    let r = (|| -> Result<PathBuf> {
+        let clip = videos.load(&dto.id)?;
+        if dto.version > 0 && !clip.versions.iter().any(|v| v.n == dto.version) {
+            anyhow::bail!("clip '{}' has no version {}", dto.id, dto.version);
+        }
+        let name = match dto.version {
+            0 => clip.id.clone(),
+            n => format!("{}-v{n}", clip.id),
+        };
+        let out = store(cfg).output_dir().to_path_buf();
+        if cfg.settings().video_save == settings::VIDEO_FILE {
+            let dest = out.join(format!("{name}.avi"));
+            if !dest.is_file() {
+                videos.export(&clip, dto.version, &dest)?;
+            }
+            Ok(dest)
+        } else {
+            let dest = out.join(&name);
+            std::fs::create_dir_all(&dest)?;
+            for (i, f) in videos.version_frames(&clip.id, dto.version).iter().enumerate() {
+                std::fs::copy(f, dest.join(format!("frame_{i:03}.png")))?;
+            }
+            Ok(dest)
+        }
+    })();
+    match r {
+        Ok(p) => conn.respond(200, "application/json", serde_json::json!({ "saved": p }).to_string().as_bytes()),
+        Err(e) => conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
     }
 }
 
@@ -1688,6 +1757,84 @@ fn handle_list_outputs(conn: &mut http::Connection, cfg: &Config, gallery: Galle
 /// one thumbnail route that can take ~100 ms — an output PNG is full resolution.
 /// It is still on the connection thread, since it's a decode and a resize rather
 /// than GPU work, and the grid asks for its tiles in parallel.
+/// The saved clip last read, so a clip dialog fetching 100 frames reads its
+/// file once: the path, its mtime, and what [`avi::read`] made of it.
+static OUTPUT_CLIP: Mutex<Option<(PathBuf, std::time::SystemTime, Arc<avi::Contents>)>> = Mutex::new(None);
+
+fn output_clip(cfg: &Config, stem: &str) -> Option<Arc<avi::Contents>> {
+    let path = store(cfg).find_clip_output(stem)?;
+    let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+    let mut cache = OUTPUT_CLIP.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((p, t, c)) = cache.as_ref() {
+        if *p == path && *t == mtime {
+            return Some(c.clone());
+        }
+    }
+    let contents = Arc::new(avi::read(&path).ok()?);
+    *cache = Some((path, mtime, contents.clone()));
+    Some(contents)
+}
+
+/// `GET /outputs/{stem}/video.json|frames/{k}.jpg|audio.wav|clip.avi` — a clip
+/// saved to `work/output/` (or kept as a favourite), read straight out of its
+/// MJPEG AVI: the frames are the JPEGs it holds.
+fn handle_output_clip(conn: &mut http::Connection, cfg: &Config, rest: &str) -> Result<()> {
+    let not_found = |conn: &mut http::Connection| conn.respond(404, "text/plain", b"not found");
+    let Some((stem, what)) = rest.split_once('/') else {
+        return not_found(conn);
+    };
+    if what == "clip.avi" {
+        return match store(cfg).find_clip_output(stem).and_then(|p| std::fs::read(p).ok()) {
+            Some(body) => conn.respond_with(
+                200,
+                "video/x-msvideo",
+                &format!("Content-Disposition: attachment; filename=\"{stem}.avi\"\r\n"),
+                &body,
+            ),
+            None => not_found(conn),
+        };
+    }
+    let Some(clip) = output_clip(cfg, stem) else {
+        return not_found(conn);
+    };
+    if what == "video.json" {
+        let (w, h) = clip
+            .frames
+            .first()
+            .and_then(|f| image::load_from_memory(f).ok())
+            .map(|i| (i.width(), i.height()))
+            .unwrap_or((0, 0));
+        let body = serde_json::json!({
+            "stem": stem, "frames": clip.frames.len(), "fps": clip.fps.max(1),
+            "width": w, "height": h, "audio": clip.audio.is_some(),
+        });
+        return conn.respond(200, "application/json", body.to_string().as_bytes());
+    }
+    if what == "audio.wav" {
+        let Some(audio) = clip.audio.as_ref() else {
+            return not_found(conn);
+        };
+        // Through a scratch file: the WAV writer writes paths.
+        let tmp = pipeline::scratch_dir(&cfg.base_dir.join("work")).join(format!("{stem}-audio.wav"));
+        return match avi::write_wav(&tmp, audio).and_then(|()| Ok(std::fs::read(&tmp)?)) {
+            Ok(body) => {
+                let _ = std::fs::remove_file(&tmp);
+                conn.respond(200, "audio/wav", &body)
+            }
+            Err(_) => not_found(conn),
+        };
+    }
+    let frame = what
+        .strip_prefix("frames/")
+        .and_then(|k| k.strip_suffix(".jpg"))
+        .and_then(|k| k.parse::<usize>().ok())
+        .and_then(|k| clip.frames.get(k));
+    match frame {
+        Some(jpg) => conn.respond(200, "image/jpeg", jpg),
+        None => not_found(conn),
+    }
+}
+
 fn handle_output_thumb(conn: &mut http::Connection, cfg: &Config, stem: &str) -> Result<()> {
     let body = store(cfg)
         .ensure_output_thumb(stem)
@@ -4125,8 +4272,12 @@ mod tests {
     /// clip's poster frame.
     #[test]
     fn a_frame_path_needs_a_number_or_nothing() {
-        assert_eq!(clip_frame("/videos/100-7/frames/0.png"), Some(("100-7", 0)));
-        assert_eq!(clip_frame("/videos/100-7/frames/32.png"), Some(("100-7", 32)));
+        assert_eq!(clip_frame("/videos/100-7/frames/0.png"), Some(("100-7", 0, 0)));
+        assert_eq!(clip_frame("/videos/100-7/frames/32.png"), Some(("100-7", 0, 32)));
+        // An enlarged version's frames, and no version 0 spelled out.
+        assert_eq!(clip_frame("/videos/100-7/v2/frames/5.png"), Some(("100-7", 2, 5)));
+        assert_eq!(clip_frame("/videos/100-7/v0/frames/5.png"), None);
+        assert_eq!(clip_frame("/videos/100-7/vx/frames/5.png"), None);
 
         for bad in [
             "/videos/100-7/frames/nonsense.png",
@@ -4146,7 +4297,7 @@ mod tests {
         // so the division of labour is on the record rather than assumed.
         assert_eq!(
             clip_frame("/videos/../../secrets/frames/0.png"),
-            Some(("../../secrets", 0))
+            Some(("../../secrets", 0, 0))
         );
         assert!(!workitems::valid_id("../../secrets"));
     }

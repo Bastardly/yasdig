@@ -321,11 +321,11 @@ const HELP = [
         + 'memory-hungry end of a clip, so this is the first thing to reach for '
         + 'when the render finishes and the *decode* runs out of VRAM. It costs '
         + 'time, not quality.' },
-  { ids: ['vsharp'],
+  { ids: ['cbsharp'],
     text: 'Sharpening applied to every enlarged frame. It is a fixed kernel — the '
         + 'same function of the same pixels every time — so it cannot flicker '
         + 'between frames the way a per-frame diffusion would. 0 is off.' },
-  { ids: ['vclarity'],
+  { ids: ['cbclarity'],
     text: 'Local contrast on every enlarged frame: a wide band, so it reads as '
         + 'depth rather than as edge sharpening. Negative softens. Fixed kernel '
         + 'again, so it stays stable in motion.' },

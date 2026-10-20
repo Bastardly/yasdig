@@ -1,10 +1,10 @@
 import { $, esc, getJSON, post, numOr, rememberFolds } from './dom.js';
 import { floatPanels } from './panels.js';
 import { MEMORY_LABELS, showError } from './memory.js';
-import { S } from './state.js';
 import { setBusy, setIdle, cancelRun } from './busy.js';
 import { soonJobs } from './jobs.js';
 import { clip, renderClip } from './player.js';
+import { initClipView } from './clipview.js';
 import { sourceSlot } from './source-slot.js';
 import { partRows } from './parts.js';
 import { loraPicker } from './loras.js';
@@ -290,27 +290,6 @@ async function startClip() {
 
 const cancelClip = () => cancelRun('vstop', 'video');
 
-export async function enlargeClip() {
-  if (!clip) return;
-  setBusy('venlarge', 'Enlarging…', 'enlarge');
-  $('verr').textContent = '';
-  soonJobs();
-  try {
-    const data = await post('/videos/enlarge', {
-      id: clip.id,
-      upscale: S.upFactor,
-      sharpness: parseFloat($('vsharp').value) || 0,
-      clarity: parseFloat($('vclarity').value) || 0,
-    });
-    $('vsaved').textContent =
-      `${data.frames} frames at ${data.width}×${data.height} → ${data.dir} (${data.ms} ms)`;
-  } catch (e) {
-    $('verr').textContent = String(e.message || e);
-  } finally {
-    setIdle('venlarge');
-  }
-}
-
 // ---- The clip grid ----------------------------------------------------------
 
 const vDeleteMode = () =>
@@ -454,7 +433,6 @@ const PANEL_DEFS = [
   { id: 'vid-gen', el: 'vfold-gen', open: true },
   { id: 'vid-adv', el: 'vfold-adv' },
   { id: 'vid-info' },
-  { id: 'vid-clip' },
   { id: 'vid-clips', open: true, corner: 'bottom-right' },
 ];
 
@@ -514,6 +492,16 @@ export function initVideo() {
       markClips();
     });
   }
+
+  // An enlarge in the clip dialog adds a version: the grid's copy of the
+  // clip, and the stage's, are the record it changed.
+  initClipView({
+    onClipChange: (c) => {
+      const i = clips.findIndex((x) => x.id === c.id);
+      if (i >= 0) clips[i] = c;
+      if (clip?.id === c.id) clip.versions = c.versions;
+    },
+  });
 
   loadVideoModels();
   loadClips();

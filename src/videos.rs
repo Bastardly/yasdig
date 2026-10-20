@@ -87,12 +87,48 @@ pub struct Clip {
     #[serde(default)]
     pub audio: bool,
     pub video: VideoModel,
+    /// The clip's enlarged versions, oldest first — the clip dialog's History.
+    /// Each is a folder of frames inside the clip's own (`v{n}/`), so deleting
+    /// the clip deletes them and nothing lands in `work/output/` unasked.
+    #[serde(default)]
+    pub versions: Vec<ClipVersion>,
+}
+
+/// One enlarged version of a clip: what made it, and its frames' size.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipVersion {
+    /// Its folder, `v{n}`; 1 is the first enlarge. The original is version 0.
+    pub n: u32,
+    pub factor: f32,
+    pub sharpness: f32,
+    pub clarity: f32,
+    pub width: u32,
+    pub height: u32,
 }
 
 // No `duration()` to match [`crate::config::VideoModel::duration`]: that one
 // exists because a *requested* frame count has to be rounded to the family's
 // grid first, and the page must not do that arithmetic twice. `Clip::frames` is
 // already what is on disk, so its duration is a division the page can do.
+
+/// The `frame_*.png` files directly in `dir`, sorted — the names are
+/// zero-padded, so name order is frame order.
+fn frames_in(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("frame_") && n.ends_with(".png"))
+        })
+        .collect();
+    out.sort();
+    out
+}
 
 /// `work/videos/`. Holds nothing but its path, like `workitems::Store`, so the
 /// GPU worker and each connection thread build their own.
@@ -166,32 +202,62 @@ impl VideoStore {
     /// A video file of the clip for the player's *Download*: sd-cli's own AVI
     /// when it wrote one, or one encoded once into the clip's folder — which
     /// [`VideoStore::delete`] and the sweep take with the rest of it.
-    pub fn download_file(&self, clip: &Clip) -> Result<PathBuf> {
+    pub fn download_file(&self, clip: &Clip, version: u32) -> Result<PathBuf> {
         let own = self.dir(&clip.id).join(CONTAINER);
-        if own.is_file() {
+        if version == 0 && own.is_file() {
             return Ok(own);
         }
-        let path = self.dir(&clip.id).join("download.avi");
+        let path = self.version_root(&clip.id, version).join("download.avi");
         if !path.is_file() {
-            self.export(clip, &path)?;
+            self.export(clip, version, &path)?;
         }
         Ok(path)
+    }
+
+    /// The folder a version's frames are in: the clip's own for the original
+    /// (0), `v{n}/` inside it for an enlarge.
+    pub fn version_root(&self, id: &str, version: u32) -> PathBuf {
+        match version {
+            0 => self.dir(id),
+            n => self.dir(id).join(format!("v{n}")),
+        }
+    }
+
+    /// Frame `k` of a version, by the [`FRAME_PATTERN`] name.
+    pub fn version_frame(&self, id: &str, version: u32, k: u32) -> PathBuf {
+        self.version_root(id, version).join(format!("frame_{k:03}.png"))
+    }
+
+    /// Every frame of a version, in order.
+    pub fn version_frames(&self, id: &str, version: u32) -> Vec<PathBuf> {
+        frames_in(&self.version_root(id, version))
+    }
+
+    /// Rewrite the clip's record — after an enlarge adds a version.
+    pub fn save(&self, clip: &Clip) -> Result<()> {
+        let json = serde_json::to_vec_pretty(clip).context("serializing clip")?;
+        let path = self.sidecar_path(&clip.id);
+        std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
     }
 
     /// The clip as one video file at `dest`: sd-cli's own AVI for a clip that
     /// came as one, otherwise its frames (and soundtrack) encoded by
     /// [`crate::avi::write`].
-    pub fn export(&self, clip: &Clip, dest: &Path) -> Result<()> {
+    pub fn export(&self, clip: &Clip, version: u32, dest: &Path) -> Result<()> {
         let own = self.dir(&clip.id).join(CONTAINER);
-        if own.is_file() {
+        if version == 0 && own.is_file() {
             std::fs::copy(&own, dest).with_context(|| format!("writing {}", dest.display()))?;
             return Ok(());
+        }
+        let frames = self.version_frames(&clip.id, version);
+        if frames.is_empty() {
+            bail!("clip '{}' has no version {version}", clip.id);
         }
         let audio = match self.audio_path(&clip.id) {
             Some(p) => Some(crate::avi::read_wav(&p)?),
             None => None,
         };
-        crate::avi::write(dest, &self.frames(&clip.id), clip.fps, audio.as_ref())
+        crate::avi::write(dest, &frames, clip.fps, audio.as_ref())
     }
 
     /// Every frame of a clip, in order.
@@ -200,20 +266,7 @@ impl VideoStore {
     /// this is also what tells us what `clip.frames` should say. Sorting is by
     /// name, which is why the pattern is zero-padded.
     pub fn frames(&self, id: &str) -> Vec<PathBuf> {
-        let Ok(entries) = std::fs::read_dir(self.dir(id)) else {
-            return Vec::new();
-        };
-        let mut out: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("frame_") && n.ends_with(".png"))
-            })
-            .collect();
-        out.sort();
-        out
+        frames_in(&self.dir(id))
     }
 
     /// Close out a finished clip: measure what sd-cli produced, write the
@@ -316,6 +369,11 @@ impl ClipDir {
     pub fn keep(&mut self) {
         self.keep = true;
     }
+
+    /// A guard over any folder this module writes: an enlarge's version.
+    pub fn at(dir: PathBuf) -> ClipDir {
+        ClipDir { dir, keep: false }
+    }
 }
 
 impl Drop for ClipDir {
@@ -372,6 +430,7 @@ t5xxl = "t.gguf"
             source: Some("100-7-s0".to_string()),
             audio: false,
             video: model(),
+            versions: Vec::new(),
         }
     }
 
@@ -400,7 +459,7 @@ t5xxl = "t.gguf"
         assert!(c.audio);
         assert_eq!(crate::avi::read_wav(&store.audio_path("100-7").unwrap()).unwrap(), audio);
         // The download is sd-cli's own file, not a second encode of its JPEGs.
-        assert_eq!(store.download_file(&c).unwrap(), out);
+        assert_eq!(store.download_file(&c, 0).unwrap(), out);
         std::fs::remove_dir_all(&dir).ok();
     }
 
