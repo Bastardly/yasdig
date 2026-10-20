@@ -2201,6 +2201,90 @@ impl Engine {
         Ok(VideoResult { clip, gen_ms, saved, note })
     }
 
+    /// Add one shot to clip `id`, in place: a segment from its last frame,
+    /// conditioned on the clip's own prompt and `shot`, joined as a long
+    /// clip's shots are — the clip dialog's *Extend*. With `replace_last`, the
+    /// clip's last added shot goes first (*Regenerate*); with no `shot`, that
+    /// is all (*Undo*). The clip's enlarged versions no longer cover it and go.
+    ///
+    /// Runs on the model as the clip recorded it, so the new shot matches the
+    /// old ones: size, steps, LoRAs, parts.
+    pub fn extend_clip(
+        &mut self,
+        id: &str,
+        shot: Option<&str>,
+        seed: i64,
+        replace_last: bool,
+    ) -> Result<VideoResult> {
+        let mut clip = self.videos.load(id)?;
+        let m = clip.video.clone();
+        if !m.family.chains() {
+            bail!("a {} clip can't go on from its last frame", m.family.label());
+        }
+        let fps = clip.fps.max(1);
+        let mut note = None;
+        if replace_last {
+            if clip.shot_starts.len() < 2 {
+                bail!("this clip has no added shot to take back");
+            }
+            let start = clip.shot_starts.pop().expect("checked above");
+            clip.shots.pop();
+            self.videos.truncate(id, start, fps)?;
+        }
+        let t = Instant::now();
+        if let Some(shot) = shot.map(str::trim).filter(|s| !s.is_empty()) {
+            if clip.shot_starts.len() >= MAX_SHOTS {
+                bail!("a long clip has at most {MAX_SHOTS} shots");
+            }
+            let missing = m.missing();
+            if !missing.is_empty() {
+                bail!("the model this clip was made with is missing files: {}", missing.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "));
+            }
+            self.cfg.check_video_loras(&m.picked_loras, m.family)?;
+            let seed = if seed < 0 { random_seed() } else { seed };
+            let vars = self.cfg.settings().variables;
+            let text = format!("{}. {}", clip.prompt, variables::expand(shot, &vars, seed)?);
+            // A clip made in one go is its own first shot, starting at frame 0.
+            if clip.shot_starts.is_empty() {
+                clip.shot_starts.push(0);
+                clip.shots.push(String::new());
+            }
+            let k = clip.shot_starts.len();
+            let last = self.videos.frames(id).pop().context("the clip has no frames")?;
+            let out = self.videos.prepare_segment(id, k, m.audio_vae.is_some())?;
+            let ran = self.sd().video(
+                &m,
+                &text,
+                &clip.negative,
+                seed,
+                &VideoIo { init: Some(&last), control: None, out: &out },
+                Some((k + 1, k + 1)),
+            );
+            if let Err(e) = ran {
+                let _ = std::fs::remove_dir_all(self.videos.dir(id).join(format!("seg{k}")));
+                // A shot taken back for this one is gone: say so rather than
+                // leave the clip looking untouched.
+                if replace_last {
+                    self.videos.finish(&mut clip)?;
+                }
+                return Err(e);
+            }
+            clip.shot_starts.push(self.videos.append_segment(id, k, fps)?);
+            clip.shots.push(shot.to_string());
+        }
+        // One shot left is a clip made in one go again.
+        if clip.shot_starts.len() < 2 {
+            clip.shot_starts.clear();
+            clip.shots.clear();
+        }
+        let dropped = self.videos.invalidate(&mut clip);
+        if dropped > 0 {
+            note = Some(format!("Its {dropped} enlarged version(s) no longer covered it and were removed."));
+        }
+        self.videos.finish(&mut clip)?;
+        Ok(VideoResult { clip, gen_ms: t.elapsed().as_millis(), saved: None, note })
+    }
+
     /// FSR every frame of clip `id` into a new version of it (`v{n}/` inside
     /// the clip's folder), listed in its record — the clip dialog's History.
     /// Invariant 9: the frames are filtered, never re-diffused. Always from the

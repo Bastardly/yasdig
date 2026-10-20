@@ -944,6 +944,7 @@
 <dialog id="clipbox">
   <nav class="lbrail" aria-label="Clip">
     <b class="railtitle">Clip</b>
+    <button type="button" class="btn btn-choice railbtn" data-panel="cb-extend">Extend</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="cb-enlarge">Enlarge</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="cb-history">History</button>
     <div class="railfoot">
@@ -964,6 +965,23 @@
     </div>
     <audio id="cbaudio" preload="auto" hidden></audio>
   </div>
+  <!-- One shot at a time, on the clip itself: what happens next, from its
+       last frame — and if it comes out wrong, Regenerate or Undo it. -->
+  <section class="fpanel" id="panel-cb-extend" aria-label="Extend" hidden>
+    <header class="fphead"><b>Extend</b> <span class="foldstate" id="sum-cb-extend"></span><button type="button" class="fpclose" aria-label="Close Extend">&times;</button></header>
+    <div class="fpbody">
+      <label for="cbshot" data-help="cbshot">What happens next</label>
+      <textarea id="cbshot" class="short" placeholder="she turns and walks toward the door"></textarea>
+      <p class="sub" id="cbextendnote"></p>
+      <div class="btnrow" id="cblastrow" hidden>
+        <button type="button" id="cbregen" class="btn" title="Draw the last shot again with a new seed — and the text above, if you changed it">Regenerate last shot</button>
+        <button type="button" id="cbundo" class="btn" title="Take the last shot off the clip">Undo last shot</button>
+      </div>
+    </div>
+    <div class="fpfoot">
+      <button type="button" id="cbextend" class="btn btn-run btn-block">Extend</button>
+    </div>
+  </section>
   <section class="fpanel" id="panel-cb-enlarge" aria-label="Enlarge" hidden>
     <header class="fphead"><b>Enlarge</b> <span class="foldstate" id="sum-cb-enlarge"></span><button type="button" class="fpclose" aria-label="Close Enlarge">&times;</button></header>
     <div class="fpbody">

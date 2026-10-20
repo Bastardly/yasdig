@@ -23,6 +23,12 @@ What changed in each release of yasdig. Each release's executables are on the
     clip* in the clip dialog sets up a new clip that starts with one and goes on
     from its last frame. Only one frame carries across a seam, so motion can change
     direction there.
+  - **Extend a clip a shot at a time**, with no plan up front: the clip dialog's
+    *Extend* panel takes what happens next and adds it to the clip from its last
+    frame, with the clip's own prompt and settings. If it comes out wrong,
+    *Regenerate last shot* draws it again with a new seed (and new text, if you
+    changed it), and *Undo last shot* takes it off. The Shots list still makes
+    several in one go.
   - **The clip dialog.** Click the clip on the stage to open it full size, as a
     picture opens Refine & adjust. *Enlarge* makes a new version of it (FSR on every
     frame, sharpness and clarity), *History* lists the original and each version —

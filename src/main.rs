@@ -264,6 +264,13 @@ enum Work {
         sharpness: Option<f32>,
         clarity: Option<f32>,
     },
+    /// One shot added to a clip, or its last one taken back (`Engine::extend_clip`).
+    ExtendClip {
+        id: String,
+        shot: Option<String>,
+        seed: i64,
+        replace_last: bool,
+    },
 }
 
 impl Work {
@@ -278,7 +285,7 @@ impl Work {
             | Work::Edit { id, .. }
             | Work::Extend { id, .. }
             | Work::Upscale { id, .. } => Some(*id),
-            Work::Run(_) | Work::Video(_) | Work::Convert(_) | Work::EnlargeClip { .. } => None,
+            Work::Run(_) | Work::Video(_) | Work::Convert(_) | Work::EnlargeClip { .. } | Work::ExtendClip { .. } => None,
         }
     }
 }
@@ -641,6 +648,10 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
                 )
                 .and_then(|r| json_body(&r)),
         ),
+        Work::ExtendClip { id, shot, seed, replace_last } => queue.finish(
+            t.id,
+            engine.extend_clip(&id, shot.as_deref(), seed, replace_last).and_then(|r| json_body(&r)),
+        ),
     }
 }
 
@@ -987,6 +998,7 @@ fn route(
         ("GET", "/video-models") => handle_video_models(conn, cfg),
         ("POST", "/video") => handle_video(conn, lanes, &req.body),
         ("POST", "/videos/enlarge") => handle_enlarge_clip(conn, lanes, &req.body),
+        ("POST", "/videos/extend") => handle_extend_clip(conn, lanes, &req.body),
         ("GET", "/videos") => handle_list_clips(conn, cfg),
         // Two guard arms rather than one, because a clip serves both a
         // thumbnail and its frames and only the frame route has a number in it.
@@ -1570,6 +1582,34 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
     enqueue_wait(conn, lanes, jobs::Kind::Video, label, Work::Video(req), false, 500)
 }
 
+/// `POST /videos/extend {id, shot?, seed?, replace_last?}`: a shot added to a
+/// clip from its last frame, or (`replace_last`) its last one redrawn, or
+/// with no `shot` taken back. Through the queue, as a clip is.
+fn handle_extend_clip(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        id: String,
+        #[serde(default)]
+        shot: Option<String>,
+        #[serde(default)]
+        seed: Option<i64>,
+        #[serde(default)]
+        replace_last: bool,
+    }
+    match parse_json::<Dto>(conn, body)? {
+        Some(dto) => enqueue_wait(
+            conn,
+            lanes,
+            jobs::Kind::Video,
+            format!("extend {}", dto.id),
+            Work::ExtendClip { id: dto.id, shot: dto.shot, seed: dto.seed.unwrap_or(-1), replace_last: dto.replace_last },
+            false,
+            500,
+        ),
+        None => Ok(()),
+    }
+}
+
 fn handle_enlarge_clip(
     conn: &mut http::Connection,
     lanes: &Lanes,
@@ -1743,8 +1783,8 @@ fn handle_clip_media(conn: &mut http::Connection, cfg: &Config, head: &str, vide
 /// `POST /videos/save {id, version}`: a version of a clip into `work/output/`
 /// — the clip dialog's *Save to output*. As a video file or a folder of
 /// frames, `Settings::video_save`'s choice; named `{id}` for the original and
-/// `{id}-v{n}` for a version. A file already there is the same clip saved
-/// before, and is answered rather than written twice.
+/// `{id}-v{n}` for a version. A file already there is replaced (and its tile
+/// redrawn): the clip may have grown shots since.
 fn handle_save_clip(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
@@ -1767,10 +1807,11 @@ fn handle_save_clip(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> R
         };
         let out = store(cfg).output_dir().to_path_buf();
         if cfg.settings().video_save == settings::VIDEO_FILE {
+            // Written every time: a clip extended since its last save is
+            // longer than the file of that name.
             let dest = out.join(format!("{name}.avi"));
-            if !dest.is_file() {
-                videos.export(&clip, dto.version, &dest)?;
-            }
+            videos.export(&clip, dto.version, &dest)?;
+            let _ = std::fs::remove_file(out.join(format!("{name}-thumb.png")));
             Ok(dest)
         } else {
             let dest = out.join(&name);

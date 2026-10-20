@@ -647,7 +647,10 @@ export function initVideo() {
     onClipChange: (c) => {
       const i = clips.findIndex((x) => x.id === c.id);
       if (i >= 0) clips[i] = c;
-      if (clip?.id === c.id) clip.versions = c.versions;
+      // The stage plays it as it now is: a shot added or taken back changes
+      // its frames, an enlarge its versions.
+      if (clip?.id === c.id) renderClip(c);
+      renderClips();
     },
   });
 

@@ -233,6 +233,35 @@ impl VideoStore {
         Ok(start)
     }
 
+    /// Cut a clip back to its first `keep` frames — *Undo* of an added shot —
+    /// and its sound to the same length.
+    pub fn truncate(&self, id: &str, keep: u32, fps: u32) -> Result<()> {
+        for f in self.frames(id).iter().skip(keep as usize) {
+            std::fs::remove_file(f).with_context(|| format!("removing {}", f.display()))?;
+        }
+        let path = self.dir(id).join(AUDIO);
+        if path.is_file() {
+            let mut a = crate::avi::read_wav(&path)?;
+            let bytes = (keep as u64 * a.sample_rate as u64 / fps.max(1) as u64) as usize * a.channels as usize * 2;
+            a.pcm.truncate(bytes);
+            crate::avi::write_wav(&path, &a)?;
+        }
+        Ok(())
+    }
+
+    /// Everything made *from* a clip's frames, let go when its frames change:
+    /// sd-cli's container, the cached download, and the enlarged versions,
+    /// which no longer cover the clip. Answers how many versions went.
+    pub fn invalidate(&self, clip: &mut Clip) -> usize {
+        self.drop_container(&clip.id);
+        let _ = std::fs::remove_file(self.dir(&clip.id).join("download.avi"));
+        let n = clip.versions.len();
+        for v in clip.versions.drain(..) {
+            let _ = std::fs::remove_dir_all(self.version_root(&clip.id, v.n));
+        }
+        n
+    }
+
     /// A long clip's joined frames are the clip; sd-cli's container of its
     /// first shot alone must not stand in for it on *Download*.
     pub fn drop_container(&self, id: &str) {
@@ -683,6 +712,16 @@ t5xxl = "t.gguf"
         let px = |p: &Path| image::open(p).unwrap().to_luma8().get_pixel(0, 0)[0];
         assert_eq!(frames.iter().map(|f| px(f)).collect::<Vec<_>>(), [0, 1, 2, 101, 102]);
         assert!(!store.dir("100-7").join("seg1").exists());
+
+        // Undo of that shot: back to the clip's own three frames.
+        store.truncate("100-7", 3, 24).unwrap();
+        assert_eq!(store.frames("100-7").len(), 3);
+        assert_eq!(store.append_segment("100-7", 1, 24).is_err(), true, "the segment is gone");
+        let seg = store.prepare_segment("100-7", 1, false).unwrap();
+        for i in 0..3u8 {
+            shade(&seg.with_file_name(format!("frame_{i:03}.png")), 100 + i);
+        }
+        store.append_segment("100-7", 1, 24).unwrap();
 
         let (_, mut g2) = store.prepare("200-7", false).unwrap();
         store.seed_from("200-7", "100-7").unwrap();

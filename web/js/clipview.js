@@ -166,10 +166,15 @@ function drawHistory() {
 function syncRail() {
   const clip = isClip();
   for (const b of $('clipbox').querySelectorAll('.lbrail .railbtn')) b.hidden = !clip;
+  // Extend only where a clip can go on from its last frame.
+  const extendable = clip && canContinue(view.clip);
+  $('clipbox').querySelector('[data-panel="cb-extend"]').hidden = !extendable;
+  if (!extendable && $('panel-cb-extend').open) $('panel-cb-extend').open = false;
+  syncExtend();
   $('cbsave').hidden = !clip;
   $('cbcontinue').hidden = !clip || !canContinue(view.clip);
   if (!clip) {
-    for (const id of ['panel-cb-enlarge', 'panel-cb-history']) if ($(id).open) $(id).open = false;
+    for (const id of ['panel-cb-enlarge', 'panel-cb-history', 'panel-cb-extend']) if ($(id).open) $(id).open = false;
   }
   const href = clip
     ? `/videos/${encodeURIComponent(view.clip.id)}${version ? `/v${version}` : ''}/clip.avi`
@@ -217,6 +222,45 @@ export async function openOutputClip(stem) {
   }
   open();
   show(0);
+}
+
+// The Extend panel's state: how many shots, and whether the last one can be
+// redrawn or taken back (a clip made in one go has none added).
+function syncExtend() {
+  if (!isClip()) return;
+  const c = view.clip;
+  const shots = c.shot_starts?.length ?? 0;
+  $('cblastrow').hidden = shots < 2;
+  $('cbextendnote').textContent = shots >= 2
+    ? `${shots} shots, ${(c.frames / Math.max(1, c.fps)).toFixed(1)} s. The last: “${c.shots?.at(-1) ?? ''}”.`
+    : `${(c.frames / Math.max(1, c.fps)).toFixed(1)} s. A shot goes on from its last frame, `
+      + 'with the clip’s own prompt and settings.';
+  $('sum-cb-extend').textContent = shots >= 2 ? `— ${shots} shots` : '';
+}
+
+// One shot added, redrawn (`replace`) or taken back (no `shot`): the clip
+// itself changes, so the dialog plays it from where the new shot starts.
+async function extend(shot, replace) {
+  if (!isClip()) return;
+  const btn = shot === null ? 'cbundo' : replace ? 'cbregen' : 'cbextend';
+  setBusy(btn, shot === null ? 'Undoing…' : 'Drawing the shot…', 'video');
+  $('cberr').textContent = '';
+  soonJobs();
+  try {
+    const data = await post('/videos/extend', { id: view.clip.id, shot, replace_last: replace });
+    view.clip = data.clip;
+    onClip(data.clip);
+    $('cbprog').textContent = data.note ?? (shot === null ? 'The last shot is gone.'
+      : `Shot ${data.clip.shot_starts.length} added in ${(data.gen_ms / 1000).toFixed(1)} s.`);
+    if (shot !== null) $('cbshot').value = '';
+    base = [];
+    at = data.clip.shot_starts?.at(-1) ?? 0;
+    show(0);
+  } catch (e) {
+    $('cberr').textContent = String(e.message || e);
+  } finally {
+    setIdle(btn);
+  }
 }
 
 async function enlarge() {
@@ -282,7 +326,7 @@ export function initClipView({ onClipChange, canContinue: can, onContinue: cont 
   panels = floatPanels({
     host: $('clipbox'),
     rail: $('clipbox').querySelector('.lbrail'),
-    defs: [{ id: 'cb-enlarge' }, { id: 'cb-history', corner: 'bottom-right' }],
+    defs: [{ id: 'cb-extend' }, { id: 'cb-enlarge' }, { id: 'cb-history', corner: 'bottom-right' }],
   });
   panels.init();
   $('cbfactor').innerHTML = upOptions();
@@ -307,6 +351,15 @@ export function initClipView({ onClipChange, canContinue: can, onContinue: cont 
   $('cbcanvas').addEventListener('pointerdown', dragSplit);
   $('cbenlarge').addEventListener('click', enlarge);
   $('cbsave').addEventListener('click', save);
+  $('cbextend').addEventListener('click', () => {
+    const shot = $('cbshot').value.trim();
+    if (!shot) { $('cberr').textContent = 'Say what happens next.'; return; }
+    extend(shot, false);
+  });
+  // The box's text if one was typed, else the last shot's own.
+  $('cbregen').addEventListener('click', () =>
+    extend($('cbshot').value.trim() || view.clip.shots?.at(-1) || '', true));
+  $('cbundo').addEventListener('click', () => extend(null, true));
   // The new clip is set up on the Video tab, where Generate is.
   $('cbcontinue').addEventListener('click', () => {
     if (!isClip()) return;

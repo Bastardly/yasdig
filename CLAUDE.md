@@ -1438,6 +1438,14 @@ from `family` goes on `VideoModelDto`.
     (5B, A14B, H3 — `-i` is a first frame there; VACE reads it as a reference, T2V
     ignores it). Failure or Stop at shot k>1 keeps 1..k-1 with `VideoResult.note`.
     A multi-shot clip drops sd-cli's `clip.avi` (it is shot 1 alone).
+  - **Extend is in place** (`Engine::extend_clip`, `POST /videos/extend {id, shot?,
+    replace_last}`, `Work::ExtendClip` on the queue): one segment from the clip's
+    last frame on `clip.video` as recorded, appended to the *same* clip;
+    `replace_last` first `truncate`s back to the last `shot_starts` entry
+    (Regenerate), no `shot` stops there (Undo). A one-go clip becomes shot 1 (`""`)
+    on its first extend, and back to none when one shot is left. Any change
+    `invalidate`s what was made from the frames (container, cached download,
+    enlarged versions) and re-`finish`es. *Save to output* always rewrites.
   - **A saved clip is an output**: `list_outputs` lists `{stem}.avi` with
     `video: true`; `find_output` stays PNG-only (it resolves image sources), and
     `find_clip_output` finds the clip; `free_stem` checks both; delete, star

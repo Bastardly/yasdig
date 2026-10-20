@@ -165,6 +165,12 @@ const HELP = [
         + 'change of size, and every Refine and Hi-res pass is told them again at '
         + 'its own size. The model card calls this experimental: it guides, it '
         + 'doesn’t trace.' },
+  { ids: ['cbshot'],
+    text: 'One more shot, on this clip: what happens next, drawn from its last frame '
+        + 'with the clip’s own prompt (the scene) and settings. If it comes out wrong, '
+        + 'Regenerate draws it again with a new seed — and this text, if you changed '
+        + 'it — and Undo takes it off. Building a clip a shot at a time like this needs '
+        + 'no plan; the Shots list on the Prompts panel makes several in one go.' },
   { ids: ['vshots'],
     text: 'A longer clip, one shot at a time. Each shot is a segment of the '
         + 'Frames above, made from the previous shot’s last frame, and says what '
