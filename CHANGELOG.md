@@ -3,7 +3,7 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
-## Unreleased
+## 0.3.0 — 2026-10-20
 
 ### New
 
@@ -14,8 +14,8 @@ What changed in each release of yasdig. Each release's executables are on the
   file beside the model, encoder and VAE: Qwen3.5's `tokenizer.json`, which the card
   fetches and the Models panel lists as *Tokenizer*. Its Qwen3.5-9B encoder is never
   offered to Flux.2 Klein 9B, or Klein's Qwen3-8B to it, although both are 4096 wide.
-- **Get models is grouped**: image models, video models and upscalers each under a
-  heading, in the list and in its menu.
+- **Get models is grouped**: image models and upscalers (and video models, with the
+  nightly Video tab on) each under a heading, in the list and in its menu.
 - **Qwen-Image 2.1.** Qwen's 7B model, with its own VAE and Qwen3-VL-8B as the
   encoder, and a Get models card that also fetches Comfy-Org's turbo LoRA: with
   **Turbo** on it renders 8 steps at CFG 1 on the model's fixed turbo schedule,
@@ -40,9 +40,9 @@ What changed in each release of yasdig. Each release's executables are on the
 - **Recommended models, for your GPU.** FLUX.3 Klein, MOSS-Image and Krea 2 are
   marked *Recommended* on their Get models cards and menu buttons and in the Image
   tab's model list — where they fit the GPU's memory, which yasdig reads on Linux. On a
-  card under 12 GB, Iris-3B is the recommendation instead. A card that needs more than
+  card under 12 GB, Iris-3B Turbo is the recommendation instead. A card that needs more than
   the GPU has says so.
-- **Video tab (nightly)**:
+- **Video tab (nightly — Settings → Nightly features; hidden otherwise)**:
   - **Video models in Get models**: Wan 2.2 TI2V-5B, the Wan 2.2 I2V-A14B pair, and
     MiniMax H3.
   - **MiniMax H3 runs**, with its own VAE (it was handed Wan's) and its sound. Its
