@@ -353,6 +353,15 @@ longer fits stays on its row with a line saying why, and Generate refuses it rat
 than running without it. A LoRA nothing could identify is offered for every model —
 refusing a file that works would be worse. `doctor` prints each LoRA's family.
 
+**Turbo.** Some models have a *speed LoRA*: the model distilled to a few steps. The
+MOSS-Image cards on Get models fetch one (lodestones' 8-step DMD LoRA, into the LoRA
+folder), and with it installed the Models panel shows a **Turbo** switch. On, it adds
+that LoRA and sets Steps and CFG to what it was distilled for (8 steps at CFG 1,
+against the model's own 50 at CFG 3); off, it removes it and puts the model's own
+numbers back. It is on by default and remembered per model in your browser. Removing
+the LoRA's row by hand unticks it, and *Save as defaults* never saves Turbo's steps and
+CFG as the model's. A reopened image comes back with Turbo as it was made.
+
 The Flux LoRAs are the case where the names say least: Flux.1 and every Flux.2 share
 `double_blocks`, so a Flux LoRA is placed by how wide the model it patches is (Klein 9B
 and Flux.2 dev are wider) and, for the two the same width, by which blocks it touches —

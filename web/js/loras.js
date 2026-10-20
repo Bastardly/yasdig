@@ -145,6 +145,37 @@ export function loraPicker({ rows, add, family = () => null, onChange = () => {}
     // drawing early would show the empty-folder message as if it were true.
     refresh: () => fetchLoras().then(render),
 
+    // The same, re-reading the folder: a download just landed in it.
+    reload: () => fetchLoras(true).then(render),
+
+    // The installed speed LoRA for `family` — a catalog file `/loras` serves
+    // with its `turbo` settings — or undefined.
+    turboFor: (fam) => available.find((l) => l.turbo && l.usable && fits(l, fam)),
+
+    has: (name) => picked.some((p) => p.name === name),
+
+    // Drop every picked speed LoRA that doesn't fit `fam`: the Turbo switch
+    // put it there for another model, and nobody chose it for this one.
+    dropTurbos(fam) {
+      const before = picked.length;
+      picked = picked.filter((p) => {
+        const l = available.find((a) => a.name === p.name);
+        return !(l?.turbo && !fits(l, fam));
+      });
+      if (picked.length !== before) render();
+    },
+
+    // Add or drop one LoRA by name, for the Turbo switch. Adding one already
+    // picked changes nothing; both redraw, so `onChange` hears them.
+    add(name, strength = 1) {
+      if (!picked.some((p) => p.name === name)) picked.push({ name, strength });
+      render();
+    },
+    remove(name) {
+      picked = picked.filter((p) => p.name !== name);
+      render();
+    },
+
     // What goes in the request body. Empty is a real answer — the server reads
     // `[]` as "none, explicitly" and a missing key as "keep what the profile
     // has", which are different things.

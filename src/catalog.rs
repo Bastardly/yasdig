@@ -15,6 +15,11 @@
 //! what makes a Qwen3-4B you already have under another name count, and stops
 //! a second 4 GB download of it.
 //!
+//! Speed LoRAs are a table of their own too, `[[lora]]` ([`Lora`]): a file
+//! under the LoRA dir, fetched with the cards that name it in `loras`, carrying
+//! the settings it was distilled for ([`Turbo`]) — which `/loras` serves beside
+//! the file once it is here, for the Image tab's *Turbo* switch.
+//!
 //! Video models are a table of their own, `[[video]]`, of the same [`Entry`]
 //! shape: a [`VideoFamily`], its [`VideoFamily::slots`] keys, `"high_noise"`
 //! for the A14B's second expert, and every `dest` under the **video dir**. Kept
@@ -24,7 +29,7 @@
 use crate::config::{ImageFamily, PartSlot, VideoFamily};
 use crate::discover::{DitKind, Role};
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Component, Path};
 use std::sync::OnceLock;
 
@@ -40,6 +45,37 @@ pub struct Catalog {
     /// Upscaler models, a table of their own: see [`Upscaler`].
     #[serde(default)]
     pub upscaler: Vec<Upscaler>,
+    /// Speed LoRAs: see [`Lora`].
+    #[serde(default)]
+    pub lora: Vec<Lora>,
+}
+
+/// A distilled ("turbo") LoRA: a model's few-step version as an adapter. Not an
+/// [`Entry`] file, because it lives in [`crate::config::Config::lora_dir`],
+/// which may be anywhere, and because it is had only under its own `dest` at its
+/// own length — two LoRAs for one family are different adapters, so a name-free
+/// "something fits" would be wrong (an [`Upscaler`]'s rule).
+#[derive(Debug, Deserialize)]
+pub struct Lora {
+    pub id: String,
+    pub family: ImageFamily,
+    pub label: String,
+    pub url: String,
+    /// Relative to the LoRA dir, `/`-separated — and so the name the page's
+    /// LoRA picker and the `<lora:…>` tag carry.
+    pub dest: String,
+    pub bytes: u64,
+    pub sha256: Option<String>,
+    pub turbo: Turbo,
+}
+
+/// What a speed LoRA was distilled to run at. Applied by the page's *Turbo*
+/// switch onto the boxes, never by the server: a LoRA is request-only
+/// (`a_model_brings_no_loras_of_its_own`), so its settings are too.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Turbo {
+    pub steps: u32,
+    pub cfg_scale: f32,
 }
 
 /// One upscaler model. Not an [`Entry`]: it has no family and no parts, lives in
@@ -108,6 +144,9 @@ pub struct Entry {
     pub recommended: bool,
     pub note: String,
     pub file: Vec<File>,
+    /// [`Lora`] ids fetched with this card, shown as rows of it.
+    #[serde(default)]
+    pub loras: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,6 +180,15 @@ impl Catalog {
         self.upscaler.iter().find(|u| u.id == id)
     }
 
+    pub fn lora(&self, id: &str) -> Option<&Lora> {
+        self.lora.iter().find(|l| l.id == id)
+    }
+
+    /// The speed LoRAs a card fetches with it.
+    pub fn loras_of<'a>(&'a self, e: &'a Entry) -> impl Iterator<Item = &'a Lora> + 'a {
+        e.loras.iter().filter_map(|id| self.lora(id))
+    }
+
     /// Whether some recommended card is of this family — what the Image tab's
     /// model list marks. By family, since the installed file may be any
     /// quantization of it.
@@ -169,6 +217,12 @@ impl File {
 }
 
 impl Upscaler {
+    pub fn page(&self) -> String {
+        repo_page(&self.url)
+    }
+}
+
+impl Lora {
     pub fn page(&self) -> String {
         repo_page(&self.url)
     }
@@ -275,7 +329,44 @@ fn parse(src: &str) -> Result<Catalog> {
     for table in [&c.entry, &c.video] {
         check_shared_dests(table)?;
     }
+    check_loras(&c)?;
     check_upscalers(c)
+}
+
+fn check_loras(c: &Catalog) -> Result<()> {
+    for (i, l) in c.lora.iter().enumerate() {
+        if c.entry(&l.id).is_some() || c.lora[..i].iter().any(|o| o.id == l.id || o.dest == l.dest) {
+            bail!("catalog: lora {:?} is listed twice", l.id);
+        }
+        if !l.family.runnable() {
+            bail!("catalog: lora {} is for a family this build doesn't run", l.id);
+        }
+        // A LoRA's name is a `<lora:…>` tag, so `valid_lora_name` is the rule,
+        // and sd.cpp's LoRA loader reads safetensors only.
+        let p = Path::new(&l.dest);
+        if !(crate::config::valid_lora_name(&l.dest)
+            && p.components().all(|c| matches!(c, Component::Normal(_)))
+            && p.extension().and_then(|x| x.to_str()) == Some("safetensors"))
+        {
+            bail!("catalog: lora {}'s dest {:?} must be a plain .safetensors name", l.id, l.dest);
+        }
+        if !hf_resolve(&l.url) {
+            bail!("catalog: lora {}'s url must be a huggingface.co resolve link: {}", l.id, l.url);
+        }
+        if l.bytes == 0 || l.turbo.steps == 0 {
+            bail!("catalog: lora {} needs a size and its steps", l.id);
+        }
+    }
+    for e in c.entry.iter().chain(&c.video) {
+        for id in &e.loras {
+            match c.lora(id) {
+                Some(l) if e.family == Family::Image(l.family) => {}
+                Some(_) => bail!("catalog: {} fetches lora {id}, which is for another family", e.id),
+                None => bail!("catalog: {} fetches lora {id}, which isn't listed", e.id),
+            }
+        }
+    }
+    Ok(())
 }
 
 fn check_shared_dests(table: &[Entry]) -> Result<()> {
@@ -297,7 +388,7 @@ fn check_shared_dests(table: &[Entry]) -> Result<()> {
 
 fn check_upscalers(c: Catalog) -> Result<Catalog> {
     for (i, u) in c.upscaler.iter().enumerate() {
-        if c.entry(&u.id).is_some() || c.upscaler[..i].iter().any(|o| o.id == u.id) {
+        if c.entry(&u.id).is_some() || c.lora(&u.id).is_some() || c.upscaler[..i].iter().any(|o| o.id == u.id) {
             bail!("catalog: id {:?} is listed twice", u.id);
         }
         if !safe_upscaler_dest(&u.dest) {
@@ -462,6 +553,34 @@ mod tests {
         assert!(two("sha256 = \"ab\"\n", "sha256 = \"ab\"\n").is_ok());
         assert!(two("sha256 = \"ab\"\n", "sha256 = \"cd\"\n").is_err());
         assert!(two("", "").is_err());
+    }
+
+    /// A speed LoRA is a plain `.safetensors` name a `<lora:…>` tag can carry,
+    /// and a card fetches only LoRAs listed for its own family.
+    #[test]
+    fn a_speed_lora_belongs_to_its_cards_family() {
+        let c = Catalog::get();
+        let moss = c.entry.iter().filter(|e| e.family == Family::Image(ImageFamily::MossImage));
+        for e in moss {
+            assert_eq!(c.loras_of(e).count(), 1, "{} fetches its turbo LoRA", e.id);
+        }
+        let lora = "[[lora]]\nid = \"l\"\nfamily = \"z_image\"\nlabel = \"l\"\nurl = \"https://huggingface.co/a/b/resolve/main/l.safetensors\"\ndest = \"l.safetensors\"\nbytes = 1\nturbo = { steps = 8, cfg_scale = 1.0 }\n";
+        assert!(parse(lora).is_ok());
+        let card = |family: &str| {
+            format!("[[entry]]\nid = \"x\"\nfamily = \"{family}\"\nlabel = \"x\"\nnote = \"\"\nloras = [\"l\"]\n[[entry.file]]\nslot = \"model\"\nurl = \"https://huggingface.co/a/b/resolve/main/m.gguf\"\ndest = \"m.gguf\"\nbytes = 1\n")
+        };
+        assert!(parse(&format!("{}{lora}", card("z_image"))).is_ok());
+        assert!(parse(&format!("{}{lora}", card("krea2"))).is_err());
+        assert!(parse(&card("z_image")).is_err(), "names a LoRA nobody lists");
+        for bad in [
+            lora.replace("l.safetensors\"\nbytes", "../l.safetensors\"\nbytes"),
+            lora.replace("dest = \"l.safetensors\"", "dest = \"l.gguf\""),
+            lora.replace("dest = \"l.safetensors\"", "dest = \"a:b.safetensors\""),
+            lora.replace("steps = 8", "steps = 0"),
+            format!("{lora}{lora}"),
+        ] {
+            assert!(parse(&bad).is_err(), "accepted:\n{bad}");
+        }
     }
 
     #[test]

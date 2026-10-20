@@ -338,6 +338,17 @@ Paste is a document listener per slot, gated to its visible tab.
 Wire: `/loras` entries carry `families` and `base`; `fits()` in `loras.js` is
 membership only.
 
+**Speed LoRAs / Turbo**: catalog `[[lora]]` (`catalog::Lora`, `dest` under
+`Config::lora_dir`, had only at its own dest *and* length — `lora_is`), fetched with
+cards listing it in `loras`. `/loras` adds `turbo {steps, cfg_scale}` to the file at
+that dest and length. The page's *Turbo* switch (`image.js`) is a **view over the
+picker**: ticked = the LoRA is picked (`syncTurboBox` reflects on every redraw, never
+applies); ticking sets steps/CFG, unticking puts the model's back. Default on, per
+model in `localStorage` — never server-side (`Profile.loras` stays request-only).
+`syncAdvanced` applies the default after the LoRA listing lands, guarded by
+`turboSeq`, which `applyWorkItem` bumps (`holdTurbo`) so a reopened item's steps
+win. *Save as defaults* skips steps/CFG while Turbo is on.
+
 **`Profile.loras` is request-only** — no per-model config; `as_profile` builds it empty
 (`a_model_brings_no_loras_of_its_own`). It's on `Profile` because `base_cmd` is shared
 by every pass (finishing passes keep the look) and because the profile is what a

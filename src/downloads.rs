@@ -28,7 +28,7 @@
 //!   between the last byte and the rename) is finished without asking the
 //!   server, which would answer a range past the end with a 416.
 
-use crate::catalog::{Catalog, Entry, File, Upscaler};
+use crate::catalog::{Catalog, Entry, File, Lora, Upscaler};
 use crate::config::{slash_name, Config};
 use crate::discover::{self, Found};
 use anyhow::{bail, Result};
@@ -61,6 +61,8 @@ enum Want {
     Part { entry: String, index: usize },
     /// A catalog upscaler: checked against its `arch`.
     Upscaler { id: String },
+    /// A speed LoRA a card fetches: checked to be a LoRA for its family.
+    Lora { id: String },
 }
 
 fn key(path: &Path) -> String {
@@ -87,6 +89,8 @@ struct Inner {
     /// Where a `[[video]]` entry's files go — `Config::video_dir`.
     videos: PathBuf,
     upscalers: PathBuf,
+    /// Where a [`Lora`]'s `dest` is — `Config::lora_dir`.
+    loras: PathBuf,
     state: Mutex<State>,
     wake: Condvar,
 }
@@ -97,6 +101,7 @@ impl Downloads {
             models: cfg.models_dir(),
             videos: cfg.video_dir(),
             upscalers: cfg.upscaler_dir(),
+            loras: cfg.lora_dir(),
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
         }));
@@ -122,21 +127,27 @@ impl Downloads {
     fn tasks(&self, id: &str) -> Result<Vec<Task>> {
         let c = Catalog::get();
         if let Some(e) = c.entry(id) {
-            return Ok(e
-                .file
-                .iter()
-                .enumerate()
-                .map(|(index, f)| {
-                    let dest = self.root(e).join(&f.dest);
-                    Task {
-                        key: key(&dest),
-                        dest,
-                        url: f.url.clone(),
-                        bytes: f.bytes,
-                        want: Want::Part { entry: e.id.clone(), index },
-                    }
-                })
-                .collect());
+            let parts = e.file.iter().enumerate().map(|(index, f)| {
+                let dest = self.root(e).join(&f.dest);
+                Task {
+                    key: key(&dest),
+                    dest,
+                    url: f.url.clone(),
+                    bytes: f.bytes,
+                    want: Want::Part { entry: e.id.clone(), index },
+                }
+            });
+            let loras = c.loras_of(e).map(|l| {
+                let dest = self.0.loras.join(&l.dest);
+                Task {
+                    key: key(&dest),
+                    dest,
+                    url: l.url.clone(),
+                    bytes: l.bytes,
+                    want: Want::Lora { id: l.id.clone() },
+                }
+            });
+            return Ok(parts.chain(loras).collect());
         }
         if let Some(u) = c.upscaler(id) {
             let dest = self.0.upscalers.join(&u.dest);
@@ -175,6 +186,7 @@ impl Downloads {
                 Want::Upscaler { id } => {
                     upscaler_is(&t.dest, c.upscaler(id).expect("tasks come from the catalog"))
                 }
+                Want::Lora { id } => lora_is(&t.dest, c.lora(id).expect("tasks come from the catalog")),
             };
             if busy || had {
                 continue;
@@ -343,6 +355,16 @@ impl Downloads {
                     bail!("downloaded, but it reads as {arch}, not the {} the catalog lists", u.arch);
                 }
             }
+            Want::Lora { id } => {
+                let l = Catalog::get().lora(id).expect("tasks come from the catalog");
+                if !lora_is(dest, l) {
+                    bail!(
+                        "downloaded, but it reads as {} — not a LoRA for {}",
+                        discover::identify(dest).describe(),
+                        l.family.label()
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -363,8 +385,13 @@ impl Downloads {
             label: &e.label,
             recommended: e.recommended,
             note: &e.note,
-            bytes: e.bytes(),
-            files: e.file.iter().map(|f| file_state(self.root(e), e, f, found, &st)).collect(),
+            bytes: e.bytes() + c.loras_of(e).map(|l| l.bytes).sum::<u64>(),
+            files: e
+                .file
+                .iter()
+                .map(|f| file_state(self.root(e), e, f, found, &st))
+                .chain(c.loras_of(e).map(|l| lora_state(&self.0.loras, l, &st)))
+                .collect(),
         };
         let entries = c.entry.iter().map(|e| view(e, &found)).collect();
         let videos = if nightly { c.video.iter().map(|e| view(e, &video_found)).collect() } else { Vec::new() };
@@ -486,6 +513,52 @@ fn file_state(models: &Path, e: &'static Entry, f: &'static File, found: &[Found
     } else if models.join(&f.dest).exists() {
         v.state = "wrong";
         v.why = Some(format!("{} is there, and reads as {}", f.dest, discover::identify(&models.join(&f.dest)).describe()));
+    } else if let Some(why) = st.failed.get(&k) {
+        v.state = "failed";
+        v.got = got;
+        v.why = Some(why.clone());
+    } else if got > 0 {
+        v.state = "partial";
+        v.got = got;
+    }
+    v
+}
+
+/// A speed LoRA is had when its own `dest` is there, whole, and reads as a
+/// LoRA its family takes — not when some other LoRA fits (see [`Lora`]).
+fn lora_is(dest: &Path, l: &Lora) -> bool {
+    std::fs::metadata(dest).is_ok_and(|m| m.is_file() && m.len() == l.bytes)
+        && matches!(discover::identify(dest), discover::Role::Lora(b) if b.fits(l.family))
+}
+
+/// [`file_state`] for a card's speed LoRA, under the LoRA dir.
+fn lora_state(dir: &Path, l: &'static Lora, st: &State) -> FileView {
+    let dest = dir.join(&l.dest);
+    let k = key(&dest);
+    let got = std::fs::metadata(part_of(&dest)).map(|m| m.len()).unwrap_or(0);
+    let mut v = FileView {
+        slot: "lora".to_string(),
+        slot_label: format!("Turbo LoRA ({} steps)", l.turbo.steps),
+        dest: l.dest.clone(),
+        bytes: l.bytes,
+        page: l.page(),
+        state: "missing",
+        got: 0,
+        name: None,
+        why: None,
+    };
+    if st.running.as_deref() == Some(&k) {
+        v.state = "downloading";
+        v.got = got;
+    } else if st.queue.iter().any(|t| t.key == k) {
+        v.state = "queued";
+        v.got = got;
+    } else if lora_is(&dest, l) {
+        v.state = "have";
+        v.name = Some(l.dest.clone());
+    } else if dest.exists() {
+        v.state = "wrong";
+        v.why = Some(format!("{} is there, and reads as {}", l.dest, discover::identify(&dest).describe()));
     } else if let Some(why) = st.failed.get(&k) {
         v.state = "failed";
         v.got = got;
@@ -722,6 +795,7 @@ mod tests {
             models: models.to_path_buf(),
             videos: models.join("video"),
             upscalers: upscalers.to_path_buf(),
+            loras: models.join("loras"),
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
         }))

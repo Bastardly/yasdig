@@ -135,6 +135,11 @@
         <option value="ram">System RAM</option>
         <option value="disk">Stream from SSD (slower)</option>
       </select>
+      <!-- Shown when an installed catalog speed LoRA fits the model: a view over
+           the LoRA rows below (image.js, Turbo). -->
+      <div class="checks" id="turborow" hidden>
+        <label data-help="turbo"><input type="checkbox" id="turbo"> <span id="turbolabel">Turbo</span></label>
+      </div>
       <label data-help="loras">LoRAs</label>
       <div id="loras"></div>
       <button type="button" id="loraadd" class="btn spaced">+ Add LoRA</button>

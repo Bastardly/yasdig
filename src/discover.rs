@@ -937,6 +937,11 @@ fn lora_base(t: &Tensors) -> LoraBase {
     if t.has("cross_attn") {
         return LoraBase::Other("Wan");
     }
+    // MOSS-Image's fused up/gate projection (`moss_image.hpp`). Nothing else
+    // here names one so; lodestones' 8-step DMD LoRA patches it in every layer.
+    if either(".proj.ffn_up_gate.", "_proj_ffn_up_gate") {
+        return LoraBase::Image(ImageFamily::MossImage);
+    }
     if let Some(family) = unet_lora(t) {
         return family;
     }
@@ -1911,6 +1916,18 @@ mod tests {
             LoraBase::Image(ImageFamily::QwenImage)
         );
         assert_eq!(base(&[("mystery.lora_down.weight", &[4, 4])]), LoraBase::Unknown);
+        // lodestones' MOSS-Image DMD LoRA, off its header, and kohya's spelling.
+        assert_eq!(
+            base(&[
+                ("diffusion_model.layers.0.proj.q.lora_down.weight", &[128, 3072]),
+                ("diffusion_model.layers.0.proj.ffn_up_gate.lora_down.weight", &[128, 3072]),
+            ]),
+            LoraBase::Image(ImageFamily::MossImage)
+        );
+        assert_eq!(
+            base(&[("lora_unet_layers_0_proj_ffn_up_gate.lora_down.weight", &[128, 3072])]),
+            LoraBase::Image(ImageFamily::MossImage)
+        );
     }
 
     /// Flux.1 and every Flux.2 share `double_blocks`, so a Flux LoRA is placed

@@ -1,6 +1,6 @@
 import { $, esc, getJSON, post } from './dom.js';
 import { S } from './state.js';
-import { imageLoras, imageSource, models, render, setParts, setUpscaler, syncCfgPlaceholders,
+import { holdTurbo, imageLoras, imageSource, models, render, setParts, setUpscaler, syncCfgPlaceholders,
          syncOutSize, syncParts, syncSeedLine } from './image.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
 import { setReferences } from './refs.js';
@@ -212,6 +212,8 @@ export function applyWorkItem(item) {
   // defaults — the exact opposite of restoring this item.
   const known = models.some((m) => m.name === item.template);
   if (known) $('template').value = item.template;
+  // Its LoRAs say whether Turbo was on, so no default may land over them.
+  holdTurbo();
   // The fold's slots are the model's, so they are redrawn for it — and then set
   // to what this image ran with, which a sidecar records as absolute paths. Not
   // when its model is gone: the select kept another one, and that model's slots

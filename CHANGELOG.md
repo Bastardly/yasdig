@@ -16,6 +16,11 @@ What changed in each release of yasdig. Each release's executables are on the
   offered to Flux.2 Klein 9B, or Klein's Qwen3-8B to it, although both are 4096 wide.
 - **Get models is grouped**: image models, video models and upscalers each under a
   heading, in the list and in its menu.
+- **Turbo for MOSS-Image.** The MOSS cards also fetch lodestones' 8-step DMD LoRA,
+  and a **Turbo** switch in the Models panel turns it on with its 8 steps at CFG 1
+  (on by default, remembered per model), several times faster than 50 steps at CFG 3.
+  Off puts the model's own steps and CFG back. MOSS LoRAs are now recognised as MOSS
+  ones, so they're no longer offered to other models.
 - **Recommended models.** FLUX.3 Klein, MOSS-Image and Krea 2 are marked
   *Recommended* on their Get models cards, which come first, and their families lead
   the Image tab's model list.

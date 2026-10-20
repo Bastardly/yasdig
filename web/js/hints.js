@@ -157,6 +157,13 @@ const HELP = [
         + 'finishes sooner, at some cost in exactness. Refine and Hi-res always '
         + 'run every step. Leave it Off for few-step models, which have nothing '
         + 'to skip; the Help tab says what the two modes do.' },
+  { ids: ['turbo'],
+    text: 'A LoRA that teaches this model to finish in a few steps, from its Get '
+        + 'models card. On, it renders in the few steps at CFG 1 the label says, '
+        + 'instead of the model’s dozens at real CFG — several times faster, with '
+        + 'a little less fine detail and variety. '
+        + 'Off puts the model’s own steps and CFG back. The choice is remembered '
+        + 'per model in this browser.' },
   { ids: ['loras'],
     text: 'Small files that patch the checkpoint’s weights — a style, a '
         + 'character, a 4-step distillation. They come from models/loras/, and '

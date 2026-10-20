@@ -397,6 +397,11 @@ pub struct LoraFile {
     /// The base as a name — "SDXL", "Krea 2" — or empty when unknown; what the
     /// picker says a LoRA is "for".
     pub base: &'static str,
+    /// The settings a catalog speed LoRA was distilled for, when this file is
+    /// one: at its catalog `dest`, at its catalog length. What the Image tab's
+    /// *Turbo* switch applies.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turbo: Option<crate::catalog::Turbo>,
 }
 
 /// One file in the upscaler directory, as `GET /upscalers` publishes it.
@@ -2579,6 +2584,13 @@ impl Config {
                     crate::discover::Role::Lora(b) => b,
                     _ => crate::discover::LoraBase::Unknown,
                 };
+                // By the catalog's own name and length, which the download
+                // wrote: a hint for the page, never a refusal.
+                let turbo = crate::catalog::Catalog::get()
+                    .lora
+                    .iter()
+                    .find(|l| l.dest == name && l.bytes == bytes)
+                    .map(|l| l.turbo.clone());
                 LoraFile {
                     name,
                     label,
@@ -2587,6 +2599,7 @@ impl Config {
                     note,
                     families: ImageFamily::ALL.iter().filter(|f| base.fits(**f)).map(|f| f.as_str()).collect(),
                     base: base.label(),
+                    turbo,
                 }
             })
             .collect()

@@ -290,7 +290,8 @@ id = "moss-image-sft-int8"
 family = "moss_image"
 label = "MOSS-Image SFT (INT8)"
 recommended = true
-note = "About 16 GB on the card. A 5B model strong at layout and rendered text. 50 steps at CFG 3 on its own; its encoder is Qwen3.5-9B, and it needs Qwen3.5's tokenizer.json beside it."
+note = "About 16 GB on the card. A 5B model strong at layout and rendered text. 50 steps at CFG 3 on its own, 8 with the Turbo LoRA the card fetches too (switch it in the Models panel). Its encoder is Qwen3.5-9B, and it needs Qwen3.5's tokenizer.json beside it."
+loras = ["moss-image-sft-dmd8"]
 
 [[entry.file]]
 slot = "model"
@@ -321,7 +322,8 @@ sha256 = "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
 id = "moss-image-sft-bf16"
 family = "moss_image"
 label = "MOSS-Image SFT (BF16)"
-note = "The unquantized original, twice the INT8 file: about 21 GB on the card, so a 24 GB card's. Same encoder, tokenizer and VAE."
+note = "The unquantized original, twice the INT8 file: about 21 GB on the card, so a 24 GB card's. Same encoder, tokenizer, VAE and Turbo LoRA."
+loras = ["moss-image-sft-dmd8"]
 
 [[entry.file]]
 slot = "model"
@@ -520,3 +522,18 @@ note = "A fast 2×, for when 4× is more than the picture needs. Runs on yasdig'
 url = "https://huggingface.co/Phips/2xNomosUni_span_multijpg_ldl/resolve/main/2xNomosUni_span_multijpg_ldl.safetensors"
 dest = "2xNomosUni_span_multijpg_ldl.safetensors"
 bytes = 8903384
+
+# Speed LoRAs: a model distilled to a few steps, as an adapter. Fetched with
+# the cards that list them in `loras`, into the LoRA dir; `turbo` is what the
+# Image tab's Turbo switch sets while the LoRA is on. lodestones' DMD LoRA is
+# trained on the SFT (a Base one is a separate repo); rank 128, fp32, Apache-2.0
+# (checked 2026-10-20).
+[[lora]]
+id = "moss-image-sft-dmd8"
+family = "moss_image"
+label = "MOSS-Image SFT 8-step (DMD)"
+url = "https://huggingface.co/lodestones/MOSS-Image-SFT-8-steps-dmd/resolve/main/lora.safetensors"
+dest = "moss-image-sft-8steps-dmd.safetensors"
+bytes = 1189176800
+sha256 = "4abb14e39c1a59018907581e609f43616ec6810126144ec2b1d2e6f8969628fe"
+turbo = { steps = 8, cfg_scale = 1.0 }

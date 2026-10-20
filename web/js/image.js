@@ -26,8 +26,73 @@ export const fillReady = () => models.some((m) => m.fill && m.exists);
 // adapters are as much a part of that as the steps and the seed.
 export const imageLoras = loraPicker({
   rows: 'loras', add: 'loraadd', family: () => currentModel()?.family ?? null,
-  onChange: () => syncSummaries(),
+  onChange: () => {
+    syncTurboBox();
+    syncSummaries();
+  },
 });
+
+// ---- Turbo -----------------------------------------------------------------
+//
+// A speed LoRA from the catalog (MOSS-Image's 8-step DMD) is the model
+// distilled to a few steps, as an adapter. The switch is a view over the LoRA
+// picker: ticked means that LoRA is picked, and ticking it also sets the steps
+// and CFG it was distilled for (`turbo` on `/loras`); unticking puts the
+// model's own back. The server knows nothing of it — a LoRA is request-only,
+// so the default lives here: on, unless it was switched off for this model in
+// this browser.
+let turboSeq = 0;
+const turboKey = (name) => `yasdig.turbo.${name}`;
+function turboWanted(name) {
+  try {
+    return localStorage.getItem(turboKey(name)) !== '0';
+  } catch {
+    return true;
+  }
+}
+function rememberTurbo(name, on) {
+  try {
+    localStorage.setItem(turboKey(name), on ? '1' : '0');
+  } catch { /* a private window: the default holds */ }
+}
+
+const turboOf = (m) => (m ? imageLoras.turboFor(m.family) : undefined);
+const turboOn = () => !$('turborow').hidden && $('turbo').checked;
+
+// Reflects, never applies: on every picker redraw, so removing the LoRA's row
+// by hand unticks the box.
+function syncTurboBox() {
+  const t = turboOf(currentModel());
+  $('turborow').hidden = !t;
+  $('turbo').checked = !!t && imageLoras.has(t.name);
+  if (t) $('turbolabel').textContent = `Turbo — ${t.turbo.steps} steps at CFG ${t.turbo.cfg_scale}`;
+}
+
+function setBox(id, v) {
+  $(id).value = v;
+  $(id).dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function setTurbo(on) {
+  const m = currentModel();
+  const t = turboOf(m);
+  if (!t) return;
+  if (on) {
+    imageLoras.add(t.name);
+    setBox('steps', t.turbo.steps);
+    setBox('cfg', t.turbo.cfg_scale);
+  } else {
+    imageLoras.remove(t.name);
+    setBox('steps', m.steps);
+    setBox('cfg', m.cfg_scale);
+  }
+}
+
+// A reopened work item brings its own LoRAs and steps: a model change's
+// pending Turbo default must not land on top of them.
+export function holdTurbo() {
+  turboSeq++;
+}
 
 // "Start from". Nothing picked is text to image; a picked image makes Generate
 // run `/img2img` over it instead of `/generate`. This used to be a tab of its
@@ -140,7 +205,10 @@ function syncModelsSummary() {
   if ($('memory').value && $('memory').value !== 'auto') {
     bits.push(`Memory: ${MEMORY_LABELS[$('memory').value] ?? $('memory').value}`);
   }
-  const loras = imageLoras.get();
+  // The speed LoRA is named by what it does, not by its file.
+  const turbo = turboOn() ? turboOf(m)?.name : null;
+  if (turbo) bits.push('Turbo');
+  const loras = imageLoras.get().filter((l) => l.name !== turbo);
   if (loras.length) {
     bits.push(`LoRA: ${loras.map((l) => baseName(l.name).replace(/\.[^.]+$/, '')).join(', ')}`);
   }
@@ -149,7 +217,7 @@ function syncModelsSummary() {
   $('modelsum').title = [m.name, ...bits].join('\n');
   // LoRAs patch what is drawn and a memory mode changes how it fits: a
   // departure from the plain path, which a closed panel must not hide.
-  $('modelsum').classList.toggle('on', loras.length > 0 || ($('memory').value || 'auto') !== 'auto');
+  $('modelsum').classList.toggle('on', loras.length > 0 || !!turbo || ($('memory').value || 'auto') !== 'auto');
   syncRailDots();
 }
 
@@ -311,8 +379,15 @@ function initFolds() {
 function syncAdvanced() {
   const m = currentModel();
   if (!m) return;
-  // Re-greys the LoRA lists against the new model's family.
-  imageLoras.refresh();
+  // Re-greys the LoRA lists against the new model's family, then sets Turbo
+  // to this model's default — once the listing says whether it has one.
+  const seq = ++turboSeq;
+  imageLoras.refresh().then(() => {
+    if (seq !== turboSeq || currentModel() !== m) return;
+    imageLoras.dropTurbos(m.family);
+    if (turboOf(m) && turboWanted(m.name)) setTurbo(true);
+    syncTurboBox();
+  });
   // The References button is the model's to show (`references` on /models).
   syncRefs(m);
   syncParts();
@@ -528,9 +603,12 @@ async function saveModelDefaults() {
   // A pass with another checkpoint picked for it has that checkpoint's numbers
   // in its boxes (`fillPass`), and they are not this model's to keep — saving
   // them would quietly retune it with another model's escalation.
+  // Likewise Turbo's steps and CFG, which are its LoRA's, not the model's:
+  // saved, they would be what unticking Turbo puts back.
   const foreign = (key) =>
     (key.startsWith('hires_') && passModel('hiresmodel') !== m)
-    || (key.startsWith('refine_') && passModel('refmodel') !== m);
+    || (key.startsWith('refine_') && passModel('refmodel') !== m)
+    || ((key === 'steps' || key === 'cfg_scale') && turboOn());
   const values = {};
   for (const [key, id, kind] of MODEL_KNOBS) {
     if (foreign(key)) continue;
@@ -657,6 +735,8 @@ export async function loadModels({ refill = true } = {}) {
       $('getparts').querySelector('button').onclick = () => openGetModels(waiting[0].family);
     }
     if (refill || $('template').value !== before) syncAdvanced();
+    // A download may have brought a speed LoRA: Turbo shows once it is here.
+    else imageLoras.reload();
   } catch (e) {
     $('err').textContent = 'Could not load models: ' + e;
   }
@@ -1363,6 +1443,11 @@ export function initImage() {
   // Each model carries its own defaults, so re-fill the controls on switch.
   $('template').addEventListener('change', syncAdvanced);
   $('savemodel').addEventListener('click', saveModelDefaults);
+  $('turbo').addEventListener('change', () => {
+    const m = currentModel();
+    if (m) rememberTurbo(m.name, $('turbo').checked);
+    setTurbo($('turbo').checked);
+  });
   // A note about the model that was selected is stale once another one is.
   $('template').addEventListener('change', () => { $('savemodelmsg').textContent = ''; });
   // What an empty per-pass CFG box resolves to is whatever the chain under it
