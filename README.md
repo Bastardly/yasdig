@@ -139,7 +139,9 @@ vulnerability*) rather than in a public issue.
 
 ## What's supported
 
-**Model families.** Each but SD 1.x/2.x has a one-click card on the Get models tab:
+**Model families.** Each but SD 1.x/2.x has a one-click card on the Get models tab.
+Not sure where to start? FLUX.3 Klein, MOSS-Image and Krea 2 are marked *Recommended*
+there and in the model list.
 
 | family | good for | on the card |
 |---|---|---|
@@ -150,7 +152,7 @@ vulnerability*) rather than in a public issue.
 | Flux.1 schnell / dev | 4-step drafts / detailed 20-step renders | about 18.5 GB |
 | Krea 2 Turbo | 8 steps | about 15 GB |
 | Qwen-Image | the largest here (20B); strong at text in pictures | about 17 GB |
-| MOSS-Image | layout and lettering; 50 steps at real CFG, so not fast | about 16 GB |
+| MOSS-Image | layout and lettering; 50 steps at real CFG, so not fast | about 16 GB (INT8) / 21 GB (BF16) |
 | FLUX.1 Fill | powers **Extend**; not used for generating | about 18.5 GB |
 
 **Model files** can be `.safetensors`, `.gguf` or `.ckpt`, and are recognised by what

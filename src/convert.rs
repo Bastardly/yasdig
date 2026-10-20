@@ -317,6 +317,10 @@ pub struct Candidate {
     pub group: &'static str,
 }
 
+/// Why an INT8 (convrot) file is listed but never converted.
+const INT8_NOTE: &str = "INT8 convrot, which sd.cpp runs as it is — its weights are stored \
+     rotated, and a converted copy would lose the rotation";
+
 /// The headings, in the order the page lists them.
 pub const GROUPS: [&str; 4] = ["Image models", "Video models", "VAEs", "Text encoders"];
 
@@ -404,6 +408,11 @@ pub fn candidates(cfg: &Config) -> Vec<Candidate> {
                     .into(),
             ),
             "f32" => Some("32-bit — f16 is half the size with no visible difference".into()),
+            // ComfyUI's INT8 convrot: weights stored rotated, which sd.cpp
+            // undoes per matmul at run time (docs/int8_convrot.md). Its
+            // converter knows nothing of the rotation, so a copy would carry
+            // rotated weights unrotated — and Vulkan multiplies INT8 natively.
+            "i8" => Some(INT8_NOTE.into()),
             "f8_e4m3" | "f8_e5m2" => Some(
                 "fp8, which this Vulkan backend cannot multiply — it is cast to BF16 \
                  per layer at run time, so a quantized copy is both smaller and faster"
@@ -566,6 +575,9 @@ pub fn plan(cfg: &Config, source: &str, ty: &str) -> Result<Plan> {
     }
     if c.dtype == ty {
         bail!("{} is already stored as {ty}", c.file);
+    }
+    if c.dtype == "i8" {
+        bail!("{}: {INT8_NOTE}", c.file);
     }
     Ok(Plan {
         source: path,

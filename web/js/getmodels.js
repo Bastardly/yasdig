@@ -3,7 +3,8 @@ import { loadModels } from './image.js';
 import { loadVideoModels } from './video.js';
 
 // The Get models tab: the server's catalog (`src/catalog.toml`), one card per
-// recommended set, and what each of its files is on this disk.
+// set of files — a family may have two, in different precisions — and what
+// each of its files is on this disk. Recommended cards come first and say so.
 //
 // The page sends a catalog id and nothing else — never a URL, never a path —
 // so all it can ask for is what the catalog lists. Whether a file is "had" is
@@ -80,10 +81,19 @@ function pages(e) {
 // about.
 const allEntries = () => [...view.entries, ...(view.videos ?? []), ...(view.upscalers ?? [])];
 
+// Recommended cards first, the rest in catalog order (a stable sort keeps a
+// family's cards together within each half).
+const byRecommended = (list) => [...list].sort((a, b) => b.recommended - a.recommended);
+
+// A family's first card, once each: the nav buttons, and the anchor
+// `openGetModels` scrolls to.
+export const firstPerFamily = (list) =>
+  list.filter((e, i) => list.findIndex((o) => o.family === e.family) === i);
+
 // What the tab shows, by category: a nav heading and a run of cards each.
 // `where` is what a finished card says to do next.
 const categories = () => [
-  { id: 'image', title: 'Image models', entries: view.entries,
+  { id: 'image', title: 'Image models', entries: byRecommended(view.entries),
     where: 'Everything is here. Pick it in the Image tab’s model list.' },
   { id: 'video', title: 'Video models', entries: view.videos ?? [],
     where: 'Everything is here. Pick it in the Video tab’s model list.' },
@@ -91,7 +101,7 @@ const categories = () => [
     where: 'Everything is here. Pick it under Output upscale, or in Refine & adjust’s Scale.' },
 ].filter((c) => c.entries.length);
 
-function card(e, i, where) {
+function card(e, i, where, first) {
   const left = e.files.filter(needed).reduce((s, f) => s + f.bytes - f.got, 0);
   const busy = e.files.some(active);
   const partial = !busy && e.files.some((f) => f.got > 0 && (f.state === 'partial' || f.state === 'failed'));
@@ -105,9 +115,11 @@ function card(e, i, where) {
   ].join('');
   const upscaler = e.family === 'upscaler';
   // The upscalers share one anchor, on the first of them.
-  const anchor = upscaler ? (i === 0 ? 'id="gm-upscaler"' : '') : `id="gm-${e.family}"`;
+  // A family with two cards anchors on the first of them, like the upscalers.
+  const anchor = upscaler ? (i === 0 ? 'id="gm-upscaler"' : '') : (first ? `id="gm-${e.family}"` : '');
+  const badge = e.recommended ? '<span class="gmbadge">Recommended</span>' : '';
   return `<div class="card gmcard" ${anchor} data-entry="${esc(e.id)}">
-    <div class="gmhead"><b>${esc(e.label)}</b><span class="sub">${esc(e.family_label)} · ${gb(e.bytes)}</span></div>
+    <div class="gmhead"><b>${esc(e.label)}</b>${badge}<span class="sub">${esc(e.family_label)} · ${gb(e.bytes)}</span></div>
     <p class="sub">${esc(e.note)}</p>
     <p class="sub">Licence: each file has its own — see ${pages(e)}.</p>
     <table class="helptable gmfiles"><tbody>${e.files.map(fileRow).join('')}</tbody></table>
@@ -131,9 +143,12 @@ function draw() {
   $('gmnav').innerHTML = categories().map((c) => `<span class="grouphead">${c.title}</span>`
     + (c.id === 'upscaler'
       ? '<button type="button" class="btn btn-choice" data-family="upscaler">Upscalers</button>'
-      : c.entries.map(navButton).join(''))).join('');
-  $('gmlist').innerHTML = categories().map((c) => `<h2 class="gmgroup">${c.title}</h2>`
-    + c.entries.map((e, i) => card(e, i, c.where)).join('')).join('');
+      : firstPerFamily(c.entries).map(navButton).join(''))).join('');
+  $('gmlist').innerHTML = categories().map((c) => {
+    const firsts = new Set(firstPerFamily(c.entries));
+    return `<h2 class="gmgroup">${c.title}</h2>`
+      + c.entries.map((e, i) => card(e, i, c.where, firsts.has(e))).join('');
+  }).join('');
 }
 
 async function refresh() {

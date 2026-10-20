@@ -7,13 +7,18 @@ What changed in each release of yasdig. Each release's executables are on the
 
 ### New
 
-- **MOSS-Image.** OpenMOSS's 5B model, Base and SFT, with a Get models card for the
-  SFT at Q8. It renders 50 steps at CFG 3, as its model card does. It needs a fourth
+- **MOSS-Image.** OpenMOSS's 5B model, Base and SFT, with two Get models cards for the
+  SFT: Comfy-Org's official INT8 file (5.4 GB, which sd.cpp runs as INT8) and the BF16
+  original (10.2 GB). The Convert tab lists an INT8 file but won't convert it, since
+  its weights are stored rotated. It renders 50 steps at CFG 3, as its model card does. It needs a fourth
   file beside the model, encoder and VAE: Qwen3.5's `tokenizer.json`, which the card
   fetches and the Models panel lists as *Tokenizer*. Its Qwen3.5-9B encoder is never
   offered to Flux.2 Klein 9B, or Klein's Qwen3-8B to it, although both are 4096 wide.
 - **Get models is grouped**: image models, video models and upscalers each under a
   heading, in the list and in its menu.
+- **Recommended models.** FLUX.3 Klein, MOSS-Image and Krea 2 are marked
+  *Recommended* on their Get models cards, which come first, and their families lead
+  the Image tab's model list.
 - **Video tab (nightly)**:
   - **Video models in Get models**: Wan 2.2 TI2V-5B, the Wan 2.2 I2V-A14B pair, and
     MiniMax H3.

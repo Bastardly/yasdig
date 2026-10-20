@@ -1,5 +1,5 @@
 import { $, esc } from './dom.js';
-import { fetchCatalog, openGetModels } from './getmodels.js';
+import { fetchCatalog, firstPerFamily, openGetModels } from './getmodels.js';
 
 // The Help tab: a menu of topics on the left, one topic on the right.
 //
@@ -130,7 +130,9 @@ export const TOPICS = [
             + `<br><button type="button" class="btn spaced" data-family="${e.family}">Get it</button>`
           : '<span class="famstate done">✓ all here</span>';
       };
-      box.innerHTML = table(['Family', 'Needs', 'Recommended set', ''], cat.entries.map((e) => [
+      // One row per family: its first card, the default set (a second card
+      // is the same model in another precision).
+      box.innerHTML = table(['Family', 'Needs', 'Recommended set', ''], firstPerFamily(cat.entries).map((e) => [
         esc(e.family_label),
         esc(parts(e)),
         `${esc(e.label)}, ${gb(e.bytes)}<br><span class="sub">${esc(e.note)}</span>`,

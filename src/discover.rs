@@ -2295,6 +2295,17 @@ mod tests {
             ("layers.0.proj.qkv.weight", &[3072, 9216]),
         ]);
         assert_eq!(classify(&dit), Role::Image { family: ImageFamily::MossImage, bundled: false });
+        // Comfy-Org's INT8 convrot repack: the same names, plus a scale and a
+        // quantization record beside each linear (off its released header).
+        let int8 = t(&[
+            ("video_embedder.weight", &[128, 3072]),
+            ("shared_block_modulation.weight", &[3072, 18432]),
+            ("layers.0.proj.qkv.weight", &[3072, 9216]),
+            ("layers.0.proj.qkv.weight_scale", &[9216]),
+            ("layers.0.proj.qkv.comfy_quant", &[60]),
+            ("layers.0.comfy_attention.config", &[30]),
+        ]);
+        assert_eq!(classify(&int8), Role::Image { family: ImageFamily::MossImage, bundled: false });
         let gguf = Tensors {
             arch: Some("qwen35".into()),
             layout: Layout::Ggml,

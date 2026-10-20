@@ -1,5 +1,8 @@
-# The Get models tab's catalog: one recommended set per family, the only URLs the
-# downloader will fetch (src/catalog.rs, src/downloads.rs).
+# The Get models tab's catalog: a set of files per family — sometimes two, in
+# different precisions, the first being the one Help's family table names — and
+# the only URLs the downloader will fetch (src/catalog.rs, src/downloads.rs).
+# `recommended = true` marks the cards a newcomer should start from: the tab
+# lists them first and the Image tab's model list says so.
 #
 # Every URL and `bytes` here was checked against Hugging Face on 2026-10-10
 # (MOSS-Image on 2026-10-20) — the repo's file listing for the exact name, and a
@@ -180,6 +183,7 @@ sha256 = "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
 id = "flux3-klein-q8"
 family = "flux3_klein"
 label = "FLUX.3 Klein (Q8_0 GGUF)"
+recommended = true
 note = "About 11 GB on the card. 16 steps; takes reference images and can edit."
 
 [[entry.file]]
@@ -230,6 +234,7 @@ sha256 = "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
 id = "krea2-turbo-q6"
 family = "krea2"
 label = "Krea 2 Turbo (Q6_K GGUF)"
+recommended = true
 note = "About 15 GB on the card. Its text encoder is the Qwen3-VL-4B GGUF, not Comfy's safetensors, which sd.cpp can't load."
 
 [[entry.file]]
@@ -276,17 +281,53 @@ dest = "vae/qwen_image_vae.safetensors"
 bytes = 253806246
 sha256 = "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
 
+# MOSS-Image: Comfy-Org's official repack, in two precisions (checked
+# 2026-10-20). The INT8 file is ComfyUI's `int8_tensorwise` + convrot, which
+# sd.cpp multiplies as INT8 on Vulkan (docs/int8_convrot.md) rather than
+# converting; the BF16 one is the unquantized original.
 [[entry]]
-id = "moss-image-sft-q8"
+id = "moss-image-sft-int8"
 family = "moss_image"
-label = "MOSS-Image SFT (Q8_0 GGUF)"
-note = "About 16 GB on the card. A 5B model that runs 50 steps at real CFG, so slower per image than its size suggests; strong at layout and text. Its encoder is Qwen3.5-9B, and it needs Qwen3.5's tokenizer.json beside it."
+label = "MOSS-Image SFT (INT8)"
+recommended = true
+note = "About 16 GB on the card. A 5B model strong at layout and rendered text. 50 steps at CFG 3 on its own; its encoder is Qwen3.5-9B, and it needs Qwen3.5's tokenizer.json beside it."
 
 [[entry.file]]
 slot = "model"
-url = "https://huggingface.co/leejet/MOSS-Image-SFT-GGUF/resolve/main/MOSS-Image-SFT-Q8_0.gguf"
-dest = "diffusion_models/MOSS-Image-SFT-Q8_0.gguf"
-bytes = 5705571168
+url = "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/diffusion_models/moss_image_sft_int8_convrot.safetensors"
+dest = "diffusion_models/moss_image_sft_int8_convrot.safetensors"
+bytes = 5413698958
+
+[[entry.file]]
+slot = "llm"
+url = "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q8_0.gguf"
+dest = "text_encoders/Qwen3.5-9B-Q8_0.gguf"
+bytes = 9527502048
+
+[[entry.file]]
+slot = "tokenizer"
+url = "https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/resolve/main/tokenizer/tokenizer.json"
+dest = "tokenizers/tokenizer_qwen3.5.json"
+bytes = 19989325
+
+[[entry.file]]
+slot = "vae"
+url = "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/vae/flux2-vae.safetensors"
+dest = "vae/flux2-vae.safetensors"
+bytes = 336211292
+sha256 = "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
+
+[[entry]]
+id = "moss-image-sft-bf16"
+family = "moss_image"
+label = "MOSS-Image SFT (BF16)"
+note = "The unquantized original, twice the INT8 file: about 21 GB on the card, so a 24 GB card's. Same encoder, tokenizer and VAE."
+
+[[entry.file]]
+slot = "model"
+url = "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/diffusion_models/moss_image_sft_bf16.safetensors"
+dest = "diffusion_models/moss_image_sft_bf16.safetensors"
+bytes = 10164655808
 
 [[entry.file]]
 slot = "llm"

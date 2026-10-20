@@ -446,9 +446,12 @@ gallery holds, so `Store::find_output` searches both and `output_source`,
 ## Downloads
 
 Get models tab: `src/catalog.toml` (compiled in), `src/catalog.rs`, `src/downloads.rs`,
-`GET /catalog`, `POST /downloads/{start,cancel,clear}`, `web/js/getmodels.js`. One set
-per runnable family, each file keyed by its `slots()` key (or `"model"`). Help's
-*Intro to models* draws from `/catalog`. **curl is a subprocess** (no TLS stack in the
+`GET /catalog`, `POST /downloads/{start,cancel,clear}`, `web/js/getmodels.js`. A set
+per runnable family, each file keyed by its `slots()` key (or `"model"`); **a family
+may have two cards** (MOSS INT8 + BF16), so its anchor, nav button and Help's family
+row take its *first* card (`firstPerFamily`) — keep the default first in the toml.
+`recommended = true` sorts a card first and marks its family in the model select
+(`Catalog::recommends`, by family). Help's *Intro to models* draws from `/catalog`. **curl is a subprocess** (no TLS stack in the
 binary); `doctor` warns when missing.
 
 - **The catalog is the only source of a URL or destination**; routes take an `id`.

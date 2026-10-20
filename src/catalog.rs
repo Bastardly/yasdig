@@ -1,5 +1,6 @@
-//! What the Get models tab offers: one recommended set of files per family,
-//! compiled in from `catalog.toml`.
+//! What the Get models tab offers: a set of files per family — two where a
+//! model ships in two precisions, the first being the default — compiled in
+//! from `catalog.toml`.
 //!
 //! The catalog is the **only** source of a URL the downloader will fetch, and
 //! of the path it writes to. The page names an entry by its `id` and nothing
@@ -101,6 +102,10 @@ pub struct Entry {
     pub id: String,
     pub family: Family,
     pub label: String,
+    /// A card a newcomer should start from: listed first on the tab, and its
+    /// family marked in the Image tab's model list ([`Catalog::recommends`]).
+    #[serde(default)]
+    pub recommended: bool,
     pub note: String,
     pub file: Vec<File>,
 }
@@ -134,6 +139,13 @@ impl Catalog {
 
     pub fn upscaler(&self, id: &str) -> Option<&Upscaler> {
         self.upscaler.iter().find(|u| u.id == id)
+    }
+
+    /// Whether some recommended card is of this family — what the Image tab's
+    /// model list marks. By family, since the installed file may be any
+    /// quantization of it.
+    pub fn recommends(&self, family: ImageFamily) -> bool {
+        self.entry.iter().any(|e| e.recommended && e.family == Family::Image(family))
     }
 }
 

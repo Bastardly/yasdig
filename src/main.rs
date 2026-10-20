@@ -3206,7 +3206,7 @@ fn build_models_json(cfg: &Config) -> String {
                 .unwrap_or_else(|_| "[]".into());
             format!(
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
-                 \"family\":{},\"family_label\":{},\"references\":{},\"fill\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
+                 \"family\":{},\"family_label\":{},\"recommended\":{},\"references\":{},\"fill\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
                  \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\"scheduler\":{},\"cache_mode\":{},\"memory\":{},\
                  \"upscale_factor\":{},\"upscaler\":{},\
@@ -3220,6 +3220,8 @@ fn build_models_json(cfg: &Config) -> String {
                 p.exists,
                 json_str(p.family.as_str()),
                 json_str(p.family.label()),
+                // The catalog's mark, by family: the select says "(Recommended)".
+                catalog::Catalog::get().recommends(p.family),
                 // Whether the References button shows: the server's rule,
                 // served, so the page holds no copy of it.
                 p.family.takes_references(),

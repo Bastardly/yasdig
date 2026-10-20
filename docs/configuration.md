@@ -115,14 +115,14 @@ Forest Labs' own repos are gated, so these links are leejet's GGUFs:
 | the VAE | [`qwen_image_vae.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/tree/main/split_files/vae) — the same file as Krea 2's |
 
 **MOSS-Image** (Base and SFT, which `doctor` can't tell apart: the same tensors) —
-about 16 GB at Q8. It runs 50 steps at CFG 3, its model card's settings, so a picture
+about 16 GB with the INT8 model, about 21 GB with BF16. It runs 50 steps at CFG 3, its model card's settings, so a picture
 takes longer than the 5B size suggests. It is the one family with a fourth file: sd.cpp
 requires Qwen3.5's own `tokenizer.json`, which is recognised by its contents like the
 rest and can go anywhere under `models/`:
 
 | file | where to get it |
 |---|---|
-| the model | SFT [GGUF](https://huggingface.co/leejet/MOSS-Image-SFT-GGUF/tree/main) (`Q8_0`, 5.7 GB); Base [GGUF](https://huggingface.co/leejet/MOSS-Image-Base-GGUF/tree/main) |
+| the model | SFT or Base from [Comfy-Org](https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/diffusion_models): `int8_convrot` (5.4 GB, the Get models default — sd.cpp multiplies it as INT8, and the Convert tab leaves it alone) or `bf16` (10.2 GB); or leejet's [GGUF](https://huggingface.co/leejet/MOSS-Image-SFT-GGUF/tree/main) (`Q8_0`, 5.7 GB) |
 | the text encoder — Qwen3.5-9B | [GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/main) (`Q8_0`, 9.5 GB; not an `mmproj` file) |
 | the tokenizer | [`tokenizer.json`](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/tree/main/tokenizer) |
 | the VAE — Flux.2's | the same file as Flux.2 Klein's, above |
