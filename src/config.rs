@@ -1811,6 +1811,14 @@ impl VideoFamily {
         matches!(self, VideoFamily::Wan22A14b)
     }
 
+    /// Whether `-i` is this family's **first frame**, so a clip can go on
+    /// from its own last one — a long clip's shots, *Continue this clip*. Not
+    /// VACE, which reads `-i` as a reference image, nor the dense family, whose
+    /// text-to-video checkpoints ignore it (`src/pipeline/video.cpp`).
+    pub fn chains(self) -> bool {
+        matches!(self, VideoFamily::Wan22Ti2v5b | VideoFamily::Wan22A14b | VideoFamily::MinimaxH3)
+    }
+
     /// The settings a model of this family should arrive with.
     ///
     /// These are the numbers every example for that family in sd.cpp's
@@ -4288,6 +4296,13 @@ lora_dir = "adapters"
     /// isn't an output stem.
     /// Layout boxes are MOSS-Image's alone, and checked by the layout's own
     /// rules on the way in.
+    /// Only a family whose `-i` is a first frame can go on from a clip's last.
+    #[test]
+    fn only_a_first_frame_family_chains() {
+        let chains: Vec<_> = VideoFamily::ALL.iter().filter(|f| f.chains()).collect();
+        assert_eq!(chains, [&VideoFamily::Wan22Ti2v5b, &VideoFamily::Wan22A14b, &VideoFamily::MinimaxH3]);
+    }
+
     #[test]
     fn a_layout_is_moss_only_and_well_formed() {
         use crate::layout::{Item, Label, Layout};

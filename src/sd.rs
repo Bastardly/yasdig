@@ -347,10 +347,15 @@ impl<'a> SdRunner<'a> {
         negative: &str,
         seed: i64,
         io: &VideoIo,
+        shot: Option<(usize, usize)>,
     ) -> Result<()> {
         let cmd = self.video_cmd(m, prompt, negative, seed, io);
-        let label = if io.init.is_some() { "i2v" } else { "t2v" };
-        self.run(cmd, label)
+        // A long clip's progress line says which shot it is on.
+        let label = match shot {
+            Some((k, n)) => format!("shot {k} of {n}"),
+            None => (if io.init.is_some() { "i2v" } else { "t2v" }).to_string(),
+        };
+        self.run(cmd, &label)
     }
 
     /// The argv for [`SdRunner::video`], built separately so it can be asserted

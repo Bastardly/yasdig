@@ -492,7 +492,17 @@ pub struct VideoRequest {
     pub parts: Option<std::collections::BTreeMap<String, Option<String>>>,
     /// The Video tab's LoRA picks; `None` keeps none, `Some([])` is none.
     pub loras: Option<Vec<crate::config::VideoLora>>,
+    /// A long clip: one segment per shot, each from the last one's final
+    /// frame, conditioned on `"{prompt}. {shot}"`. Empty is one clip.
+    pub shots: Vec<String>,
+    /// A clip id whose frames this one starts with; its shots (or the prompt
+    /// alone) go on from that clip's last frame.
+    pub continue_from: Option<String>,
 }
+
+/// More shots than this is past what one queued job should be: about a
+/// minute at three seconds a shot.
+pub const MAX_SHOTS: usize = 20;
 
 /// A finished clip, plus how long it took. The timing is the point on this
 /// hardware — it's what tells you whether the next clip is worth starting.
@@ -505,6 +515,9 @@ pub struct VideoResult {
     ///
     /// [`Settings::video_save`]: crate::settings::Settings::video_save
     pub saved: Option<PathBuf>,
+    /// Why a long clip has fewer shots than were asked for: a Stop, or a
+    /// shot that failed after others were done.
+    pub note: Option<String>,
 }
 
 /// What [`Engine::convert`] produced, and how well the estimate held.
@@ -2053,27 +2066,94 @@ impl Engine {
         let typed_prompt = variables::typed(&req.prompt, &prompt);
         let typed_negative = variables::typed(&negative, &rolled);
         let negative = rolled;
+        // A long clip's shots, as typed and as conditioned: the Prompt is the
+        // scene, a shot what happens in it. Each rolls its variables off its
+        // own seed, `seed + k`, as a batch image does.
+        let typed_shots: Vec<String> =
+            req.shots.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let continues = req.continue_from.clone().filter(|s| !s.is_empty());
+        if (!typed_shots.is_empty() || continues.is_some()) && !m.family.chains() {
+            bail!(
+                "a {} model can't go on from a clip's last frame (its -i is not a first frame), so it \
+                 makes one clip at a time — remove the shots, or pick a TI2V-5B, A14B or H3 model",
+                m.family.label()
+            );
+        }
+        if typed_shots.len() > MAX_SHOTS {
+            bail!("a long clip has at most {MAX_SHOTS} shots; this one has {}", typed_shots.len());
+        }
+        let continued = match &continues {
+            Some(from) => Some(self.videos.load(from)?),
+            None => None,
+        };
+        let segments: Vec<String> = if typed_shots.is_empty() {
+            vec![prompt.clone()]
+        } else {
+            typed_shots
+                .iter()
+                .enumerate()
+                .map(|(k, shot)| Ok(format!("{prompt}. {}", variables::expand(shot, &vars, seed.wrapping_add(k as i64))?)))
+                .collect::<Result<_>>()?
+        };
+        let n = segments.len();
+
         let id = workitems::new_id(seed);
         // A soundtrack only survives in a container — see `videos::CONTAINER`.
         let sound = m.audio_vae.is_some();
         let (pattern, mut dir) = self.videos.prepare(&id, sound)?;
+        if let Some(from) = &continues {
+            self.videos.seed_from(&id, from)?;
+        }
 
         let t = Instant::now();
-        self.sd().video(
-            &m,
-            &prompt,
-            &negative,
-            seed,
-            &VideoIo {
-                init: init.as_deref(),
-                control: None,
-                out: &pattern,
-            },
-        )?;
-        let gen_ms = t.elapsed().as_millis();
-        if sound {
-            self.videos.unpack(&id)?;
+        let mut shot_starts = Vec::new();
+        let mut note = None;
+        for (k, text) in segments.iter().enumerate() {
+            // The first segment of a fresh clip renders into the clip itself,
+            // from the picked first frame; every other one into a folder of
+            // its own, from the clip's last frame so far, and is then joined.
+            let fresh = k == 0 && continued.is_none();
+            let last = (!fresh).then(|| self.videos.frames(&id).pop()).flatten();
+            let out = if fresh { pattern.clone() } else { self.videos.prepare_segment(&id, k, sound)? };
+            let ran = self.sd().video(
+                &m,
+                text,
+                &negative,
+                seed.wrapping_add(k as i64),
+                &VideoIo {
+                    init: if fresh { init.as_deref() } else { last.as_deref() },
+                    control: None,
+                    out: &out,
+                },
+                (n > 1).then_some((k + 1, n)),
+            );
+            if let Err(e) = ran {
+                // Shots already done are minutes of work: a Stop or a failure
+                // past the first keeps them as the clip, and says so.
+                if k == 0 {
+                    return Err(e);
+                }
+                let stopped = format!("{e:#}").contains(crate::sd::CANCELLED);
+                note = Some(if stopped {
+                    format!("Stopped during shot {} of {n}; the {k} before it are the clip.", k + 1)
+                } else {
+                    format!("Shot {} of {n} failed ({e:#}); the {k} before it are the clip.", k + 1)
+                });
+                break;
+            }
+            if fresh {
+                if sound {
+                    self.videos.unpack(&id)?;
+                }
+                shot_starts.push(0);
+            } else {
+                shot_starts.push(self.videos.append_segment(&id, k, m.effective_fps())?);
+            }
         }
+        if n > 1 || continued.is_some() {
+            self.videos.drop_container(&id);
+        }
+        let gen_ms = t.elapsed().as_millis();
 
         let (_, _, frames) = m.aligned();
         let mut clip = Clip {
@@ -2098,6 +2178,9 @@ impl Engine {
             audio: false,
             video: m,
             versions: Vec::new(),
+            shots: typed_shots,
+            shot_starts: if n > 1 { shot_starts } else { Vec::new() },
+            continues,
         };
         self.videos.finish(&mut clip)?;
         // Past every `?`, so the guard stops being a sweeper. Everything before
@@ -2115,7 +2198,7 @@ impl Engine {
         } else {
             None
         };
-        Ok(VideoResult { clip, gen_ms, saved })
+        Ok(VideoResult { clip, gen_ms, saved, note })
     }
 
     /// FSR every frame of clip `id` into a new version of it (`v{n}/` inside

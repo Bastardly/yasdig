@@ -92,6 +92,15 @@ pub struct Clip {
     /// the clip deletes them and nothing lands in `work/output/` unasked.
     #[serde(default)]
     pub versions: Vec<ClipVersion>,
+    /// A long clip's shots as they were typed, one per segment, and the frame
+    /// each began at. Empty for a clip made in one go.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shots: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shot_starts: Vec<u32>,
+    /// The clip this one continues, whose frames it starts with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continues: Option<String>,
 }
 
 /// One enlarged version of a clip: what made it, and its frames' size.
@@ -178,6 +187,69 @@ impl VideoStore {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let out = dir.join(if sound { CONTAINER } else { FRAME_PATTERN });
         Ok((out, ClipDir { dir, keep: false }))
+    }
+
+    /// Where segment `k` of a long clip renders before it joins the clip — a
+    /// folder inside the clip's own, so the clip's guard sweeps it — and the
+    /// `-o` to hand sd-cli there.
+    pub fn prepare_segment(&self, id: &str, k: usize, sound: bool) -> Result<PathBuf> {
+        let dir = self.dir(id).join(format!("seg{k}"));
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        Ok(dir.join(if sound { CONTAINER } else { FRAME_PATTERN }))
+    }
+
+    /// Join segment `k` onto the clip: its frames after the clip's, **less its
+    /// first**, which is the clip's last frame sd-cli was started from; its
+    /// sound after the clip's, less that frame's worth. Answers the frame the
+    /// segment's own begin at. The segment's folder goes.
+    pub fn append_segment(&self, id: &str, k: usize, fps: u32) -> Result<u32> {
+        let seg = self.dir(id).join(format!("seg{k}"));
+        let container = seg.join(CONTAINER);
+        let mut audio = None;
+        if container.is_file() {
+            let avi = crate::avi::read(&container)?;
+            for (n, jpeg) in avi.frames.iter().enumerate() {
+                image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)
+                    .with_context(|| format!("decoding frame {n} of shot {}", k + 1))?
+                    .save(seg.join(format!("frame_{n:03}.png")))?;
+            }
+            audio = avi.audio;
+        }
+        let start = self.frames(id).len() as u32;
+        for (i, f) in frames_in(&seg).iter().enumerate().skip(1) {
+            let to = self.frame_path(id, start + i as u32 - 1);
+            std::fs::rename(f, &to).with_context(|| format!("joining shot {} into the clip", k + 1))?;
+        }
+        if let Some(mut more) = audio {
+            let path = self.dir(id).join(AUDIO);
+            let mut joined = crate::avi::read_wav(&path)?;
+            // One frame of samples, the one dropped above.
+            let skip = (more.sample_rate / fps.max(1)) as usize * more.channels as usize * 2;
+            more.pcm.drain(..skip.min(more.pcm.len()));
+            joined.pcm.extend_from_slice(&more.pcm);
+            crate::avi::write_wav(&path, &joined)?;
+        }
+        std::fs::remove_dir_all(&seg).with_context(|| format!("removing {}", seg.display()))?;
+        Ok(start)
+    }
+
+    /// A long clip's joined frames are the clip; sd-cli's container of its
+    /// first shot alone must not stand in for it on *Download*.
+    pub fn drop_container(&self, id: &str) {
+        let _ = std::fs::remove_file(self.dir(id).join(CONTAINER));
+    }
+
+    /// Start clip `id` with every frame (and the sound) of clip `from` — for
+    /// *Continue this clip*, whose shots then run from its last frame.
+    pub fn seed_from(&self, id: &str, from: &str) -> Result<()> {
+        for (i, f) in self.frames(from).iter().enumerate() {
+            std::fs::copy(f, self.frame_path(id, i as u32))
+                .with_context(|| format!("copying {} to continue it", f.display()))?;
+        }
+        if let Some(a) = self.audio_path(from) {
+            std::fs::copy(a, self.dir(id).join(AUDIO))?;
+        }
+        Ok(())
     }
 
     /// Split the AVI sd-cli wrote for a clip with sound into numbered PNG
@@ -431,6 +503,9 @@ t5xxl = "t.gguf"
             audio: false,
             video: model(),
             versions: Vec::new(),
+            shots: Vec::new(),
+            shot_starts: Vec::new(),
+            continues: None,
         }
     }
 
@@ -583,6 +658,37 @@ t5xxl = "t.gguf"
             .unwrap_err()
             .to_string();
         assert!(err.contains("no frames"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A long clip's next shot starts from the clip's last frame, which sd-cli
+    /// draws again as the shot's first: joined, that one is dropped and the
+    /// rest follow on, numbered after the clip's. Continue copies a clip in.
+    #[test]
+    fn a_shot_joins_the_clip_without_repeating_its_seam() {
+        let dir = std::env::temp_dir().join(format!("yasdig-vid-shots-{}", std::process::id()));
+        let store = VideoStore::new(&dir);
+        let (_, mut guard) = store.prepare("100-7", false).unwrap();
+        let shade = |p: &Path, v: u8| image::GrayImage::from_pixel(4, 4, image::Luma([v])).save(p).unwrap();
+        for i in 0..3u8 {
+            shade(&store.frame_path("100-7", i as u32), i);
+        }
+        let seg = store.prepare_segment("100-7", 1, false).unwrap();
+        for i in 0..3u8 {
+            shade(&seg.with_file_name(format!("frame_{i:03}.png")), 100 + i);
+        }
+        assert_eq!(store.append_segment("100-7", 1, 24).unwrap(), 3);
+        let frames = store.frames("100-7");
+        assert_eq!(frames.len(), 5, "3 + 3 less the repeated seam");
+        let px = |p: &Path| image::open(p).unwrap().to_luma8().get_pixel(0, 0)[0];
+        assert_eq!(frames.iter().map(|f| px(f)).collect::<Vec<_>>(), [0, 1, 2, 101, 102]);
+        assert!(!store.dir("100-7").join("seg1").exists());
+
+        let (_, mut g2) = store.prepare("200-7", false).unwrap();
+        store.seed_from("200-7", "100-7").unwrap();
+        assert_eq!(store.frames("200-7").len(), 5);
+        guard.keep();
+        g2.keep();
         std::fs::remove_dir_all(&dir).ok();
     }
 }

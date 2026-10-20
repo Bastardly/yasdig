@@ -1527,6 +1527,10 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         parts: Option<std::collections::BTreeMap<String, Option<String>>>,
         #[serde(default)]
         loras: Option<Vec<config::VideoLora>>,
+        #[serde(default)]
+        shots: Vec<String>,
+        #[serde(default)]
+        continue_from: Option<String>,
     }
 
     let dto: Dto = match parse_json::<Dto>(conn, body)? {
@@ -1554,6 +1558,8 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         memory: dto.memory,
         parts: dto.parts,
         loras: dto.loras,
+        shots: dto.shots,
+        continue_from: dto.continue_from,
     };
 
     let label = req.model.clone();
