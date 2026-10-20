@@ -394,6 +394,8 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   gap: var(--sp-2); margin-top: var(--sp-2);
 }
 .lorarow .btn { padding: var(--sp-2); }
+/* The A14B pair's expert choice, under its row. */
+.loraexpert { width: 100%; margin-top: var(--sp-1); }
 
 /* One prompt variable: its name, the words it can stand for, and a way to take
    it off again. One line, unlike `.lorarow` above and unlike this rule's first

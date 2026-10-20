@@ -3,6 +3,24 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### New
+
+- **Video tab (nightly)**:
+  - **LoRAs**, picked as on the Image tab from `models/loras/`. Only the ones that fit
+    the video model are offered: Wan LoRAs are read by their size, so a TI2V-5B LoRA
+    never reaches a 14B. On the Wan 2.2 A14B pair each LoRA says which expert it
+    patches (both, low noise or high noise). A reopened clip puts its LoRAs back.
+  - **The seed** has the Image tab's line in the rail and a Reset button, width and
+    height have a swap button, and the size boxes snap to what the model will run.
+
+### Fixed
+
+- **Video tab (nightly)**: finishing a clip no longer resets the settings to the
+  model's defaults, and another clip can be opened — and a new one set up from it —
+  while one is rendering.
+
 ## 0.3.0 — 2026-10-20
 
 ### New

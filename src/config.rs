@@ -305,6 +305,44 @@ pub fn check_sampling(
     Ok(())
 }
 
+/// One LoRA picked on the Video tab for one clip: a [`LoraRef`] plus the
+/// expert it patches.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VideoLora {
+    /// Relative to [`Config::lora_dir`], extension included, as [`LoraRef`].
+    pub name: String,
+    pub strength: f32,
+    /// Which of the A14B's two experts it patches. sd.cpp applies a plain
+    /// `<lora:…>` to the low-noise model and `<lora:|high_noise|…>` to the
+    /// other, so the pairs published for it are one file per expert. Ignored
+    /// on a model with one transformer.
+    #[serde(default)]
+    pub expert: Expert,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Expert {
+    /// Both: a Wan 2.1 14B LoRA on the A14B pair.
+    #[default]
+    Both,
+    Low,
+    High,
+}
+
+impl VideoLora {
+    /// The prompt tags for this pick on a model with (`moe`) or without two
+    /// experts.
+    pub fn tags(&self, moe: bool) -> String {
+        let (n, s) = (&self.name, self.strength);
+        match (moe, self.expert) {
+            (false, _) | (true, Expert::Low) => format!("<lora:{n}:{s}>"),
+            (true, Expert::High) => format!("<lora:|high_noise|{n}:{s}>"),
+            (true, Expert::Both) => format!("<lora:{n}:{s}><lora:|high_noise|{n}:{s}>"),
+        }
+    }
+}
+
 /// One LoRA applied to one generation.
 ///
 /// A struct rather than the video side's `"name:1"` string, and the difference
@@ -1683,8 +1721,8 @@ impl VideoFamily {
     /// Rust can't enumerate an enum, so this is a hand-written list and could
     /// fall behind — `all_families_are_listed` is the tripwire, and every
     /// `match` in this impl is exhaustive, so a new variant cannot be added
-    /// without at least being *considered* everywhere it matters.
-    #[cfg(test)]
+    /// without at least being *considered* everywhere it matters. The LoRA
+    /// listing reads it too, for the families a LoRA fits.
     pub const ALL: [VideoFamily; 5] = [
         VideoFamily::Wan22Ti2v5b,
         VideoFamily::Wan22A14b,
@@ -2093,10 +2131,16 @@ pub struct VideoModel {
     /// per-model config instead of something typed into the prompt box.
     #[serde(default)]
     pub loras: Vec<String>,
-    /// Directory the names above resolve in (`--lora-model-dir`). Defaults to
-    /// the models dir.
+    /// Directory every LoRA name resolves in (`--lora-model-dir`): the ones
+    /// above and the Video tab's picks. Unset is [`Config::lora_dir`], the
+    /// folder the picker lists.
     #[serde(default)]
     pub lora_dir: Option<PathBuf>,
+    /// The LoRAs picked on the Video tab for this clip. Request-only, like an
+    /// image's `Profile::loras`: never from config, recorded in the clip so a
+    /// reopen restores them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub picked_loras: Vec<VideoLora>,
     /// Where the weights live, one of [`MEMORY_MODES`] — read through
     /// [`VideoModel::memory_mode`]. Unset means `ram`, which is what this
     /// used to be as `offload_to_cpu = true`: it is what makes the A14B pair
@@ -2238,6 +2282,7 @@ impl VideoModel {
             negative_prompt: default_video_negative(),
             loras: Vec::new(),
             lora_dir: None,
+            picked_loras: Vec::new(),
             memory: Some(r.memory.into()),
             offload_to_cpu: None,
             vae_tiling: true,
@@ -2704,7 +2749,14 @@ impl Config {
                     bytes,
                     usable: note.is_empty(),
                     note,
-                    families: ImageFamily::ALL.iter().filter(|f| base.fits(**f)).map(|f| f.as_str()).collect(),
+                    // Image families and video ones, whose wire names never
+                    // collide, so one list serves both tabs' pickers.
+                    families: ImageFamily::ALL
+                        .iter()
+                        .filter(|f| base.fits(**f))
+                        .map(|f| f.as_str())
+                        .chain(VideoFamily::ALL.iter().filter(|f| base.fits_video(**f)).map(|f| f.as_str()))
+                        .collect(),
                     base: base.label(),
                     turbo,
                 }
@@ -2732,15 +2784,27 @@ impl Config {
     /// out, so this is for what reaches a run another way — a reopened work
     /// item, a hand-written request.
     pub fn check_loras(&self, refs: &[LoraRef], family: ImageFamily) -> Result<()> {
-        if refs.is_empty() {
-            return Ok(());
-        }
+        self.check_lora_files(refs.iter().map(|l| l.name.as_str()), family.label(), |b| b.fits(family))
+    }
+
+    /// [`Config::check_loras`] for a clip's picked LoRAs: the same refusals,
+    /// with the video side's fit ([`crate::discover::LoraBase::fits_video`]).
+    pub fn check_video_loras(&self, picks: &[VideoLora], family: VideoFamily) -> Result<()> {
+        self.check_lora_files(picks.iter().map(|l| l.name.as_str()), family.label(), |b| b.fits_video(family))
+    }
+
+    fn check_lora_files<'a>(
+        &self,
+        names: impl Iterator<Item = &'a str>,
+        family: &str,
+        fits: impl Fn(crate::discover::LoraBase) -> bool,
+    ) -> Result<()> {
         let dir = self.lora_dir();
-        for l in refs {
-            if !valid_lora_name(&l.name) {
-                bail!("'{}' is not a LoRA name", l.name);
+        for name in names {
+            if !valid_lora_name(name) {
+                bail!("'{name}' is not a LoRA name");
             }
-            if !dir.join(&l.name).exists() {
+            if !dir.join(name).exists() {
                 let known: Vec<String> = self
                     .list_loras()
                     .into_iter()
@@ -2748,8 +2812,7 @@ impl Config {
                     .map(|f| f.name)
                     .collect();
                 bail!(
-                    "no LoRA named '{}' in {} — available: {}",
-                    l.name,
+                    "no LoRA named '{name}' in {} — available: {}",
                     dir.display(),
                     if known.is_empty() {
                         "nothing (the folder is empty)".to_string()
@@ -2758,16 +2821,14 @@ impl Config {
                     }
                 );
             }
-            match crate::discover::identify(&dir.join(&l.name)) {
-                crate::discover::Role::Lora(base) if !base.fits(family) => bail!(
-                    "'{}' is a LoRA for {}, and this is a {} model — its weights would \
+            match crate::discover::identify(&dir.join(name)) {
+                crate::discover::Role::Lora(base) if !fits(base) => bail!(
+                    "'{name}' is a LoRA for {}, and this is a {family} model — its weights would \
                      not match, and sd.cpp would render without it",
-                    l.name,
                     base.label(),
-                    family.label()
                 ),
                 crate::discover::Role::Lora(_) => {}
-                other => bail!("'{}' looks like a {}, not a LoRA", l.name, other.describe()),
+                other => bail!("'{name}' looks like a {}, not a LoRA", other.describe()),
             }
         }
         Ok(())

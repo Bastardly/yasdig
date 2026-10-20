@@ -233,9 +233,14 @@ pub enum LoraBase {
     /// An image family — runnable here or not; [`LoraBase::fits`] compares it
     /// with the model it would be applied to.
     Image(ImageFamily),
-    /// An architecture with no [`ImageFamily`] variant, named: a Wan LoRA
-    /// (video, named in a `[[video]]` entry instead), a Flux.2 dev one.
+    /// An architecture with no [`ImageFamily`] variant, named: a Flux.2 dev
+    /// LoRA.
     Other(&'static str),
+    /// A Wan LoRA — video — with the transformer width its attention
+    /// projections were read at, when one could be: 3072 the TI2V-5B, 5120 the
+    /// 14B models (Wan 2.1 and 2.2 alike), 1536 the 1.3B. See
+    /// [`LoraBase::fits_video`].
+    Wan(Option<u64>),
     /// No marker matched. Offered anyway: refusing a file that works because
     /// this couldn't read it is worse than the mismatch the check exists for.
     Unknown,
@@ -256,8 +261,25 @@ impl LoraBase {
                 matches!(family, ImageFamily::Flux3Klein | ImageFamily::Flux3KleinBase)
             }
             LoraBase::Image(f) => f == family,
-            LoraBase::Other(_) => false,
+            LoraBase::Other(_) | LoraBase::Wan(_) => false,
             LoraBase::Unknown => true,
+        }
+    }
+
+    /// Whether a LoRA for this base belongs on a `family` video model. By
+    /// width, since a family is a training recipe and the width is what the
+    /// weights must match: one 5120-wide LoRA fits every 14B family. VACE and
+    /// the dense family come at 1.3B and 14B, so both widths fit them. Nothing
+    /// reads an H3 LoRA yet, so only an unidentified one is offered there.
+    pub fn fits_video(self, family: crate::config::VideoFamily) -> bool {
+        use crate::config::VideoFamily as V;
+        match self {
+            LoraBase::Wan(None) => family != V::MinimaxH3,
+            LoraBase::Wan(Some(3072)) => family == V::Wan22Ti2v5b,
+            LoraBase::Wan(Some(5120)) => matches!(family, V::Wan22A14b | V::Wan21Vace | V::WanDense),
+            LoraBase::Wan(Some(1536)) => matches!(family, V::Wan21Vace | V::WanDense),
+            LoraBase::Unknown => true,
+            _ => false,
         }
     }
 
@@ -266,6 +288,10 @@ impl LoraBase {
         match self {
             LoraBase::Image(f) => f.label(),
             LoraBase::Other(name) => name,
+            LoraBase::Wan(Some(3072)) => "Wan 2.2 TI2V-5B",
+            LoraBase::Wan(Some(5120)) => "Wan 14B",
+            LoraBase::Wan(Some(1536)) => "Wan 1.3B",
+            LoraBase::Wan(_) => "Wan",
             LoraBase::Unknown => "",
         }
     }
@@ -948,7 +974,17 @@ fn lora_base(t: &Tensors) -> LoraBase {
         return flux_lora(t);
     }
     if t.has("cross_attn") {
-        return LoraBase::Other("Wan");
+        // The width off an attention projection's down half, `[rank, dim]` in
+        // either order: the rank is far smaller, so the larger side is it.
+        let width = t
+            .tensors
+            .iter()
+            .find(|x| {
+                x.name.contains("attn.")
+                    && (x.name.contains("lora_down") || x.name.contains("lora_A") || x.name.contains("lora.down"))
+            })
+            .and_then(|x| x.shape.iter().copied().max());
+        return LoraBase::Wan(width);
     }
     // MOSS-Image's fused up/gate projection (`moss_image.hpp`). Nothing else
     // here names one so; lodestones' 8-step DMD LoRA patches it in every layer.
@@ -1840,7 +1876,29 @@ mod tests {
             ("blocks.0.cross_attn.norm_k.weight.lora_down.weight", &[32, 5120]),
             ("blocks.0.cross_attn.norm_k.weight.lora_up.weight", &[5120, 32]),
         ]);
-        assert_eq!(classify(&lora), Role::Lora(LoraBase::Other("Wan")));
+        assert_eq!(classify(&lora), Role::Lora(LoraBase::Wan(Some(5120))));
+    }
+
+    /// A Wan LoRA is placed by its width: the 5B's never reaches a 14B, a
+    /// Wan 2.1 14B one fits every 14B family, and none is an image LoRA.
+    #[test]
+    fn a_wan_lora_fits_the_video_models_of_its_width() {
+        use crate::config::VideoFamily as V;
+        let at = |w: u64| match classify(&t(&[(
+            "diffusion_model.blocks.0.self_attn.q.lora_down.weight",
+            &[32, w],
+        ), ("diffusion_model.blocks.0.cross_attn.k.lora_down.weight", &[32, w])])) {
+            Role::Lora(b) => b,
+            other => panic!("{other:?}"),
+        };
+        let five = at(3072);
+        assert!(five.fits_video(V::Wan22Ti2v5b) && !five.fits_video(V::Wan22A14b));
+        let big = at(5120);
+        assert!(big.fits_video(V::Wan22A14b) && big.fits_video(V::Wan21Vace) && !big.fits_video(V::Wan22Ti2v5b));
+        assert!(!big.fits_video(V::MinimaxH3));
+        assert!(at(1536).fits_video(V::WanDense) && !at(1536).fits_video(V::Wan22A14b));
+        assert!(!big.fits(ImageFamily::Krea2));
+        assert!(LoraBase::Unknown.fits_video(V::MinimaxH3));
     }
 
     /// LyCORIS carries the base model's tensor names exactly as a LoRA does, so
@@ -1853,14 +1911,14 @@ mod tests {
             ("blocks.0.cross_attn.norm_k.hada_w1_a", &[32, 5120]),
             ("blocks.0.cross_attn.norm_k.hada_w1_b", &[5120, 32]),
         ]);
-        assert_eq!(classify(&loha), Role::Lora(LoraBase::Other("Wan")));
+        assert!(matches!(classify(&loha), Role::Lora(LoraBase::Wan(_))));
 
         let lokr = t(&[
             ("blocks.0.cross_attn.norm_k.weight", &[5120, 5120]),
             ("blocks.0.cross_attn.norm_k.lokr_w1", &[64, 64]),
             ("blocks.0.cross_attn.norm_k.lokr_w2", &[80, 80]),
         ]);
-        assert_eq!(classify(&lokr), Role::Lora(LoraBase::Other("Wan")));
+        assert!(matches!(classify(&lokr), Role::Lora(LoraBase::Wan(_))));
     }
 
     /// One case per LoRA in the models dir, keys and shapes as they are on disk,
@@ -2010,7 +2068,7 @@ mod tests {
         assert!(sdxl.fits(ImageFamily::Sdxl));
         assert!(!sdxl.fits(ImageFamily::ZImage));
         assert!(!sdxl.fits(ImageFamily::Sd1));
-        assert!(!LoraBase::Other("Wan").fits(ImageFamily::Sdxl));
+        assert!(!LoraBase::Wan(Some(5120)).fits(ImageFamily::Sdxl));
         assert!(LoraBase::Unknown.fits(ImageFamily::ZImage));
     }
 

@@ -10,8 +10,8 @@ import { $, esc, getJSON } from './dom.js';
 //
 // A factory, in `gridmark.js`'s shape and for the same reason — two copies of a
 // control that builds a request body is two chances for one of them to send a
-// subtly different one. One instance today, on the Image tab; the edit tab is
-// the likely second.
+// subtly different one. Two instances: the Image tab's and the Video tab's,
+// whose `experts` adds a per-row choice of the A14B's expert.
 
 // The LoRA directory's contents, shared by every picker: one request, every
 // consumer, the same argument `outputGrid` makes for the output tile.
@@ -64,7 +64,11 @@ const options = (selected, family) => available.map((l) => {
 // `refresh()` after a model change is all it takes to re-grey the lists.
 // `onChange` runs after every redraw — an added or removed row; an edit inside
 // a row is an ordinary `input` event that bubbles to whoever is listening.
-export function loraPicker({ rows, add, family = () => null, onChange = () => {} }) {
+// `experts` says whether the model has two experts (the Wan 2.2 A14B pair), and
+// so whether each row picks which one it patches; sent as `expert`.
+const EXPERTS = [['both', 'Both experts'], ['low', 'Low noise'], ['high', 'High noise']];
+
+export function loraPicker({ rows, add, family = () => null, onChange = () => {}, experts = null }) {
   // The rows, in order. Held here rather than read back out of the DOM because a
   // re-render rebuilds the elements and would lose a half-typed strength.
   let picked = [];
@@ -118,10 +122,16 @@ export function loraPicker({ rows, add, family = () => null, onChange = () => {}
           value="${p.strength}" aria-label="Strength" title="Multiplier. 1 is the weight it was trained at.">
         <button type="button" class="btn btn-danger" data-i="${i}"
           title="Remove this LoRA">&times;</button>
-      </div>${off}`;
+      </div>${experts?.() ? `<select class="loraexpert" data-e="${i}" aria-label="Expert"
+        title="Which of the two experts it patches. A pair published for Wan 2.2 is one file each.">${
+        EXPERTS.map(([v, l]) => `<option value="${v}"${v === (p.expert ?? 'both') ? ' selected' : ''}>${l}</option>`).join('')
+      }</select>` : ''}${off}`;
     }).join('');
-    for (const sel of el.querySelectorAll('select')) {
+    for (const sel of el.querySelectorAll('select[data-i]')) {
       sel.addEventListener('change', () => { picked[Number(sel.dataset.i)].name = sel.value; });
+    }
+    for (const sel of el.querySelectorAll('select[data-e]')) {
+      sel.addEventListener('change', () => { picked[Number(sel.dataset.e)].expert = sel.value; });
     }
     for (const box of el.querySelectorAll('input')) {
       // Read on every keystroke rather than on blur: `get()` runs the moment
@@ -179,7 +189,11 @@ export function loraPicker({ rows, add, family = () => null, onChange = () => {}
     // What goes in the request body. Empty is a real answer — the server reads
     // `[]` as "none, explicitly" and a missing key as "keep what the profile
     // has", which are different things.
-    get: () => picked.map((p) => ({ name: p.name, strength: p.strength })),
+    get: () => picked.map((p) => ({
+      name: p.name,
+      strength: p.strength,
+      ...(experts ? { expert: p.expert ?? 'both' } : {}),
+    })),
 
     // Put a stored generation's LoRAs back, for reopening a work item. An entry
     // whose file has since been deleted is dropped rather than restored: the
@@ -187,7 +201,7 @@ export function loraPicker({ rows, add, family = () => null, onChange = () => {}
     // is a row that can only produce an error.
     set(list) {
       picked = (list || []).filter((l) => available.some((a) => a.name === l.name && a.usable))
-        .map((l) => ({ name: l.name, strength: l.strength }));
+        .map((l) => ({ name: l.name, strength: l.strength, expert: l.expert }));
       render();
     },
 

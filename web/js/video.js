@@ -7,6 +7,7 @@ import { soonJobs } from './jobs.js';
 import { clip, renderClip } from './player.js';
 import { sourceSlot } from './source-slot.js';
 import { partRows } from './parts.js';
+import { loraPicker } from './loras.js';
 
 // ---- Video ------------------------------------------------------------------
 //
@@ -38,6 +39,15 @@ function currentVideoModel() {
 // optional part (H3's audio VAE, VACE's CLIP-Vision) can be left out.
 const videoParts = partRows({
   el: 'vpartrows', prefix: 'vpart', none: 'None', onChange: () => syncReady(),
+});
+
+// The clip's LoRAs: the Image tab's picker, offered what fits this video
+// family (`/loras` lists video families too).
+const videoLoras = loraPicker({
+  rows: 'vloras', add: 'vloraadd',
+  family: () => currentVideoModel()?.family ?? null,
+  experts: () => !!currentVideoModel()?.is_moe,
+  onChange: () => syncVideoSummaries(),
 });
 
 // The model's missing files, less any a pick replaced: a Wan VAE that only
@@ -81,10 +91,12 @@ function syncVideoSummaries() {
   $('vsum-prompt').textContent = p ? `— ${p.length > 60 ? p.slice(0, 60) + '…' : p}` : '';
   const m = $('vmodel').value;
   const picked = partsDeparted();
+  const loras = videoLoras.get();
   $('vsum-gen').textContent = m
     ? `— ${m} · ${$('vw').value}×${$('vh').value} · ${$('vframes').value} frames`
-      + (picked.length ? ` · own ${picked.join(', ')}` : '') : '';
-  $('vsum-gen').classList.toggle('on', picked.length > 0);
+      + (picked.length ? ` · own ${picked.join(', ')}` : '')
+      + (loras.length ? ` · LoRA: ${loras.map((l) => l.name.split('/').pop().replace(/\.[^.]+$/, '')).join(', ')}` : '') : '';
+  $('vsum-gen').classList.toggle('on', picked.length > 0 || loras.length > 0);
   $('vsum-adv').textContent = `— Memory: ${MEMORY_LABELS[$('vmemory').value] ?? $('vmemory').value}`
     + ($('vtiling').checked ? '' : ' · VAE tiling off');
 }
@@ -146,6 +158,9 @@ function syncVideo() {
   if (!m) return;
   $('vnegative').value = m.negative_prompt ?? '';
   videoParts.draw(m.parts);
+  // Re-greys the LoRA rows for this family (and shows the expert choice on
+  // the pair).
+  videoLoras.refresh();
   $('vw').value = m.width;
   $('vh').value = m.height;
   $('vw').step = m.size_multiple;
@@ -231,6 +246,8 @@ function vidPayload() {
     vae_tiling: $('vtiling').checked,
     memory: $('vmemory').value || null,
     parts: videoParts.picked(),
+    // Always sent, `[]` included: the picker is the whole answer.
+    loras: videoLoras.get(),
   };
 }
 
@@ -397,6 +414,8 @@ function applyClip(c) {
   $('vhsteps').value = v.high_noise_steps ?? '';
   $('vhcfg').value = v.high_noise_cfg_scale ?? '';
   vSource.set(c.source);
+  // Its picked LoRAs; a clip from before picks has none.
+  videoLoras.set(v.picked_loras ?? []);
   syncVideoNote();
   syncVideoSummaries();
 }
@@ -462,6 +481,7 @@ export function initVideo() {
   $('vgo').addEventListener('click', startClip);
   $('vstop').addEventListener('click', cancelClip);
   vSource.init();
+  videoLoras.init();
   $('pickclose').addEventListener('click', () => $('picker').close());
   $('vdelete').addEventListener('click', deleteClips);
   $('vmodel').addEventListener('change', syncVideo);

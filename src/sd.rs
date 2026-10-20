@@ -393,13 +393,18 @@ impl<'a> SdRunner<'a> {
         for lora in &m.loras {
             p.push_str(&format!("<lora:{lora}>"));
         }
+        // The Video tab's picks, each on the expert it was picked for.
+        for l in &m.picked_loras {
+            p.push_str(&l.tags(m.family.is_moe()));
+        }
         cmd.args(["-p", &p]);
         if !negative.is_empty() {
             cmd.args(["-n", negative]);
         }
-        if let Some(dir) = &m.lora_dir {
-            cmd.args(["--lora-model-dir", &path_str(dir)]);
-        }
+        // Always, the image side's trap: an empty `--lora-model-dir` skips tag
+        // extraction, and its default is the process's CWD.
+        let dir = m.lora_dir.clone().unwrap_or_else(|| self.cfg.lora_dir());
+        cmd.args(["--lora-model-dir", &path_str(&dir)]);
 
         // Rounded here as well as in the UI, because a request can arrive from
         // anywhere. sd.cpp would align these itself and warn, but then the
@@ -2377,6 +2382,28 @@ lora_dir = "loras""#,
         assert_eq!(flag(&a, "--lora-model-dir"), Some(joined("/models", "loras").as_str()));
         // An empty negative is omitted rather than sent as "".
         assert!(flag(&a, "-n").is_none());
+    }
+
+    /// A pick on the A14B patches the expert it names — both, by default —
+    /// and on a one-transformer model is one plain tag. The LoRA dir is always
+    /// sent: an empty one would skip tag extraction.
+    #[test]
+    fn a_picked_video_lora_patches_its_expert() {
+        use crate::config::{Expert, VideoLora};
+        let l = |expert| VideoLora { name: "w.safetensors".into(), strength: 0.8, expert };
+        assert_eq!(l(Expert::Both).tags(true), "<lora:w.safetensors:0.8><lora:|high_noise|w.safetensors:0.8>");
+        assert_eq!(l(Expert::High).tags(true), "<lora:|high_noise|w.safetensors:0.8>");
+        assert_eq!(l(Expert::Low).tags(true), "<lora:w.safetensors:0.8>");
+        assert_eq!(l(Expert::High).tags(false), "<lora:w.safetensors:0.8>");
+        let (cfg, mut m) = video_fixture("");
+        m.picked_loras = vec![l(Expert::Both)];
+        let io = VideoIo { init: None, control: None, out: Path::new("o_%03d.png") };
+        let a = argv(&SdRunner::new(&cfg).video_cmd(&m, "cat", "", 1, &io));
+        assert!(flag(&a, "-p").unwrap().contains("<lora:w.safetensors:0.8>"));
+        assert_eq!(flag(&a, "--lora-model-dir"), Some(path_str(&cfg.lora_dir()).as_str()));
+        // An old clip.json, written before picks existed, still reads.
+        let old: crate::config::VideoLora = serde_json::from_str(r#"{"name":"a.safetensors","strength":1}"#).unwrap();
+        assert_eq!(old.expert, Expert::Both);
     }
 
     /// A VACE refine: frames in, frames out, and the input directory is what

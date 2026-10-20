@@ -165,6 +165,12 @@ const HELP = [
         + 'change of size, and every Refine and Hi-res pass is told them again at '
         + 'its own size. The model card calls this experimental: it guides, it '
         + 'doesn’t trace.' },
+  { ids: ['vloras'],
+    text: 'LoRAs for the video model, from models/loras/ — only the ones for this '
+        + 'model’s size are offered (a TI2V-5B LoRA does nothing to a 14B). On the '
+        + 'Wan 2.2 A14B pair, each says which expert it patches: the low- and '
+        + 'high-noise LoRAs published for it are one file each, and a Wan 2.1 14B '
+        + 'LoRA goes on both. Strength 1 is what it was trained at.' },
   { ids: ['turbo'],
     text: 'A LoRA that teaches this model to finish in a few steps, from its Get '
         + 'models card. On, it renders in the few steps at CFG 1 the label says, '

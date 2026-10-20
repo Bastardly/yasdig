@@ -10,12 +10,11 @@ use crate::settings::Settings;
 /// One line naming what a shared component is, for the `doctor` listing.
 ///
 /// A LoRA gets an extra clause here that [`Role::describe`] deliberately
-/// doesn't: this listing is the video dir's, where a LoRA is only reachable by
-/// being named in config. The image side picks them from a folder instead, so
-/// the same sentence would be wrong there.
+/// doesn't: this listing is the video dir's, and both tabs pick LoRAs from the
+/// LoRA folder alone, so one here is only reachable by being named in config.
 fn describe_role(role: &Role) -> String {
     match role {
-        Role::Lora(_) => "LoRA (name it in a [[video]] entry's `loras` to use it)".into(),
+        Role::Lora(_) => "LoRA — move it to the LoRA folder to pick it on the Video tab".into(),
         other => other.describe(),
     }
 }

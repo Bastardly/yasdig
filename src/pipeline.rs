@@ -490,6 +490,8 @@ pub struct VideoRequest {
     /// or `null` to leave an optional part out. Absent keys keep the model's.
     /// See [`Config::apply_video_parts`].
     pub parts: Option<std::collections::BTreeMap<String, Option<String>>>,
+    /// The Video tab's LoRA picks; `None` keeps none, `Some([])` is none.
+    pub loras: Option<Vec<crate::config::VideoLora>>,
 }
 
 /// A finished clip, plus how long it took. The timing is the point on this
@@ -2003,7 +2005,14 @@ impl Engine {
             // `exists` was the model's own files; a pick replaces some.
             m.exists = m.missing().is_empty();
         }
+        // Whole-list, as on the image side: `[]` is none.
+        if let Some(v) = &req.loras {
+            m.picked_loras = v.clone();
+        }
         m.validate()?;
+        // Before minutes of render: a missing or wrong-family LoRA is a silent
+        // drop in sd.cpp.
+        self.cfg.check_video_loras(&m.picked_loras, m.family)?;
 
         if !m.exists {
             let missing: Vec<String> =

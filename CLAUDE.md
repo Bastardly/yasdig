@@ -378,6 +378,15 @@ Paste is a document listener per slot, gated to its visible tab.
 Wire: `/loras` entries carry `families` and `base`; `fits()` in `loras.js` is
 membership only.
 
+**Video LoRAs**: `VideoModel.picked_loras: Vec<VideoLora>` (request-only, the
+Video tab's picker; `loras: Vec<String>` stays the hand-written `[[video]]` pins).
+`LoraBase::Wan(width)` off an attention down-projection (3072 5B, 5120 the 14Bs,
+1536 the 1.3B) and `fits_video`; `/loras` `families` carries video wire names too.
+`VideoLora::tags` puts an A14B pick on its expert (`<lora:|high_noise|…>` is
+sd.cpp's high-noise spelling, a plain tag the low-noise model). `video_cmd` always
+sends `--lora-model-dir` (`m.lora_dir` or `Config::lora_dir`); `check_video_loras`
+in `Engine::video` shares `check_lora_files` with the image side.
+
 **Speed LoRAs / Turbo**: catalog `[[lora]]` (`catalog::Lora`, `dest` under
 `Config::lora_dir`, had only at its own dest *and* length — `lora_is`), fetched with
 cards listing it in `loras`. `/loras` adds `turbo {steps, cfg_scale}` to the file at

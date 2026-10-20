@@ -615,6 +615,11 @@
            text encoder, H3's audio VAE), drawn by parts.js from the slots
            `/video-models` serves — the Image tab's Models rows. -->
       <div id="vpartrows"></div>
+      <!-- The Image tab's LoRA picker, for the video model's family; on the
+           A14B pair each row also says which expert it patches. -->
+      <label data-help="vloras">LoRAs</label>
+      <div id="vloras"></div>
+      <button type="button" id="vloraadd" class="btn spaced">+ Add LoRA</button>
 
       <!-- The first frame comes from work/output/ — the images that were worth
            keeping are the ones worth animating. Clearing it makes the same model
