@@ -183,11 +183,23 @@ pub const AUTO_SCHEDULER: &str = "auto";
 pub const CACHE_MODES: [&str; 3] = [CACHE_OFF, "spectrum", "adaptive"];
 pub const CACHE_OFF: &str = "off";
 
-/// [`Profile::sigmas`]'s values: sd-cli's named `--sigmas` presets, each a
-/// distilled model's fixed schedule and so the one family it belongs to. A
-/// list of numbers is never accepted from the page — the preset is the whole
-/// reason to send one.
-pub const SIGMA_PRESETS: [(&str, ImageFamily); 1] = [("qwen-image-2.1-turbo", ImageFamily::QwenImage21)];
+/// [`Profile::sigmas`]'s values: a name, the family whose distilled model the
+/// schedule belongs to, and what `--sigmas` is handed — sd-cli's own preset
+/// name, or the published list with its closing 0 (the list's length less one
+/// is the steps run). A list of numbers is never accepted from the page: the
+/// name is the whole request.
+///
+/// Iris-3B Turbo's is its `turbo/distill.yaml`: four deterministic Euler steps
+/// from σ = 1, 0.938, 0.833, 0.625.
+pub const SIGMA_PRESETS: [(&str, ImageFamily, &str); 2] = [
+    ("qwen-image-2.1-turbo", ImageFamily::QwenImage21, "qwen-image-2.1-turbo"),
+    ("iris-turbo", ImageFamily::Iris, "1.0,0.938,0.833,0.625,0.0"),
+];
+
+/// What `--sigmas` is handed for preset `name`, if it is one.
+pub fn sigma_arg(name: &str) -> Option<&'static str> {
+    SIGMA_PRESETS.iter().find(|(n, ..)| *n == name).map(|(.., v)| *v)
+}
 
 /// [`Profile::memory`]'s values: where the weights are kept while a pass runs.
 ///
@@ -834,13 +846,13 @@ impl Profile {
         }
         check_sampling(&format!("'{}'", self.name), &self.sampler, &self.scheduler, Some(self.family))?;
         if !self.sigmas.is_empty() {
-            match SIGMA_PRESETS.iter().find(|(name, _)| *name == self.sigmas) {
-                Some((_, f)) if *f == self.family => {}
-                Some((_, f)) => bail!("the '{}' schedule is {}'s, not {}'s", self.sigmas, f.label(), self.family.label()),
+            match SIGMA_PRESETS.iter().find(|(name, ..)| *name == self.sigmas) {
+                Some((_, f, _)) if *f == self.family => {}
+                Some((_, f, _)) => bail!("the '{}' schedule is {}'s, not {}'s", self.sigmas, f.label(), self.family.label()),
                 None => bail!(
                     "'{}' is not a sigma schedule this build knows (one of: {})",
                     self.sigmas,
-                    SIGMA_PRESETS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
+                    SIGMA_PRESETS.iter().map(|(n, ..)| *n).collect::<Vec<_>>().join(", ")
                 ),
             }
         }
@@ -2871,6 +2883,7 @@ impl Config {
                     family: e.family,
                     components: e.components,
                     bundled: Some(e.bundled),
+                    sigmas: e.sigmas,
                     ..settings.as_profile(&e.name)
                 };
                 // The parts somebody picked for this model. One that no longer
@@ -3224,8 +3237,17 @@ impl Config {
         };
         let components =
             crate::discover::image_components(family, bundled, scan, &self.models_dir());
+        // A catalog file distilled to fewer steps than its family's recipe
+        // (Iris-3B Turbo): its steps and CFG over the recipe, under a template.
+        let distilled = crate::catalog::Catalog::get().distilled(&self.models_dir(), &model);
+        let fast = PartialSettings {
+            steps: distilled.map(|d| d.steps),
+            cfg_scale: distilled.map(|d| d.cfg_scale),
+            ..PartialSettings::default()
+        };
         ModelEntry {
-            base: settings.merged_with(&family.recipe()).merged_with(over),
+            base: settings.merged_with(&family.recipe()).merged_with(&fast).merged_with(over),
+            sigmas: distilled.and_then(|d| d.sigmas.clone()).unwrap_or_default(),
             name,
             description,
             model,
@@ -3249,6 +3271,9 @@ pub struct ModelEntry {
     pub bundled: bool,
     pub components: Option<Components>,
     pub base: Settings,
+    /// The fixed schedule a distilled catalog file runs on
+    /// ([`crate::catalog::Catalog::distilled`]), or empty.
+    pub sigmas: String,
 }
 
 /// A file that can fill a slot: `name` is what a request and

@@ -1500,7 +1500,11 @@ impl Engine {
             profile.references = v.clone();
         }
         profile.layout = req.layout.clone().filter(|l| !l.items.is_empty());
-        profile.sigmas = req.sigmas.clone().unwrap_or_default();
+        // Absent keeps the model's own (a distilled file's schedule); the page
+        // sends one only with a turbo LoRA.
+        if let Some(s) = &req.sigmas {
+            profile.sigmas = s.clone();
+        }
         if let Some(parts) = &req.parts {
             self.cfg.apply_parts(&mut profile, parts)?;
         }

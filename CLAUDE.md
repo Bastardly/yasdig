@@ -183,6 +183,11 @@ Things that break silently:
   `guidance_in`); **so are FLUX.3 Klein/Klein Base** (`ref_time_in`, the distilled
   one's flow map). `LoraBase::fits` lets a Flux LoRA fit both, a FLUX.3 one both
   FLUX.3s — hence `/loras` serves `families`.
+- **A distilled file its header can't tell apart** (Iris-3B Turbo) carries its
+  settings in the catalog (`File.distilled`): `Catalog::distilled` matches the model at
+  its own dest *and* length, and `Config::entry` lays steps/CFG over the recipe and
+  `Profile.sigmas` from it. A request's absent `sigmas` keeps the model's.
+  `SIGMA_PRESETS` rows are (name, family, the `--sigmas` value).
 - **Iris is pixel space**: no VAE slot (so no `--vae`), sd.cpp's marker pair
   (`y_embedder.layer_pool` + `modulation_cores.adaln_img`); its recipe carries
   `weight_type = q8_0` because the release is a 12 GB fp32 file. `--preview proj`

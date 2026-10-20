@@ -129,13 +129,18 @@ research licence — read it on the model's page before you use it:
 | the turbo LoRA (optional) | [`qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/tree/main/loras), into `models/loras/` |
 
 **Iris-3B** — about 8 GB. A 3B model that draws in pixel space, so it has no VAE: the
-model and its text encoder are all it needs. It ships as one 12 GB fp32 file, which
-its recipe loads as q8_0 (`weight_type`); the Convert tab can write that q8_0 file
-once, which then loads faster. 100 steps at CFG 3, its model card's default:
+model and its text encoder are all it needs. Its recipe loads it as q8_0
+(`weight_type`). Two releases with identical tensors: **Turbo** (`turbo/`, BF16,
+6 GB), 4 steps at CFG 1 on the σ list of its `distill.yaml`, and the base (fp32,
+12 GB), 100 steps at CFG 3 — 200 network passes a picture, so minutes. A header can't
+tell them apart, so the Turbo's settings come with the file the Get models card
+downloads (at its own name and size); a Turbo saved under another name starts at the
+base's 100 steps — set 4 steps at CFG 1 and *Save as defaults*, though its fixed
+schedule only comes with the card's file:
 
 | file | where to get it |
 |---|---|
-| the model | [`model.safetensors`](https://huggingface.co/speridlabs/iris-3b/tree/main) (fp32, 12 GB; the root one, not `turbo/`, `depth/` or `upscaler/`) |
+| the model | Turbo: [`turbo/model.safetensors`](https://huggingface.co/speridlabs/iris-3b/tree/main/turbo) (BF16, 6 GB); base: the root [`model.safetensors`](https://huggingface.co/speridlabs/iris-3b/tree/main) (fp32, 12 GB) |
 | the text encoder — Qwen3-VL-4B | the same file as Krea 2's, above |
 
 **MOSS-Image** (Base and SFT, which `doctor` can't tell apart: the same tensors) —

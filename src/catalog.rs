@@ -172,6 +172,12 @@ pub struct File {
     /// from different URLs — the proof the copies are one file. Not checked
     /// after a download (hashing gigabytes per file is minutes); the length is.
     pub sha256: Option<String>,
+    /// On a `model` file only: the settings this exact file was distilled to
+    /// run at, where its header can't say it is the distilled one (Iris-3B
+    /// Turbo has every tensor of the base). Applied to the model found at
+    /// this `dest` at this length ([`Catalog::distilled`]) as a layer over the
+    /// family's recipe.
+    pub distilled: Option<Turbo>,
 }
 
 impl Catalog {
@@ -219,6 +225,20 @@ impl Catalog {
     /// quantization of it.
     pub fn recommends(&self, family: ImageFamily, vram: Option<u64>) -> bool {
         self.entry.iter().any(|e| e.family == Family::Image(family) && Catalog::recommended(e, vram))
+    }
+
+    /// The settings a model file at `path` was distilled to run at: a catalog
+    /// `model` file with `distilled`, at its own dest under `models` and its
+    /// own length — the file the download wrote. A hint, never a refusal: a
+    /// renamed copy just starts at the family's recipe.
+    pub fn distilled(&self, models: &Path, path: &Path) -> Option<&Turbo> {
+        let len = std::fs::metadata(path).ok()?.len();
+        self.entry
+            .iter()
+            .flat_map(|e| &e.file)
+            .find(|f| f.slot == "model" && f.bytes == len && models.join(&f.dest) == path)?
+            .distilled
+            .as_ref()
     }
 
     /// Whether `family` has more than one card — two precisions of one model,
@@ -350,6 +370,15 @@ fn parse(src: &str) -> Result<Catalog> {
             if f.bytes == 0 {
                 bail!("catalog: {}'s {} has no size", e.id, f.dest);
             }
+            if let Some(d) = &f.distilled {
+                let fam = match e.family {
+                    Family::Image(fam) if f.slot == "model" => fam,
+                    _ => bail!("catalog: {}'s distilled settings belong on an image model file", e.id),
+                };
+                if d.sigmas.as_deref().is_some_and(|s| !crate::config::SIGMA_PRESETS.iter().any(|(n, f, _)| *n == s && *f == fam)) {
+                    bail!("catalog: {}'s distilled sigmas is no {} preset", e.id, fam.label());
+                }
+            }
         }
     }
     // One destination is one file. Entries sharing a VAE may each fetch it
@@ -388,7 +417,7 @@ fn check_loras(c: &Catalog) -> Result<()> {
             bail!("catalog: lora {} needs a size, a sha256 and its steps", l.id);
         }
         if let Some(s) = &l.turbo.sigmas {
-            if !crate::config::SIGMA_PRESETS.contains(&(s.as_str(), l.family)) {
+            if !crate::config::SIGMA_PRESETS.iter().any(|(n, f, _)| *n == s && *f == l.family) {
                 bail!("catalog: lora {}'s sigmas {s:?} is no {} preset", l.id, l.family.label());
             }
         }
@@ -607,12 +636,35 @@ mod tests {
         assert!(Catalog::recommended(e("moss-image-sft-int8"), gb(24)));
         assert!(!Catalog::recommended(e("moss-image-sft-int8"), gb(12)));
         assert!(!Catalog::recommended(e("moss-image-sft-bf16"), gb(24)));
-        assert!(!Catalog::recommended(e("iris-3b"), gb(24)));
-        assert!(Catalog::recommended(e("iris-3b"), gb(8)));
+        assert!(!Catalog::recommended(e("iris-3b-turbo"), gb(24)));
+        assert!(Catalog::recommended(e("iris-3b-turbo"), gb(8)));
+        assert!(!Catalog::recommended(e("iris-3b"), gb(8)), "the base is 200 passes a picture");
         assert!(Catalog::recommended(e("flux3-klein-q8"), None));
-        assert!(!Catalog::recommended(e("iris-3b"), None));
+        assert!(!Catalog::recommended(e("iris-3b-turbo"), None));
         assert!(c.has_several(Family::Image(ImageFamily::MossImage)));
         assert!(!c.has_several(Family::Image(ImageFamily::Krea2)));
+    }
+
+    /// Iris-3B Turbo has the base's every tensor, so its 4 steps ride on the
+    /// file: at the card's own dest and length, and nowhere else.
+    #[test]
+    fn a_distilled_file_is_known_by_its_dest_and_length() {
+        let dir = std::env::temp_dir().join(format!("yasdig-distilled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("diffusion_models")).unwrap();
+        let c = Catalog::get();
+        let at = dir.join("diffusion_models/iris-3b-turbo.safetensors");
+        // Sparse: the length is what is compared, and costs nothing.
+        std::fs::File::create(&at).unwrap().set_len(5975089200).unwrap();
+        let d = c.distilled(&dir, &at).expect("the Turbo at its dest");
+        assert_eq!((d.steps, d.cfg_scale, d.sigmas.as_deref()), (4, 1.0, Some("iris-turbo")));
+        assert_eq!(crate::config::sigma_arg("iris-turbo"), Some("1.0,0.938,0.833,0.625,0.0"));
+        std::fs::File::create(&at).unwrap().set_len(5).unwrap();
+        assert!(c.distilled(&dir, &at).is_none(), "another length is another file");
+        let base = dir.join("diffusion_models/iris-3b.safetensors");
+        std::fs::File::create(&base).unwrap().set_len(11950112680).unwrap();
+        assert!(c.distilled(&dir, &base).is_none(), "the base runs its recipe");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A speed LoRA is a plain `.safetensors` name a `<lora:…>` tag can carry,

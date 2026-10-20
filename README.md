@@ -153,7 +153,7 @@ Not sure where to start? The ones marked *Recommended* there and in the model li
 | Krea 2 Turbo | 8 steps | about 15 GB |
 | Qwen-Image | the largest here (20B); strong at text in pictures | about 17 GB |
 | Qwen-Image 2.1 | 7B, strong lettering, trained at 2048²; 8 steps with Turbo | about 18 GB |
-| Iris-3B | small: draws in pixels with no VAE, loads at Q8 | about 8 GB |
+| Iris-3B Turbo / Iris-3B | small: draws in pixels with no VAE, loads at Q8; Turbo in 4 steps | about 8 GB |
 | MOSS-Image | layout and lettering; 50 steps at real CFG, so not fast | about 16 GB (INT8) / 21 GB (BF16) |
 | FLUX.1 Fill | powers **Extend**; not used for generating | about 18.5 GB |
 

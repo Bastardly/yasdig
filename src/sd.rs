@@ -119,8 +119,8 @@ impl<'a> SdRunner<'a> {
         // The generate pass only: an img2img trims its schedule by strength
         // (invariant 2), which a fixed list doesn't survive. A finishing pass
         // keeps the LoRA and runs sd.cpp's own schedule for its steps.
-        if !p.sigmas.is_empty() {
-            cmd.args(["--sigmas", &p.sigmas]);
+        if let Some(arg) = crate::config::sigma_arg(&p.sigmas) {
+            cmd.args(["--sigmas", arg]);
         }
         push_refs(&mut cmd, p, refs, ref_side);
         cmd

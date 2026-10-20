@@ -21,9 +21,12 @@ What changed in each release of yasdig. Each release's executables are on the
   **Turbo** on it renders 8 steps at CFG 1 on the model's fixed turbo schedule,
   instead of 40 at CFG 6. Its turbo LoRA is recognised as a Qwen-Image 2.1 one, not a
   Qwen-Image one. Read its licence (Qwen's research licence) before you use it.
-- **Iris-3B.** Sperid Labs' small model, which draws in pixels with no VAE: just the
-  model and Krea 2's Qwen3-VL-4B encoder. Its 12 GB full-precision file loads as Q8,
-  about 8 GB on the card, so it suits a smaller one. Get models has a card.
+- **Iris-3B and Iris-3B Turbo.** Sperid Labs' small model, which draws in pixels with
+  no VAE: just the model and Krea 2's Qwen3-VL-4B encoder, loaded as Q8 (about 8 GB on
+  the card). The Turbo card is the one to start with — 4 steps at CFG 1 on its
+  published schedule, where the base runs 100 at CFG 3 (200 network passes a
+  picture). The Turbo can't be told from the base by its contents, so the downloaded
+  file brings its settings with it.
 - **Layout boxes for MOSS-Image.** Draw boxes on the picture to say where things go
   and what they are (an object, a character, or text with its exact words); the Prompt
   describes the whole scene. A **Picture | Layout** switch above the picture brings the
