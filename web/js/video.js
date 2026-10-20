@@ -182,9 +182,52 @@ function syncVideo() {
   // a number here pins it and quietly stops it following the CFG above.
   $('vhcfg').value = m.high_noise_cfg_scale ?? '';
   $('vhcfg').placeholder = m.cfg_scale;
+  $('vclearmodel').hidden = !m.tuned;
   syncReady();
   syncVideoNote();
   syncVideoSummaries();
+}
+
+// The boxes *Save as defaults* writes, as [wire key, box, kind]: what
+// `settings::VIDEO_KNOBS` takes. A blank number box with a meaning — shift and
+// the high-noise CFG follow the model when blank — is `null`, which forgets it.
+const VIDEO_KNOBS = [
+  ['width', 'vw'], ['height', 'vh'], ['frames', 'vframes'], ['fps', 'vfps'],
+  ['steps', 'vsteps'], ['cfg_scale', 'vcfg'], ['sampler', 'vsampler', 'text'],
+  ['flow_shift', 'vshift', 'blank'], ['high_noise_steps', 'vhsteps', 'moe'],
+  ['high_noise_cfg_scale', 'vhcfg', 'moe'], ['vae_tiling', 'vtiling', 'check'],
+  ['memory', 'vmemory', 'text'], ['negative_prompt', 'vnegative', 'text'],
+];
+
+async function saveVideoDefaults(clear) {
+  const m = currentVideoModel();
+  if (!m) return;
+  const values = {};
+  for (const [key, id, kind] of VIDEO_KNOBS) {
+    if (clear) { values[key] = null; continue; }
+    if (kind === 'moe' && !m.is_moe) continue;
+    if (kind === 'check') { values[key] = $(id).checked; continue; }
+    if (kind === 'text') { values[key] = $(id).value; continue; }
+    if (kind === 'blank' && $(id).value.trim() === '') { values[key] = null; continue; }
+    const n = parseFloat($(id).value);
+    if (Number.isFinite(n)) values[key] = n;
+  }
+  // The rows too; the server keeps only a file that isn't discovery's pick.
+  const parts = clear
+    ? Object.fromEntries(m.parts.map((p) => [p.slot, null]))
+    : videoParts.picked();
+  $('vsavemodelmsg').textContent = 'Saving…';
+  try {
+    const data = await post('/model-settings', { kind: 'video', model: m.name, values, parts });
+    $('vsavemodelmsg').textContent = clear
+      ? `Cleared — ${m.name} starts from its own defaults again.`
+      : data.tuned ? `Saved — ${m.name} now opens with these.`
+        : 'Nothing to save: every box is where this model starts anyway.';
+    // Clearing puts the boxes back where the model starts; a save leaves them.
+    await loadVideoModels({ refill: clear });
+  } catch (e) {
+    $('vsavemodelmsg').textContent = String(e.message || e);
+  }
 }
 
 // `refill: false` keeps the boxes as they are unless the selected model itself
@@ -201,7 +244,8 @@ export async function loadVideoModels({ refill = true } = {}) {
     for (const m of videoModels) {
       const opt = document.createElement('option');
       opt.value = m.name;
-      opt.textContent = `${m.name}${m.exists ? '' : ' — not downloaded'}`;
+      // "tuned": it opens with saved defaults of its own — the Image tab's tag.
+      opt.textContent = `${m.name}${m.tuned ? ' [tuned]' : ''}${m.exists ? '' : ' — not downloaded'}`;
       sel.appendChild(opt);
     }
     // A rebuilt select falls back to its first option: put the pick back.
@@ -214,7 +258,10 @@ export async function loadVideoModels({ refill = true } = {}) {
       return;
     }
     if (refill || sel.value !== before) syncVideo();
-    else syncReady();
+    else {
+      $('vclearmodel').hidden = !currentVideoModel()?.tuned;
+      syncReady();
+    }
   } catch (e) {
     $('verr').textContent = 'Could not load video models: ' + (e.message || e);
   }
@@ -457,6 +504,8 @@ export function initVideo() {
   for (const ev of ['input', 'change']) $('tab-video').addEventListener(ev, syncRailDots);
   for (const ev of ['input', 'change']) $('tab-video').addEventListener(ev, syncVideoSummaries);
   $('vgo').addEventListener('click', startClip);
+  $('vsavemodel').addEventListener('click', () => saveVideoDefaults(false));
+  $('vclearmodel').addEventListener('click', () => saveVideoDefaults(true));
   $('vstop').addEventListener('click', cancelClip);
   vSource.init();
   videoLoras.init();

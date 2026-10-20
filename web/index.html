@@ -683,6 +683,15 @@
         </div>
       </div>
     </div>
+    <!-- The Image tab's per-model save, for the video model: the boxes that
+         differ from where it would start, into user/model-settings.toml. -->
+    <div class="fpfoot">
+      <div class="btnrow">
+        <button type="button" id="vsavemodel" class="btn">Save as defaults for this model</button>
+        <button type="button" id="vclearmodel" class="btn" hidden title="Forget this model's saved defaults">Clear</button>
+      </div>
+      <p class="sub" id="vsavemodelmsg"></p>
+    </div>
   </section>
   <section class="fpanel" id="vfold-adv" aria-label="Advanced" hidden>
     <header class="fphead"><b>Advanced</b> <span class="foldstate" id="vsum-adv"></span><button type="button" class="fpclose" aria-label="Close Advanced">&times;</button></header>

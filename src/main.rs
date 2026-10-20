@@ -394,7 +394,8 @@ fn run(args: &[String]) -> Result<()> {
     // ones that returned, before anything reads them. Said once, here, rather
     // than as a warning on every start that nobody can act on but by hand.
     let registry = cfg.registry();
-    match settings::ModelSettings::reconcile(&cfg.user_dir(), |n| registry.contains_key(n)) {
+    let videos: std::collections::HashSet<String> = cfg.video_models_untuned().into_iter().map(|m| m.name).collect();
+    match settings::ModelSettings::reconcile(&cfg.user_dir(), |n| registry.contains_key(n), |n| videos.contains(n)) {
         Ok((parked, restored)) => {
             let removed = settings::ModelSettings::parked_path(&cfg.user_dir());
             for name in parked {
@@ -1199,6 +1200,9 @@ struct VideoModelDto {
     /// The separate files, for the Video tab's *Models* rows — the image
     /// side's `parts`, from [`config::VideoFamily::slots`].
     parts: Vec<config::PartView>,
+    /// It starts at saved defaults of its own (`[video."<name>"]`), which the
+    /// select says, as the Image tab's "tuned" does.
+    tuned: bool,
 }
 
 /// Everything in the LoRA dir, usable or not.
@@ -1312,9 +1316,15 @@ fn handle_save_model_settings(
         /// Slot key to a name under the models dir, or `null` to forget it.
         #[serde(default)]
         parts: serde_json::Map<String, serde_json::Value>,
+        /// `"video"` for the Video tab's save; absent is an image model.
+        #[serde(default)]
+        kind: Option<String>,
     }
     let result = (|| -> Result<String> {
         let dto: Dto = serde_json::from_slice(body).context("parsing model settings body")?;
+        if dto.kind.as_deref() == Some("video") {
+            return save_video_model_settings(cfg, &dto.model, &dto.values, &dto.parts);
+        }
         let base = cfg
             .model_base(&dto.model)
             .with_context(|| format!("no model named '{}'", dto.model))?;
@@ -1345,7 +1355,60 @@ fn handle_save_model_settings(
     }
 }
 
-/// says why".
+/// The video half of `POST /model-settings`: the knobs that differ from where
+/// the model starts without saved defaults, and the parts that differ from
+/// the files discovery would pick. Clearing every box — or *Clear* — leaves no
+/// trace of the model in the file. Answers `{tuned}`.
+fn save_video_model_settings(
+    cfg: &Config,
+    name: &str,
+    values: &serde_json::Map<String, serde_json::Value>,
+    parts: &serde_json::Map<String, serde_json::Value>,
+) -> Result<String> {
+    let base = cfg
+        .video_models_untuned()
+        .into_iter()
+        .find(|m| m.name == name)
+        .with_context(|| format!("no video model named '{name}'"))?;
+    let mut tuned = settings::ModelSettings::load(&cfg.user_dir()).unwrap_or_default();
+    let current = tuned.video.get(name).cloned().unwrap_or_default();
+    let next = settings::update_video_model(&current, &base, values)?;
+    if next == settings::VideoKnobs::default() {
+        tuned.video.remove(name);
+    } else {
+        tuned.video.insert(name.to_string(), next);
+    }
+    let mut saved = tuned.video_parts.get(name).cloned().unwrap_or_default();
+    for (key, v) in parts {
+        match v.as_str() {
+            Some(pick) => {
+                // Kept only when it is another file than discovery's: a pick
+                // of the default would pin it past a better file arriving.
+                let mut probe = base.clone();
+                cfg.apply_video_parts(&mut probe, &std::collections::BTreeMap::from([(key.clone(), Some(pick.to_string()))]))?;
+                if probe.part(key) != base.part(key) {
+                    saved.insert(key.clone(), pick.to_string());
+                } else {
+                    saved.remove(key);
+                }
+            }
+            None => {
+                saved.remove(key);
+            }
+        }
+    }
+    if saved.is_empty() {
+        tuned.video_parts.remove(name);
+    } else {
+        tuned.video_parts.insert(name.to_string(), saved);
+    }
+    tuned.save(&cfg.user_dir())?;
+    let on = tuned.video.contains_key(name) || tuned.video_parts.contains_key(name);
+    Ok(serde_json::json!({ "tuned": on }).to_string())
+}
+
+/// `GET /loras`: every file in the LoRA dir, usable or not, with what each
+/// fits. Filesystem only, so it answers on the connection thread.
 fn handle_list_loras(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
     match serde_json::to_vec(&cfg.list_loras()) {
         Ok(body) => conn.respond(200, "application/json", &body),
@@ -1395,10 +1458,12 @@ fn handle_download(
 
 fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
     let scan = cfg.video_scan();
+    let saved = settings::ModelSettings::load_or_default(&cfg.user_dir());
     let models: Vec<VideoModelDto> = cfg
         .video_models()
         .into_iter()
         .map(|m| VideoModelDto {
+            tuned: saved.video.contains_key(&m.name) || saved.video_parts.contains_key(&m.name),
             parts: cfg.video_part_views(&m, &scan),
             family: m.family.as_str(),
             size_multiple: m.family.size_multiple(),

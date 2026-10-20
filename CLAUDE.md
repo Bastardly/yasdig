@@ -1425,6 +1425,13 @@ from `family` goes on `VideoModelDto`.
     served at `/videos/{id}/v{n}/frames/{k}.png` and `…/v{n}/clip.avi`
     (`clip_version` parses `{id}` or `{id}/v{n}`; `v0` is refused). *Save to output*
     is `POST /videos/save {id, version}` → `{id}[-v{n}].avi` (or a frames folder).
+  - **Per-model video defaults** are `[video."<name>"]` (`settings::VideoKnobs`,
+    typed, every field optional) and `[video_parts."<name>"]` in
+    `user/model-settings.toml`, apart from the image tables (a name may be both).
+    `Config::video_models` lays them over `video_models_untuned`, which is what a
+    save compares against (`update_video_model`: typed round trip first, `memory`
+    against `memory_mode()`); a saved part is kept only when it isn't discovery's.
+    `POST /model-settings {kind: "video"}`; `reconcile` takes a video `exists` too.
   - **A saved clip is an output**: `list_outputs` lists `{stem}.avi` with
     `video: true`; `find_output` stays PNG-only (it resolves image sources), and
     `find_clip_output` finds the clip; `free_stem` checks both; delete, star

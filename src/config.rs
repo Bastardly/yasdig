@@ -2859,7 +2859,35 @@ impl Config {
     /// downloading" is a normal state for it to be in, and a restart to notice
     /// the rest arrived would be a poor way to find that out. The scan costs one
     /// header read per file, not a hash of 20 GB.
+    /// Every video model as the Video tab starts it: [`Config::video_models_untuned`]
+    /// with the saved per-model defaults over each (`[video."<name>"]` and its
+    /// parts in `user/model-settings.toml`). Re-read every call, as
+    /// [`Config::registry`] is.
     pub fn video_models(&self) -> Vec<VideoModel> {
+        let tuned = crate::settings::ModelSettings::load_or_default(&self.user_dir());
+        self.video_models_untuned()
+            .into_iter()
+            .map(|mut m| {
+                if let Some(k) = tuned.video.get(&m.name) {
+                    k.apply(&mut m);
+                }
+                if let Some(parts) = tuned.video_parts.get(&m.name) {
+                    // A saved part that no longer resolves is left out, and
+                    // the model keeps the one discovery picked.
+                    for (key, name) in parts {
+                        let one = BTreeMap::from([(key.clone(), Some(name.clone()))]);
+                        let _ = self.apply_video_parts(&mut m, &one);
+                    }
+                    m.exists = m.missing().is_empty();
+                }
+                m
+            })
+            .collect()
+    }
+
+    /// Every video model up to, not including, the saved per-model layer —
+    /// what a save is compared against, so only a real difference is kept.
+    pub fn video_models_untuned(&self) -> Vec<VideoModel> {
         let explicit: Vec<VideoModel> = self.video.iter().map(|m| self.resolve_model(m)).collect();
         let mut out = explicit.clone();
         for m in self.discover_video().models {

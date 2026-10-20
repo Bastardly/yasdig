@@ -686,7 +686,113 @@ pub struct ModelSettings {
     /// `model`, which TOML doesn't care about here — both are tables.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub parts: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    /// Video models' saved defaults, `[video."<name>"]` — the Video tab's *Save
+    /// as defaults for this model*. Apart from `model`, because a video model
+    /// may share an image model's name and its knobs are a different struct.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub video: std::collections::BTreeMap<String, VideoKnobs>,
+    /// And their picked parts, `[video_parts."<name>"]`, as `parts` is to `model`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub video_parts: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
 }
+
+/// What a video model can be saved to start at: the Video tab's boxes, each
+/// unset unless it differs from where the model would start anyway
+/// ([`update_video_model`]). Never a name or a path — the files are
+/// `video_parts`, resolved by the scan.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VideoKnobs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frames: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fps: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub steps: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cfg_scale: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampler: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow_shift: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high_noise_steps: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high_noise_cfg_scale: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vae_tiling: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub negative_prompt: Option<String>,
+}
+
+impl VideoKnobs {
+    /// Lay these over a resolved model.
+    pub fn apply(&self, m: &mut crate::config::VideoModel) {
+        macro_rules! set {
+            ($($f:ident),*) => { $( if let Some(v) = &self.$f { m.$f = v.clone(); } )* };
+        }
+        macro_rules! set_opt {
+            ($($f:ident),*) => { $( if let Some(v) = &self.$f { m.$f = Some(v.clone()); } )* };
+        }
+        set!(width, height, frames, fps, steps, cfg_scale, sampler, vae_tiling, negative_prompt);
+        set_opt!(flow_shift, high_noise_steps, high_noise_cfg_scale, memory);
+    }
+}
+
+/// [`update_model`] for a video model: lay `values` (knob → value, `null` to
+/// forget) over what is saved, keep only what differs from `base` — the model
+/// as it starts without this layer — and check the result runs.
+pub fn update_video_model(
+    current: &VideoKnobs,
+    base: &crate::config::VideoModel,
+    values: &serde_json::Map<String, serde_json::Value>,
+) -> Result<VideoKnobs> {
+    let base_v = serde_json::to_value(base).context("reading the model's defaults")?;
+    let mut m = match serde_json::to_value(current)? {
+        serde_json::Value::Object(m) => m,
+        other => bail!("overrides are not an object: {other}"),
+    };
+    for (k, v) in values {
+        if !VIDEO_KNOBS.contains(&k.as_str()) {
+            bail!("'{k}' is not a setting a video model can save");
+        }
+        if v.is_null() {
+            m.remove(k);
+        } else {
+            m.insert(k.clone(), v.clone());
+        }
+    }
+    // Through the types first, as `update_model` does: the page sends `6` where
+    // the model serializes `6.0`, and the two only compare equal as f32s.
+    let typed: VideoKnobs = serde_json::from_value(serde_json::Value::Object(m)).context("reading the model's settings")?;
+    let mut m = match serde_json::to_value(&typed)? {
+        serde_json::Value::Object(m) => m,
+        other => bail!("overrides are not an object: {other}"),
+    };
+    // `memory` is compared with the mode the model resolves to: the page shows
+    // that (`ram` for an entry that names none), and saving it unchanged must
+    // keep nothing.
+    m.retain(|k, v| {
+        base_v.get(k) != Some(v) && !(k == "memory" && v.as_str() == Some(base.memory_mode()))
+    });
+    let out: VideoKnobs = serde_json::from_value(serde_json::Value::Object(m)).context("reading the model's settings")?;
+    let mut check = base.clone();
+    out.apply(&mut check);
+    check.validate()?;
+    Ok(out)
+}
+
+/// [`VideoKnobs`]' fields, the keys `update_video_model` accepts.
+pub const VIDEO_KNOBS: [&str; 13] = [
+    "width", "height", "frames", "fps", "steps", "cfg_scale", "sampler", "flow_shift",
+    "high_noise_steps", "high_noise_cfg_scale", "vae_tiling", "memory", "negative_prompt",
+];
 
 impl ModelSettings {
     pub fn path(user_dir: &Path) -> PathBuf {
@@ -728,6 +834,7 @@ impl ModelSettings {
     pub fn reconcile(
         user_dir: &Path,
         exists: impl Fn(&str) -> bool,
+        video_exists: impl Fn(&str) -> bool,
     ) -> Result<(Vec<String>, Vec<String>)> {
         let mut live = Self::load(user_dir)?;
         let parked_path = Self::parked_path(user_dir);
@@ -737,8 +844,29 @@ impl ModelSettings {
             live.model.keys().chain(live.parts.keys()).filter(|n| !exists(n)).cloned().collect();
         let back: std::collections::BTreeSet<String> =
             parked.model.keys().chain(parked.parts.keys()).filter(|n| exists(n)).cloned().collect();
-        if gone.is_empty() && back.is_empty() {
+        // Video models by their own test: a name may be both kinds.
+        let vgone: std::collections::BTreeSet<String> =
+            live.video.keys().chain(live.video_parts.keys()).filter(|n| !video_exists(n)).cloned().collect();
+        let vback: std::collections::BTreeSet<String> =
+            parked.video.keys().chain(parked.video_parts.keys()).filter(|n| video_exists(n)).cloned().collect();
+        if gone.is_empty() && back.is_empty() && vgone.is_empty() && vback.is_empty() {
             return Ok((vec![], vec![]));
+        }
+        for name in &vgone {
+            if let Some(e) = live.video.remove(name) {
+                parked.video.insert(name.clone(), e);
+            }
+            if let Some(p) = live.video_parts.remove(name) {
+                parked.video_parts.insert(name.clone(), p);
+            }
+        }
+        for name in &vback {
+            if let Some(e) = parked.video.remove(name) {
+                live.video.entry(name.clone()).or_insert(e);
+            }
+            if let Some(p) = parked.video_parts.remove(name) {
+                live.video_parts.entry(name.clone()).or_insert(p);
+            }
         }
         for name in &gone {
             if let Some(e) = live.model.remove(name) {
@@ -764,7 +892,7 @@ impl ModelSettings {
             parked.write(&parked_path, PARKED_HEADER)?;
         }
         live.save(user_dir)?;
-        Ok((gone.into_iter().collect(), back.into_iter().collect()))
+        Ok((gone.into_iter().chain(vgone).collect(), back.into_iter().chain(vback).collect()))
     }
 
     /// Read it, or nothing. The same decision [`Settings::load_or_default`]
@@ -971,19 +1099,65 @@ mod tests {
         s.parts.insert("moved".into(), [("vae".into(), "vae/x.safetensors".into())].into());
         s.save(&dir).unwrap();
 
-        let (parked, back) = ModelSettings::reconcile(&dir, |n| n == "kept").unwrap();
+        let (parked, back) = ModelSettings::reconcile(&dir, |n| n == "kept", |_| true).unwrap();
         assert_eq!((parked, back), (vec!["moved".to_string()], vec![]));
         let live = ModelSettings::load(&dir).unwrap();
         assert!(live.model.contains_key("kept") && !live.model.contains_key("moved"));
         assert!(live.parts.is_empty());
 
         // Nothing to move: the files are left alone.
-        assert_eq!(ModelSettings::reconcile(&dir, |n| n == "kept").unwrap(), (vec![], vec![]));
+        assert_eq!(ModelSettings::reconcile(&dir, |n| n == "kept", |_| true).unwrap(), (vec![], vec![]));
 
-        let (parked, back) = ModelSettings::reconcile(&dir, |_| true).unwrap();
+        let (parked, back) = ModelSettings::reconcile(&dir, |_| true, |_| true).unwrap();
         assert_eq!((parked, back), (vec![], vec!["moved".to_string()]));
         assert_eq!(ModelSettings::load(&dir).unwrap(), s);
         assert!(!ModelSettings::parked_path(&dir).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A video model's saved defaults keep only what differs from where it
+    /// would start, lay over it, refuse a knob that isn't one or a value that
+    /// won't run, and are parked by the video test — not the image one, since
+    /// a name may be both.
+    #[test]
+    fn a_saved_video_setting_applies_and_is_parked_by_its_own_kind() {
+        let cfg: crate::config::Config = toml::from_str(
+            "[sd]\nbinary = \"sd-cli\"\n[[video]]\nname = \"5b\"\nfamily = \"wan22_ti2v_5b\"\n\
+             diffusion_model = \"d.safetensors\"\nvae = \"v.safetensors\"\nt5xxl = \"t.gguf\"\n",
+        )
+        .unwrap();
+        let base = cfg.video.into_iter().next().unwrap();
+        let vals = |j: &str| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(j).unwrap();
+        // CFG as the page sends it, `6` for the model's 6.0: the same number.
+        let k = update_video_model(&VideoKnobs::default(), &base, &vals(&format!(
+            r#"{{"steps": 12, "frames": {}, "vae_tiling": false, "cfg_scale": {}}}"#, base.frames, base.cfg_scale as i64
+        )))
+        .unwrap();
+        assert_eq!(k, VideoKnobs { steps: Some(12), vae_tiling: Some(false), ..Default::default() }, "frames is the base's");
+        let mut m = base.clone();
+        k.apply(&mut m);
+        assert_eq!((m.steps, m.vae_tiling, m.frames), (12, false, base.frames));
+        // The memory box shows the resolved mode: unchanged, it keeps nothing.
+        let same = update_video_model(&VideoKnobs::default(), &base, &vals(&format!(r#"{{"memory": "{}"}}"#, base.memory_mode()))).unwrap();
+        assert_eq!(same, VideoKnobs::default());
+        // null forgets one; an unknown knob, or one that won't run, is refused.
+        let k2 = update_video_model(&k, &base, &vals(r#"{"steps": null}"#)).unwrap();
+        assert_eq!(k2.steps, None);
+        assert!(update_video_model(&k, &base, &vals(r#"{"diffusion_model": "x"}"#)).is_err());
+        assert!(update_video_model(&k, &base, &vals(r#"{"fps": 0}"#)).is_err());
+
+        let dir = tmpdir("vreconcile");
+        let mut s = ModelSettings::default();
+        s.video.insert("5b".into(), k.clone());
+        s.model.insert("5b".into(), PartialSettings { steps: Some(9), ..Default::default() });
+        s.save(&dir).unwrap();
+        let (parked, _) = ModelSettings::reconcile(&dir, |_| true, |_| false).unwrap();
+        assert_eq!(parked, vec!["5b".to_string()]);
+        let live = ModelSettings::load(&dir).unwrap();
+        assert!(live.video.is_empty() && live.model.contains_key("5b"), "the image entry of the name stays");
+        let (_, back) = ModelSettings::reconcile(&dir, |_| true, |_| true).unwrap();
+        assert_eq!(back, vec!["5b".to_string()]);
+        assert_eq!(ModelSettings::load(&dir).unwrap(), s);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
