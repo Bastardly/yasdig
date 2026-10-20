@@ -165,6 +165,68 @@ async function drawPreview() {
   }
 }
 
+// The clip in flight's preview: every latent frame of the newest version
+// (`video_preview.seq`), fetched once per version and looped on the Video
+// status card's canvas at the AVI's own rate (sd-cli writes it at a quarter
+// of the clip's fps). Frames are swapped only once a whole version is in hand.
+let vpSeq = null;
+let vpWanted = null;
+let vpFrames = [];
+let vpTimer = null;
+
+function stopVideoPreview() {
+  clearInterval(vpTimer);
+  vpTimer = null;
+  for (const f of vpFrames) f.close?.();
+  vpFrames = [];
+  vpSeq = vpWanted = null;
+  const c = document.getElementById('vlivepreview');
+  if (c) c.hidden = true;
+}
+
+async function drawVideoPreview() {
+  const vp = snap.progress?.video_preview;
+  const canvas = document.getElementById('vlivepreview');
+  if (!vp || !canvas) {
+    if (vpSeq !== null || vpTimer) stopVideoPreview();
+    return;
+  }
+  if (vp.seq === vpSeq || vp.seq === vpWanted) return;
+  vpWanted = vp.seq;
+  try {
+    const frames = await Promise.all(Array.from({ length: vp.frames }, async (_, k) => {
+      const res = await fetch(`/preview/video/${vp.seq}/${k}.jpg`);
+      if (!res.ok) throw new Error('replaced');
+      return createImageBitmap(await res.blob());
+    }));
+    // A newer version, or the end of the run, overtook this one.
+    if (vpWanted !== vp.seq || snap.progress?.video_preview?.seq !== vp.seq) {
+      for (const f of frames) f.close?.();
+      return;
+    }
+    for (const f of vpFrames) f.close?.();
+    vpFrames = frames;
+    vpSeq = vp.seq;
+    canvas.width = frames[0].width;
+    canvas.height = frames[0].height;
+    canvas.hidden = false;
+    let k = 0;
+    clearInterval(vpTimer);
+    const ctx = canvas.getContext('2d');
+    const draw = () => {
+      if (!vpFrames.length) return;
+      ctx.drawImage(vpFrames[k % vpFrames.length], 0, 0);
+      k++;
+    };
+    draw();
+    vpTimer = setInterval(draw, 1000 / Math.max(1, vp.fps));
+  } catch {
+    // Replaced mid-fetch; the next poll names the newer version.
+  } finally {
+    if (vpWanted === vp.seq) vpWanted = null;
+  }
+}
+
 async function deliverLatest(seq) {
   try {
     const data = await (await fetch('/jobs/latest')).json();
@@ -203,6 +265,7 @@ export async function pollJobs() {
     // them is ever visible.
     for (const id of ['prog', 'vprog', 'cprog', 'rdprog']) $(id).textContent = text;
     drawPreview();
+    drawVideoPreview();
     drawButton();
     if ($('jobsdlg').open) drawList();
     for (const fn of jobsHooks) fn(snap);

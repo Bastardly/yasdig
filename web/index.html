@@ -747,6 +747,12 @@
   </section>
   <div class="statuscard">
     <div id="verr" class="err"></div>
+    <!-- The clip in flight, every latent frame looping: sd-cli's cheap preview,
+         at latent resolution, so blurry by nature (jobs.js, drawVideoPreview). -->
+    <details class="fold previewfold" id="vfold-preview" open>
+      <summary>Preview <span class="sub">(low resolution)</span></summary>
+      <canvas id="vlivepreview" class="livepreview" hidden></canvas>
+    </details>
     <p class="sub" id="vprog"></p>
   </div>
   </div>

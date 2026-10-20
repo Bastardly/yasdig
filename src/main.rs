@@ -879,6 +879,19 @@ fn route(
                 None => conn.respond(404, "text/plain", b"not found"),
             }
         }
+        // A frame of the live video preview, by the version `/jobs` reports
+        // (`video_preview.seq`); a 404 is a version since replaced.
+        ("GET", p) if p.starts_with("/preview/video/") && p.ends_with(".jpg") => {
+            let rest = p.trim_start_matches("/preview/video/").trim_end_matches(".jpg");
+            let frame = rest
+                .split_once('/')
+                .and_then(|(s, k)| Some((s.parse::<u32>().ok()?, k.parse::<usize>().ok()?)))
+                .and_then(|(s, k)| monitor.video_preview_frame(s, k));
+            match frame {
+                Some(jpg) => conn.respond_with(200, "image/jpeg", "Cache-Control: no-store\r\n", &jpg),
+                None => conn.respond(404, "text/plain", b"not found"),
+            }
+        }
         // The queue, beside them for the same reason: the Jobs dialog is about
         // what the worker is doing and what waits behind it.
         ("GET", "/jobs") => handle_jobs(conn, &lanes.queue, monitor),
@@ -3168,8 +3181,21 @@ fn saved_json(path: &std::path::Path) -> String {
 /// passes to `SdRunner`, and `rate` is sd.cpp's own `%.2f` plus a unit.
 /// `preview` is the newest live frame's number for `GET /preview/{n}.png`, or
 /// `null` while the run has none (loading, or a mode that writes none).
+///
+/// A clip in flight adds `video_preview: {seq, frames, fps}` — its live preview,
+/// every frame of it, served by `GET /preview/video/{seq}/{k}.jpg`.
 fn progress_json(monitor: &Monitor) -> String {
-    progress_body(monitor.snapshot().as_ref(), monitor.preview())
+    let body = progress_body(monitor.snapshot().as_ref(), monitor.preview());
+    match monitor.video_preview() {
+        Some((seq, frames, fps)) => match serde_json::from_str::<serde_json::Value>(&body) {
+            Ok(mut v) => {
+                v["video_preview"] = serde_json::json!({ "seq": seq, "frames": frames, "fps": fps });
+                v.to_string()
+            }
+            Err(_) => body,
+        },
+        None => body,
+    }
 }
 
 fn progress_body(p: Option<&sd::Progress>, preview: Option<u32>) -> String {

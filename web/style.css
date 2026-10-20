@@ -322,7 +322,7 @@ a.btn, a.btn:hover { text-decoration: none; color: var(--text); }
    nothing. No border here — the bar's hairline is the edge. In the bar it is
    capped by the window as well, since everything above it is still in view. */
 .previewfold { border-bottom: 0; padding: 0; }
-.previewfold:not(:has(img:not([hidden]))) { display: none; }
+.previewfold:not(:has(img:not([hidden]), canvas:not([hidden]))) { display: none; }
 .dock .livepreview { max-height: min(var(--preview-h), 35vh); }
 /* The seed, a row of its own beside the button it is reached for between. */
 .dockseed { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-2); }
@@ -666,7 +666,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   padding: var(--sp-3); background: var(--ink-700); border: var(--line);
   border-radius: var(--r-lg); box-shadow: var(--shadow-pop);
 }
-.statuscard:not(:has(> .err:not(:empty), img.livepreview:not([hidden]), > .sub:not(:empty), .runstop > button:not([hidden]))) { display: none; }
+.statuscard:not(:has(> .err:not(:empty), .livepreview:not([hidden]), > .sub:not(:empty), .runstop > button:not([hidden]))) { display: none; }
 .statuscard > .err { max-height: 40vh; overflow-y: auto; }
 /* The dialog's foot line, under everything: panels may cover it. Centred over
    the pane, not the window. */

@@ -405,6 +405,13 @@ impl<'a> SdRunner<'a> {
         // extraction, and its default is the process's CWD.
         let dir = m.lora_dir.clone().unwrap_or_else(|| self.cfg.lora_dir());
         cmd.args(["--lora-model-dir", &path_str(&dir)]);
+        // The live preview: every latent frame through `proj`'s fixed matrix
+        // (Wan 2.1, Wan 2.2 and H3 each have one), at latent resolution — a
+        // blurry moving thumbnail, which is what it costs nothing to show.
+        if let Some(dir) = self.monitor.preview_dir() {
+            cmd.args(["--preview", "proj", "--preview-interval", "1"]);
+            cmd.args(["--preview-path", &path_str(&dir.join(VIDEO_PREVIEW))]);
+        }
 
         // Rounded here as well as in the UI, because a request can arrive from
         // anywhere. sd.cpp would align these itself and warn, but then the
@@ -1217,6 +1224,20 @@ pub struct Progress {
 #[derive(Clone, Default)]
 pub struct Monitor(Arc<MonitorInner>);
 
+/// What sd-cli calls the video preview it rewrites each step: one MJPEG AVI
+/// of every latent frame, at latent resolution. A fixed name, since sd-cli fills
+/// no `%d` into a video preview's path (`step_callback`, `examples/cli/main.cpp`).
+const VIDEO_PREVIEW: &str = "preview.avi";
+
+/// A parsed video preview: the frames as the JPEGs the AVI holds, and which
+/// file version they came from.
+struct VideoPreview {
+    key: (u64, std::time::SystemTime),
+    seq: u32,
+    fps: u32,
+    frames: Vec<Vec<u8>>,
+}
+
 #[derive(Default)]
 struct MonitorInner {
     progress: Mutex<Option<Progress>>,
@@ -1239,6 +1260,10 @@ struct MonitorInner {
     load_ms: Mutex<u64>,
     /// Where the last run's time went, stage by stage — see [`Stages`].
     stages: Mutex<Stages>,
+    /// The video preview last read whole, and a counter that moves each time a
+    /// newer one is ([`Monitor::video_preview`]).
+    video_preview: Mutex<Option<VideoPreview>>,
+    video_preview_seq: std::sync::atomic::AtomicU32,
     /// Where the last diffusion run kept its weights, when anything was off the
     /// card — see [`describe_params`]. Set from the command's own
     /// `--params-backend`, or from auto-fit's plan line once sd-cli prints it.
@@ -1274,6 +1299,41 @@ impl Monitor {
     /// whole whitelist: the name is built here, never taken from the request.
     pub fn preview_png(&self, n: u32) -> Option<Vec<u8>> {
         std::fs::read(self.preview_dir()?.join(preview_name(n))).ok()
+    }
+
+    /// The live video preview, while a clip renders: `(seq, frames, fps)`,
+    /// where `seq` moves whenever a newer version has been read whole.
+    ///
+    /// sd-cli rewrites one file in place every step, so a read can land on a
+    /// half-written one: that fails to parse and the last whole version stands.
+    /// Parsed once per version (its length and mtime), not once per request.
+    pub fn video_preview(&self) -> Option<(u32, usize, u32)> {
+        self.snapshot()?;
+        let path = self.preview_dir()?.join(VIDEO_PREVIEW);
+        let mut cache = self.0.video_preview.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(meta) = std::fs::metadata(&path) else {
+            // A new run emptied the dir: the last clip's preview is not this one's.
+            *cache = None;
+            return None;
+        };
+        let key = (meta.len(), meta.modified().ok()?);
+        if cache.as_ref().is_none_or(|c| c.key != key) {
+            if let Ok(avi) = crate::avi::read(&path) {
+                if !avi.frames.is_empty() {
+                    let seq = self.0.video_preview_seq.fetch_add(1, Ordering::Relaxed) + 1;
+                    *cache = Some(VideoPreview { key, seq, fps: avi.fps.max(1), frames: avi.frames });
+                }
+            }
+        }
+        cache.as_ref().map(|c| (c.seq, c.frames.len(), c.fps))
+    }
+
+    /// Frame `k` of the video preview `seq`, as JPEG, for
+    /// `GET /preview/video/{seq}/{k}.jpg`. `None` once a newer version replaced
+    /// it — the page then asks for that one.
+    pub fn video_preview_frame(&self, seq: u32, k: usize) -> Option<Vec<u8>> {
+        let cache = self.0.video_preview.lock().unwrap_or_else(|e| e.into_inner());
+        cache.as_ref().filter(|c| c.seq == seq)?.frames.get(k).cloned()
     }
 
     /// `(skipped, total)` steps the last run's step cache skipped, or `None`
@@ -2552,6 +2612,45 @@ lora_dir = "loras""#,
             Some(joined("/work/current/preview", "p-%04d.png").as_str())
         );
         assert_eq!(m.preview(), None, "nothing running, nothing to show");
+    }
+
+    /// A video run asks for its preview by a fixed name, and a half-written
+    /// rewrite of it leaves the last whole version showing.
+    #[test]
+    fn a_video_preview_survives_being_rewritten_in_place() {
+        let dir = std::env::temp_dir().join(format!("yasdig-vpreview-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let m = Monitor::with_preview(dir.clone());
+        let (cfg, model) = video_fixture("");
+        let io = VideoIo { init: None, control: None, out: Path::new("o_%03d.png") };
+        let a = argv(&SdRunner::watched(&cfg, &m).video_cmd(&model, "cat", "", 1, &io));
+        assert_eq!(flag(&a, "--preview-path"), Some(path_str(&dir.join(VIDEO_PREVIEW)).as_str()));
+
+        let frame = |name: &str| {
+            let p = dir.join(name);
+            image::RgbImage::from_pixel(8, 8, image::Rgb([200, 30, 30])).save(&p).unwrap();
+            p
+        };
+        let frames = [frame("a.png"), frame("b.png")];
+        let avi = dir.join(VIDEO_PREVIEW);
+        crate::avi::write(&avi, &frames, 4, None).unwrap();
+        assert_eq!(m.video_preview(), None, "nothing running, nothing to show");
+        m.advance("video", 1, 20, "1.00s/it");
+        let (seq, n, fps) = m.video_preview().expect("a whole preview");
+        assert_eq!((n, fps), (2, 4));
+        assert!(m.video_preview_frame(seq, 1).is_some_and(|j| j.starts_with(&[0xFF, 0xD8])), "a JPEG");
+        // Mid-rewrite: truncated, so the version before it stands.
+        let whole = std::fs::read(&avi).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&avi, &whole[..whole.len() / 2]).unwrap();
+        assert_eq!(m.video_preview(), Some((seq, 2, 4)));
+        // The next whole one moves the version.
+        crate::avi::write(&avi, &frames[..1], 4, None).unwrap();
+        let (next, n, _) = m.video_preview().unwrap();
+        assert!(next > seq && n == 1);
+        assert!(m.video_preview_frame(seq, 0).is_none(), "an old version is gone");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `Phase` is derived from the unit sd.cpp chose, so that derivation is a

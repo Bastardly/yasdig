@@ -690,13 +690,20 @@ pinning kinds** — no `_` arm.
 ## Live preview
 
 `--preview proj` on every txt2img/img2img (`base_cmd`) into `work/current/preview/`,
-served as `GET /preview/{n}.png`. `Monitor::with_preview` holds the dir. Video excluded.
+served as `GET /preview/{n}.png`. `Monitor::with_preview` holds the dir. Video too,
+in its own shape (below).
 
 - **Numbered files plus an `IEND` test** (sd-cli writes in place). `newest_complete`
   takes the newest complete `p-NNNN.png` and prunes older ones only.
 - **The dir is emptied in `run_tail` before spawn**, not in `Monitor::begin`.
 - **`Monitor::preview` is `None` whenever `progress` is.** The page swaps a blob only
   once fetched.
+- **Video is one file, `preview.avi`** (`VIDEO_PREVIEW`; sd-cli fills no `%d` for a
+  video preview and rewrites it in place each step). `Monitor::video_preview` parses
+  it per (length, mtime) with `avi::read`, keeps the last whole version when a read
+  lands mid-write, and bumps `seq`; `/jobs` `progress.video_preview {seq, frames,
+  fps}`, frames at `/preview/video/{seq}/{k}.jpg` (the AVI's own JPEGs). The page
+  loops them on `#vlivepreview` (`drawVideoPreview`), swapping only whole versions.
 
 ## Redraw
 
