@@ -76,6 +76,11 @@ Five things break silently:
   **`build_id` is read once, first thing in `run`** (re-read, a rebuilt binary hands
   over to a stale server). **Takeover must send `clear:false`**.
 
+**A master push builds Windows alone** (same `release.yml`, the Linux job skipped,
+`publish`/`scan` tag-only): a 14-day workflow artifact to try on a Windows PC, and
+`cargo test` on Windows. Never a rolling pre-release — the site's buttons read
+`/releases` with pre-releases included.
+
 **Releasing** (`v*` tag → `release.yml`, ~9 min; pushing `master` also deploys the
 site when `site/` changed):
 

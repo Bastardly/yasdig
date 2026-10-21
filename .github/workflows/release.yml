@@ -7,6 +7,12 @@
 # tag not starting with `v` builds nothing. Run it by hand from the Actions tab
 # to get the files as workflow artifacts only.
 #
+# Every push to master builds Windows alone, as a workflow artifact kept 14
+# days (`gh run download -n yasdig-windows-x86_64`): a build to try on a
+# Windows PC without cutting a release, and `cargo test` on Windows for each
+# change. No release, no VirusTotal — and deliberately no rolling pre-release,
+# since the site's buttons read /releases with pre-releases included.
+#
 # Three flags on the sd.cpp build are what make the result travel, and all three
 # fail on *someone else's* machine rather than here:
 #   GGML_NATIVE=OFF   a native build uses this runner's CPU instructions and dies
@@ -23,7 +29,16 @@ name: release
 on:
   push:
     tags: ["v*"]
+    branches: [master]
+    # Not evaluated for tag pushes, so a release always builds.
+    paths-ignore: ["site/**", "docs/**", "**.md"]
   workflow_dispatch:
+
+# A newer master push replaces a running master build; a release is never cut
+# short.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 # Read-only by default: the two build jobs only check out and compile. The
 # `publish` job, which attaches the archives, asks for write on its own.
@@ -44,6 +59,8 @@ env:
 
 jobs:
   linux:
+    # Not on a master push: that build is for trying Windows.
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     # The oldest supported runner: glibc is linked dynamically, and a binary
     # runs on systems with the glibc it was built against *or newer*.
     runs-on: ubuntu-22.04
@@ -181,6 +198,7 @@ jobs:
         with:
           name: yasdig-windows-x86_64
           path: yasdig-windows-x86_64.zip
+          retention-days: ${{ github.ref_type == 'tag' && 90 || 14 }}
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
