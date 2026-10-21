@@ -1383,6 +1383,10 @@ from `family` goes on `VideoModelDto`.
 - **Every sd-cli spawn is `SdRunner::run_tail`'s, which confines it**
   (`sandbox::confine`, after the arguments are read; the builders stay plain, so
   their `argv` tests hold on every OS). `curl` for downloads is deliberately outside.
+  Off by `startup.toml`'s `[sandbox] enabled = false` (`startup::sandbox_off`, read
+  without creating the file and set in `Config::load`, since `doctor` and `upscale`
+  run sd-cli too) or `YASDIG_NO_SANDBOX=1`; messages name the file
+  (`sandbox::TURN_OFF`).
   - **Linux**: seccomp in `pre_exec` (namespaces fail on Ubuntu's AppArmor). The
     filter's jump offsets are checked by a BPF interpreter in its tests — renumber
     them with it.
