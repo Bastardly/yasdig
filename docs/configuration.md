@@ -356,6 +356,12 @@ The port is in `startup.toml`, beside `models.toml` — created on the first sta
 | any other yasdig — another folder, or an older build of this one | asks it to close (without its clear-on-close), then takes the port |
 | any other program | leaves it alone, and uses the next free port, saying which |
 
+`startup.toml` also holds `[sandbox] enabled`: sd-cli runs with no network access
+(seccomp on Linux, an AppContainer on Windows). Set it to `false`, then restart, only
+when sd-cli can't run that way on this computer — `yasdig doctor` says whether it
+does. The environment variable `YASDIG_NO_SANDBOX=1` does the same for one start. A
+`startup.toml` from before this has no `[sandbox]` table, which means on.
+
 Closing another yasdig goes through its own `/shutdown`, so it works the same on
 Linux and Windows, and nothing that isn't yasdig is ever closed. A yasdig built
 before this existed has no such route and is stepped past like any other program. With no

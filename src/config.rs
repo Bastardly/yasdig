@@ -2471,6 +2471,8 @@ impl Config {
             _ => PathBuf::from("."),
         };
         cfg.base_dir = plain_canonicalize(&dir).unwrap_or(dir);
+        // Here, since every entry point that runs sd-cli loads a `Config`.
+        crate::sandbox::set_off_by_file(crate::startup::sandbox_off(&cfg.base_dir));
 
         // Before the registry, because the registry reads it. A first run seeds
         // it from the old `[defaults]` block so an install that had tuned that

@@ -24,6 +24,27 @@ pub const FILE: &str = "startup.toml";
 pub struct Startup {
     #[serde(default)]
     pub server: Server,
+    #[serde(default)]
+    pub sandbox: Sandbox,
+}
+
+/// `[sandbox]`: whether sd-cli runs without network access (`crate::sandbox`).
+/// A start-up setting because it describes this machine — whether its kernel,
+/// or its GPU driver inside an AppContainer, can run it — not a generation.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct Sandbox {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+impl Default for Sandbox {
+    fn default() -> Self {
+        Sandbox { enabled: true }
+    }
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -60,7 +81,14 @@ fn template(s: &Server) -> String {
          # If another yasdig is using it (an older build, or another folder),\n\
          # that one is closed and this one takes over. If some other program\n\
          # has it, yasdig leaves it alone and uses the next free port.\n\
-         port = {port}\n",
+         port = {port}\n\
+         \n\
+         [sandbox]\n\
+         # sd-cli, the program that reads model files and draws, runs with no\n\
+         # network access, so a booby-trapped model file couldn't send anything\n\
+         # anywhere. Set false only if it can't run that way on this computer\n\
+         # (`yasdig doctor` says so).\n\
+         enabled = true\n",
         host = s.host,
         port = s.port,
     )
@@ -68,6 +96,17 @@ fn template(s: &Server) -> String {
 
 pub fn path(root: &Path) -> PathBuf {
     root.join(FILE)
+}
+
+/// `[sandbox] enabled = false`, read without creating the file: every entry
+/// point loads `Config`, not only the server, and `doctor` and `upscale` run
+/// sd-cli too. A file that doesn't parse leaves the sandbox on; the server's
+/// own `load` reports the error.
+pub fn sandbox_off(root: &Path) -> bool {
+    std::fs::read_to_string(path(root))
+        .ok()
+        .and_then(|t| toml::from_str::<Startup>(&t).ok())
+        .is_some_and(|s| !s.sandbox.enabled)
 }
 
 /// Read `startup.toml`, writing it first if it isn't there — from the old
@@ -271,6 +310,25 @@ mod tests {
         // And the shipped text parses to the defaults.
         std::fs::remove_file(path(&root)).unwrap();
         assert_eq!(load(&root, None).unwrap().server, Server::default());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_sandbox_is_on_unless_the_file_says_false() {
+        let root = std::env::temp_dir().join(format!("yasdig-sandbox-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        // No file, the shipped file, an older file without the table, a
+        // broken one: all on.
+        assert!(!sandbox_off(&root));
+        assert!(load(&root, None).unwrap().sandbox.enabled);
+        assert!(!sandbox_off(&root));
+        std::fs::write(path(&root), "[server]\nport = 9200\n").unwrap();
+        assert!(!sandbox_off(&root));
+        std::fs::write(path(&root), "[sandbox]\nenabled = nope\n").unwrap();
+        assert!(!sandbox_off(&root));
+        std::fs::write(path(&root), "[server]\nport = 9200\n\n[sandbox]\nenabled = false\n").unwrap();
+        assert!(sandbox_off(&root));
         std::fs::remove_dir_all(&root).ok();
     }
 }

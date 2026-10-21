@@ -135,12 +135,17 @@ pub fn check(cfg: &Config) -> Report {
     // 1a) The network sandbox (`sandbox`). Where there is none it's a plain
     // fact, not a warning every start; where the system can't run it sd-cli
     // won't launch, so that one is loud and names the way out.
-    let opt_out = crate::sandbox::OPT_OUT;
+    let opt_out = crate::sandbox::TURN_OFF;
     match (crate::sandbox::kernel_ready(), crate::sandbox::opted_out()) {
         (None, _) => info.push("sd-cli network sandbox: Linux and Windows only, so not on this OS".into()),
         (Some(_), true) => warnings.push(format!(
-            "{opt_out}=1 is set, so sd-cli runs with network access.\n\
-             Unset it unless sd-cli can't run inside the sandbox on this machine."
+            "{}, so sd-cli runs with network access.\n\
+             Turn it back on unless sd-cli can't run inside the sandbox on this machine.",
+            if crate::sandbox::off_by_file() {
+                "startup.toml says `enabled = false` under [sandbox]".to_string()
+            } else {
+                format!("{}=1 is set", crate::sandbox::OPT_OUT)
+            }
         )),
         (Some(true), false) => match crate::sandbox::probe() {
             None => info.push("sd-cli network sandbox: on (seccomp; no internet sockets)".into()),
@@ -153,22 +158,22 @@ pub fn check(cfg: &Config) -> Report {
             Some(Ok(crate::sandbox::Probe::Leaks)) => warnings.push(format!(
                 "a test connection from inside sd-cli's sandbox got through, so Windows\n\
                  isn't enforcing its network block here (a third-party firewall can\n\
-                 replace the one that does) and sd-cli won't run. {opt_out}=1 runs it\n\
-                 without the sandbox."
+                 replace the one that does) and sd-cli won't run.\n\
+                 {opt_out} runs it without the sandbox."
             )),
             Some(Err(e)) => warnings.push(format!(
                 "sd-cli's sandbox can't start ({e}), so sd-cli won't run.\n\
-                 {opt_out}=1 runs it without the sandbox."
+                 {opt_out} runs it without the sandbox."
             )),
         },
         (Some(false), false) if cfg!(windows) => warnings.push(format!(
             "the AppContainer sd-cli runs in can't be created on this Windows, so\n\
-             sd-cli won't start. {opt_out}=1 runs it without the sandbox."
+             sd-cli won't start. {opt_out} runs it without the sandbox."
         )),
         (Some(false), false) => warnings.push(format!(
             "this kernel doesn't advertise the seccomp actions the sd-cli network\n\
              sandbox uses (/proc/sys/kernel/seccomp/actions_avail), so sd-cli may\n\
-             fail to start. If it does, run with {opt_out}=1."
+             fail to start. If it does, set {opt_out}."
         )),
     }
 

@@ -40,10 +40,12 @@
 //! of ours. A connection that arrives refuses every sd-cli run.
 //!
 //! Linux on x86_64 and aarch64, and Windows; elsewhere `confine` does nothing
-//! and `doctor` says so. `YASDIG_NO_SANDBOX=1` turns it off, for a kernel
-//! without seccomp or a Windows where the GPU isn't visible from inside.
+//! and `doctor` says so. `[sandbox] enabled = false` in `startup.toml` (or
+//! `YASDIG_NO_SANDBOX=1`) turns it off, for a kernel without seccomp or a
+//! Windows where the GPU isn't visible from inside.
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The environment variable that turns the sandbox off.
 pub const OPT_OUT: &str = "YASDIG_NO_SANDBOX";
@@ -55,9 +57,29 @@ pub const HELPER: &str = "sandbox-run";
 /// The launcher's exit code when it couldn't start sd-cli confined.
 pub const SANDBOX_FAILED: i32 = 125;
 
+/// How to turn it off, for every message that offers it.
+pub const TURN_OFF: &str = "`enabled = false` under [sandbox] in startup.toml";
+
+/// Set from `startup.toml` by `Config::load`, before any sd-cli runs.
+static OFF_BY_FILE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_off_by_file(off: bool) {
+    OFF_BY_FILE.store(off, Ordering::Relaxed);
+}
+
+/// True when `startup.toml` says `enabled = false` under `[sandbox]`.
+pub fn off_by_file() -> bool {
+    OFF_BY_FILE.load(Ordering::Relaxed)
+}
+
 /// True when the user set [`OPT_OUT`] (to anything but empty or `0`).
-pub fn opted_out() -> bool {
+pub fn off_by_env() -> bool {
     std::env::var_os(OPT_OUT).is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+/// Turned off, by the file or the environment.
+pub fn opted_out() -> bool {
+    off_by_file() || off_by_env()
 }
 
 /// True when `confine` sandboxes on this build and this run.
@@ -428,9 +450,9 @@ mod imp {
                 return Err(os_error(
                     &format!(
                         "letting sd-cli's sandbox into {} (move the yasdig folder somewhere you own, \
-                         or set {}=1)",
+                         or set {})",
                         path.display(),
-                        super::OPT_OUT
+                        super::TURN_OFF
                     ),
                     put,
                 ));
@@ -485,11 +507,11 @@ mod imp {
             Ok(Probe::Leaks) => anyhow::bail!(
                 "Windows isn't enforcing the sd-cli sandbox's network block on this machine (a test \
                  connection from inside it got through — a third-party firewall can replace the one \
-                 that does), so sd-cli won't run. {}=1 runs it without the sandbox.",
-                super::OPT_OUT
+                 that does), so sd-cli won't run. {} runs it without the sandbox.",
+                super::TURN_OFF
             ),
             Ok(_) => {}
-            Err(e) => anyhow::bail!("the sd-cli sandbox can't start: {e}. {}=1 runs sd-cli without it.", super::OPT_OUT),
+            Err(e) => anyhow::bail!("the sd-cli sandbox can't start: {e}. {} runs sd-cli without it.", super::TURN_OFF),
         }
         let mut wrapped = Command::new(std::env::current_exe()?);
         wrapped.arg(HELPER).arg(cmd.get_program()).args(cmd.get_args());
@@ -525,7 +547,7 @@ mod imp {
         match launch(Path::new(program), rest, own) {
             Ok(code) => std::process::exit(code as i32),
             Err(e) => {
-                eprintln!("[yasdig sandbox] {e} — sd-cli was not started. {}=1 runs it without the sandbox.", super::OPT_OUT);
+                eprintln!("[yasdig sandbox] {e} — sd-cli was not started. {} runs it without the sandbox.", super::TURN_OFF);
                 std::process::exit(SANDBOX_FAILED);
             }
         }

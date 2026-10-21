@@ -16,7 +16,8 @@ How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the detail
   can open only the folders yasdig grants it (`work/`, the model folders, sd-cli's
   own); yasdig re-runs itself as a small launcher (`yasdig sandbox-run`) to start it
   there, and the first run checks with `curl.exe` that a connection from inside is
-  refused. `YASDIG_NO_SANDBOX=1` turns it off; `doctor` says whether it's on.
+  refused. `[sandbox] enabled = false` in `startup.toml` (or `YASDIG_NO_SANDBOX=1`)
+  turns it off; `doctor` says whether it's on.
 - **Layout:**
   ```
   src/main.rs      server + routing + single GPU worker + CLI subcommands

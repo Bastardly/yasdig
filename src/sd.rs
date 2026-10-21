@@ -756,8 +756,8 @@ impl<'a> SdRunner<'a> {
                 let hint = if crate::sandbox::enabled() {
                     format!(
                         " (it runs without network access; if this system can't set that \
-                         up, {}=1 turns it off — `yasdig doctor` says which)",
-                        crate::sandbox::OPT_OUT
+                         up, {} turns it off — `yasdig doctor` says which)",
+                        crate::sandbox::TURN_OFF
                     )
                 } else {
                     String::new()
@@ -836,8 +836,8 @@ impl<'a> SdRunner<'a> {
             bail!(
                 "sd-cli {label}: no GPU is visible from inside the sandbox sd-cli runs in \
                  (\"{NO_GPU}\"), so it was stopped before it fell back to the CPU. \
-                 {}=1 runs sd-cli without the sandbox.",
-                crate::sandbox::OPT_OUT
+                 {} runs sd-cli without the sandbox.",
+                crate::sandbox::TURN_OFF
             );
         }
         if !status.success() {
