@@ -119,7 +119,6 @@ could have a bug a crafted file exploits to run code on your computer. So the pr
 that loads and runs every model is started unable to open an internet connection —
 nor can anything it starts — and the lock can't be lifted from inside. Even a file
 that broke in couldn't send your pictures or anything else anywhere, or fetch more.
-Windows doesn't have this yet.
 
 **Saved pictures carry their settings.** *Save to output* and *Download* write the
 prompt, model names and settings into the PNG, so others can recreate your picture
