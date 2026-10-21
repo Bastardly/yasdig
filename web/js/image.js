@@ -1,4 +1,4 @@
-import { $, bar, esc, getJSON, post, numOr, rememberFolds } from './dom.js';
+import { $, bar, esc, getJSON, post, numOr, rememberFolds, randomSeed } from './dom.js';
 import { S, P, escErr } from './state.js';
 import { isBusy, setBusy, setIdle, onIdle, redrawBusy } from './busy.js';
 import { cancelPost, onPassResult, onViewerResult, setLook, setPost, setViewerImage, showFullSize } from './viewer.js';
@@ -326,12 +326,11 @@ function syncSummaries() {
     // Auto is the model's own and says nothing worth the space.
     $('scheduler').value === 'auto' ? null : $('scheduler').value,
     $('cachemode').value === 'off' ? null : `${$('cachemode').value} cache`,
-    refs ? `${refs} ref${refs > 1 ? 's' : ''}` : null,
     source ? null : `${$('upscale').value}× via ${upscalerName()}`,
   ].filter(Boolean).join(' · '));
-  // A step cache trades exactness for time, and references change what is
-  // drawn: departures from the plain path a folded section must not hide.
-  $('sum-gen').classList.toggle('on', n > 1 || $('cachemode').value !== 'off' || refs > 0);
+  // A step cache trades exactness for time: a departure from the plain path
+  // a folded section must not hide.
+  $('sum-gen').classList.toggle('on', n > 1 || $('cachemode').value !== 'off');
 
   say('sum-src', source ? `from ${source} · strength ${$('srcstrength').value}` : 'off');
   // In the accent rather than dim, like every summary below that marks a
@@ -340,8 +339,10 @@ function syncSummaries() {
   $('sum-src').classList.toggle('on', !!source);
 
   // Whole: the summary line cuts it to the width there is, and the title holds
-  // all of it.
-  say('sum-prompt', $('prompt').value.trim());
+  // all of it. References lead, in the accent: they change what is drawn.
+  say('sum-prompt', [refs ? `${refs} ref${refs > 1 ? 's' : ''}` : null, $('prompt').value.trim()]
+    .filter(Boolean).join(' · '));
+  $('sum-prompt').classList.toggle('on', refs > 0);
 
   syncModelsSummary();
 
@@ -1448,6 +1449,11 @@ export function initImage() {
   // anything listening to the box hears it.
   $('seedrandom').addEventListener('click', () => {
     $('seed').value = -1;
+    $('seed').dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  // A random seed, pinned: the dice.
+  $('seedroll').addEventListener('click', () => {
+    $('seed').value = randomSeed();
     $('seed').dispatchEvent(new Event('input', { bubbles: true }));
   });
   // Every panel's summary follows its boxes, from one listener on the tab.

@@ -72,10 +72,12 @@ const HELP = [
         + 'prompt and any text to render. The fp16 file is 9.5 GB, and beside a '
         + 'Q8 Flux (12 GB) that is tight on a 24 GB card — a Q8 GGUF of it '
         + '(about 5 GB) is the fix, at no visible cost.' },
-  { ids: ['seed', 'vseed'],
+  { ids: ['seed'],
     text: 'The random noise the picture is grown from, as a number. The same seed '
         + 'with the same settings gives the same image, so it is how you keep a '
-        + 'result and change one thing about it. -1 draws a new one every time.' },
+        + 'result and change one thing about it. -1 draws a new one every time; '
+        + 'the circling arrow puts -1 back, and the die picks one at random and '
+        + 'keeps it.' },
   { ids: ['steps', 'vsteps'],
     text: 'How many passes the sampler takes to turn noise into an image. More '
         + 'costs proportionally more time and stops helping after a point — and '
@@ -166,14 +168,43 @@ const HELP = [
         + 'its own size. The model card calls this experimental: it guides, it '
         + 'doesn’t trace.' },
   { ids: ['vshots'],
-    text: 'A longer clip, one shot at a time. The Prompt is shot 1; each shot '
-        + 'here is a segment of the Frames above, made from the one before’s last '
-        + 'frame, and says only what happens in it — an action or a line in the '
-        + 'Prompt happens once. Shots the clip on screen already has are ticked '
-        + 'green; add one below and Extend clip draws it onto that clip, or press '
-        + 'Generate clip to make the whole list again. The × on the clip’s last '
-        + 'shot cuts it off and keeps its text, to draw it again. TI2V-5B, A14B and '
-        + 'H3 can do it.' },
+    text: 'A clip, one shot at a time: each shot is its own sd-cli run with its '
+        + 'own seed, length and words, and each after the first goes on from the '
+        + 'last one’s final frame — so say only what happens in it; an action or a '
+        + 'line in shot 1 happens once. Shots the clip on screen already has are '
+        + 'ticked green. Change one’s seed, length or words and Redo from shot k '
+        + 'draws it and the ones after it again, keeping those before; add a row '
+        + 'and Extend clip draws it onto the end. Cheap to try at a few steps — '
+        + 'then raise the steps and Generate clip makes every shot again with the '
+        + 'same seeds. TI2V-5B, A14B and H3 can do it.' },
+  { ids: ['vshotseed'],
+    text: 'The shot’s seed. -1 rolls a new one, and the box then shows the seed '
+        + 'the shot was drawn with, so Generate clip draws it the same way again '
+        + '— at more steps, say. A new shot starts with the seed of the one above. '
+        + 'The circling arrow puts -1 back; the die picks a seed at random and '
+        + 'keeps it, to try the shot another way.' },
+  { ids: ['vshotframes'],
+    text: 'How long the shot is, in frames — divided by fps, that is its length. '
+        + 'The model’s latent grid only permits certain counts (Wan works in 4k+1, '
+        + 'H3 in 17k+5), so the number is rounded for you. A shot that goes on from '
+        + 'the last one adds one frame fewer: its first is the last one’s final '
+        + 'frame. A longer shot costs more memory, so a long clip is more shots.' },
+  { ids: ['vshotcut'],
+    text: 'How the shot begins. Continue draws on from the last shot’s final '
+        + 'frame: seamless, but one frame is all that carries over, so a face that '
+        + 'leaves and comes back is drawn anew and may not match. Cut starts a new '
+        + 'camera shot from nothing but its words and, if you pick them, reference '
+        + 'pictures — the dwarf’s face, his coat — which H3 keeps; it does not join '
+        + 'the frame before. Only MiniMax H3 takes references, and never beside a '
+        + 'starting frame, which is why a shot with them is a cut.' },
+  { ids: ['cbformat'],
+    text: 'What to save the version on screen as, made here in the browser, so '
+        + 'only what this browser can encode is offered. MP4 plays everywhere — '
+        + 'Discord, phones — and WebM nearly everywhere; AV1 is smallest, for '
+        + 'newer players. Their sound is Opus, which some Apple players skip. GIF '
+        + 'loops on its own in a chat, with no sound. Under 10 MB fits Discord '
+        + 'without Nitro; a long clip then looks soft, and half size helps. The '
+        + 'AVI is the file yasdig keeps, large and untouched.' },
   { ids: ['vevery'],
     text: 'Words that go in front of every shot, the first included: who and where '
         + '— the characters, the place, the look. One frame is all that carries '
@@ -308,11 +339,6 @@ const HELP = [
     text: 'The clip’s frame size. Wan publishes 832×480 and 1280×720, and going '
         + 'far past what a model was trained on costs VRAM quickly for little '
         + 'gain. Rounded up to what the model’s latent grid allows.' },
-  { ids: ['vframes'],
-    text: 'How many frames to generate — divided by fps, that is the length. The '
-        + 'model’s latent grid only permits certain counts (Wan works in 4n+1), '
-        + 'so the number is rounded for you and the line below says what you will '
-        + 'actually get.' },
   { ids: ['vfps'],
     text: 'How fast the finished frames are played back. It does not change how '
         + 'much motion is generated, only how long the same frames take to show. '

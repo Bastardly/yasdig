@@ -98,12 +98,12 @@ pub struct Clip {
     /// the clip deletes them and nothing lands in `work/output/` unasked.
     #[serde(default)]
     pub versions: Vec<ClipVersion>,
-    /// The Prompts panel's *Every shot* box as typed: what goes in front of
+    /// The Shots panel's *Every shot* box as typed: what goes in front of
     /// every shot's own text ([`shot_prompt`]). `None` when it was empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub every: Option<String>,
-    /// The clip's shots, first to last; a clip made in one go is one. Shot 1
-    /// is the Prompt. Never empty once read ([`Clip::normalize`]).
+    /// The clip's shots, first to last; a clip made in one go is one. Never
+    /// empty once read ([`Clip::normalize`]).
     #[serde(default)]
     pub segments: Vec<Segment>,
     /// Whether the clip is starred — where it lives, not something stored:
@@ -120,20 +120,37 @@ pub struct Clip {
 }
 
 /// One shot of a clip: what was typed for it, what sd-cli was conditioned on,
-/// its seed, and the frame it begins at in the clip's one frame sequence.
+/// its seed and length, how it began, and the frame it begins at in the
+/// clip's one frame sequence.
+///
+/// The page's row for a shot holds `text`, `seed`, `frames`, `cut` and
+/// `references`; a row that still matches all five is a shot that is done.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Segment {
-    /// As typed, `{variables}` and all. The page's row holds this, and a row
-    /// that still matches it is a shot that is done.
+    /// As typed, `{variables}` and all.
     pub text: String,
     pub conditioned: String,
     pub seed: i64,
     pub start: u32,
+    /// What sd-cli rendered, aligned to the family's grid — a shot that goes
+    /// on from the last one adds one fewer to the clip (the seam frame).
+    /// 0 in a record from before shots had their own length: [`Clip::normalize`]
+    /// fills it with the model's, which every shot then used.
+    #[serde(default)]
+    pub frames: u32,
+    /// A shot that starts fresh instead of going on from the last frame — a
+    /// cut, which is the only way an H3 shot can take references: sd.cpp
+    /// refuses its references beside a start frame.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cut: bool,
+    /// `work/output/` stems, as for a still's references.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
 }
 
 /// What a shot is conditioned on: the *Every shot* text in front of its own.
-/// Never another shot's text, and never the Prompt's on a later shot — the
-/// Prompt is shot 1, and an action or a line of dialogue in it must happen once.
+/// Never another shot's text — an action or a line of dialogue in shot 1 must
+/// happen once.
 pub fn shot_prompt(every: &str, text: &str) -> String {
     match (every.trim(), text.trim()) {
         ("", t) => t.to_string(),
@@ -151,6 +168,9 @@ impl Clip {
             conditioned: self.prompt.clone(),
             seed: self.seed,
             start: 0,
+            frames: self.video.aligned().2,
+            cut: false,
+            references: Vec::new(),
         }
     }
 
@@ -162,8 +182,13 @@ impl Clip {
         if !self.segments.is_empty() {
             self.shots.clear();
             self.shot_starts.clear();
+            let frames = self.video.aligned().2;
+            for s in self.segments.iter_mut().filter(|s| s.frames == 0) {
+                s.frames = frames;
+            }
             return;
         }
+        let frames = self.video.aligned().2;
         let shots = std::mem::take(&mut self.shots);
         let starts = std::mem::take(&mut self.shot_starts);
         let start = |k: usize| starts.get(k).copied().unwrap_or(0);
@@ -177,6 +202,9 @@ impl Clip {
                     conditioned: format!("{}. {s}", self.prompt),
                     seed: self.seed,
                     start: start(k),
+                    frames,
+                    cut: false,
+                    references: Vec::new(),
                 });
             }
             self.segments = segs;
@@ -190,6 +218,9 @@ impl Clip {
                     conditioned: format!("{}. {s}", self.prompt),
                     seed: self.seed.wrapping_add(k as i64),
                     start: start(k),
+                    frames,
+                    cut: false,
+                    references: Vec::new(),
                 })
                 .collect();
             self.prompt = shots[0].clone();
@@ -315,10 +346,11 @@ impl VideoStore {
     }
 
     /// Join segment `k` onto the clip: its frames after the clip's, **less its
-    /// first**, which is the clip's last frame sd-cli was started from; its
-    /// sound after the clip's, less that frame's worth. Answers the frame the
-    /// segment's own begin at. The segment's folder goes.
-    pub fn append_segment(&self, id: &str, k: usize, fps: u32) -> Result<u32> {
+    /// first** when it goes on from the clip (`seam`), which is the clip's last
+    /// frame sd-cli was started from; its sound after the clip's, less that
+    /// frame's worth. A cut keeps every frame. Answers the frame the segment's
+    /// own begin at. The segment's folder goes.
+    pub fn append_segment(&self, id: &str, k: usize, fps: u32, seam: bool) -> Result<u32> {
         let seg = self.dir(id).join(format!("seg{k}"));
         let container = seg.join(CONTAINER);
         let mut audio = None;
@@ -332,15 +364,16 @@ impl VideoStore {
             audio = avi.audio;
         }
         let start = self.frames(id).len() as u32;
-        for (i, f) in frames_in(&seg).iter().enumerate().skip(1) {
-            let to = self.frame_path(id, start + i as u32 - 1);
+        let skip = usize::from(seam);
+        for (i, f) in frames_in(&seg).iter().enumerate().skip(skip) {
+            let to = self.frame_path(id, start + (i - skip) as u32);
             std::fs::rename(f, &to).with_context(|| format!("joining shot {} into the clip", k + 1))?;
         }
         if let Some(mut more) = audio {
             let path = self.dir(id).join(AUDIO);
             let mut joined = crate::avi::read_wav(&path)?;
             // One frame of samples, the one dropped above.
-            let skip = (more.sample_rate / fps.max(1)) as usize * more.channels as usize * 2;
+            let skip = skip * (more.sample_rate / fps.max(1)) as usize * more.channels as usize * 2;
             more.pcm.drain(..skip.min(more.pcm.len()));
             joined.pcm.extend_from_slice(&more.pcm);
             crate::avi::write_wav(&path, &joined)?;
@@ -879,7 +912,7 @@ t5xxl = "t.gguf"
         for i in 0..3u8 {
             shade(&seg.with_file_name(format!("frame_{i:03}.png")), 100 + i);
         }
-        assert_eq!(store.append_segment("100-7", 1, 24).unwrap(), 3);
+        assert_eq!(store.append_segment("100-7", 1, 24, true).unwrap(), 3);
         let frames = store.frames("100-7");
         assert_eq!(frames.len(), 5, "3 + 3 less the repeated seam");
         let px = |p: &Path| image::open(p).unwrap().to_luma8().get_pixel(0, 0)[0];
@@ -889,13 +922,23 @@ t5xxl = "t.gguf"
         // Undo of that shot: back to the clip's own three frames.
         store.truncate("100-7", 3, 24).unwrap();
         assert_eq!(store.frames("100-7").len(), 3);
-        assert_eq!(store.append_segment("100-7", 1, 24).is_err(), true, "the segment is gone");
+        assert_eq!(store.append_segment("100-7", 1, 24, true).is_err(), true, "the segment is gone");
         let seg = store.prepare_segment("100-7", 1, false).unwrap();
         for i in 0..3u8 {
             shade(&seg.with_file_name(format!("frame_{i:03}.png")), 100 + i);
         }
-        store.append_segment("100-7", 1, 24).unwrap();
+        store.append_segment("100-7", 1, 24, true).unwrap();
         assert_eq!(store.frames("100-7").len(), 5);
+
+        // A cut starts fresh, so it has no seam to drop: all three join.
+        store.truncate("100-7", 3, 24).unwrap();
+        let seg = store.prepare_segment("100-7", 1, false).unwrap();
+        for i in 0..3u8 {
+            shade(&seg.with_file_name(format!("frame_{i:03}.png")), 100 + i);
+        }
+        store.append_segment("100-7", 1, 24, false).unwrap();
+        let frames = store.frames("100-7");
+        assert_eq!(frames.iter().map(|f| px(f)).collect::<Vec<_>>(), [0, 1, 2, 100, 101, 102]);
         guard.keep();
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -933,6 +976,9 @@ t5xxl = "t.gguf"
         let texts: Vec<_> = long.segments.iter().map(|s| (s.text.as_str(), s.start, s.seed)).collect();
         assert_eq!(texts, [("a crab walks", 0, 7), ("it lifts a claw", 33, 8)]);
         assert_eq!(long.segments[1].conditioned, "a beach at dusk. it lifts a claw");
+        // Every old shot ran the model's own length.
+        let frames = long.video.aligned().2;
+        assert!(long.segments.iter().all(|s| s.frames == frames && !s.cut), "{:?}", long.segments);
 
         let mut grown = clip("100-7", 1);
         grown.shots = vec![String::new(), "it turns".into()];

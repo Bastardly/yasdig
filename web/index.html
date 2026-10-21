@@ -94,6 +94,21 @@
   <section class="fpanel" id="fold-prompt" aria-label="Prompts" hidden>
     <header class="fphead"><b>Prompts</b> <span class="foldstate" id="sum-prompt"></span><button type="button" class="fpclose" aria-label="Close Prompts">&times;</button></header>
     <div class="fpbody">
+      <!-- The seed first, above the words it rolls: it is the one setting
+           reached for between renders — pinned from a result (Info) to keep a
+           picture, reset to vary it. A pinned seed walks across a batch. -->
+      <div class="genseed">
+        <label for="seed">Seed</label>
+        <!-- The button puts -1 back: a pinned seed is one click from the
+             result's seed, so getting back to random should be one too. -->
+        <div class="withbtn">
+          <input id="seed" type="number" value="-1">
+          <button type="button" id="seedrandom" class="btn btn-icon" data-icon="reset"
+                  title="Back to -1: a new seed every image" aria-label="Reset seed to -1"></button>
+          <button type="button" id="seedroll" class="btn btn-icon" data-icon="dice"
+                  title="A random seed, kept: every image of a run starts from it" aria-label="Random seed"></button>
+        </div>
+      </div>
       <label for="prompt">Prompt</label>
       <prompt-box>
         <!-- Empty, and filled from user/settings.toml once `/settings` answers.
@@ -107,6 +122,11 @@
         <input id="negative" placeholder="blurry, low quality">
       </prompt-box>
       <p class="sub" id="negnote" hidden>No negative prompt at CFG 1 — the model ignores it. Raise CFG to use one.</p>
+      <!-- Pictures the model looks at while it draws ("the person from image 1"),
+           beside the prompt that names them. Shown only for a model that takes
+           them — the server says which (`references` on /models). The picks
+           live in #refsdlg (refs.js). -->
+      <button type="button" id="refsopen" class="btn btn-block spaced" hidden>References…</button>
       <!-- A saved yasdig output, or an A1111/Forge/Civitai PNG, carries the
            settings that made it (`src/pngmeta.rs`). This button, or a PNG
            dropped on the prompt box, puts them back in the controls. -->
@@ -178,19 +198,6 @@
   <section class="fpanel" id="fold-gen" aria-label="Generation" hidden>
     <header class="fphead"><b>Generation</b> <span class="foldstate" id="sum-gen"></span><button type="button" class="fpclose" aria-label="Close Generation">&times;</button></header>
     <div class="fpbody">
-      <!-- The seed first: it is the one setting reached for between renders —
-           pinned from a result (Info) to keep a picture, reset to vary it. A
-           pinned seed walks across a batch. -->
-      <div class="genseed">
-        <label for="seed">Seed</label>
-        <!-- The button puts -1 back: a pinned seed is one click from the
-             result's seed, so getting back to random should be one too. -->
-        <div class="withbtn">
-          <input id="seed" type="number" value="-1">
-          <button type="button" id="seedrandom" class="btn" title="Back to -1: a new seed every image"
-                  aria-label="Reset seed to -1">Reset</button>
-        </div>
-      </div>
       <!-- A base size describes a txt2img: a source brings its own size. -->
       <div class="row sizerow" data-when="text">
         <div>
@@ -300,10 +307,6 @@
       <label for="count">Images</label>
       <input id="count" type="number" min="1" step="1" value="1">
     </div>
-    <!-- Pictures the model looks at while it draws ("the person from image 1").
-         Shown only for a model that takes them — the server says which
-         (`references` on /models). The picks live in #refsdlg (refs.js). -->
-    <button type="button" id="refsopen" class="btn btn-block" hidden>References…</button>
       <!-- How big the picture comes out: part of every generate. -->
       <!-- The output upscale describes a txt2img: the pass over a source has no
            enlarge stage. 1 is not a special case, it is FSR skipped — see the
@@ -556,7 +559,7 @@
        (`syncVideoSummaries`). -->
   <div class="workspace" id="tab-video" hidden>
   <nav class="wsrail" aria-label="Video">
-    <button type="button" class="btn btn-choice railbtn" data-panel="vid-prompt">Prompts</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="vid-prompt">Shots</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-gen">Generation</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-adv">Advanced</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-info">Info</button>
@@ -566,8 +569,10 @@
       <!-- Not the image tab's Stop, which finishes the image in flight and then
            ends the run. There is only ever one clip in flight, so stopping it
            means killing it — POST /cancel. -->
-      <!-- The seed the next clip uses, the Image tab's line (`syncVSeedLine`). -->
-      <div class="seedline" id="vseedline"></div>
+      <!-- An empty stage and one empty shot: start another clip without
+           taking apart the one on screen, which stays in Current. -->
+      <button type="button" id="vnew" class="btn btn-block"
+        title="Start a new clip: empties the stage and the shots. The clip on screen stays in Current.">New clip</button>
       <div class="runstop">
         <button id="vstop" class="btn btn-danger btn-block" hidden>Stop</button>
       </div>
@@ -576,12 +581,17 @@
   </nav>
   <!-- The clip on screen, as a canvas player (`renderClip`). -->
   <div class="stage vstage" id="vresult" data-empty="Generate a clip to see it here"></div>
-  <section class="fpanel" id="vfold-prompt" aria-label="Prompts" hidden>
-    <header class="fphead"><b>Prompts</b> <span class="foldstate" id="vsum-prompt"></span><button type="button" class="fpclose" aria-label="Close Prompts">&times;</button></header>
+  <!-- The clip as shots, first to last (`shots.js`): Every shot in front of
+       each one's own words, then each shot's seed, length and prompt. A row
+       the clip on the stage already has is marked done; a changed one is
+       drawn again, with every row after it (*Redo from shot k*), and rows
+       added under a whole clip are drawn onto it (*Extend clip*). -->
+  <section class="fpanel" id="vfold-prompt" aria-label="Shots" hidden>
+    <header class="fphead"><b>Shots</b> <span class="foldstate" id="vsum-prompt"></span><button type="button" class="fpclose" aria-label="Close Shots">&times;</button></header>
     <div class="fpbody">
-      <label for="vprompt">Prompt</label>
+      <label for="veverytext" data-help="vevery">Every shot</label>
       <prompt-box>
-        <textarea id="vprompt" placeholder="the crab lifts a claw, slow camera push in"></textarea>
+        <textarea id="veverytext" class="short" placeholder="who and where: a red-haired woman in a green coat, a rainy street at night, film grain"></textarea>
       </prompt-box>
 
       <label for="vnegative">Negative prompt</label>
@@ -592,39 +602,18 @@
         <textarea id="vnegative" class="short"></textarea>
       </prompt-box>
 
-      <!-- A long clip: the Prompt is shot 1, and each shot below goes on from
-           the last one's final frame, conditioned on its own text with Every
-           shot in front. A row the clip on the stage already has is marked
-           done (`shots.js`); Extend clip draws the rest onto that clip. -->
       <label class="grouphead" data-help="vshots">Shots</label>
-      <div id="vevery" hidden>
-        <label for="veverytext" data-help="vevery">Every shot</label>
-        <prompt-box>
-          <textarea id="veverytext" class="short" placeholder="who and where: a red-haired woman in a green coat, a rainy street at night, film grain"></textarea>
-        </prompt-box>
-      </div>
       <div id="vshots"></div>
       <button type="button" id="vshotadd" class="btn spaced">+ Add shot</button>
       <p class="sub" id="vshotnote"></p>
     </div>
     <div class="fpfoot" id="vextendfoot" hidden>
-      <button type="button" id="vextend" class="btn btn-run btn-block"
-        title="Draw the new shots onto the clip on screen, from its last frame">Extend clip</button>
+      <button type="button" id="vextend" class="btn btn-run btn-block">Extend clip</button>
     </div>
   </section>
   <section class="fpanel" id="vfold-gen" aria-label="Generation" hidden>
     <header class="fphead"><b>Generation</b> <span class="foldstate" id="vsum-gen"></span><button type="button" class="fpclose" aria-label="Close Generation">&times;</button></header>
     <div class="fpbody">
-      <!-- The seed first, as on the Image tab: the setting reached for
-           between clips, one click back to random. -->
-      <div class="genseed">
-        <label for="vseed">Seed</label>
-        <div class="withbtn">
-          <input id="vseed" type="number" value="-1">
-          <button type="button" id="vseedrandom" class="btn" title="Back to -1: a new seed every clip"
-                  aria-label="Reset seed to -1">Reset</button>
-        </div>
-      </div>
       <label for="vmodel">Model</label>
       <select id="vmodel"></select>
       <p class="sub" id="vmodelnote"></p>
@@ -673,16 +662,10 @@
           <input id="vh" type="number" min="64">
         </div>
       </div>
-      <div class="row">
-        <div>
-          <label for="vframes">Frames</label>
-          <input id="vframes" type="number" min="1">
-        </div>
-        <div>
-          <label for="vfps">fps</label>
-          <input id="vfps" type="number" min="1" max="60">
-        </div>
-      </div>
+      <!-- The length is each shot's own (the Shots panel); the rate is the
+           clip's. -->
+      <label for="vfps">fps</label>
+      <input id="vfps" type="number" min="1" max="60">
       <p class="sub" id="vgridnote"></p>
 
       <div class="row">
@@ -971,16 +954,15 @@
 <!-- The clip dialog (clipview.js): a clip played full size, its enlarged
      versions as History with Compare, Enlarge, and Save to output — Refine &
      adjust's shape (`.lbrail`, floating panels). A clip from the Video tab's
-     grids has all of it; one saved to output only plays. Shots are added on
-     the Video tab, in the Prompts panel, where Generate is. -->
+     grids has all of it; one saved to output plays and downloads. Shots are
+     added on the Video tab, in the Shots panel, where Generate is. -->
 <dialog id="clipbox">
   <nav class="lbrail" aria-label="Clip">
     <b class="railtitle">Clip</b>
     <button type="button" class="btn btn-choice railbtn" data-panel="cb-enlarge">Enlarge</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="cb-history">History</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="cb-download">Download</button>
     <div class="railfoot">
-      <a id="cbdownload" class="btn btn-block" download
-        title="The version on screen as one .avi file, to your computer">Download</a>
       <button type="button" id="cbsave" class="btn btn-run btn-block"
         title="Save the version on screen to work/output/ — the Outputs tab">Save to output</button>
     </div>
@@ -988,7 +970,7 @@
   <div class="cbpane">
     <canvas id="cbcanvas" title="Drag the line to compare, when Compare is on"></canvas>
     <div class="player">
-      <button type="button" id="cbplay" class="btn">Play</button>
+      <button type="button" id="cbplay" class="btn btn-icon" data-icon="play" title="Play" aria-label="Play"></button>
       <input id="cbscrub" type="range" min="0" max="0" step="1" value="0" aria-label="Frame">
       <span class="val" id="cbat"></span>
     </div>
@@ -1026,6 +1008,39 @@
         <label><input type="checkbox" id="cbcompare"> Compare with the original</label>
       </div>
       <ol id="cbhistory" class="rdhistory"></ol>
+    </div>
+  </section>
+  <!-- The version on screen as a file to share, encoded by the browser
+       (`export.js`): only the formats it can make are offered. -->
+  <section class="fpanel" id="panel-cb-download" aria-label="Download" hidden>
+    <header class="fphead"><b>Download</b> <span class="foldstate" id="sum-cb-download"></span><button type="button" class="fpclose" aria-label="Close Download">&times;</button></header>
+    <div class="fpbody">
+      <label class="grouphead" data-help="cbformat">Format</label>
+      <div class="checks" id="cbformats"></div>
+      <p class="sub" id="cbformatnote"></p>
+      <div class="row" id="cbencrow">
+        <div>
+          <label for="cbsize">Size</label>
+          <select id="cbsize">
+            <option value="best">Best quality</option>
+            <option value="discord">Under 10 MB (Discord)</option>
+          </select>
+        </div>
+        <div>
+          <label for="cbscale">Frame</label>
+          <select id="cbscale">
+            <option value="1">Full size</option>
+            <option value="0.5">Half size</option>
+          </select>
+        </div>
+      </div>
+      <p class="sub" id="cbdlnote"></p>
+    </div>
+    <div class="fpfoot">
+      <div class="runstop">
+        <button type="button" id="cbdlstop" class="btn btn-danger btn-block" hidden>Cancel</button>
+      </div>
+      <button type="button" id="cbdlgo" class="btn btn-run btn-block">Download</button>
     </div>
   </section>
   <div class="statuscard">
@@ -1464,7 +1479,7 @@
       <b id="refstitle">References</b>
       <button type="button" id="refsdone" class="btn">Done</button>
     </div>
-    <p class="sub">Pictures the model looks at while it draws. Refer to them in the
+    <p class="sub" id="refsnote">Pictures the model looks at while it draws. Refer to them in the
       prompt as image 1, image 2 — "the person from image 1 wearing the jacket from
       image 2". Each one costs about as much as the image itself.</p>
     <div class="refslots">

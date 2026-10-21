@@ -1,12 +1,14 @@
-import { $, esc, getJSON, post, numOr, rememberFolds } from './dom.js';
+import { $, esc, getJSON, post, numOr, rememberFolds, ICONS, randomSeed } from './dom.js';
 import { floatPanels } from './panels.js';
 import { MEMORY_LABELS, showError } from './memory.js';
-import { setBusy, setIdle, cancelRun } from './busy.js';
+import { cancelRun } from './busy.js';
 import { soonJobs } from './jobs.js';
-import { clip, renderClip, stopPlayback } from './player.js';
+import { clip, renderClip, stopPlayback, clearClip } from './player.js';
 import { initClipView, openClipView } from './clipview.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
-import { shotState } from './shots.js';
+import { shotState, rowMatches } from './shots.js';
+import { editRefs } from './refs.js';
+import { wireHints } from './hints.js';
 import { sourceSlot } from './source-slot.js';
 import { partRows } from './parts.js';
 import { loraPicker } from './loras.js';
@@ -27,9 +29,17 @@ import { loadModelSettings } from './modelsettings.js';
 // than watching.
 
 let videoModels = [];
-// A clip generation in flight. Only ever one — there is no batch here, because
-// a single clip already owns the GPU for minutes.
-let vrunning = false;
+// Clip requests in flight — Generates and changes to a clip. Any number: the
+// job queue runs them one after another, so Generate clip stays pressable and
+// queues the next (New clip, then Generate, while another renders).
+let pending = 0;
+// Clips with a change in flight (Extend, Redo, ×): one at a time per clip, so
+// their rows can't be sent twice. Other clips stay free to change.
+const busyClips = new Set();
+// Bumped whenever the stage changes hands — a clip opened, *New clip* — so a
+// clip that finishes rendering lands on the stage (and in the rows) only if
+// the stage is still the one it was started from.
+let stageSeq = 0;
 
 function currentVideoModel() {
   return videoModels.find((m) => m.name === $('vmodel').value);
@@ -52,81 +62,243 @@ const videoLoras = loraPicker({
 
 // ---- Shots -------------------------------------------------------------------
 //
-// A long clip is one segment per shot, each made from the last one's final
-// frame (`Engine::video`). The Prompt is shot 1 and each row here a later
-// one, conditioned on its own text with *Every shot* in front — never the
-// Prompt's, or a line spoken in it is spoken again in every shot. The rows
-// hold their own text, so a redraw is only for adding or removing; the marks
-// are `syncShots`'s, against the clip on the stage (`shots.js`).
+// A clip is its shots, first to last: one sd-cli run each (`Engine::video`),
+// each but the first going on from the last one's final frame — or, on H3, a
+// cut that starts fresh and may follow reference pictures. Each row is
+// conditioned on its own words with *Every shot* in front, never another
+// row's, or a line spoken in shot 1 is spoken again in every shot. A row
+// holds its own state in the DOM: the boxes, and `data-cut`/`data-refs`. The
+// marks are `syncShots`'s, against the clip on the stage (`shots.js`).
 
-// The later shots' boxes, as typed.
-const rowBoxes = () => [...$('vshots').querySelectorAll('textarea')];
+const rowEls = () => [...$('vshots').querySelectorAll('.shotrow')];
 
-function shotList() {
-  return rowBoxes().map((t) => t.value.trim()).filter(Boolean);
+function readRow(el) {
+  const seed = parseInt(el.querySelector('.shotseed').value, 10);
+  const frames = parseInt(el.querySelector('.shotframes').value, 10);
+  return {
+    text: el.querySelector('textarea').value,
+    seed: Number.isFinite(seed) ? seed : -1,
+    frames: Number.isFinite(frames) ? frames : null,
+    cut: el.dataset.cut === '1',
+    refs: JSON.parse(el.dataset.refs || '[]'),
+    folded: el.classList.contains('folded'),
+  };
 }
+
+// The rows that are shots — a blank one is not — each with its row index,
+// its frames on the grid the server will round them to.
+function liveRows() {
+  const m = currentVideoModel();
+  return rowEls().map((el, i) => {
+    const r = readRow(el);
+    if (m && r.frames != null) r.frames = alignFrames(r.frames, m.frame_grid);
+    return { ...r, i };
+  }).filter((r) => r.text.trim());
+}
+
+// A drawn clip's shots as rows: the seeds they were drawn with, so Generate
+// makes them again unless a seed is reset.
+const rowsOf = (c) => (c.segments ?? []).map((s) => ({
+  text: s.text, seed: s.seed, frames: s.frames, cut: !!s.cut, refs: s.references ?? [],
+}));
+
+// The wire's shape for a row; a blank Frames box is the model's.
+const shotWire = (r) => ({ prompt: r.text, seed: r.seed, frames: r.frames, cut: r.cut, references: r.refs });
 
 // Whether a clip's own family can go on from its last frame — by the clip's
 // family, since the model it was made with may be listed under another name
 // now (or be a [[video]] entry since removed).
 const chains = (c) => !!c && videoModels.some((m) => m.family === c.video?.family && m.chains);
 
-// The rows against the clip on the stage: which are done, what Extend draws.
-const shotsNow = () => shotState([$('vprompt').value, ...rowBoxes().map((t) => t.value)], clip, chains(clip));
+// The rows against the clip on the stage: which are done, what a press draws.
+const shotsNow = () => shotState(liveRows(), clip, chains(clip));
 
-function drawShots(list) {
-  $('vshots').innerHTML = (list.length ? `
-    <div class="shotrow shotfirst" data-k="0"><b>1</b><p class="sub">The Prompt above</p></div>` : '')
-    + list.map((text, i) => `
-    <div class="shotrow" data-k="${i + 1}">
-      <b>${i + 2}</b>
-      <textarea class="short" aria-label="Shot ${i + 2}" placeholder="what happens in this shot">${esc(text)}</textarea>
-      <button type="button" class="btn btn-danger" data-x="${i + 1}">&times;</button>
-    </div>`).join('');
+// A row folds to its heading line, a panel's way: the fold is the row's own
+// (`folded` on a row read back), else what row k was before the redraw.
+function drawShots(rows) {
+  const was = rowEls().map((el) => el.classList.contains('folded'));
+  $('vshots').innerHTML = rows.map((r, k) => {
+    const folded = r.folded ?? was[k] ?? false;
+    return `
+    <div class="shotrow${folded ? ' folded' : ''}" data-cut="${r.cut ? 1 : 0}" data-refs="${esc(JSON.stringify(r.refs ?? []))}">
+      <div class="shothead">
+        <button type="button" class="shotfold" aria-expanded="${!folded}" title="Fold or unfold this shot">
+          <b>Shot ${k + 1}</b></button>
+        <span class="shotsum"></span>
+        <span class="shotstart" hidden>
+          <label data-help="vshotcut">Starts</label>
+          <button type="button" class="btn btn-choice" data-start="0">Continue</button>
+          <button type="button" class="btn btn-choice" data-start="1">Cut</button>
+        </span>
+        <button type="button" class="fpclose shotx" aria-label="Remove shot ${k + 1}">&times;</button>
+      </div>
+      <div class="shotbody">
+        <label data-help="vshotseed">Seed</label>
+        <div class="withbtn">
+          <input class="shotseed" type="number" value="${r.seed ?? -1}" aria-label="Shot ${k + 1} seed">
+          <button type="button" class="btn btn-icon shotreseed" title="Back to -1: a new seed each time"
+            aria-label="Reset shot ${k + 1} seed to -1">${ICONS.reset}</button>
+          <button type="button" class="btn btn-icon shotroll" title="A random seed, kept"
+            aria-label="Random seed for shot ${k + 1}">${ICONS.dice}</button>
+        </div>
+        <label data-help="vshotframes">Frames</label>
+        <input class="shotframes" type="number" value="${r.frames ?? ''}" aria-label="Shot ${k + 1} frames">
+        <label data-help="vprompt">Prompt</label>
+        <prompt-box><textarea class="short" aria-label="Shot ${k + 1} prompt"
+          placeholder="${k ? 'what happens next: an action, a line spoken' : 'the crab lifts a claw, slow camera push in'}">${esc(r.text ?? '')}</textarea></prompt-box>
+        <button type="button" class="btn shotrefs" hidden>References…</button>
+      </div>
+    </div>`;
+  }).join('');
+  wireHints($('vshots'));
+  frameSteps();
   syncShots();
 }
 
-// The marks, the × buttons, Extend, and what the shots add up to: their count
-// times one segment's length, the segment being the Frames box after the
-// model's rounding.
+// ---- Unsent edits, per clip ----------------------------------------------------
+//
+// Rows added or changed on a clip and not drawn yet are the clip's draft: kept
+// when another clip is opened and put back when it is opened again — and in
+// this browser's storage, so a reload keeps them too. Only what differs from
+// the clip is kept; a draft that matches it is dropped. Per browser on purpose:
+// it is a convenience over the record, never part of it.
+const DRAFTS_KEY = 'yasdig.clipdrafts';
+const MAX_DRAFTS = 200;
+let drafts = null;
+let draftTimer = null;
+
+function draftMap() {
+  if (!drafts) {
+    try {
+      drafts = new Map(Object.entries(JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}')));
+    } catch {
+      drafts = new Map();
+    }
+  }
+  return drafts;
+}
+
+function storeDrafts() {
+  const map = draftMap();
+  // Oldest first, as inserted: a long-forgotten clip's edits go first.
+  while (map.size > MAX_DRAFTS) map.delete(map.keys().next().value);
+  try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(Object.fromEntries(map))); } catch { /* a convenience */ }
+}
+
+// Whether the panel holds just what clip `c` is: its shots, its Every shot,
+// its negative. Blank rows are not shots.
+function matchesClip(c, rows, every, negative) {
+  const segs = c.segments ?? [];
+  return rows.length === segs.length
+    && rows.every((r, k) => rowMatches(r, segs[k], k))
+    && every.trim() === (c.every ?? '').trim()
+    && negative === (c.typed_negative ?? c.negative ?? '');
+}
+
+// Record the panel as clip `c`'s draft, or drop the draft when there is
+// nothing unsent. `rows` defaults to the panel's.
+function setDraft(c, rows = rowEls().map(readRow), every = $('veverytext').value, negative = $('vnegative').value) {
+  clearTimeout(draftTimer);
+  const map = draftMap();
+  const m = currentVideoModel();
+  const live = rows.filter((r) => String(r.text ?? '').trim())
+    .map((r) => ({ ...r, frames: m && r.frames != null ? alignFrames(r.frames, m.frame_grid) : r.frames }));
+  map.delete(c.id);
+  if (!matchesClip(c, live, every, negative)) map.set(c.id, { rows, every, negative });
+  storeDrafts();
+}
+
+const keepDraft = () => { if (clip) setDraft(clip); };
+
+// Typing saves a moment later, so a reload loses at most that moment.
+function keepDraftSoon() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(keepDraft, 400);
+}
+
+// A row for + Add shot: the seed and length of the row above it, so a new
+// shot starts as its neighbour was drawn (the dice or Reset vary it).
+function addShot() {
+  const els = rowEls();
+  const last = els.length ? readRow(els.at(-1)) : null;
+  drawShots([...rowEls().map(readRow), {
+    text: '', seed: last?.seed ?? -1, frames: last?.frames ?? currentVideoModel()?.frames ?? null,
+  }]);
+  rowEls().at(-1)?.querySelector('textarea').focus();
+  syncVideoSummaries();
+}
+
+// The clip's length as the rows say it: a shot that goes on from the last
+// one adds one frame fewer (the seam is its first frame, the last one's
+// final frame).
+function rowsSeconds(m) {
+  const fps = m.forced_fps ?? (parseInt($('vfps').value, 10) || 1);
+  let frames = 0;
+  for (const [j, r] of liveRows().entries()) {
+    const f = r.frames ?? alignFrames(m.frames, m.frame_grid);
+    frames += j > 0 && !r.cut ? f - 1 : f;
+  }
+  return frames / fps;
+}
+
+// The marks, each row's start switch, references button and ×, the footer's
+// press, and what the shots add up to.
 function syncShots() {
   const m = currentVideoModel();
-  const rows = rowBoxes().length;
-  const st = shotsNow();
-  for (const row of $('vshots').querySelectorAll('.shotrow')) {
-    const k = Number(row.dataset.k);
-    row.classList.toggle('done', k < st.done);
-    const x = row.querySelector('[data-x]');
-    if (!x) continue;
+  const live = liveRows();
+  const st = shotState(live, clip, chains(clip));
+  const doneRows = new Set(live.slice(0, st.done).map((r) => r.i));
+  const lastDone = st.dropLast >= 0 ? live[st.dropLast]?.i : -1;
+  const els = rowEls();
+  const refsOk = !!m?.references;
+  // A change to this clip is in flight: nothing more on it until it lands.
+  const busy = !!clip && busyClips.has(clip.id);
+  els.forEach((el, i) => {
+    el.classList.toggle('done', doneRows.has(i));
+    // What a folded row still says: the start of its prompt.
+    el.querySelector('.shotsum').textContent = el.querySelector('textarea').value.trim();
+    const cut = el.dataset.cut === '1' && i > 0;
+    const start = el.querySelector('.shotstart');
+    start.hidden = i === 0 || !refsOk;
+    for (const b of start.querySelectorAll('[data-start]')) b.classList.toggle('active', (b.dataset.start === '1') === cut);
+    // References on a cut, or on shot 1 without a first frame: H3 can't
+    // follow them and go on from a frame at once.
+    const refs = el.querySelector('.shotrefs');
+    const n = JSON.parse(el.dataset.refs || '[]').length;
+    refs.hidden = !refsOk || (i === 0 ? !!vSource.get() : !cut);
+    refs.textContent = n ? `References (${n})` : 'References…';
     // A done shot stays: the shots after it start from its frames. Only the
     // clip's last one can be cut off, and the cut leaves its text in the row.
-    x.hidden = k < st.done && k !== st.dropLast;
-    x.title = k === st.dropLast ? 'Cut this shot off the clip — its text stays, to draw it again' : 'Remove this shot';
-  }
-  $('vevery').hidden = !rows && !$('veverytext').value.trim();
-  $('vextendfoot').hidden = !st.canExtend || vrunning;
-  $('vextend').textContent = `Extend clip — ${st.pending.length} shot${st.pending.length === 1 ? '' : 's'}`;
+    const x = el.querySelector('.shotx');
+    x.hidden = (doneRows.has(i) && (i !== lastDone || busy)) || els.length === 1;
+    x.title = i === lastDone ? 'Cut this shot off the clip — its text stays, to draw it again' : 'Remove this shot';
+  });
+  const foot = st.action === 'extend' || st.action === 'redo';
+  $('vextendfoot').hidden = !foot || busy;
+  const n = st.pending.length;
+  $('vextend').textContent = st.action === 'redo'
+    ? (n ? `Redo from shot ${st.done + 1}` : `Cut from shot ${st.done + 1}`)
+    : `Extend clip — ${n} shot${n === 1 ? '' : 's'}`;
+  $('vextend').title = st.action === 'redo'
+    ? `Keep shots 1–${st.done} of the clip on screen and draw the rest again, from shot ${st.done}’s last frame`
+    : 'Draw the new shots onto the clip on screen, from its last frame';
   const note = $('vshotnote');
   note.classList.remove('err');
   if (!m) { note.textContent = ''; return; }
-  const frames = alignFrames(parseInt($('vframes').value, 10), m.frame_grid);
-  const fps = m.forced_fps ?? (parseInt($('vfps').value, 10) || 1);
-  const seg = frames / fps;
-  const n = 1 + shotList().length;
-  if (rows && !m.chains) {
+  if (busy) {
+    note.textContent = 'A change to this clip is queued or drawing; its shots can be changed again when it lands.';
+  } else if (live.length > 1 && !m.chains) {
     note.textContent = `${m.name} can't go on from a clip's last frame, so it makes one clip at a time — `
       + 'TI2V-5B, A14B and H3 can.';
     note.classList.add('err');
-  } else if (clip && st.done > 0 && !st.whole) {
-    note.textContent = `Shot ${st.done + 1} differs from the clip on screen: Generate makes a new clip from every row. `
-      + 'Extend only adds to the end of a clip.';
-  } else if (st.canExtend) {
-    note.textContent = `Extend clip draws ${st.pending.length} more onto the clip on screen, from its last frame, `
+  } else if (st.action === 'redo') {
+    note.textContent = `Shot ${st.done + 1} differs from the clip on screen. ${$('vextend').textContent} keeps the `
+      + `${st.done} before it, on the clip's own model and settings; Generate clip makes every row again.`;
+  } else if (st.action === 'extend') {
+    note.textContent = `Extend clip draws ${n} more onto the clip on screen, from its last frame, `
       + 'with its own model and settings.';
-  } else if (n > 1) {
-    note.textContent = `${n} shots × ${seg.toFixed(1)} s ≈ ${(n * seg).toFixed(1)} s`;
   } else {
-    note.textContent = rows ? '' : 'Add a shot to make the clip longer.';
+    note.textContent = `${live.length || 1} shot${live.length > 1 ? 's' : ''} ≈ ${rowsSeconds(m).toFixed(1)} s`;
   }
 }
 
@@ -150,7 +322,9 @@ function syncReady() {
   $('vmodelnote').textContent = missing.length
     ? `Not ready — missing ${missing.length} file(s): ${missing.join(', ')}`
     : (m.description || '');
-  $('vgo').disabled = !!missing.length || vrunning;
+  $('vgo').disabled = !!missing.length;
+  // Pressed again while one runs, it queues another.
+  $('vgo').textContent = pending ? 'Queue another clip' : 'Generate clip';
 }
 
 // Which rows hold something other than what discovery picked — said in the
@@ -167,17 +341,19 @@ function partsDeparted() {
 // section still reads. Run from a delegated listener on the tab, and after
 // anything that sets the boxes without an event (`syncVideo`, `applyClip`).
 function syncVideoSummaries() {
-  const p = $('vprompt').value.trim();
-  const shots = 1 + shotList().length;
-  $('vsum-prompt').textContent = (p ? `— ${p.length > 60 ? p.slice(0, 60) + '…' : p}` : '')
-    + (shots > 1 ? ` · ${shots} shots` : '');
+  const live = liveRows();
+  const p = live[0]?.text.trim() ?? '';
+  const m = currentVideoModel();
+  $('vsum-prompt').textContent = (live.length > 1 ? `— ${live.length} shots` : '— 1 shot')
+    + (m ? ` · ${rowsSeconds(m).toFixed(1)} s` : '')
+    + (p ? ` · ${p.length > 60 ? p.slice(0, 60) + '…' : p}` : '');
   // A long clip is a departure from one clip a Generate: the rail's dot says so.
-  $('vsum-prompt').classList.toggle('on', shots > 1);
-  const m = $('vmodel').value;
+  $('vsum-prompt').classList.toggle('on', live.length > 1);
+  const name = $('vmodel').value;
   const picked = partsDeparted();
   const loras = videoLoras.get();
-  $('vsum-gen').textContent = m
-    ? `— ${m} · ${$('vw').value}×${$('vh').value} · ${$('vframes').value} frames`
+  $('vsum-gen').textContent = name
+    ? `— ${name} · ${$('vw').value}×${$('vh').value} · ${$('vsteps').value} steps`
       + (picked.length ? ` · own ${picked.join(', ')}` : '')
       + (loras.length ? ` · LoRA: ${loras.map((l) => l.name.split('/').pop().replace(/\.[^.]+$/, '')).join(', ')}` : '') : '';
   $('vsum-gen').classList.toggle('on', picked.length > 0 || loras.length > 0);
@@ -207,33 +383,45 @@ function snapSize(id) {
   if (snapped !== v) $(id).value = snapped;
 }
 
-// The rail's seed line, the Image tab's `syncSeedLine`: amber when pinned.
-function syncVSeedLine() {
-  const v = $('vseed').value.trim() || '-1';
-  const el = $('vseedline');
-  el.textContent = `Seed: ${v}`;
-  el.title = el.textContent;
-  el.classList.toggle('on', v !== '-1');
-}
-
-// What the boxes add up to, before anything runs: the frame count after
-// rounding, the fps the model will actually use, and the duration that implies.
-// The size is snapped in its boxes; a half-typed one is still rounded here.
+// What the boxes add up to, before anything runs: the size after rounding,
+// the fps the model will actually use, and the frame grid each shot's length
+// is rounded to. The size is snapped in its boxes; a half-typed one is still
+// rounded here.
 function syncVideoNote() {
   const m = currentVideoModel();
   if (!m) { $('vgridnote').textContent = ''; return; }
   const w = alignSize(parseInt($('vw').value, 10), m.size_multiple);
   const h = alignSize(parseInt($('vh').value, 10), m.size_multiple);
-  const frames = alignFrames(parseInt($('vframes').value, 10), m.frame_grid);
   const fps = m.forced_fps ?? (parseInt($('vfps').value, 10) || 1);
-  const asked = [
-    parseInt($('vframes').value, 10) !== frames
-      ? `${frames} frames (the grid is ${m.frame_grid.multiple}k+${m.frame_grid.offset})` : null,
-    m.forced_fps ? `${fps} fps — this model overrides anything else` : null,
-  ].filter(Boolean);
-  $('vgridnote').textContent =
-    `${w}×${h}, ${frames} frames @ ${fps} fps = ${(frames / fps).toFixed(2)} s`
-    + (asked.length ? ` · ${asked.join(' · ')}` : '');
+  $('vgridnote').textContent = `${w}×${h} @ ${fps} fps`
+    + (m.forced_fps ? ' — this model overrides anything else' : '')
+    + ` · a shot's frames are ${m.frame_grid.multiple}k+${m.frame_grid.offset}`;
+}
+
+// Every row's Frames on the model's grid, a blank one at the model's length —
+// after a model change (H3's grid is not Wan's) or a typed number.
+function snapShotFrames() {
+  const m = currentVideoModel();
+  if (!m) return;
+  for (const box of $('vshots').querySelectorAll('.shotframes')) {
+    const v = parseInt(box.value, 10);
+    box.value = alignFrames(Number.isFinite(v) ? v : m.frames, m.frame_grid);
+  }
+  frameSteps();
+}
+
+// The arrows step from grid point to grid point. A number box steps from its
+// `min`, so `min` must be on the grid too: with H3's 17k+5 and a min of 1, a
+// step down from 39 landed on 35, which the snap rounds back *up* to 39 — the
+// down arrow did nothing.
+function frameSteps() {
+  const g = currentVideoModel()?.frame_grid;
+  if (!g) return;
+  const min = g.offset >= g.min ? g.offset : g.offset + Math.ceil((g.min - g.offset) / g.multiple) * g.multiple;
+  for (const box of $('vshots').querySelectorAll('.shotframes')) {
+    box.min = min;
+    box.step = g.multiple;
+  }
 }
 
 // Pre-fill from the selected model, the same job syncAdvanced does for an image.
@@ -249,8 +437,7 @@ function syncVideo() {
   $('vh').value = m.height;
   $('vw').step = m.size_multiple;
   $('vh').step = m.size_multiple;
-  $('vframes').value = m.frames;
-  $('vframes').step = m.frame_grid.multiple;
+  snapShotFrames();
   $('vfps').value = m.forced_fps ?? m.fps;
   $('vfps').disabled = !!m.forced_fps;
   $('vsteps').value = m.steps;
@@ -277,7 +464,7 @@ function syncVideo() {
 // `settings::VIDEO_KNOBS` takes. A blank number box with a meaning — shift and
 // the high-noise CFG follow the model when blank — is `null`, which forgets it.
 const VIDEO_KNOBS = [
-  ['width', 'vw'], ['height', 'vh'], ['frames', 'vframes'], ['fps', 'vfps'],
+  ['width', 'vw'], ['height', 'vh'], ['frames', null, 'shot1'], ['fps', 'vfps'],
   ['steps', 'vsteps'], ['cfg_scale', 'vcfg'], ['sampler', 'vsampler', 'text'],
   ['flow_shift', 'vshift', 'blank'], ['high_noise_steps', 'vhsteps', 'moe'],
   ['high_noise_cfg_scale', 'vhcfg', 'moe'], ['vae_tiling', 'vtiling', 'check'],
@@ -291,6 +478,12 @@ async function saveVideoDefaults(clear) {
   for (const [key, id, kind] of VIDEO_KNOBS) {
     if (clear) { values[key] = null; continue; }
     if (kind === 'moe' && !m.is_moe) continue;
+    // A new row's length: the first shot's.
+    if (kind === 'shot1') {
+      const f = rowEls()[0] && readRow(rowEls()[0]).frames;
+      if (f) values[key] = f;
+      continue;
+    }
     if (kind === 'check') { values[key] = $(id).checked; continue; }
     if (kind === 'text') { values[key] = $(id).value; continue; }
     if (kind === 'blank' && $(id).value.trim() === '') { values[key] = null; continue; }
@@ -356,20 +549,16 @@ export async function loadVideoModels({ refill = true } = {}) {
 
 // ---- Generating -------------------------------------------------------------
 
-function vidPayload() {
-  const seed = parseInt($('vseed').value, 10);
+function vidPayload(rows) {
   const m = currentVideoModel();
   return {
-    prompt: $('vprompt').value,
     model: $('vmodel').value,
     // Sent even when empty: an emptied box means "no negative", which is not
     // the same as "inherit the model's".
     negative: $('vnegative').value,
-    seed: Number.isFinite(seed) ? seed : -1,
     source: vSource.get(),
     width: numOr('vw'),
     height: numOr('vh'),
-    frames: numOr('vframes'),
     fps: numOr('vfps'),
     steps: numOr('vsteps'),
     cfg_scale: numOr('vcfg'),
@@ -382,29 +571,63 @@ function vidPayload() {
     parts: videoParts.picked(),
     // Always sent, `[]` included: the picker is the whole answer.
     loras: videoLoras.get(),
-    // The shots after the first: the Prompt is shot 1.
-    shots: shotList(),
+    shots: rows.map(shotWire),
     every: $('veverytext').value,
   };
 }
 
-async function startClip() {
-  if (vrunning) return;
-  vrunning = true;
-  $('verr').textContent = '';
+// After a press: the rows the clip now has, with the seeds they were drawn
+// with, then any sent that it didn't get to (a Stop, a failed shot) — kept
+// for another try.
+function landRows(c, sent) {
+  drawShots([...rowsOf(c), ...sent.slice((c.segments ?? []).length)]);
+  syncVideoSummaries();
+  setDraft(c);
+}
+
+// A clip request starts or ends: Stop shows while any is in flight (it
+// stops the one running; the queue goes on to the next).
+function began() {
+  pending++;
   $('vstop').hidden = false;
   $('vstop').disabled = false;
   $('vstop').textContent = 'Stop';
-  setBusy('vgo', 'Generating clip…', 'video');
+  syncReady();
   syncShots();
-  const shownAtStart = clip?.id;
+}
+
+function ended() {
+  pending--;
+  $('vstop').hidden = pending === 0;
+  $('vstop').disabled = false;
+  $('vstop').textContent = 'Stop';
+  // Only the button: the boxes keep what made this clip, so the next one
+  // starts from it. `syncVideo` here used to put the model's defaults back.
+  syncReady();
+  syncShots();
+}
+
+async function startClip() {
+  const sent = liveRows();
+  $('verr').textContent = '';
+  if (!sent.length) {
+    showError($('verr'), 'Say what happens in shot 1.');
+    return;
+  }
+  const stageAtStart = stageSeq;
+  const body = vidPayload(sent);
+  began();
   try {
-    const pending = post('/video', vidPayload());
+    const req = post('/video', body);
     soonJobs();
-    const data = await pending;
-    // Onto the stage unless another clip was opened while this one rendered:
-    // then it only joins the grid, and the one being looked at stays.
-    if (!clip || clip.id === shownAtStart) renderClip(data.clip, data.gen_ms);
+    const data = await req;
+    // Onto the stage unless another clip was opened, or a new one started,
+    // while this one rendered: then it only joins the grid, and the stage and
+    // the rows being set up stay.
+    if (stageSeq === stageAtStart) {
+      renderClip(data.clip, data.gen_ms);
+      landRows(data.clip, sent);
+    }
     // A long clip cut short says why — a Stop or a failed shot — and is kept.
     if (data.note) $('verr').textContent = data.note;
     loadClips();
@@ -419,66 +642,64 @@ async function startClip() {
         ? 'Removed from the queue before it started.'
         : msg, e.oom, { memory: 'vmemory', retry: startClip });
   } finally {
-    vrunning = false;
-    $('vstop').hidden = true;
-    setIdle('vgo');
-    // Only the button: the boxes keep what made this clip, so the next one
-    // starts from it. `syncVideo` here used to put the model's defaults back.
-    syncReady();
-    syncShots();
+    ended();
   }
 }
 
-// *Extend clip*: the pending rows drawn onto the clip on the stage, in place,
-// each from its last frame — on the clip's own model and settings, so the
-// join is seamless; only the words and the seed come from the panel. A shot
-// that fails or is stopped after others keeps those, as a long clip's does.
+// *Extend clip* and *Redo from shot k*: the clip on the stage changed in
+// place — its first `keep` shots kept, the pending rows drawn after them, on
+// the clip's own model and settings, so the join is seamless; only the rows,
+// *Every shot* and the negative come from the panel. A shot that fails or is
+// stopped after others keeps those, as a long clip's does.
 async function extendClip() {
   const c = clip;
-  const st = shotsNow();
-  if (vrunning || !st.canExtend) return;
-  const seed = parseInt($('vseed').value, 10);
-  await runOnClip('vextend', 'Drawing shots…', {
+  const live = liveRows();
+  const st = shotState(live, c, chains(c));
+  if (!c || busyClips.has(c.id) || (st.action !== 'extend' && st.action !== 'redo')) return;
+  const keep = st.action === 'redo' ? st.done : c.segments.length;
+  await runOnClip({
     id: c.id,
-    shots: st.pending,
+    keep,
+    shots: st.pending.map(shotWire),
     every: $('veverytext').value,
     negative: $('vnegative').value,
-    seed: Number.isFinite(seed) ? seed : -1,
-  });
+  }, [...live.slice(0, keep), ...st.pending]);
 }
 
 // The × on the clip's last shot: cut off, its text left in the row, so it
 // can be drawn again with a press of Extend.
-const cutLastShot = () => clip && runOnClip('vgo', 'Cutting the last shot…', { id: clip.id, drop_last: true });
+function cutLastShot() {
+  if (!clip || busyClips.has(clip.id)) return;
+  runOnClip({ id: clip.id, keep: clip.segments.length - 1, shots: [] }, liveRows());
+}
 
-// One `/videos/extend` on the clip on the stage, with Stop and errors where a
-// Generate has them. The clip that comes back replaces it everywhere.
-async function runOnClip(btn, label, body) {
-  if (vrunning) return;
-  vrunning = true;
+// One `/videos/extend` on a clip, queued like a Generate, with Stop and
+// errors where a Generate has them. The clip that comes back replaces it
+// everywhere, and its rows if it is still on the stage.
+async function runOnClip(body, rows) {
   $('verr').textContent = '';
-  $('vstop').hidden = false;
-  $('vstop').disabled = false;
-  $('vstop').textContent = 'Stop';
-  setBusy(btn, label, 'video');
-  syncShots();
+  busyClips.add(body.id);
+  began();
   try {
-    const pending = post('/videos/extend', body);
+    const req = post('/videos/extend', body);
     soonJobs();
-    const data = await pending;
+    const data = await req;
     clipChanged(data.clip);
+    if (clip?.id === data.clip.id) landRows(data.clip, rows);
+    // Off the stage, its draft becomes what was drawn plus what wasn't
+    // reached, so opening it again shows the shots as they now are.
+    else setDraft(data.clip, [...rowsOf(data.clip), ...rows.slice(data.clip.segments.length)], body.every, body.negative);
     if (data.note) $('verr').textContent = data.note;
   } catch (e) {
     const msg = String(e.message || e);
     showError($('verr'), msg.includes('cancelled by request')
       ? 'Stopped. The clip is as it was before this shot.'
-      : msg, e.oom, { memory: 'vmemory' });
+      : msg.includes('removed from the job queue')
+        ? 'Removed from the queue before it started.'
+        : msg, e.oom, { memory: 'vmemory' });
   } finally {
-    vrunning = false;
-    $('vstop').hidden = true;
-    setIdle(btn);
-    syncReady();
-    syncShots();
+    busyClips.delete(body.id);
+    ended();
   }
 }
 
@@ -619,6 +840,8 @@ function clickClip(c) {
     openClipView(clip);
     return;
   }
+  keepDraft();
+  stageSeq++;
   $('verr').textContent = '';
   applyClip(c);
   renderClip(c);
@@ -626,16 +849,34 @@ function clickClip(c) {
   syncShots();
 }
 
+// *New clip*: an empty stage and one empty shot, so the next Generate makes
+// a clip of its own rather than a redo of the one that was showing — which
+// stays in Current. The model and its settings stay too: they are how clips
+// are made here, not part of the one left behind. Allowed mid-render; that
+// clip then only joins the grid.
+function newClip() {
+  keepDraft();
+  stageSeq++;
+  clearClip();
+  markClips();
+  $('verr').textContent = '';
+  $('veverytext').value = '';
+  vSource.set(null);
+  // A seed of its own from the start, so the first render can be drawn again.
+  drawShots([{ text: '', seed: randomSeed(), frames: currentVideoModel()?.frames ?? null, folded: false }]);
+  snapShotFrames();
+  syncVideoSummaries();
+  syncRailDots();
+  rowEls()[0]?.querySelector('textarea').focus();
+}
+
 // Put a clip's stored settings back in the controls, so the next Generate starts
 // from what made the clip on screen rather than from whatever was last typed.
 function applyClip(c) {
   const v = c.video;
-  // The typed prompt where the roll made one — see `applyWorkItem`. The seed
-  // below restores the roll with it.
-  $('vprompt').value = c.typed_prompt ?? c.prompt;
+  // The typed negative where the roll made one — see `applyWorkItem`. Each
+  // row's seed restores its roll.
   $('vnegative').value = c.typed_negative ?? c.negative ?? '';
-  $('vseed').value = c.seed;
-  syncVSeedLine();
   if (videoModels.some((m) => m.name === c.model)) $('vmodel').value = c.model;
   // Deliberately not firing `change`: that listener is syncVideo, which would
   // overwrite everything below with the model's defaults. The rows are redrawn
@@ -646,7 +887,6 @@ function applyClip(c) {
   syncReady();
   $('vw').value = v.width;
   $('vh').value = v.height;
-  $('vframes').value = v.frames;
   $('vfps').value = v.fps;
   $('vsteps').value = v.steps;
   $('vcfg').value = v.cfg_scale;
@@ -659,9 +899,17 @@ function applyClip(c) {
   $('vhsteps').value = v.high_noise_steps ?? '';
   $('vhcfg').value = v.high_noise_cfg_scale ?? '';
   vSource.set(c.source);
-  // Its shots — the Prompt is shot 1 — to extend, to make again, or to edit.
+  // Its shots, with their seeds and lengths — to extend, to redo from one,
+  // to make again, or to edit.
   $('veverytext').value = c.every ?? '';
-  drawShots((c.segments ?? []).slice(1).map((s) => s.text));
+  drawShots(rowsOf(c));
+  // What was added or changed on it and not drawn yet.
+  const d = draftMap().get(c.id);
+  if (d) {
+    $('veverytext').value = d.every ?? '';
+    $('vnegative').value = d.negative ?? $('vnegative').value;
+    drawShots(d.rows);
+  }
   // Its picked LoRAs; a clip from before picks has none.
   videoLoras.set(v.picked_loras ?? []);
   syncVideoNote();
@@ -677,6 +925,8 @@ export const vSource = sourceSlot({
   tab: 'tab-video',
   none: 'None — text to video. Choose, upload, drop or paste an image to animate it.',
   err: 'verr',
+  // Shot 1's references can't sit beside a first frame.
+  onChange: () => syncShots(),
 });
 
 // The tab is a workspace like the Image tab's: its panels kept the folds' ids,
@@ -712,28 +962,58 @@ export function initVideo() {
   for (const ev of ['input', 'change']) $('tab-video').addEventListener(ev, syncRailDots);
   for (const ev of ['input', 'change']) $('tab-video').addEventListener(ev, syncVideoSummaries);
   $('vgo').addEventListener('click', startClip);
+  $('vnew').addEventListener('click', newClip);
   $('vsavemodel').addEventListener('click', () => saveVideoDefaults(false));
-  $('vshotadd').addEventListener('click', () => {
-    const list = [...$('vshots').querySelectorAll('textarea')].map((t) => t.value);
-    drawShots([...list, '']);
-    [...$('vshots').querySelectorAll('textarea')].at(-1)?.focus();
-    syncVideoSummaries();
-  });
+  $('vshotadd').addEventListener('click', addShot);
   $('vshots').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-x]');
-    if (!b) return;
-    const k = Number(b.dataset.x);
-    // The clip's last shot is cut off the clip; any other row only leaves
-    // the panel.
-    if (k === shotsNow().dropLast) { cutLastShot(); return; }
-    const list = rowBoxes().map((t) => t.value);
-    list.splice(k - 1, 1);
-    drawShots(list);
+    const row = e.target.closest('.shotrow');
+    if (!row) return;
+    const i = rowEls().indexOf(row);
+    if (e.target.closest('.shotfold')) {
+      const folded = row.classList.toggle('folded');
+      e.target.closest('.shotfold').setAttribute('aria-expanded', String(!folded));
+      return;
+    }
+    if (e.target.closest('.shotx')) {
+      // The clip's last shot is cut off the clip; any other row only leaves
+      // the panel.
+      const st = shotsNow();
+      if (st.dropLast >= 0 && liveRows()[st.dropLast]?.i === i) { cutLastShot(); return; }
+      const rows = rowEls().map(readRow);
+      rows.splice(i, 1);
+      drawShots(rows);
+    } else if (e.target.closest('.shotreseed')) {
+      row.querySelector('.shotseed').value = -1;
+    } else if (e.target.closest('.shotroll')) {
+      row.querySelector('.shotseed').value = randomSeed();
+    } else if (e.target.closest('[data-start]')) {
+      row.dataset.cut = e.target.closest('[data-start]').dataset.start;
+      // A shot that goes on from a frame can't follow references.
+      if (row.dataset.cut === '0') row.dataset.refs = '[]';
+    } else if (e.target.closest('.shotrefs')) {
+      editRefs(JSON.parse(row.dataset.refs || '[]'), (stems) => {
+        row.dataset.refs = JSON.stringify(stems);
+        syncShots();
+        syncVideoSummaries();
+        keepDraft();
+      }, `Pictures shot ${i + 1} follows: a face, a costume, a place — MiniMax H3 keeps who and what is in `
+        + 'them. The shot starts fresh, a new camera shot, since H3 cannot follow references and go on from '
+        + 'a frame at once. Say in its prompt who is who.');
+      return;
+    } else return;
+    syncShots();
     syncVideoSummaries();
   });
-  // The Prompt and Every shot count as much as the rows: a changed shot 1
-  // is a new clip.
+  $('vshots').addEventListener('change', (e) => {
+    if (e.target.classList.contains('shotframes')) snapShotFrames();
+    syncShots();
+    syncVideoSummaries();
+  });
+  // Every shot counts as much as the rows: what a done shot was drawn with.
   $('tab-video').addEventListener('input', syncShots);
+  // The Shots panel's edits are the stage clip's draft.
+  for (const ev of ['input', 'change', 'click']) $('vfold-prompt').addEventListener(ev, keepDraftSoon);
+  window.addEventListener('pagehide', keepDraft);
   $('vextend').addEventListener('click', extendClip);
   $('vclearmodel').addEventListener('click', () => saveVideoDefaults(true));
   $('vstop').addEventListener('click', cancelClip);
@@ -742,7 +1022,7 @@ export function initVideo() {
   $('pickclose').addEventListener('click', () => $('picker').close());
   for (const g of grids) g.init();
   $('vmodel').addEventListener('change', syncVideo);
-  for (const id of ['vw', 'vh', 'vframes', 'vfps']) {
+  for (const id of ['vw', 'vh', 'vfps']) {
     $(id).addEventListener('input', syncVideoNote);
   }
   for (const id of ['vw', 'vh']) {
@@ -755,12 +1035,7 @@ export function initVideo() {
     [$('vw').value, $('vh').value] = [$('vh').value, $('vw').value];
     $('vw').dispatchEvent(new Event('input', { bubbles: true }));
   });
-  $('vseedrandom').addEventListener('click', () => {
-    $('vseed').value = -1;
-    $('vseed').dispatchEvent(new Event('input', { bubbles: true }));
-  });
-  $('vseed').addEventListener('input', syncVSeedLine);
-  syncVSeedLine();
+  drawShots([{ text: '', seed: randomSeed(), frames: null }]);
   // An enlarge in the clip dialog adds a version: the grid's copy of the
   // clip, and the stage's, are the record it changed.
   initClipView({

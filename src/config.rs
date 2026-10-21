@@ -1812,11 +1812,20 @@ impl VideoFamily {
     }
 
     /// Whether `-i` is this family's **first frame**, so a clip can go on
-    /// from its own last one — a long clip's shots, *Continue this clip*. Not
+    /// from its own last one — a long clip's shots. Not
     /// VACE, which reads `-i` as a reference image, nor the dense family, whose
     /// text-to-video checkpoints ignore it (`src/pipeline/video.cpp`).
     pub fn chains(self) -> bool {
         matches!(self, VideoFamily::Wan22Ti2v5b | VideoFamily::Wan22A14b | VideoFamily::MinimaxH3)
+    }
+
+    /// Whether a shot can follow reference pictures (`-r`): H3's Ref2VA
+    /// alone. sd.cpp refuses those beside a start frame ("MiniMax-H3 keyframes
+    /// and Ref2VA references cannot be used together", `src/pipeline/video.cpp`),
+    /// so such a shot is a **cut** — it starts fresh rather than going on from
+    /// the last frame. Wan has none; VACE's one reference *is* its `-i`.
+    pub fn takes_references(self) -> bool {
+        matches!(self, VideoFamily::MinimaxH3)
     }
 
     /// The settings a model of this family should arrive with.

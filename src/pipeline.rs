@@ -463,19 +463,15 @@ pub struct Img2ImgRequest {
 /// on a live one — see [`Engine::video`].
 #[derive(Debug, Clone, Default)]
 pub struct VideoRequest {
-    pub prompt: String,
     /// Name of a `[[video]]` entry.
     pub model: String,
     /// `None` inherits the model's negative prompt, which for Wan is its own
     /// published one. `Some("")` deliberately means *no* negative.
     pub negative: Option<String>,
-    /// Negative = pick one; otherwise use as-is.
-    pub seed: i64,
     /// A `work/output/` stem to use as the first frame. `None` is text-to-video.
     pub source: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    pub frames: Option<u32>,
     pub fps: Option<u32>,
     pub steps: Option<u32>,
     pub cfg_scale: Option<f32>,
@@ -492,33 +488,56 @@ pub struct VideoRequest {
     pub parts: Option<std::collections::BTreeMap<String, Option<String>>>,
     /// The Video tab's LoRA picks; `None` keeps none, `Some([])` is none.
     pub loras: Option<Vec<crate::config::VideoLora>>,
-    /// A long clip's shots after the first — the Prompt is shot 1 — each from
-    /// the last one's final frame and conditioned on its own text. Empty is
-    /// one clip.
-    pub shots: Vec<String>,
-    /// The Prompts panel's *Every shot*: what goes in front of every shot's
-    /// text, the Prompt's included ([`crate::videos::shot_prompt`]).
+    /// The clip's shots, first to last — at least one. Each after the first
+    /// goes on from the last one's final frame, or is a cut, and is
+    /// conditioned on its own text.
+    pub shots: Vec<ShotSpec>,
+    /// The Shots panel's *Every shot*: what goes in front of every shot's
+    /// text ([`crate::videos::shot_prompt`]).
     pub every: Option<String>,
 }
 
-/// *Extend clip*: shots to add to clip `id`, or with `drop_last` its last
-/// shot to cut off. See [`Engine::extend_clip`].
+/// One row of the Shots panel: its words, seed and length, and whether it
+/// is a cut with references. What [`Segment`] records once it is drawn.
+#[derive(Debug, Clone, Default)]
+pub struct ShotSpec {
+    pub text: String,
+    /// Negative = pick one.
+    pub seed: i64,
+    /// `None` is the model's; aligned to the family's grid either way.
+    pub frames: Option<u32>,
+    pub cut: bool,
+    /// `work/output/` stems. Only on a cut, or on shot 1 with no first frame.
+    pub references: Vec<String>,
+}
+
+/// *Extend clip*, *Redo from shot k* and the × on the last shot, as one
+/// request: keep clip `id`'s first `keep` shots, then draw `shots` after
+/// them. See [`Engine::extend_clip`].
 #[derive(Debug, Clone, Default)]
 pub struct ExtendClipRequest {
     pub id: String,
-    pub shots: Vec<String>,
+    pub keep: usize,
+    pub shots: Vec<ShotSpec>,
     pub every: Option<String>,
     /// `None` keeps the clip's own.
     pub negative: Option<String>,
-    /// Negative = pick one; the shots after the first take `seed + j`.
-    pub seed: i64,
-    pub drop_last: bool,
 }
 
 /// The note a long clip cut short carries: a Stop, or a failed shot, after
 /// `k` of `n` were done — which are kept.
 fn cut_short(e: &anyhow::Error, k: usize, n: usize) -> String {
-    if format!("{e:#}").contains(crate::sd::CANCELLED) {
+    let stopped = format!("{e:#}").contains(crate::sd::CANCELLED);
+    if k == 0 {
+        // Only an in-place change gets here with nothing done: the shots it
+        // replaced are gone, and so is the one that should have followed.
+        return if stopped {
+            format!("Stopped during the first of {n} new shot(s); the clip ends where the change began.")
+        } else {
+            format!("The first of {n} new shot(s) failed ({e:#}); the clip ends where the change began.")
+        };
+    }
+    if stopped {
         format!("Stopped during shot {} of {n}; the {k} before it are kept.", k + 1)
     } else {
         format!("Shot {} of {n} failed ({e:#}); the {k} before it are kept.", k + 1)
@@ -1998,9 +2017,6 @@ impl Engine {
         if let Some(v) = req.height {
             m.height = v;
         }
-        if let Some(v) = req.frames {
-            m.frames = v;
-        }
         if let Some(v) = req.fps {
             m.fps = v;
         }
@@ -2056,10 +2072,6 @@ impl Engine {
                 missing.join("\n  ")
             );
         }
-        if req.prompt.trim().is_empty() {
-            bail!("prompt is empty");
-        }
-
         // The first frame, if there is one. Taken from `work/output/` rather
         // than the work item archive because that is the finished work — the
         // images that were worth keeping are the ones worth animating.
@@ -2074,55 +2086,30 @@ impl Engine {
             .clone()
             .unwrap_or_else(|| m.negative_prompt.clone());
 
-        let seed = if req.seed < 0 { random_seed() } else { req.seed };
+        let first = req.shots.first().context("say what happens: the clip has no shots")?;
+        let seed = if first.seed < 0 { random_seed() } else { first.seed };
         // The same roll as a still's, over both prompts — see `run`. The
         // negative has already picked up the model's published one by here, and
         // that is plain text with no braces in it.
         let vars = self.cfg.settings().variables;
-        let prompt = variables::expand(&req.prompt, &vars, seed)?;
+        let typed = first.text.trim().to_string();
+        let prompt = variables::expand(&typed, &vars, seed)?;
         let rolled = variables::expand(&negative, &vars, seed)?;
         // Both typed halves are taken before the shadowing below, which is the
         // whole reason the rolled negative gets a name of its own here.
-        let typed_prompt = variables::typed(&req.prompt, &prompt);
+        let typed_prompt = variables::typed(&typed, &prompt);
         let typed_negative = variables::typed(&negative, &rolled);
         let negative = rolled;
-        // A long clip's shots: the Prompt is shot 1, each later one its own
-        // text, and *Every shot* goes in front of all of them (`shot_prompt`).
-        // That box rolls once, off the clip's seed, so a rolled character is
-        // the same one in every shot; a shot rolls off its own, `seed + k`, as
-        // a batch image does.
+        // *Every shot* rolls once, off shot 1's seed, so a rolled character is
+        // the same one in every shot; a shot rolls off its own.
         let every_typed = req.every.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
         let every = match &every_typed {
             Some(e) => variables::expand(e, &vars, seed)?,
             None => String::new(),
         };
-        let later: Vec<String> =
-            req.shots.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-        if !later.is_empty() && !m.family.chains() {
-            bail!(
-                "a {} model can't go on from a clip's last frame (its -i is not a first frame), so it \
-                 makes one clip at a time — remove the shots, or pick a TI2V-5B, A14B or H3 model",
-                m.family.label()
-            );
-        }
-        if later.len() + 1 > MAX_SHOTS {
-            bail!("a long clip has at most {MAX_SHOTS} shots; this one has {}", later.len() + 1);
-        }
-        let mut segments = vec![Segment {
-            text: req.prompt.trim().to_string(),
-            conditioned: shot_prompt(&every, &prompt),
-            seed,
-            start: 0,
-        }];
-        for (k, shot) in later.iter().enumerate() {
-            let seed = seed.wrapping_add(k as i64 + 1);
-            segments.push(Segment {
-                text: shot.clone(),
-                conditioned: shot_prompt(&every, &variables::expand(shot, &vars, seed)?),
-                seed,
-                start: 0,
-            });
-        }
+        let mut shots = req.shots.clone();
+        shots[0].seed = seed;
+        let mut segments = plan_shots(&vars, &m, &shots, &every, 0, init.is_some())?;
         let n = segments.len();
 
         let id = workitems::new_id(seed);
@@ -2136,18 +2123,14 @@ impl Engine {
         for k in 0..n {
             // The first shot renders into the clip itself, from the picked
             // first frame; every other one into a folder of its own, from the
-            // clip's last frame so far, and is then joined.
+            // clip's last frame so far (or from nothing, a cut), and is then
+            // joined.
             let ran = if k == 0 {
-                self.sd().video(
-                    &m,
-                    &segments[0].conditioned,
-                    &negative,
-                    seed,
-                    &VideoIo { init: init.as_deref(), control: None, out: &pattern },
-                    (n > 1).then_some((1, n)),
-                )
+                self.render_first(&id, &m, &segments[0], &negative, init.as_deref(), &pattern, n)
             } else {
-                self.render_shot(&id, &m, &segments[k], &negative, k, n)
+                self.render_shot(&id, &m, &segments[k], &negative, k, n).map(|start| {
+                    segments[k].start = start;
+                })
             };
             if let Err(e) = ran {
                 // Shots already done are minutes of work: a Stop or a failure
@@ -2158,12 +2141,8 @@ impl Engine {
                 note = Some(cut_short(&e, k, n));
                 break;
             }
-            if k == 0 {
-                if sound {
-                    self.videos.unpack(&id)?;
-                }
-            } else {
-                segments[k].start = self.videos.append_segment(&id, k, m.effective_fps())?;
+            if k == 0 && sound {
+                self.videos.unpack(&id)?;
             }
             done = k + 1;
         }
@@ -2173,7 +2152,9 @@ impl Engine {
         }
         let gen_ms = t.elapsed().as_millis();
 
-        let (_, _, frames) = m.aligned();
+        // The record keeps shot 1's length as the model's, which is what an
+        // old record's shots all ran at (`Clip::normalize`).
+        m.frames = segments[0].frames;
         let mut clip = Clip {
             id,
             created_ms: now_ms(),
@@ -2188,7 +2169,7 @@ impl Engine {
             // warns about it.
             width: 0,
             height: 0,
-            frames,
+            frames: 0,
             fps: m.effective_fps(),
             thumb_width: 0,
             thumb_height: 0,
@@ -2211,99 +2192,153 @@ impl Engine {
         Ok(VideoResult { clip, gen_ms, note })
     }
 
-    /// Shot `k` of `n` of clip `id`: a segment from the clip's last frame so
-    /// far, into `seg{k}/`, which [`VideoStore::append_segment`] then joins.
-    fn render_shot(&mut self, id: &str, m: &VideoModel, seg: &Segment, negative: &str, k: usize, n: usize) -> Result<()> {
-        let last = self.videos.frames(id).pop().context("the clip has no frames")?;
-        let out = self.videos.prepare_segment(id, k, m.audio_vae.is_some())?;
+    /// A shot's references, copied into scratch for its `-r` (invariant 8),
+    /// no bigger than the clip's frame — sd.cpp fits them to it anyway.
+    fn stage_shot_refs(&self, id: &str, k: usize, m: &VideoModel, seg: &Segment) -> Result<Vec<PathBuf>> {
+        let side = m.width.max(m.height);
+        let mut refs = Vec::new();
+        for (i, stem) in seg.references.iter().enumerate() {
+            let dst = self.scratch.join(format!("{id}-shot{k}-ref{}.png", i + 1));
+            stage_reference(&self.output_source(stem)?, &dst, side)?;
+            refs.push(dst);
+        }
+        Ok(refs)
+    }
+
+    /// Shot 1, into the clip's own folder: from the picked first frame, or
+    /// from its references, or from words alone.
+    #[allow(clippy::too_many_arguments)]
+    fn render_first(
+        &mut self,
+        id: &str,
+        m: &VideoModel,
+        seg: &Segment,
+        negative: &str,
+        init: Option<&Path>,
+        out: &Path,
+        n: usize,
+    ) -> Result<()> {
+        let mut ms = m.clone();
+        ms.frames = seg.frames;
+        let refs = self.stage_shot_refs(id, 0, m, seg)?;
         let ran = self.sd().video(
-            m,
+            &ms,
             &seg.conditioned,
             negative,
             seg.seed,
-            &VideoIo { init: Some(&last), control: None, out: &out },
-            Some((k + 1, n)),
+            &VideoIo { init, control: None, out, refs: &refs },
+            (n > 1).then_some((1, n)),
         );
-        if ran.is_err() {
-            let _ = std::fs::remove_dir_all(self.videos.dir(id).join(format!("seg{k}")));
+        for r in &refs {
+            let _ = std::fs::remove_file(r);
         }
         ran.map(|_| ())
     }
 
-    /// Add shots to clip `id`, in place — the Prompts panel's *Extend clip*:
-    /// each a segment from the clip's last frame, conditioned on its own text
-    /// with *Every shot* in front, joined as a long clip's shots are. With
-    /// `drop_last`, the clip's last shot is cut off instead, and nothing drawn.
-    /// The clip's enlarged versions no longer cover it and go.
+    /// Shot `k` of `n` of clip `id`, into `seg{k}/` and then joined onto the
+    /// clip ([`VideoStore::append_segment`]): from the clip's last frame so
+    /// far, or — a cut — from nothing but its words and references. Answers
+    /// the frame it begins at.
+    fn render_shot(&mut self, id: &str, m: &VideoModel, seg: &Segment, negative: &str, k: usize, n: usize) -> Result<u32> {
+        let last = self.videos.frames(id).pop().context("the clip has no frames")?;
+        let out = self.videos.prepare_segment(id, k, m.audio_vae.is_some())?;
+        let mut ms = m.clone();
+        ms.frames = seg.frames;
+        let refs = self.stage_shot_refs(id, k, m, seg)?;
+        let init = (!seg.cut).then_some(last.as_path());
+        let ran = self.sd().video(
+            &ms,
+            &seg.conditioned,
+            negative,
+            seg.seed,
+            &VideoIo { init, control: None, out: &out, refs: &refs },
+            Some((k + 1, n)),
+        );
+        for r in &refs {
+            let _ = std::fs::remove_file(r);
+        }
+        if let Err(e) = ran {
+            let _ = std::fs::remove_dir_all(self.videos.dir(id).join(format!("seg{k}")));
+            return Err(e);
+        }
+        self.videos.append_segment(id, k, m.effective_fps(), !seg.cut)
+    }
+
+    /// Change clip `id` in place from the Shots panel: keep its first `keep`
+    /// shots, then draw `shots` after them, each joined as a long clip's are.
+    /// One path for three buttons — *Extend clip* keeps every shot, *Redo
+    /// from shot k* keeps the k-1 before it, and the × on the last shot keeps
+    /// all but it and draws nothing. Shot 1 is never dropped: changing it is
+    /// a new clip, *Generate*. The clip's enlarged versions no longer cover
+    /// it and go.
     ///
     /// Runs on the model as the clip recorded it, so the new shots match the
     /// old ones: size, steps, LoRAs, parts. What it takes from the panel is
-    /// only words — *Every shot*, the negative — and the seed.
+    /// the rows — words, seed, length, cut and references — *Every shot* and
+    /// the negative.
     pub fn extend_clip(&mut self, req: &ExtendClipRequest) -> Result<VideoResult> {
         let id = req.id.as_str();
         let mut clip = self.videos.load(id)?;
         let m = clip.video.clone();
-        if !m.family.chains() {
-            bail!("a {} clip can't go on from its last frame", m.family.label());
+        if req.keep == 0 {
+            bail!("shot 1 is the clip: to change it, press Generate clip");
+        }
+        if req.keep > clip.segments.len() {
+            bail!("the clip has {} shot(s), not {}: open it again", clip.segments.len(), req.keep);
+        }
+        if req.keep == clip.segments.len() && req.shots.is_empty() {
+            bail!("say what happens next: add a shot below the ones already drawn");
         }
         let fps = clip.fps.max(1);
-        let t = Instant::now();
-        let mut note = None;
-        if req.drop_last {
-            if clip.segments.len() < 2 {
-                bail!("the first shot is the clip; there is no added shot to take back");
-            }
-            let last = clip.segments.pop().expect("checked above");
-            self.videos.truncate(id, last.start, fps)?;
-        } else {
-            let shots: Vec<String> =
-                req.shots.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-            if shots.is_empty() {
-                bail!("say what happens next: add a shot below the ones already drawn");
-            }
-            if clip.segments.len() + shots.len() > MAX_SHOTS {
-                bail!("a long clip has at most {MAX_SHOTS} shots");
-            }
+        let vars = self.cfg.settings().variables;
+        // *Every shot* rolls off the clip's own seed, shot 1's, as it did for
+        // the shots already drawn, so a rolled character stays the same one.
+        let every_typed = req.every.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        let every = match &every_typed {
+            Some(e) => variables::expand(e, &vars, clip.seed)?,
+            None => String::new(),
+        };
+        // Everything checked before a frame is cut: a refused row must not
+        // cost the shots it would have replaced.
+        let planned = plan_shots(&vars, &m, &req.shots, &every, req.keep, clip.source.is_some())?;
+        if !planned.is_empty() {
             let missing = m.missing();
             if !missing.is_empty() {
                 bail!("the model this clip was made with is missing files: {}", missing.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "));
             }
             self.cfg.check_video_loras(&m.picked_loras, m.family)?;
-            let vars = self.cfg.settings().variables;
-            let seed = if req.seed < 0 { random_seed() } else { req.seed };
-            // *Every shot* rolls off the clip's own seed, as it did for the
-            // shots already drawn, so a rolled character stays the same one.
-            let every_typed = req.every.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-            let every = match &every_typed {
-                Some(e) => variables::expand(e, &vars, clip.seed)?,
-                None => String::new(),
-            };
-            let negative = match &req.negative {
-                Some(n) => variables::expand(n, &vars, clip.seed)?,
-                None => clip.negative.clone(),
-            };
-            let n = clip.segments.len() + shots.len();
-            for (j, shot) in shots.iter().enumerate() {
-                let k = clip.segments.len();
-                let seed = seed.wrapping_add(j as i64);
-                let mut seg = Segment {
-                    text: shot.clone(),
-                    conditioned: shot_prompt(&every, &variables::expand(shot, &vars, seed)?),
-                    seed,
-                    start: 0,
-                };
-                if let Err(e) = self.render_shot(id, &m, &seg, &negative, k, n) {
-                    if j == 0 {
-                        return Err(e);
-                    }
-                    note = Some(cut_short(&e, j, shots.len()));
+        }
+        let negative = match &req.negative {
+            Some(n) => variables::expand(n, &vars, clip.seed)?,
+            None => clip.negative.clone(),
+        };
+
+        let t = Instant::now();
+        let mut note = None;
+        let cutting = req.keep < clip.segments.len();
+        if cutting {
+            let from = clip.segments[req.keep].start;
+            clip.segments.truncate(req.keep);
+            self.videos.truncate(id, from, fps)?;
+        }
+        let total = planned.len();
+        let n = clip.segments.len() + total;
+        for (j, mut seg) in planned.into_iter().enumerate() {
+            let k = clip.segments.len();
+            match self.render_shot(id, &m, &seg, &negative, k, n) {
+                Ok(start) => seg.start = start,
+                // Nothing changed yet: the clip is as it was, so this is a
+                // plain failure. After a cut, the clip on disk is shorter
+                // than the one on the stage, so it answers with the clip.
+                Err(e) if j == 0 && !cutting => return Err(e),
+                Err(e) => {
+                    note = Some(cut_short(&e, j, total));
                     break;
                 }
-                seg.start = self.videos.append_segment(id, k, fps)?;
-                clip.segments.push(seg);
-                // The words the clip goes on with now.
-                clip.every = every_typed.clone();
             }
+            clip.segments.push(seg);
+            // The words the clip goes on with now.
+            clip.every = every_typed.clone();
         }
         let dropped = self.videos.invalidate(&mut clip);
         if dropped > 0 {
@@ -4350,6 +4385,71 @@ fn edit_size(w: u32, h: u32, base: u32) -> (u32, u32) {
     (snap64(((w as f32) * k).round() as u32), snap64(((h as f32) * k).round() as u32))
 }
 
+/// The Shots panel's rows from shot `first` on, checked and rolled into
+/// what is recorded once drawn — before minutes of render, so a row that
+/// can't run is refused while nothing has. `has_init`: shot 1 has a
+/// first frame, which references can't sit beside.
+fn plan_shots(
+    vars: &variables::Variables,
+    m: &VideoModel,
+    shots: &[ShotSpec],
+    every: &str,
+    first: usize,
+    has_init: bool,
+) -> Result<Vec<Segment>> {
+    if first + shots.len() > MAX_SHOTS {
+        bail!("a long clip has at most {MAX_SHOTS} shots; this one has {}", first + shots.len());
+    }
+    let mut out = Vec::new();
+    for (j, shot) in shots.iter().enumerate() {
+        let k = first + j;
+        let text = shot.text.trim().to_string();
+        if text.is_empty() {
+            bail!("shot {} is empty: say what happens in it, or remove it", k + 1);
+        }
+        // Shot 1 starts fresh whatever its row says.
+        let cut = k > 0 && shot.cut;
+        if (cut || !shot.references.is_empty()) && !m.family.takes_references() {
+            bail!(
+                "shot {}: a cut with references needs MiniMax H3; a {} model goes on from the last frame, so \
+                 set the shot back to Continue",
+                k + 1,
+                m.family.label()
+            );
+        }
+        if k > 0 && !cut && !m.family.chains() {
+            bail!(
+                "a {} model can't go on from a clip's last frame (its -i is not a first frame), so it \
+                 makes one clip at a time — remove the shots, or pick a TI2V-5B, A14B or H3 model",
+                m.family.label()
+            );
+        }
+        if !shot.references.is_empty() && k > 0 && !cut {
+            bail!("shot {}: references need a cut — H3 can't follow them and go on from the last frame", k + 1);
+        }
+        if !shot.references.is_empty() && k == 0 && has_init {
+            bail!("shot 1: references can't sit beside a first frame on H3 — clear the first frame, or the references");
+        }
+        if shot.references.len() > crate::config::MAX_REFERENCES {
+            bail!("shot {}: at most {} reference images", k + 1, crate::config::MAX_REFERENCES);
+        }
+        if let Some(bad) = shot.references.iter().find(|r| !workitems::valid_id(r)) {
+            bail!("'{bad}' is not an output image");
+        }
+        let seed = if shot.seed < 0 { random_seed().wrapping_add(k as i64) } else { shot.seed };
+        out.push(Segment {
+            conditioned: shot_prompt(every, &variables::expand(&text, vars, seed)?),
+            text,
+            seed,
+            start: 0,
+            frames: m.family.align_frames(shot.frames.unwrap_or(m.frames)),
+            cut,
+            references: shot.references.clone(),
+        });
+    }
+    Ok(out)
+}
+
 /// A reference image, copied into scratch for sd-cli's `-r` — never handed
 /// over in place (invariant 8) — and shrunk to `max_side` when bigger. Each
 /// reference costs attention tokens like the image itself, so an unshrunk
@@ -4429,12 +4529,73 @@ mod tests {
         adjust_label, crop_rect, overlay_onto, resize_size, text_label,
         advance, after_model, edit_size, fit_to, pass_prompt, step_label, AfterModel, Expand, Pending, Retained,
         edits, workitems, Shelf,
-        Slot, MAX_HISTORY,
+        Slot, MAX_HISTORY, plan_shots, ShotSpec,
     };
     use crate::brush::Brushes;
     use crate::config::{Filters, Profile};
     use crate::fsr::out_size;
     use std::path::Path;
+
+    fn video(family: &str) -> crate::config::VideoModel {
+        let src = format!(
+            "[sd]\nbinary = \"sd-cli\"\n\n[[video]]\nname = \"m\"\nfamily = \"{family}\"\n\
+             diffusion_model = \"d.safetensors\"\nvae = \"v.safetensors\"\nt5xxl = \"t.gguf\"\nframes = 33\n"
+        );
+        let cfg: crate::config::Config = toml::from_str(&src).unwrap();
+        cfg.video.into_iter().next().unwrap()
+    }
+
+    fn shot(text: &str, seed: i64, frames: Option<u32>) -> ShotSpec {
+        ShotSpec { text: text.into(), seed, frames, ..Default::default() }
+    }
+
+    /// Each shot keeps its own seed and length — on the family's grid — and
+    /// is conditioned on its own words with *Every shot* in front.
+    #[test]
+    fn a_shot_renders_its_own_frames_and_seed() {
+        let vars = Default::default();
+        let m = video("wan22_ti2v_5b");
+        let shots = [shot("a crab walks", 7, None), shot("it lifts a claw", 40, Some(50))];
+        let segs = plan_shots(&vars, &m, &shots, "a beach", 0, false).unwrap();
+        assert_eq!(segs.iter().map(|s| (s.seed, s.frames)).collect::<Vec<_>>(), [(7, 33), (40, 49)]);
+        assert_eq!(segs[1].conditioned, "a beach. it lifts a claw");
+        assert!(segs.iter().all(|s| !s.cut));
+        // A random seed is rolled, and recorded as the number it was.
+        let segs = plan_shots(&vars, &m, &[shot("x", -1, None)], "", 0, false).unwrap();
+        assert!(segs[0].seed >= 0);
+        // An empty row is refused by number, not skipped (the rows would shift).
+        let e = plan_shots(&vars, &m, &[shot("x", 1, None), shot(" ", 1, None)], "", 0, false).unwrap_err();
+        assert!(e.to_string().contains("shot 2 is empty"), "{e}");
+    }
+
+    /// A cut with references is H3's alone, never beside a first frame, and
+    /// shot 1 is fresh whatever its row says.
+    #[test]
+    fn a_cut_shot_off_h3_is_refused() {
+        let vars = Default::default();
+        let refs = |mut s: ShotSpec| {
+            s.references = vec!["100-7-s0".into()];
+            s
+        };
+        let cut = |mut s: ShotSpec| {
+            s.cut = true;
+            s
+        };
+        let wan = video("wan22_ti2v_5b");
+        let e = plan_shots(&vars, &wan, &[cut(shot("x", 1, None))], "", 1, false).unwrap_err();
+        assert!(e.to_string().contains("needs MiniMax H3"), "{e}");
+
+        let h3 = video("minimax_h3");
+        let segs = plan_shots(&vars, &h3, &[refs(cut(shot("the dwarf returns", 1, None)))], "", 1, false).unwrap();
+        assert!(segs[0].cut && segs[0].references.len() == 1);
+        assert_eq!(segs[0].frames, 39, "H3 rounds up to 17k+5");
+        let e = plan_shots(&vars, &h3, &[refs(shot("x", 1, None))], "", 1, false).unwrap_err();
+        assert!(e.to_string().contains("need a cut"), "{e}");
+        let e = plan_shots(&vars, &h3, &[refs(shot("x", 1, None))], "", 0, true).unwrap_err();
+        assert!(e.to_string().contains("first frame"), "{e}");
+        let first = plan_shots(&vars, &h3, &[cut(shot("x", 1, None))], "", 0, false).unwrap();
+        assert!(!first[0].cut);
+    }
 
     /// The sides are drawn left and right first, so a later strip spans their
     /// new edges and draws the corners; past the limit is refused, and the

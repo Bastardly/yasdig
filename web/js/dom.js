@@ -11,6 +11,37 @@ export const $ = (id) => document.getElementById(id);
 export const esc = (s) => String(s ?? '').replace(/[&<>"]/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// Line icons for the buttons that are only an icon, drawn in the button's
+// text colour. Such a button carries `aria-label` and `title`: the picture
+// says nothing to a screen reader. Static markup names one with `data-icon`
+// (`fillIcons`, at boot); built markup interpolates `ICONS` itself.
+const svg = (body) => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"
+  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+const pip = (x, y) => `<circle cx="${x}" cy="${y}" r="1.4" fill="currentColor" stroke="none"/>`;
+export const ICONS = {
+  // Back to -1: a circling arrow.
+  reset: svg('<path d="M3 12a9 9 0 1 0 2.6-6.4"/><path d="M3 3.5V9h5.5"/>'),
+  // A random seed, kept: a die showing five.
+  dice: svg(`<rect x="3.5" y="3.5" width="17" height="17" rx="3.5"/>${pip(8.5, 8.5)}${pip(15.5, 8.5)}${pip(12, 12)}${pip(8.5, 15.5)}${pip(15.5, 15.5)}`),
+  play: svg('<path d="M8 5v14l11-7z" fill="currentColor"/>'),
+  pause: svg('<path d="M8.5 5v14M15.5 5v14" stroke-width="3"/>'),
+};
+
+export function fillIcons(root = document) {
+  for (const el of root.querySelectorAll('[data-icon]')) el.innerHTML = ICONS[el.dataset.icon] ?? '';
+}
+
+// A play/pause toggle shows what a press does.
+export function setPlayIcon(btn, playing) {
+  if (!btn) return;
+  btn.innerHTML = ICONS[playing ? 'pause' : 'play'];
+  btn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+  btn.title = playing ? 'Pause' : 'Play';
+}
+
+// A seed for the dice button: one sd.cpp takes, kept in the box.
+export const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
+
 export function bar(name, ms, max) {
   const pct = max > 0 ? Math.round((ms / max) * 100) : 0;
   return `<div class="bar"><span class="name">${name}</span>

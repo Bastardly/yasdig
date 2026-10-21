@@ -233,9 +233,9 @@ The Image, Video and Settings tabs are **workspaces**, the Refine & adjust dialo
 (`.workspace`): a rail (`.wsrail`) of panel toggles, the picture on a **stage**
 (`.stage`, `#result`; a click opens Refine & adjust), floating panels
 (`panels.js`, `--ws-panel-w`), and a **status card** (`.statuscard`: `#err`/OOM, the
-preview, `#prog`, `#loopnote`). Image panels: Prompts, Models (LoRAs included, *Save
-as defaults* in its footer), Generation (the seed first, Output upscale/Upscaler
-last), Image to image, Hi-res pass and Refine pass (each starting with *Run after each
+preview, `#prog`, `#loopnote`). Image panels: Prompts (the seed first, then the
+prompts and `#refsopen`), Models (LoRAs included, *Save as defaults* in its footer),
+Generation (Output upscale/Upscaler last), Image to image, Hi-res pass and Refine pass (each starting with *Run after each
 image*, `#opthires`/`#optrefine`), **Info** (`#resultinfo`: size, seed pin, timings,
 the rolled prompt), **Current** and **Favorites**. The rail's foot: the seed line
 (`#seedline`, `syncSeedLine` — call it after any write to `#seed` that fires no
@@ -866,9 +866,12 @@ item (`Store::favorite`/`delete`), so Delete all and Close server's clear reach 
 
 sd-cli `-r` on families that take them (`ImageFamily::takes_references`: the Flux.2
 and FLUX.3 Kleins).
-**References** button in Generation (shown from `references` on `/models`), and the
+**References** button in Prompts (shown from `references` on `/models`), and the
 dialog's Edit and Refine panels (`data-refs-open`, `openRefs`), open
-`#refsdlg`, four `sourceSlot`s (`web/js/refs.js`). `Profile.references` = output stems,
+`#refsdlg`, four `sourceSlot`s (`web/js/refs.js`). **One dialog, borrowed**: a Video cut
+shot opens it with `editRefs(stems, onDone, note)` — the Image tab's picks are parked
+and put back on `close` with no change event (`borrower`), so nothing on the Image tab
+(summaries, the loop) hears another tab's pictures. `Profile.references` = output stems,
 request-only like `loras`. **Edit** in the Refine & adjust dialog (`Engine::edit`, `POST /edit`)
 uses the image as reference 1 and the prompt as instruction, at the image's shape **at
 the model's base size, never bigger**, resized back.
@@ -971,7 +974,8 @@ Image tab, the rail's *Save to output*;
 `.btn` neutral, `.btn-danger` red, `.btn-choice` for "where you are" sets.
 
 - **A bare `<button>` is unstyled**: every button carries `.btn` or `.hint`, except
-  thumbnail grids, `#lbclose` and a panel's `.fpclose`.
+  thumbnail grids, `#lbclose`, a panel's `.fpclose` and a Video shot's fold heading
+  (`.shotfold`).
 - **`:disabled` is declared after every `:hover`.**
 - **`--col-*` can't be used in the media query** — the 899 px breakpoint is a literal.
 
@@ -985,7 +989,7 @@ only `js/app.js`.
 
 | file | holds |
 |------|-------|
-| `dom.js` | `$`, `esc`, `post`, `numOr`, `bar`, `rememberFolds`. No state, no imports |
+| `dom.js` | `$`, `esc`, `post`, `numOr`, `bar`, `rememberFolds`, `ICONS`/`fillIcons`/`setPlayIcon`, `randomSeed`. No state, no imports |
 | `state.js` | `S`, `PANES`, `P`, `clearPane`, `escErr` |
 | `busy.js` | `IDLE_LABELS`, `setBusy`/`setIdle`, `onIdle`, `cancelRun` |
 | `jobs.js` | the `/jobs` poll: Jobs button/dialog, progress lines, `onResult`, `onNotice` |
@@ -1001,9 +1005,12 @@ only `js/app.js`.
 | `loras.js` | LoRA picker factory |
 | `memory.js` | `showError` and the OOM box |
 | `redraw.js` | the dialog's passes: the Refine panel, Scale, the mask, Compare |
-| `refs.js` | References button and dialog |
+| `refs.js` | References button and dialog (borrowed by a Video cut shot, `editRefs`) |
 | `outputs.js` | `fetchOutputs`, `outputGrid`, Outputs tab |
 | `video.js` / `player.js` | Video tab; canvas frame player, `renderClip` |
+| `shots.js` | which Shots rows the clip on the stage has (`shotState`) |
+| `clipview.js` / `export.js` | the clip dialog; Download's WebCodecs encode |
+| `mp4mux.js` / `webmmux.js` / `gifenc.js` | the download containers and GIF, pure |
 | `convert.js` | Convert tab |
 | `getmodels.js` | Get models tab, `openGetModels` |
 | `prompt-box.js` / `prompt-weight.js` | the custom element; pure weighting maths |
@@ -1415,11 +1422,23 @@ from `family` goes on `VideoModelDto`.
   - **A clip is a PNG sequence**, not a container (no decoder here; escalations need
     frames). Playback is `<canvas>`.
   - Video Stop is `POST /cancel` and kills; error ends in `sd::CANCELLED` → "Stopped".
+  - **Clips queue**: Generate clip is never locked (`pending` counts requests in
+    flight; it reads *Queue another clip*), each request waits on the job queue. Only
+    a change to one clip is one at a time (`busyClips`: its footer and × hide), so a
+    clip's rows are never sent twice.
+  - **Unsent edits are a per-clip draft** (`setDraft`/`keepDraft`, `localStorage`
+    `yasdig.clipdrafts`): saved on the Shots panel's input (debounced), on switching
+    clip or New clip, on `pagehide`; restored by `applyClip`; dropped when the panel
+    matches the clip (`matchesClip`, via `rowMatches`). A change landing off the stage
+    rewrites that clip's draft to what was drawn plus the rows it didn't reach.
   - **A finished clip never refills the boxes**: `startClip`'s `finally` calls
     `syncReady()`, not `syncVideo()` (which puts the model's defaults back), and
     `loadVideoModels({refill:false})` after a download. Only a model `change` refills.
   - **Clips open while one renders** (`clickClip` has no busy gate); a clip landing
-    while another is open joins the grid without taking the stage.
+    while another is open joins the grid without taking the stage. "Another" is
+    `stageSeq`, bumped by `clickClip` and *New clip* (`#vnew`, `newClip`: `clearClip`
+    and one empty row; model and settings stay), not a clip id — a null stage after
+    New clip must not take a late clip, or its rows would overwrite the new ones.
   - **Current and Favorites** (`clipGrid` in video.js, `shelfGrid`'s shape): a star
     moves the clip's folder to `user/favorite_clips/` (`VideoStore::favorite`, rename
     or copy-then-delete). **An id names one clip wherever it lives**: every reader goes
@@ -1429,11 +1448,14 @@ from `family` goes on `VideoModelDto`.
   - **No autoplay, one player**: `loadFrames` and the dialog's `show` draw frame 0
     only; opening the dialog calls the stage's `stopPlayback` (`initClipView`'s
     `onOpen`), and `showTab` stops it off the tab.
-  - The size boxes snap up to `size_multiple` on `change` (`snapSize`); the seed has
-    the Image tab's rail line (`#vseedline`) and Reset.
+  - The size boxes snap up to `size_multiple` on `change` (`snapSize`); each shot's
+    Frames to the frame grid (`snapShotFrames`, also on a model change). **A Frames
+    box's `min` is on the grid** (`frameSteps`): a number box steps from its `min`,
+    and H3's round-up snap undid every step down from an off-grid one. There is no
+    clip seed: each shot has its own.
   - **The clip dialog** (`#clipbox`, `web/js/clipview.js`, its own player): Enlarge,
-    History, Save to output — no shots. Opened from the stage's canvas, or an Outputs ▶ tile
-    (`openOutputClip`, play only). **Enlarges are versions inside the clip**
+    History, Download, Save to output — no shots. Opened from the stage's canvas, or an
+    Outputs ▶ tile (`openOutputClip`: play and Download only). **Enlarges are versions inside the clip**
     (`work/videos/{id}/v{n}/`, `Clip.versions`, always from the original's frames),
     served at `/videos/{id}/v{n}/frames/{k}.png` and `…/v{n}/clip.avi`
     (`clip_version` parses `{id}` or `{id}/v{n}`; `v0` is refused). *Save to output*
@@ -1445,31 +1467,49 @@ from `family` goes on `VideoModelDto`.
     save compares against (`update_video_model`: typed round trip first, `memory`
     against `memory_mode()`); a saved part is kept only when it isn't discovery's.
     `POST /model-settings {kind: "video"}`; `reconcile` takes a video `exists` too.
-  - **Long clips are shots** (`VideoRequest.shots` = the shots *after* the Prompt,
-    `every`): one sd-cli run per shot in one job, seed `seed + k`, each conditioned on
+  - **A clip is shots** (`VideoRequest.shots: Vec<ShotSpec {text, seed, frames, cut,
+    references}>`, at least one, plus `every`): one sd-cli run per shot in one job,
+    each with its own seed and `align_frames`'d length (`render_first`/`render_shot`
+    clone the model with `frames` set), each conditioned on
     **`videos::shot_prompt(every, its own text)`** — never `"{prompt}. {shot}"`, which
-    made a line spoken in the Prompt be spoken in every shot. `every` rolls once, off
-    the clip's seed. Recorded as `Clip.segments` (`{text, conditioned, seed, start}`,
-    never empty; `Clip::normalize` reads the old `shots`/`shot_starts` with the old
-    prompt as `every`, and never writes them). Shot 1 renders into the clip; every
-    other into `seg{k}/` from the clip's last frame (`render_shot`), then
-    `append_segment` drops its first frame (the seam, redrawn from `-i`) and its
-    sound's first frame. Only `VideoFamily::chains()` (5B, A14B, H3 — `-i` is a first
-    frame there; VACE reads it as a reference, T2V ignores it; H3's real references
-    are refused beside a keyframe by sd.cpp, so they can't chain). Failure or Stop at
-    shot k>1 keeps 1..k-1 with `VideoResult.note` (`cut_short`). A multi-shot clip
-    drops sd-cli's `clip.avi` (it is shot 1 alone).
-  - **Extend is in place, from the Prompts panel** (`Engine::extend_clip`,
-    `ExtendClipRequest`, `POST /videos/extend {id, shots, every?, negative?, seed?,
-    drop_last?}`, `Work::ExtendClip` on the queue): the pending rows drawn onto the
-    clip on the stage on `clip.video` as recorded (only words and seed come from the
-    panel); `drop_last` `truncate`s the last segment (never shot 1). **Done is
-    computed, never stored** (`shots.js` `shotState`, `shots.test.js`): row k is done
-    when the stage clip's `segments[k].text` matches it; an edited done row breaks
-    `whole` and hides *Extend clip*, leaving Generate. The × on `dropLast` cuts and
-    keeps the text. Any change `invalidate`s what was made from the frames
-    (container, cached download, enlarged versions) and re-`finish`es. *Save to
-    output* always rewrites.
+    made a line spoken in the Prompt be spoken in every shot. A shot's words roll off
+    its own seed, `every` once off shot 1's. **`plan_shots`** (a free fn, tested)
+    checks and rolls every row before a frame is drawn or cut. Recorded as
+    `Clip.segments` (`{text, conditioned, seed, start, frames, cut, references}`, never
+    empty; `Clip::normalize` reads the old `shots`/`shot_starts` with the old prompt as
+    `every`, never writes them, and fills a missing `frames` with the model's — what
+    every old shot ran at). `Clip.prompt`/`seed` are shot 1's. Shot 1 renders into the
+    clip; every other into `seg{k}/` from the clip's last frame, then `append_segment`
+    drops its first frame (the seam, redrawn from `-i`) and its sound's — unless it is
+    a **cut** (`seam: false`). Only `VideoFamily::chains()` continue (5B, A14B, H3 —
+    `-i` is a first frame there; VACE reads it as a reference, T2V ignores it).
+    Failure or Stop at shot k>1 keeps 1..k-1 with `VideoResult.note` (`cut_short`). A
+    multi-shot clip drops sd-cli's `clip.avi` (it is shot 1 alone).
+  - **Cuts and references are H3's alone** (`VideoFamily::takes_references`,
+    `references` on `/video-models`): sd.cpp refuses H3's Ref2VA beside a keyframe, so
+    a shot with references has no `-i` (`VideoIo.refs` → one `-r` each, staged into
+    scratch by `stage_shot_refs`, removed after). Shot 1 takes them only with no
+    first frame. The page's ⓘ for it is the shared `vshotcut`.
+  - **Extend, Redo and the × are one request** (`Engine::extend_clip`,
+    `ExtendClipRequest`, `POST /videos/extend {id, keep, shots, every?, negative?}`,
+    `Work::ExtendClip` on the queue): keep the first `keep` segments (≥ 1; shot 1 is
+    Generate's), `truncate` the rest, draw `shots` after them on `clip.video` as
+    recorded. A failure before any shot answers the error only when nothing was cut;
+    after a cut it answers the shorter clip with a note. **Done is computed, never
+    stored** (`shots.js` `shotState`/`rowMatches`, `shots.test.js`): row k is done when
+    `segments[k]` has its text, seed, frames, cut and references; `action` is
+    `extend`/`redo`/`generate`/`none`. Blank rows are not shots (`liveRows` keeps the
+    row index for the marks). After a press the rows are redrawn from the clip
+    (`landRows`: the seeds drawn, plus any sent rows it didn't reach). Any change
+    `invalidate`s what was made from the frames (container, cached download, enlarged
+    versions) and re-`finish`es. *Save to output* always rewrites.
+  - **Download is the browser's** (`web/js/export.js`, WebCodecs): frames fetched one at
+    a time → `VideoEncoder` (Baseline H.264 first, so no reordering; `ctts` v1 if an
+    encoder reorders anyway) → `mp4mux.js`/`webmmux.js`, sound via
+    `OfflineAudioContext` at 48 kHz → Opus; GIF is `gifenc.js` (one median-cut palette
+    for the clip, so no shimmer). `available()` offers only what `isConfigSupported`
+    says; the AVI is a plain link. The muxers and GIF are pure, read back by
+    `mux.test.js`/`gifenc.test.js`. No codec in the binary on purpose.
   - **A saved clip is an output**: `list_outputs` lists `{stem}.avi` with
     `video: true`; `find_output` stays PNG-only (it resolves image sources), and
     `find_clip_output` finds the clip; `free_stem` checks both; delete, star

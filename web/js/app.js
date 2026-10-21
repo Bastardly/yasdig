@@ -6,7 +6,7 @@
 // which is what makes the import graph safe to have cycles in — the video tab
 // and its frame player import each other, and neither reads the other at
 // evaluation time.
-import { $ } from './dom.js';
+import { $, fillIcons } from './dom.js';
 import { S, clearPane } from './state.js';
 import { initViewer } from './viewer.js';
 import { initRedraw } from './redraw.js';
@@ -165,6 +165,7 @@ async function closeServer() {
 // has to find; after that the order is only the order the single script used to
 // run in, and nothing depends on it.
 initViewer();
+fillIcons();
 initHints();
 initBusy();
 initStatusCards();

@@ -4,8 +4,13 @@ import { sourceSlot } from './source-slot.js';
 // Reference images: up to four pictures the model looks at while it draws, the
 // prompt naming them "image 1", "image 2" (sd-cli's `-r`, on a family that
 // takes them — `references` on /models). They belong to the generation, not
-// to the tab: the button sits in the Generation fold, shows only for a model
+// to the tab: the button sits in the Prompts panel, shows only for a model
 // that takes them, and the picks live in a small dialog.
+//
+// One dialog, more than one owner: the Image tab's set lives in the slots,
+// and a Video shot borrows them (`editRefs`) — its own picks go in, the
+// Image tab's come back when the dialog closes, without a change event, so
+// nothing on the Image tab hears another tab's pictures.
 //
 // Each slot is the same `sourceSlot` *Start from* uses — pick, upload, drop —
 // with its own paste turned off: four slots listening would all take one paste,
@@ -18,6 +23,10 @@ const listeners = [];
 const changed = () => listeners.forEach((fn) => fn());
 // The model the button was last drawn for.
 let model = null;
+// A borrower's `onDone(stems)` while the dialog holds its picks, and the
+// Image tab's set to put back.
+let borrower = null;
+let parked = [];
 
 const slots = Array.from({ length: N }, (_, i) => sourceSlot({
   prefix: `ref${i + 1}`,
@@ -25,7 +34,7 @@ const slots = Array.from({ length: N }, (_, i) => sourceSlot({
   none: 'empty',
   err: 'refserr',
   paste: false,
-  onChange: () => { drawButton(); changed(); },
+  onChange: () => { if (!borrower) { drawButton(); changed(); } },
 }));
 
 // The picks, in slot order, gaps closed: "image 1" is the first picked slot.
@@ -37,6 +46,27 @@ export const refsActive = () => !!model?.references;
 
 export function setReferences(stems) {
   slots.forEach((s, i) => s.set(stems[i] ?? null));
+}
+
+// The dialog over someone else's picks — a Video shot's: `stems` in the
+// slots, `onDone(stems)` when it closes. The default words are the Image
+// tab's; a borrower says what its pictures do.
+export function editRefs(stems, onDone, note) {
+  parked = references();
+  borrower = onDone;
+  setReferences(stems);
+  $('refsnote').textContent = note;
+  openRefs();
+}
+
+function giveBack() {
+  if (!borrower) return;
+  const done = borrower;
+  const picked = references();
+  setReferences(parked);
+  borrower = null;
+  $('refsnote').textContent = IMAGE_NOTE;
+  done(picked);
 }
 
 export const onRefsChange = (fn) => { listeners.push(fn); };
@@ -61,11 +91,16 @@ export function openRefs() {
 export function syncRefs(m) {
   model = m;
   $('refsopen').hidden = !refsActive();
-  if (!refsActive() && $('refsdlg').open) $('refsdlg').close();
+  if (!refsActive() && !borrower && $('refsdlg').open) $('refsdlg').close();
   drawButton();
 }
 
+// The dialog's words for the Image tab, kept in the markup.
+let IMAGE_NOTE = '';
+
 export function initRefs() {
+  IMAGE_NOTE = $('refsnote').textContent;
+  $('refsdlg').addEventListener('close', giveBack);
   for (const s of slots) s.init();
   $('refsopen').addEventListener('click', openRefs);
   for (const b of document.querySelectorAll('[data-refs-open]')) b.addEventListener('click', openRefs);

@@ -467,6 +467,9 @@ impl<'a> SdRunner<'a> {
         if let Some(c) = io.control {
             cmd.args(["--control-video", &path_str(c)]);
         }
+        for r in io.refs {
+            cmd.args(["-r", &path_str(r)]);
+        }
         cmd.args(crate::config::memory_args(m.memory_mode(), &m.extra_args));
         cmd.args(crate::config::gpu_reserve_args(self.cfg.settings().gpu_reserve_gb, &m.extra_args));
         if m.vae_tiling {
@@ -1179,6 +1182,9 @@ pub struct VideoIo<'a> {
     pub control: Option<&'a Path>,
     /// The `-o` path. Must carry a `%0Nd` specifier; see [`SdRunner::video`].
     pub out: &'a Path,
+    /// Reference pictures, one `-r` each: H3's Ref2VA, on a shot with no
+    /// `init` (sd.cpp refuses the two together).
+    pub refs: &'a [PathBuf],
 }
 
 fn path_str(p: &Path) -> String {
@@ -1749,6 +1755,26 @@ flow_shift = 3.0
         args.get(i + 1).map(|s| s.as_str())
     }
 
+    /// A cut shot with references: one `-r` each, in order, and no `-i` —
+    /// sd.cpp refuses H3's references beside a start frame.
+    #[test]
+    fn a_cut_shot_carries_its_references_and_no_first_frame() {
+        let (cfg, m) = video_fixture("");
+        let runner = SdRunner::new(&cfg);
+        let refs = [PathBuf::from("/work/current/r0.png"), PathBuf::from("/work/current/r1.png")];
+        let cmd = runner.video_cmd(
+            &m,
+            "the dwarf turns back",
+            "",
+            42,
+            &VideoIo { init: None, control: None, out: Path::new("o_%03d.png"), refs: &refs },
+        );
+        let a = argv(&cmd);
+        let r: Vec<_> = a.iter().enumerate().filter(|(_, s)| *s == "-r").map(|(i, _)| a[i + 1].as_str()).collect();
+        assert_eq!(r, ["/work/current/r0.png", "/work/current/r1.png"]);
+        assert!(!a.contains(&"-i".to_string()), "{a:?}");
+    }
+
     #[test]
     fn a_video_command_names_every_component() {
         let (cfg, m) = video_fixture("");
@@ -1762,6 +1788,7 @@ flow_shift = 3.0
                 init: Some(Path::new("/work/first.png")),
                 control: None,
                 out: Path::new("/work/videos/1/frame_%03d.png"),
+                refs: &[],
             },
         );
         let a = argv(&cmd);
@@ -1815,6 +1842,7 @@ flow_shift = 3.0
                 init: None,
                 control: None,
                 out: Path::new("o_%03d.png"),
+                refs: &[],
             },
         ));
         assert_eq!(flag(&a, "--high-noise-steps"), Some("8"));
@@ -1836,6 +1864,7 @@ flow_shift = 3.0
                 init: None,
                 control: None,
                 out: Path::new("o_%03d.png"),
+                refs: &[],
             },
         ));
         for dead in [
@@ -1862,6 +1891,7 @@ flow_shift = 3.0
                 init: None,
                 control: None,
                 out: Path::new("o_%03d.png"),
+                refs: &[],
             },
         ));
         assert!(flag(&a, "--high-noise-steps").is_none());
@@ -1885,6 +1915,7 @@ flow_shift = 3.0
                 init: None,
                 control: None,
                 out: Path::new("o_%03d.png"),
+                refs: &[],
             },
         ));
         // 16 is the A14B's grid, and frames round *down* to 4k+1.
@@ -1907,6 +1938,7 @@ flow_shift = 3.0
                 init: None,
                 control: None,
                 out: Path::new("o_%03d.png"),
+                refs: &[],
             },
         ));
         assert_eq!(flag(&a, "--fps"), Some("24"));
@@ -2459,6 +2491,7 @@ lora_dir = "loras""#,
                 init: None,
                 control: None,
                 out: Path::new("o_%03d.png"),
+                refs: &[],
             },
         ));
         assert_eq!(
@@ -2483,7 +2516,7 @@ lora_dir = "loras""#,
         assert_eq!(l(Expert::High).tags(false), "<lora:w.safetensors:0.8>");
         let (cfg, mut m) = video_fixture("");
         m.picked_loras = vec![l(Expert::Both)];
-        let io = VideoIo { init: None, control: None, out: Path::new("o_%03d.png") };
+        let io = VideoIo { init: None, control: None, out: Path::new("o_%03d.png"), refs: &[] };
         let a = argv(&SdRunner::new(&cfg).video_cmd(&m, "cat", "", 1, &io));
         assert!(flag(&a, "-p").unwrap().contains("<lora:w.safetensors:0.8>"));
         assert_eq!(flag(&a, "--lora-model-dir"), Some(path_str(&cfg.lora_dir()).as_str()));
@@ -2509,6 +2542,7 @@ lora_dir = "loras""#,
                 init: None,
                 control: Some(Path::new("/work/videos/7")),
                 out: Path::new("/work/videos/8/frame_%03d.png"),
+                refs: &[],
             },
         ));
         assert_eq!(flag(&a, "--control-video"), Some("/work/videos/7"));
@@ -2649,7 +2683,7 @@ lora_dir = "loras""#,
         std::fs::create_dir_all(&dir).unwrap();
         let m = Monitor::with_preview(dir.clone());
         let (cfg, model) = video_fixture("");
-        let io = VideoIo { init: None, control: None, out: Path::new("o_%03d.png") };
+        let io = VideoIo { init: None, control: None, out: Path::new("o_%03d.png"), refs: &[] };
         let a = argv(&SdRunner::watched(&cfg, &m).video_cmd(&model, "cat", "", 1, &io));
         assert_eq!(flag(&a, "--preview-path"), Some(path_str(&dir.join(VIDEO_PREVIEW)).as_str()));
 

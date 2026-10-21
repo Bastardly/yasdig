@@ -200,8 +200,9 @@ rather your prompts didn't travel with them.
 ## The Image tab
 
 The Image tab is a workspace: a rail down the left, the latest picture filling the rest,
-and **panels** that float over it. Each rail button opens one — **Prompts**, **Models**,
-**Generation** (the seed at its top, the output size and upscaler at its foot),
+and **panels** that float over it. Each rail button opens one — **Prompts** (the seed at
+its top, then the prompts, and **References** for a model that takes them), **Models**,
+**Generation** (the output size and upscaler at its foot),
 **Image to image**, **Hi-res pass**, **Refine pass**,
 **Info** (the picture's size, seed, timings and the prompt as it was drawn), **Current**
 and **Favorites** (the work items). Open as many as you like and drag each by its title
@@ -730,33 +731,43 @@ image you want to keep is one **Save to output** away (or tick **Save Output** i
 
 The Video tab makes clips with Wan 2.2 (TI2V-5B, the I2V-A14B pair), Wan 2.1 VACE
 and dense models, and MiniMax H3 (with sound). Get models has cards for the first two
-and H3. It is laid out like the Image tab: the seed in the rail with Reset, the size
-with a swap button (snapped to what the model runs), LoRAs picked from
-`models/loras/` (only the ones for the model's size; on the A14B pair each says which
-expert it patches), a first frame from your outputs or an upload, and *Save as
-defaults for this model*. While a clip renders the status card loops a blurry
-preview of it, and you can open other clips and set up the next one.
+and H3. It is laid out like the Image tab: the size with a swap button (snapped to what
+the model runs), LoRAs picked from `models/loras/` (only the ones for the model's size;
+on the A14B pair each says which expert it patches), a first frame from your outputs or
+an upload, and *Save as defaults for this model*. While a clip renders the status card
+loops a blurry preview of it, and you can open other clips and set up the next one.
 
-**Long clips are shots.** A model of this size runs out of memory a few seconds in,
-so a longer clip is made a shot at a time: the Prompts panel's *Shots* list. The
-Prompt is shot 1, and each row below is a later shot, a segment of the Frames box
-made from the previous shot's last frame. A shot is conditioned on **its own text**,
-never the Prompt's, so a line spoken in the Prompt is spoken once. What every shot
-should share — the characters, the place, the look — goes in **Every shot**, which is
-put in front of each one (its `{variables}` roll once, so a rolled character stays the
-same). Five shots of 3 s are a 15 s clip, up to 20. Only one frame carries across a
-seam, so motion can change direction there; write shots that agree. TI2V-5B, A14B and
-H3 can do it (the others don't take a first frame). Stop, or a failing shot, keeps the
-shots already made.
+**A clip is shots.** A model of this size runs out of memory a few seconds in, so a
+longer clip is made a shot at a time, in the **Shots** panel: **Every shot** first,
+then the **Negative prompt**, then the shots. Each shot has its own **Seed** (-1 picks
+one), **Frames** (rounded to what the model allows) and **Prompt**, and is one render;
+each after the first goes on from the previous shot's last frame. A shot is conditioned
+on **its own words**, so a line spoken in shot 1 is spoken once. What every shot should
+share — the characters, the place, the look — goes in **Every shot**, which is put in
+front of each one (its `{variables}` roll once, so a rolled character stays the same).
+Five shots of 3 s are a 15 s clip, up to 20. Only one frame carries across a seam, so
+motion can change direction there; write shots that agree. TI2V-5B, A14B and H3 can do
+it (the others don't take a first frame). Stop, or a failing shot, keeps the shots
+already made.
 
-**Extending a clip.** With a clip on the stage, the rows it already has are ticked
-green. Add a row below them and **Extend clip** appears at the foot of the Prompts
-panel: it draws the new shots onto that clip from its last frame, with the clip's own
-model and settings so the seam matches, and the panel's words and seed. Not right? The
-**×** on the clip's last shot cuts it off and leaves its text in the row — change it,
-or not, and Extend again for a new take. Shot 1 is the clip itself; editing it (or any
-ticked row) means a new clip, which *Generate clip* makes from every row. A clip's
-enlarged versions are removed when it changes, since they no longer cover it.
+**Cheap first, then good.** After a render every row shows the seed it was drawn with,
+and the rows on the clip on the stage are ticked green. Change one row's seed, length or
+words and **Redo from shot k** appears at the foot of the panel: it keeps the shots
+before it and draws that one and every one after it again, from the last kept frame,
+with the clip's own model and settings. Add a row under a whole clip and the button is
+**Extend clip**. The **×** on the clip's last shot cuts it off and leaves its text in
+the row. So: draft at a few steps, try shots until each works, then raise the steps and
+press **Generate clip** — the same seeds, drawn properly. Shot 1 is the clip itself;
+changing it means a new clip. A clip's enlarged versions are removed when it changes,
+since they no longer cover it.
+
+**Continue or cut (MiniMax H3).** One frame is all that carries across a seam, so a face
+that leaves the picture and comes back is drawn anew and may not match. With H3, a shot
+can be a **Cut** instead of *Continue*: it starts fresh, a new camera shot, and may follow
+up to four **reference pictures** (a face, a costume, a place) from your outputs or an
+upload — say in its prompt who is who. A cut doesn't join the frame before it, and that
+is the price: sd.cpp can't give H3 references and a starting frame at once. Shot 1 can
+take references too when no first frame is picked. Other models have no references.
 
 **Current and Favorites.** Every clip is kept in `work/videos/` and listed on the
 **Current** panel, the Image tab's way: click once to show it, again to open the clip
@@ -772,6 +783,15 @@ the frame between it and the original — and *Save to output* writes the versio
 screen to the output folder, where it shows in Outputs with a play mark and opens in
 the same dialog. Clips don't play by themselves: press Play. Opening the dialog stops
 the clip on the stage.
+
+**Download** (in the dialog's rail, for a saved clip too) makes a file to share of the
+version on screen, encoded by your browser, so it offers what the browser can make:
+**MP4 (H.264)** plays everywhere, Discord and phones included; **WebM (VP9)** nearly
+everywhere; **MP4 (AV1)** is smallest, for newer players; **GIF** loops on its own in a
+chat, without sound, at most 480 px wide; and **AVI (original)** is the file yasdig keeps.
+*Under 10 MB (Discord)* sizes the file for Discord without Nitro — a long clip then looks
+soft, and *Half size* helps. The sound goes in as Opus, which some Apple players skip.
+Firefox on Linux may have no H.264 encoder; Chrome has.
 
 ## Convert
 

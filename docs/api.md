@@ -507,20 +507,32 @@ needs a Vulkan device and nothing else.
   curl, **keeping** its `.part` so start resumes it; clear deletes the `.part` files
   nothing is writing. Answered on the connection thread — downloads have their own lane,
   not the GPU queue. An unknown id is a 400.
-- `POST /video` — `prompt` and `model` are required; everything else optional:
+- `POST /video` — `model` and `shots` (at least one) are required; everything else
+  optional:
   ```json
-  { "prompt": "…", "model": "wan2.2-ti2v-5b", "negative": null, "seed": -1,
+  { "model": "wan2.2-ti2v-5b", "negative": null,
     "source": "1758104523000-12345-s3",
-    "width": 832, "height": 480, "frames": 33, "fps": 24,
+    "width": 832, "height": 480, "fps": 24,
     "steps": 20, "cfg_scale": 6.0, "high_noise_steps": 8, "high_noise_cfg_scale": 3.5,
     "flow_shift": 3.0, "sampler": "euler", "vae_tiling": true,
     "parts": { "vae": "video/vae/wan2.2_vae.safetensors", "audio_vae": null },
-    "shots": ["she turns to the door", "she walks out"], "every": "a red-haired woman, a rainy street" }
+    "shots": [
+      { "prompt": "she turns to the door", "seed": -1, "frames": 33 },
+      { "prompt": "she walks out", "seed": 1234, "frames": 49 },
+      { "prompt": "she comes back in", "seed": -1, "cut": true, "references": ["1758104523000-12345-s3"] }
+    ],
+    "every": "a red-haired woman, a rainy street" }
   ```
-  `prompt` is shot 1; `shots` are the shots after it, each rendered from the previous
-  one's last frame (only on families that chain: TI2V-5B, A14B, H3), up to 20 in all.
-  Every shot is conditioned on `"{every}. {its own text}"` — never on another shot's
-  text — and `every`'s variables roll once, off the clip's seed.
+  One sd-cli run per shot, each with its own `seed` (-1 or absent picks one) and
+  `frames` (absent is the model's; rounded to the family's grid). Each shot after the
+  first is rendered from the previous one's last frame (only on families that chain:
+  TI2V-5B, A14B, H3), up to 20 in all — or, with `cut: true`, starts fresh, and may
+  then follow up to four `references` (`work/output/` stems). Cuts and references are
+  MiniMax H3's alone (`references: true` on `/video-models`), and never beside a first
+  frame: sd.cpp refuses H3's references beside a keyframe, so shot 1 takes them only with
+  no `source`. Every shot is conditioned on `"{every}. {its own text}"` — never on
+  another shot's text — and `every`'s variables roll once, off shot 1's seed. An empty
+  shot is refused by its number.
   `parts` picks the model's separate files, by name under the models dir as `/video-models`
   lists them; `null` leaves out an optional one (H3's audio VAE, VACE's CLIP-Vision), and
   an absent key keeps the model's own.
@@ -533,8 +545,11 @@ needs a Vulkan device and nothing else.
   { "clip": { "id": "…", "frames": 33, "fps": 24, "width": 832, "height": 480, "audio": false, … },
     "gen_ms": 214000, "note": null }
   ```
-  `clip.segments` is one record per shot, `{text, conditioned, seed, start}` (typed
-  text, what sd-cli was told, its seed, its first frame); `clip.every` the typed
+  `clip.segments` is one record per shot, `{text, conditioned, seed, start, frames,
+  cut?, references?}` (typed text, what sd-cli was told, its seed, its first frame in the
+  clip, how many frames sd-cli made — a continuing shot adds one fewer, its first being
+  the seam — and whether it was a cut with references); `clip.prompt`/`clip.seed` are
+  shot 1's; `clip.every` the typed
   *Every shot*. `note` says why a long clip has fewer shots than asked for (a Stop, or a
   shot that failed after others). Nothing is written to `work/output/` — that is
   `/videos/save`. A model with a soundtrack (MiniMax H3 with its audio VAE) is generated
@@ -564,11 +579,15 @@ needs a Vulkan device and nothing else.
   (`{id}/v{n}/`, served at `/videos/{id}/v{n}/frames/{k}.png`). Returns
   `{ "clip": {…}, "version": 1, "ms": 1820 }`. Filters only — it never re-diffuses,
   for the reason under "Video" above.
-- `POST /videos/extend` — `{ "id": "…", "shots": ["…"], "every": "…", "negative": "…",
-  "seed": -1 }` draws the shots onto the clip in place, each from its last frame, on the
-  model and settings the clip recorded; `{ "id": "…", "drop_last": true }` cuts its last
-  shot off instead (never shot 1). Queued; answers like `/video`. Enlarged versions are
-  removed, since they no longer cover the clip.
+- `POST /videos/extend` — `{ "id": "…", "keep": 2, "shots": [{ "prompt": "…", "seed": -1,
+  "frames": 33 }], "every": "…", "negative": "…" }` changes the clip in place: its first
+  `keep` shots are kept (at least 1 — changing shot 1 is a new clip), the rest cut, then
+  `shots` are drawn after them, in `/video`'s shape, on the model and settings the clip
+  recorded. `keep` = the clip's shot count adds shots (*Extend clip*), a smaller one
+  redraws from shot `keep + 1` (*Redo from shot k*), and a smaller one with no `shots`
+  cuts (the × on the last shot). Every row is checked before a frame is cut. Queued;
+  answers like `/video`, `note` saying what a Stop or a failure kept. Enlarged versions
+  are removed, since they no longer cover the clip.
 - `POST /videos/save` — `{ "id": "…", "version": 0 }`. The version into `work/output/`,
   as `{id}[-v{n}].avi` (or a frames folder with `video_save = "frames"`). Answers
   `{ "saved": "…" }`.

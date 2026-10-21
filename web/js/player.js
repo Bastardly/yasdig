@@ -1,4 +1,4 @@
-import { $, esc } from './dom.js';
+import { $, esc, ICONS, setPlayIcon } from './dom.js';
 import { openClipView } from './clipview.js';
 
 // ---- The frame player -------------------------------------------------------
@@ -29,8 +29,7 @@ export function stopPlayback() {
   clearInterval(vtimer);
   vtimer = null;
   sound()?.pause();
-  const b = $('vplay');
-  if (b) b.textContent = 'Play';
+  setPlayIcon($('vplay'), false);
 }
 
 function drawFrame(i) {
@@ -50,7 +49,7 @@ function drawFrame(i) {
 function togglePlay() {
   if (vtimer) { stopPlayback(); return; }
   if (!vframes.length) return;
-  $('vplay').textContent = 'Pause';
+  setPlayIcon($('vplay'), true);
   syncSound();
   vtimer = setInterval(() => {
     const next = (vframe + 1) % vframes.length;
@@ -106,15 +105,15 @@ const PARTS = [
 const fileName = (p) => String(p).split(/[\\/]/).pop();
 
 // The Info panel: what is known about the clip on screen, the Image tab's
-// panel of the same name. The prompt as it was conditioned only when it isn't
-// what the box holds — a rolled `{variable}`, or a clip reopened from the grid.
-// A long clip lists its shots as they were conditioned, *Every shot* and all.
+// panel of the same name. The prompt as it was conditioned only when a
+// `{variable}` rolled. A long clip lists its shots as they were conditioned,
+// *Every shot* and all; the Shots panel's rows already hold each one's seed.
 function renderInfo(c, ms) {
   const v = c.video;
   const secs = (c.frames / Math.max(1, c.fps)).toFixed(2);
   const took = ms
     ? ` · took <b>${(ms / 1000).toFixed(1)} s</b> (${(ms / Math.max(1, c.frames)).toFixed(0)} ms/frame)` : '';
-  const rolled = c.prompt && c.prompt !== $('vprompt').value
+  const rolled = c.typed_prompt && c.prompt !== c.typed_prompt
     ? `<div class="meta">${esc(c.prompt)}</div>` : '';
   const shift = v.flow_shift != null ? ` · shift ${v.flow_shift}` : '';
   const moe = v.high_noise_steps != null ? ` · high-noise ${v.high_noise_steps} steps` : '';
@@ -122,20 +121,25 @@ function renderInfo(c, ms) {
     .map(([k, label]) => `<tr><td>${label}</td><td><code>${esc(fileName(v[k]))}</code></td></tr>`).join('');
   $('vresultinfo').innerHTML = `
     <div class="meta"><b>${c.width}×${c.height}</b> · ${c.frames} frames @ ${c.fps} fps · ${secs} s
-      · seed <b id="vseedval" class="pin" title="Put this seed in the box, to generate it again">${c.seed}</b>${took}</div>
+      · seed ${c.seed}${took}</div>
     ${rolled}
     <p class="sub">${esc(c.model)} · ${v.steps} steps · CFG ${v.cfg_scale} · ${esc(v.sampler)}${shift}${moe}
       ${v.vae_tiling ? ' · VAE tiling' : ''}${c.audio ? ' · with sound' : ''}</p>
     ${c.source ? `<p class="sub">First frame: <code>${esc(c.source)}</code></p>` : ''}
     ${(c.segments ?? []).length > 1 ? `<ol class="sub">${c.segments.map((s) =>
-      `<li>${esc(s.conditioned)} <span class="val">· from ${(s.start / Math.max(1, c.fps)).toFixed(1)} s · seed ${s.seed}</span></li>`).join('')}</ol>` : ''}
+      `<li>${s.cut ? '<b>Cut</b> · ' : ''}${esc(s.conditioned)} <span class="val">· from ${(s.start / Math.max(1, c.fps)).toFixed(1)} s
+        · ${s.frames} frames · seed ${s.seed}${(s.references ?? []).length ? ` · ${s.references.length} ref(s)` : ''}</span></li>`).join('')}</ol>` : ''}
     <table class="helptable"><tbody>${files}</tbody></table>`;
-  // Opt-in, as on the Image tab: the box keeps what was typed until this is
-  // clicked.
-  $('vseedval').addEventListener('click', () => {
-    $('vseed').value = c.seed;
-    $('vseed').dispatchEvent(new Event('input', { bubbles: true }));
-  });
+}
+
+// Nothing on the stage: *New clip*. The clip itself stays in its grid.
+export function clearClip() {
+  stopPlayback();
+  clip = null;
+  vframes = [];
+  vframe = 0;
+  $('vresult').innerHTML = '';
+  $('vresultinfo').innerHTML = '<p class="sub">No clip yet.</p>';
 }
 
 // The clip, rebuilt per clip: the player on the stage and what is known about
@@ -147,11 +151,9 @@ export function renderClip(c, ms) {
   $('vresult').innerHTML = `
     <canvas id="vcanvas"></canvas>
     <div class="player">
-      <button type="button" id="vplay" class="btn">Play</button>
+      <button type="button" id="vplay" class="btn btn-icon" title="Play" aria-label="Play">${ICONS.play}</button>
       <input id="vscrub" type="range" min="0" max="0" step="1" value="0">
       <span class="val" id="vat"></span>
-      <a id="vdownload" class="btn" href="/videos/${encodeURIComponent(c.id)}/clip.avi" download="${esc(c.id)}.avi"
-        title="The clip as one .avi file${c.audio ? ', with its sound' : ''}">Download</a>
     </div>
     ${c.audio ? `<audio id="vaudio" preload="auto" src="/videos/${encodeURIComponent(c.id)}/audio.wav"></audio>` : ''}`;
   renderInfo(c, ms);

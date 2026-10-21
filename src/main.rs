@@ -86,7 +86,7 @@
 //!   GET  /videos/{id}/thumb.png
 //!   GET  /videos/{id}/frames/{n}.png   one frame; the page plays the sequence
 //!   POST /videos/enlarge -> {id, upscale} FSR over every frame
-//!   POST /videos/extend  -> {id, shots, every?, negative?, seed?, drop_last?}
+//!   POST /videos/extend  -> {id, keep, shots, every?, negative?}
 //!   POST /videos/delete  -> {ids:[..]} from work/videos/ only
 //!   GET  /favorite-clips -> the starred clips alone (user/favorite_clips/)
 //!   POST /favorite-clips/add|remove -> {ids:[..]} star / un-star (a move)
@@ -1202,9 +1202,12 @@ struct VideoModelDto {
     /// True for the mixture-of-experts pair: the page shows the second set of
     /// step/CFG boxes only when they mean something.
     is_moe: bool,
-    /// Whether a clip can go on from its last frame: shots and *Continue this
-    /// clip* ([`config::VideoFamily::chains`]).
+    /// Whether a clip can go on from its last frame: a long clip's shots
+    /// ([`config::VideoFamily::chains`]).
     chains: bool,
+    /// Whether a shot can be a cut with reference pictures
+    /// ([`config::VideoFamily::takes_references`]).
+    references: bool,
     /// The memory mode the model runs with, resolved — `memory` beside it is
     /// the raw entry, which an old `offload_to_cpu` key leaves unset.
     memory_mode: String,
@@ -1488,6 +1491,7 @@ fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> 
             forced_fps: m.family.forced_fps(),
             is_moe: m.family.is_moe(),
             chains: m.family.chains(),
+            references: m.family.takes_references(),
             memory_mode: m.memory_mode().to_string(),
             missing: m.missing().iter().map(|p| p.display().to_string()).collect(),
             duration: m.duration(),
@@ -1504,15 +1508,40 @@ fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> 
     }
 }
 
+/// One row of the Video tab's Shots panel on the wire — `/video` and
+/// `/videos/extend` alike.
+#[derive(serde::Deserialize)]
+struct ShotDto {
+    #[serde(default)]
+    prompt: String,
+    #[serde(default)]
+    seed: Option<i64>,
+    #[serde(default)]
+    frames: Option<u32>,
+    #[serde(default)]
+    cut: bool,
+    #[serde(default)]
+    references: Vec<String>,
+}
+
+impl ShotDto {
+    fn spec(self) -> pipeline::ShotSpec {
+        pipeline::ShotSpec {
+            text: self.prompt,
+            seed: self.seed.unwrap_or(-1),
+            frames: self.frames,
+            cut: self.cut,
+            references: self.references,
+        }
+    }
+}
+
 fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
-        prompt: String,
         model: String,
         #[serde(default)]
         negative: Option<String>,
-        #[serde(default)]
-        seed: Option<i64>,
         /// A `work/output/` stem. Absent or empty runs the same model as plain
         /// text-to-video, which is what clearing the picker means.
         #[serde(default)]
@@ -1521,8 +1550,6 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         width: Option<u32>,
         #[serde(default)]
         height: Option<u32>,
-        #[serde(default)]
-        frames: Option<u32>,
         #[serde(default)]
         fps: Option<u32>,
         #[serde(default)]
@@ -1545,8 +1572,7 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         parts: Option<std::collections::BTreeMap<String, Option<String>>>,
         #[serde(default)]
         loras: Option<Vec<config::VideoLora>>,
-        #[serde(default)]
-        shots: Vec<String>,
+        shots: Vec<ShotDto>,
         #[serde(default)]
         every: Option<String>,
     }
@@ -1557,14 +1583,11 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
     };
 
     let req = VideoRequest {
-        prompt: dto.prompt,
         model: dto.model,
         negative: dto.negative,
-        seed: dto.seed.unwrap_or(-1),
         source: dto.source.filter(|s| !s.is_empty()),
         width: dto.width,
         height: dto.height,
-        frames: dto.frames,
         fps: dto.fps,
         steps: dto.steps,
         cfg_scale: dto.cfg_scale,
@@ -1576,7 +1599,7 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         memory: dto.memory,
         parts: dto.parts,
         loras: dto.loras,
-        shots: dto.shots,
+        shots: dto.shots.into_iter().map(ShotDto::spec).collect(),
         every: dto.every,
     };
 
@@ -1584,24 +1607,22 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
     enqueue_wait(conn, lanes, jobs::Kind::Video, label, Work::Video(req), false, 500)
 }
 
-/// `POST /videos/extend {id, shots, every?, negative?, seed?, drop_last?}`:
-/// shots added to a clip from its last frame — the Prompts panel's *Extend
-/// clip* — or with `drop_last` its last shot cut off. Through the queue, as a
-/// clip is, so a cut never lands under a shot being drawn onto the same clip.
+/// `POST /videos/extend {id, keep, shots, every?, negative?}`: clip `id`
+/// changed in place from the Shots panel — its first `keep` shots kept and
+/// `shots` drawn after them: *Extend clip*, *Redo from shot k*, and the × on
+/// the last shot. Through the queue, as a clip is, so a cut never lands under
+/// a shot being drawn onto the same clip.
 fn handle_extend_clip(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
         id: String,
+        keep: usize,
         #[serde(default)]
-        shots: Vec<String>,
+        shots: Vec<ShotDto>,
         #[serde(default)]
         every: Option<String>,
         #[serde(default)]
         negative: Option<String>,
-        #[serde(default)]
-        seed: Option<i64>,
-        #[serde(default)]
-        drop_last: bool,
     }
     match parse_json::<Dto>(conn, body)? {
         Some(dto) => enqueue_wait(
@@ -1611,11 +1632,10 @@ fn handle_extend_clip(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -
             format!("extend {}", dto.id),
             Work::ExtendClip(pipeline::ExtendClipRequest {
                 id: dto.id,
-                shots: dto.shots,
+                keep: dto.keep,
+                shots: dto.shots.into_iter().map(ShotDto::spec).collect(),
                 every: dto.every,
                 negative: dto.negative,
-                seed: dto.seed.unwrap_or(-1),
-                drop_last: dto.drop_last,
             }),
             false,
             500,

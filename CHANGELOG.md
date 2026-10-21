@@ -13,20 +13,44 @@ What changed in each release of yasdig. Each release's executables are on the
   - **Current and Favorites**, the Image tab's two panels, replace *Clips*. The star
     on a tile moves a clip to `user/favorite_clips/`, where *Delete all unstarred*
     and Close server's clear never reach it.
-  - **Extend clip, in the Prompts panel.** With a clip on the stage, the shots it
-    already has are ticked green; add a row and *Extend clip* draws it onto that
-    clip from its last frame. The × on the clip's last shot cuts it off and keeps its
-    text, to draw it again. The clip dialog's Extend panel and *Continue this clip*
-    are gone.
+  - **The Shots panel** (was Prompts): *Every shot*, the negative, then the shots,
+    each with its own **seed, frame count and prompt**. After a render each row shows
+    the seed it was drawn with, so a clip can be drafted at a few steps and then made
+    again at more with the same seeds.
+  - **Extend clip and Redo from shot k, in the Shots panel.** With a clip on the
+    stage, the shots it already has are ticked green. Change a shot's seed, length or
+    words and *Redo from shot k* keeps the shots before it and draws the rest again;
+    add a row and *Extend clip* draws it onto the end. The × on the clip's last shot
+    cuts it off and keeps its text. The clip dialog's Extend panel and *Continue this
+    clip* are gone.
+  - **New clip**, above *Generate clip*: empties the stage and the shots to start
+    another clip, leaving the one you were working on in Current. *Generate clip*
+    stays pressable while a clip renders and queues the next one.
+  - A new shot starts with the seed and length of the one above it, and a new clip's
+    first shot with a random seed of its own rather than -1.
+  - **Shots you add or change on a clip are kept** when you open another clip and
+    come back (and across a reload), until they are drawn.
   - **Every shot**: words put in front of every shot (the characters, the place, the
     look), with its variables rolled once so a rolled character stays the same.
+  - **Cut shots with reference pictures (MiniMax H3).** A shot can start fresh
+    instead of going on from the last frame, and follow up to four reference
+    pictures, so a face that leaves and comes back matches. A cut doesn't join the
+    frame before it: sd.cpp can't give H3 references and a starting frame at once.
+  - **Download in MP4, WebM, AV1 or GIF**, from the clip dialog's new Download panel
+    (for clips saved to Outputs too), encoded by the browser, with *Under 10 MB* for
+    Discord and a half-size option. It replaces the AVI-only Download buttons.
 
 ### Changed
 
+- **The seed has a die beside its reset**, on the Image tab and on each video
+  shot: a random seed, kept. Reset, the dice and the clip players' Play/Pause are
+  icons now.
+- **The seed and References are at the top of the Image tab's Prompts panel**,
+  beside the words they go with, instead of in Generation.
 - **A message in the status card can be dismissed** with its ×, so a note or an error
   no longer sits over a button until the next job.
-- **Each shot of a long clip is conditioned on its own text.** The Prompt is shot 1;
-  it used to go in front of every shot, so an action or a line spoken in it happened
+- **Each shot of a long clip is conditioned on its own text.** The old Prompt (now
+  shot 1) used to go in front of every shot, so an action or a line spoken in it happened
   again in every shot. Clips made before this open with their old Prompt in *Every
   shot*, which redraws them the way they were made.
 - **A clip reaches Outputs only by *Save to output*** in the clip dialog. Every clip

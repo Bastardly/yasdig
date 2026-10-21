@@ -1,46 +1,72 @@
-// `node --test web/js/` — the Prompts panel's done marks against the clip on
+// `node --test web/js/` — the Shots panel's done marks against the clip on
 // the stage (`shots.js`). Not in `web::WEB_FILES`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { shotState } from './shots.js';
 
-const clip = (...texts) => ({ segments: texts.map((text, k) => ({ text, start: k * 33 })) });
+const seg = (text, k) => ({ text, seed: 10 + k, frames: 33, start: k * 32 });
+const clip = (...texts) => ({ segments: texts.map(seg) });
+// The rows a drawn clip fills the panel with.
+const rows = (...texts) => texts.map((text, k) => ({ text, seed: 10 + k, frames: 33, cut: false, refs: [] }));
 
-test('a clip made from the panel has every row done, and nothing to extend', () => {
-  const s = shotState(['a crab walks', 'it lifts a claw'], clip('a crab walks', 'it lifts a claw'), true);
+test('a clip made from the panel has every row done, and nothing to draw', () => {
+  const s = shotState(rows('a crab walks', 'it lifts a claw'), clip('a crab walks', 'it lifts a claw'), true);
   assert.equal(s.done, 2);
   assert.ok(s.whole);
-  assert.ok(!s.canExtend);
+  assert.equal(s.action, 'none');
   assert.equal(s.dropLast, 1);
 });
 
 test('a row added under a whole clip is pending, and Extend draws it', () => {
-  const s = shotState(['a crab walks', 'it lifts a claw', ' it waves '], clip('a crab walks', 'it lifts a claw'), true);
+  const r = [...rows('a crab walks', 'it lifts a claw'), { text: ' it waves ', seed: -1, frames: 33 }];
+  const s = shotState(r, clip('a crab walks', 'it lifts a claw'), true);
   assert.equal(s.done, 2);
-  assert.deepEqual(s.pending, ['it waves']);
-  assert.ok(s.canExtend);
+  assert.equal(s.pending.length, 1);
+  assert.equal(s.action, 'extend');
 });
 
-test('editing a done row makes it and every row after it pending, and Extend goes', () => {
-  const s = shotState(['a crab walks', 'it lifts both claws', 'it waves'], clip('a crab walks', 'it lifts a claw'), true);
-  assert.equal(s.done, 1);
-  assert.ok(!s.whole);
-  assert.ok(!s.canExtend, 'a clip is only extended at its end');
-  assert.equal(s.dropLast, -1);
+test('a new seed, a new length or new words on a done row redo from it', () => {
+  const c = clip('a crab walks', 'it lifts a claw', 'it waves');
+  for (const change of [{ seed: -1 }, { seed: 99 }, { frames: 49 }, { text: 'it lifts both claws' }]) {
+    const r = rows('a crab walks', 'it lifts a claw', 'it waves');
+    Object.assign(r[1], change);
+    const s = shotState(r, c, true);
+    assert.equal(s.done, 1, JSON.stringify(change));
+    assert.equal(s.action, 'redo');
+    assert.equal(s.pending.length, 2, 'the changed row and every one after it');
+    assert.equal(s.dropLast, -1);
+  }
 });
 
-test('shot 1 is the clip: it can never be cut, only redrawn by Generate', () => {
-  assert.equal(shotState(['a crab walks'], clip('a crab walks'), true).dropLast, -1);
+test('a cut, or other references, is a different shot', () => {
+  const c = clip('a dwarf walks', 'he comes back');
+  const r = rows('a dwarf walks', 'he comes back');
+  r[1].cut = true;
+  assert.equal(shotState(r, c, true).action, 'redo');
+  r[1].refs = ['100-7-s0'];
+  assert.equal(shotState(r, { segments: [seg('a dwarf walks', 0), { ...seg('he comes back', 1), cut: true }] }, true).action, 'redo');
+  // Shot 1's row can say cut: it starts fresh either way.
+  const first = rows('a dwarf walks');
+  first[0].cut = true;
+  assert.equal(shotState(first, clip('a dwarf walks'), true).action, 'none');
 });
 
-test('no clip, or one that cannot chain, never extends', () => {
-  assert.ok(!shotState(['a crab', 'it waves'], null, true).canExtend);
-  assert.ok(!shotState(['a crab', 'it waves'], clip('a crab'), false).canExtend);
-  assert.equal(shotState(['a crab'], null, true).done, 0);
+test('shot 1 is the clip: changing it is a Generate, and it is never cut', () => {
+  const r = rows('a crab runs', 'it lifts a claw');
+  assert.equal(shotState(r, clip('a crab walks', 'it lifts a claw'), true).action, 'generate');
+  assert.equal(shotState(rows('a crab walks'), clip('a crab walks'), true).dropLast, -1);
+});
+
+test('no clip, or one that cannot chain, never extends or redoes', () => {
+  assert.equal(shotState(rows('a crab', 'it waves'), null, true).action, 'generate');
+  assert.equal(shotState(rows('a crab', 'it waves'), clip('a crab'), false).action, 'none');
+  assert.equal(shotState(rows('a crab', 'it runs'), clip('a crab', 'it waves'), false).action, 'generate');
+  assert.equal(shotState(rows('a crab'), null, true).done, 0);
 });
 
 test('blank rows are not shots', () => {
-  const s = shotState(['a crab', '', '  '], clip('a crab'), true);
+  const r = [...rows('a crab'), { text: '', seed: -1, frames: 33 }, { text: '  ', seed: -1, frames: 33 }];
+  const s = shotState(r, clip('a crab'), true);
   assert.deepEqual(s.pending, []);
-  assert.ok(!s.canExtend);
+  assert.equal(s.action, 'none');
 });

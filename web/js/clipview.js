@@ -1,9 +1,10 @@
-import { $, esc, getJSON, post } from './dom.js';
+import { $, esc, getJSON, post, setPlayIcon } from './dom.js';
 import { S } from './state.js';
 import { setBusy, setIdle } from './busy.js';
 import { soonJobs } from './jobs.js';
 import { floatPanels } from './panels.js';
 import { upOptions, setUpFactor } from './image.js';
+import { FORMATS, available, exportClip, outSize } from './export.js';
 
 // ---- The clip dialog ----------------------------------------------------------
 //
@@ -15,9 +16,12 @@ import { upOptions, setUpFactor } from './image.js';
 //   frame of the original, `Engine::enlarge_clip`), History lists the versions
 //   with Compare against the original, and Save to output writes the version
 //   on screen into `work/output/` — the only way a clip gets there. Shots are
-//   added on the Video tab, in the Prompts panel, where Generate is.
-// - A clip saved to output (`{stem}.avi`), opened from the Outputs tab: it only
-//   plays, its frames read out of the AVI (`/outputs/{stem}/frames/{k}.jpg`).
+//   added on the Video tab, in the Shots panel, where Generate is.
+// - A clip saved to output (`{stem}.avi`), opened from the Outputs tab: it
+//   plays and downloads, its frames read out of the AVI
+//   (`/outputs/{stem}/frames/{k}.jpg`).
+//
+// Download encodes the version on screen into a file to share (`export.js`).
 //
 // The player is this module's own, not the Video stage's. Opening the dialog
 // stops the stage (`onOpen`): one clip plays at a time, the one looked at.
@@ -35,6 +39,10 @@ let panels = null;
 // the clip as it now is.
 let onClip = () => {};
 let onOpen = () => {};
+// The formats this browser can make of the version on screen, and a
+// download in progress (its AbortController).
+let canMake = new Set(['avi']);
+let exporting = null;
 
 const isClip = () => view?.kind === 'clip';
 const fps = () => Math.max(1, isClip() ? view.clip.fps : view.info.fps);
@@ -75,7 +83,7 @@ function stop() {
   clearInterval(timer);
   timer = null;
   $('cbaudio').pause();
-  $('cbplay').textContent = 'Play';
+  setPlayIcon($('cbplay'), false);
 }
 
 function draw(i) {
@@ -104,7 +112,7 @@ function draw(i) {
 function play() {
   if (timer) { stop(); return; }
   if (!frames.length) return;
-  $('cbplay').textContent = 'Pause';
+  setPlayIcon($('cbplay'), true);
   const a = $('cbaudio');
   if (a.src) {
     a.currentTime = at / fps();
@@ -143,6 +151,7 @@ async function show(v) {
   if (mine !== seq) return;
   // Shown, not played — the stage's rule.
   draw(Math.min(at, frames.length - 1));
+  probeFormats();
 }
 
 async function loadBase() {
@@ -166,17 +175,127 @@ function drawHistory() {
 
 function syncRail() {
   const clip = isClip();
-  for (const b of $('clipbox').querySelectorAll('.lbrail .railbtn')) b.hidden = !clip;
+  // A saved clip only plays and downloads.
+  for (const b of $('clipbox').querySelectorAll('.lbrail .railbtn')) b.hidden = !clip && b.dataset.panel !== 'cb-download';
   $('cbsave').hidden = !clip;
   if (!clip) {
     for (const id of ['panel-cb-enlarge', 'panel-cb-history']) if ($(id).open) $(id).open = false;
   }
-  const href = clip
-    ? `/videos/${encodeURIComponent(view.clip.id)}${version ? `/v${version}` : ''}/clip.avi`
-    : `/outputs/${encodeURIComponent(view.stem)}/clip.avi`;
-  $('cbdownload').href = href;
-  $('cbdownload').download = `${clip ? view.clip.id : view.stem}${version ? `-v${version}` : ''}.avi`;
   $('sum-cb-enlarge').textContent = `— ${S.upFactor}×`;
+}
+
+// ---- Download ----------------------------------------------------------------
+
+const aviUrl = () => (isClip()
+  ? `/videos/${encodeURIComponent(view.clip.id)}${version ? `/v${version}` : ''}/clip.avi`
+  : `/outputs/${encodeURIComponent(view.stem)}/clip.avi`);
+const baseName = () => `${isClip() ? view.clip.id : view.stem}${isClip() && version ? `-v${version}` : ''}`;
+const audioUrl = () => $('cbaudio').getAttribute('src') || null;
+
+function remembered() {
+  try { return localStorage.getItem('yasdig.clipformat'); } catch { return null; }
+}
+
+function picked() {
+  return $('cbformats').querySelector('input:checked')?.value ?? 'avi';
+}
+
+// The radios for what this browser can make; the last pick if it still can,
+// else the first.
+function drawFormats() {
+  const keep = $('cbformats').querySelector('input:checked')?.value ?? remembered();
+  const offer = FORMATS.filter((f) => canMake.has(f.id));
+  const want = offer.some((f) => f.id === keep) ? keep : offer[0].id;
+  $('cbformats').innerHTML = offer.map((f) => `<label><input type="radio" name="cbformat" value="${f.id}"
+    ${f.id === want ? 'checked' : ''}> ${f.label}</label>`).join('');
+  syncDownload();
+}
+
+// What the pick makes, and the boxes that apply to it.
+function syncDownload() {
+  const fmt = picked();
+  const f = FORMATS.find((x) => x.id === fmt);
+  $('cbformatnote').textContent = f.note;
+  $('cbencrow').hidden = fmt === 'avi';
+  $('cbsize').parentElement.hidden = fmt === 'gif';
+  $('sum-cb-download').textContent = `— ${f.label}`;
+  const missing = FORMATS.filter((x) => !canMake.has(x.id)).map((x) => x.label);
+  if (!exporting) {
+    const cv = $('cbcanvas');
+    const [w, h] = fmt === 'avi' ? [cv.width, cv.height] : outSize(fmt, cv.width, cv.height, parseFloat($('cbscale').value) || 1);
+    $('cbdlnote').textContent = (cv.width ? `${w}×${h}. ` : '')
+      + (missing.length ? `This browser can't make ${missing.join(' or ')} — another browser may.` : '');
+  }
+}
+
+// Ask the browser once a version's size is known.
+async function probeFormats() {
+  const mine = seq;
+  const cv = $('cbcanvas');
+  let got = new Set(['avi', 'gif']);
+  try {
+    got = await available(cv.width, cv.height, fps());
+  } catch { /* GIF and AVI need no encoder */ }
+  if (mine !== seq) return;
+  canMake = got;
+  drawFormats();
+}
+
+function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+async function download() {
+  const fmt = picked();
+  try { localStorage.setItem('yasdig.clipformat', fmt); } catch { /* a convenience */ }
+  const f = FORMATS.find((x) => x.id === fmt);
+  if (fmt === 'avi') {
+    const a = document.createElement('a');
+    a.href = aviUrl();
+    a.download = `${baseName()}.avi`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return;
+  }
+  const v = version;
+  exporting = new AbortController();
+  $('cbdlgo').disabled = true;
+  $('cbdlstop').hidden = false;
+  $('cberr').textContent = '';
+  $('cbdlnote').textContent = 'Starting…';
+  try {
+    const { blob, note } = await exportClip({
+      fmt,
+      frameUrl: (k) => frameUrl(v, k),
+      frames: frames.length || frameCount(),
+      fps: fps(),
+      width: $('cbcanvas').width,
+      height: $('cbcanvas').height,
+      // A GIF has no sound to carry.
+      audioUrl: fmt === 'gif' ? null : audioUrl(),
+      scale: parseFloat($('cbscale').value) || 1,
+      size: $('cbsize').value,
+      signal: exporting.signal,
+      onProgress: (done, total) => { $('cbdlnote').textContent = `Encoding frame ${done} of ${total}…`; },
+    });
+    saveBlob(blob, `${baseName()}.${f.ext}`);
+    $('cbdlnote').textContent = `${f.label}, ${(blob.size / 1e6).toFixed(1)} MB.${note ? ` ${note}` : ''}`;
+  } catch (e) {
+    if (e?.name === 'AbortError') $('cbdlnote').textContent = 'Cancelled.';
+    else { $('cbdlnote').textContent = ''; $('cberr').textContent = `Download: ${e.message || e}`; }
+  } finally {
+    exporting = null;
+    $('cbdlgo').disabled = false;
+    $('cbdlstop').hidden = true;
+  }
 }
 
 function sound() {
@@ -297,7 +416,7 @@ export function initClipView({ onClipChange, onOpen: opened } = {}) {
   panels = floatPanels({
     host: $('clipbox'),
     rail: $('clipbox').querySelector('.lbrail'),
-    defs: [{ id: 'cb-enlarge' }, { id: 'cb-history', corner: 'bottom-right' }],
+    defs: [{ id: 'cb-enlarge' }, { id: 'cb-history', corner: 'bottom-right' }, { id: 'cb-download' }],
   });
   panels.init();
   $('cbfactor').innerHTML = upOptions();
@@ -322,9 +441,14 @@ export function initClipView({ onClipChange, onOpen: opened } = {}) {
   $('cbcanvas').addEventListener('pointerdown', dragSplit);
   $('cbenlarge').addEventListener('click', enlarge);
   $('cbsave').addEventListener('click', save);
+  $('cbdlgo').addEventListener('click', download);
+  $('cbdlstop').addEventListener('click', () => exporting?.abort());
+  $('cbformats').addEventListener('change', syncDownload);
+  $('cbscale').addEventListener('change', syncDownload);
   $('cbclose').addEventListener('click', () => $('clipbox').close());
   // Closing stops playback and lets the decoded frames go.
   $('clipbox').addEventListener('close', () => {
+    exporting?.abort();
     stop();
     seq++;
     frames = [];

@@ -407,16 +407,31 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .lorarow .btn { padding: var(--sp-2); }
 /* Per model's list of video models with saved defaults. */
 .pmvrow { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
-/* A long clip's shot: its number, its text, remove. */
-.shotrow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--sp-2); align-items: start; margin-top: var(--sp-2); }
-.shotrow b { padding-top: var(--sp-2); color: var(--text-dim); }
-.shotrow .btn { padding: var(--sp-2); }
+/* A long clip's shot: a heading line (its number, how it starts, done, ×),
+   then its seed and length, its prompt, its references. A rule above each
+   but the first is the separator between shots. */
+.shotrow { margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: var(--line); }
+.shotrow:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.shothead { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+/* The heading folds the row, as a panel's header would: a bare button, its
+   number the label, with a turning chevron. */
+.shotfold { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
+.shotfold::before { content: "\25BE"; display: inline-block; width: 1em; color: var(--text-dim); transition: transform .12s; }
+.shotrow.folded .shotfold::before { transform: rotate(-90deg); }
+.shothead b { color: var(--text-dim); }
+.shotsum { display: none; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.shotrow.folded .shotsum { display: block; }
+.shotrow.folded .shotbody { display: none; }
+.shothead .shotx { margin-left: auto; }
+.shotstart { display: flex; align-items: center; gap: var(--sp-1); }
+.shotstart label { margin: 0; }
+.shotstart .btn-choice { padding: var(--sp-1) var(--sp-3); }
+.shotrefs { margin-top: var(--sp-2); }
 /* A shot the clip on the stage already has (`shots.js`): ticked in the
-   departure green, which here means "drawn". Row 1 stands for the Prompt. */
-.shotrow.done b { color: var(--go); }
-.shotrow.done b::after { content: " \2713"; }
+   departure green, which here means "drawn". */
+.shotrow.done .shothead b { color: var(--go); }
+.shotrow.done .shothead b::after { content: " \2713"; }
 .shotrow.done textarea { border-color: var(--go); }
-.shotfirst p { margin: var(--sp-2) 0 0; }
 /* The A14B pair's expert choice, under its row. */
 .loraexpert { width: 100%; margin-top: var(--sp-1); }
 
@@ -468,6 +483,10 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .withbtn { display: flex; gap: var(--sp-2); }
 .withbtn > input { flex: 1 1 0; min-width: 0; }
 .withbtn > .btn { flex: 0 0 auto; }
+/* A button that is only an icon (`ICONS` in dom.js): square, the glyph in
+   its text colour. */
+.btn-icon { display: inline-flex; align-items: center; justify-content: center; padding: var(--sp-2); min-width: 2.25rem; }
+.btn-icon .icon { width: 1.15em; height: 1.15em; display: block; }
 .checks { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-top: var(--sp-2); }
 /* `label` is a block with margins by default here — that's for the form column,
    not for a pair of radios, or a row of checkboxes, sitting on one line. */
