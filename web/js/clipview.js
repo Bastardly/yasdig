@@ -10,15 +10,17 @@ import { upOptions, setUpFactor } from './image.js';
 // A clip played full size, Refine & adjust's shape: a rail, the player on a
 // pane, floating panels. Two kinds of clip open here:
 //
-// - A clip from the Clips grid (`work/videos/{id}/`): Enlarge makes a new
-//   version of it (FSR on every frame of the original, `Engine::enlarge_clip`),
-//   History lists the versions with Compare against the original, and Save to
-//   output writes the version on screen into `work/output/`.
+// - A clip from the Video tab's grids (`work/videos/{id}/`, or starred in
+//   `user/favorite_clips/`): Enlarge makes a new version of it (FSR on every
+//   frame of the original, `Engine::enlarge_clip`), History lists the versions
+//   with Compare against the original, and Save to output writes the version
+//   on screen into `work/output/` — the only way a clip gets there. Shots are
+//   added on the Video tab, in the Prompts panel, where Generate is.
 // - A clip saved to output (`{stem}.avi`), opened from the Outputs tab: it only
 //   plays, its frames read out of the AVI (`/outputs/{stem}/frames/{k}.jpg`).
 //
-// The player is this module's own, not the Video stage's: the stage keeps
-// playing what it shows, and closing the dialog leaves it as it was.
+// The player is this module's own, not the Video stage's. Opening the dialog
+// stops the stage (`onOpen`): one clip plays at a time, the one looked at.
 
 let view = null; // { kind: 'clip', clip } | { kind: 'output', stem, info }
 let version = 0;
@@ -32,8 +34,7 @@ let panels = null;
 // Told when a clip's versions change, so the Video tab's grid and stage hold
 // the clip as it now is.
 let onClip = () => {};
-let canContinue = () => false;
-let onContinue = () => {};
+let onOpen = () => {};
 
 const isClip = () => view?.kind === 'clip';
 const fps = () => Math.max(1, isClip() ? view.clip.fps : view.info.fps);
@@ -140,8 +141,8 @@ async function show(v) {
   $('cbscrub').max = Math.max(0, frames.length - 1);
   if ($('cbcompare').checked) await loadBase();
   if (mine !== seq) return;
+  // Shown, not played — the stage's rule.
   draw(Math.min(at, frames.length - 1));
-  play();
 }
 
 async function loadBase() {
@@ -166,15 +167,9 @@ function drawHistory() {
 function syncRail() {
   const clip = isClip();
   for (const b of $('clipbox').querySelectorAll('.lbrail .railbtn')) b.hidden = !clip;
-  // Extend only where a clip can go on from its last frame.
-  const extendable = clip && canContinue(view.clip);
-  $('clipbox').querySelector('[data-panel="cb-extend"]').hidden = !extendable;
-  if (!extendable && $('panel-cb-extend').open) $('panel-cb-extend').open = false;
-  syncExtend();
   $('cbsave').hidden = !clip;
-  $('cbcontinue').hidden = !clip || !canContinue(view.clip);
   if (!clip) {
-    for (const id of ['panel-cb-enlarge', 'panel-cb-history', 'panel-cb-extend']) if ($(id).open) $(id).open = false;
+    for (const id of ['panel-cb-enlarge', 'panel-cb-history']) if ($(id).open) $(id).open = false;
   }
   const href = clip
     ? `/videos/${encodeURIComponent(view.clip.id)}${version ? `/v${version}` : ''}/clip.avi`
@@ -200,6 +195,7 @@ function open() {
   $('cbprog').textContent = '';
   $('cbcompare').checked = false;
   sound();
+  onOpen();
   if (!$('clipbox').open) $('clipbox').showModal();
   panels.layout();
 }
@@ -212,8 +208,8 @@ export function openClipView(clip) {
 }
 
 // Open a clip saved to output, from the Outputs tab. Saved as `{id}` or
-// `{id}-v{n}`, so while the clip it came from is still in the Clips grid it
-// opens as that clip — Extend, Enlarge and History and all — on that version;
+// `{id}-v{n}`, so while the clip it came from is still on the Video tab it
+// opens as that clip — Enlarge and History and all — on that version;
 // otherwise the file only plays.
 export async function openOutputClip(stem) {
   const [, id, v] = stem.match(/^(.*?)(?:-v(\d+))?$/);
@@ -237,45 +233,6 @@ export async function openOutputClip(stem) {
   }
   open();
   show(0);
-}
-
-// The Extend panel's state: how many shots, and whether the last one can be
-// redrawn or taken back (a clip made in one go has none added).
-function syncExtend() {
-  if (!isClip()) return;
-  const c = view.clip;
-  const shots = c.shot_starts?.length ?? 0;
-  $('cblastrow').hidden = shots < 2;
-  $('cbextendnote').textContent = shots >= 2
-    ? `${shots} shots, ${(c.frames / Math.max(1, c.fps)).toFixed(1)} s. The last: “${c.shots?.at(-1) ?? ''}”.`
-    : `${(c.frames / Math.max(1, c.fps)).toFixed(1)} s. A shot goes on from its last frame, `
-      + 'with the clip’s own prompt and settings.';
-  $('sum-cb-extend').textContent = shots >= 2 ? `— ${shots} shots` : '';
-}
-
-// One shot added, redrawn (`replace`) or taken back (no `shot`): the clip
-// itself changes, so the dialog plays it from where the new shot starts.
-async function extend(shot, replace) {
-  if (!isClip()) return;
-  const btn = shot === null ? 'cbundo' : replace ? 'cbregen' : 'cbextend';
-  setBusy(btn, shot === null ? 'Undoing…' : 'Drawing the shot…', 'video');
-  $('cberr').textContent = '';
-  soonJobs();
-  try {
-    const data = await post('/videos/extend', { id: view.clip.id, shot, replace_last: replace });
-    view.clip = data.clip;
-    onClip(data.clip);
-    $('cbprog').textContent = data.note ?? (shot === null ? 'The last shot is gone.'
-      : `Shot ${data.clip.shot_starts.length} added in ${(data.gen_ms / 1000).toFixed(1)} s.`);
-    if (shot !== null) $('cbshot').value = '';
-    base = [];
-    at = data.clip.shot_starts?.at(-1) ?? 0;
-    show(0);
-  } catch (e) {
-    $('cberr').textContent = String(e.message || e);
-  } finally {
-    setIdle(btn);
-  }
 }
 
 async function enlarge() {
@@ -334,14 +291,13 @@ function dragSplit(e) {
   cv.addEventListener('pointerup', up);
 }
 
-export function initClipView({ onClipChange, canContinue: can, onContinue: cont } = {}) {
+export function initClipView({ onClipChange, onOpen: opened } = {}) {
   if (onClipChange) onClip = onClipChange;
-  if (can) canContinue = can;
-  if (cont) onContinue = cont;
+  if (opened) onOpen = opened;
   panels = floatPanels({
     host: $('clipbox'),
     rail: $('clipbox').querySelector('.lbrail'),
-    defs: [{ id: 'cb-extend' }, { id: 'cb-enlarge' }, { id: 'cb-history', corner: 'bottom-right' }],
+    defs: [{ id: 'cb-enlarge' }, { id: 'cb-history', corner: 'bottom-right' }],
   });
   panels.init();
   $('cbfactor').innerHTML = upOptions();
@@ -366,22 +322,6 @@ export function initClipView({ onClipChange, canContinue: can, onContinue: cont 
   $('cbcanvas').addEventListener('pointerdown', dragSplit);
   $('cbenlarge').addEventListener('click', enlarge);
   $('cbsave').addEventListener('click', save);
-  $('cbextend').addEventListener('click', () => {
-    const shot = $('cbshot').value.trim();
-    if (!shot) { $('cberr').textContent = 'Say what happens next.'; return; }
-    extend(shot, false);
-  });
-  // The box's text if one was typed, else the last shot's own.
-  $('cbregen').addEventListener('click', () =>
-    extend($('cbshot').value.trim() || view.clip.shots?.at(-1) || '', true));
-  $('cbundo').addEventListener('click', () => extend(null, true));
-  // The new clip is set up on the Video tab, where Generate is.
-  $('cbcontinue').addEventListener('click', () => {
-    if (!isClip()) return;
-    const c = view.clip;
-    $('clipbox').close();
-    onContinue(c);
-  });
   $('cbclose').addEventListener('click', () => $('clipbox').close());
   // Closing stops playback and lets the decoded frames go.
   $('clipbox').addEventListener('close', () => {

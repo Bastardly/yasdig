@@ -33,7 +33,7 @@ pub struct Cleared {
 pub fn clear(cfg: &Config) -> Cleared {
     let settings = Settings::load_or_default(&cfg.user_dir());
     let work = cfg.base_dir.join("work");
-    clear_in(&Store::new(&work, &cfg.user_dir()), &VideoStore::new(&work), &settings)
+    clear_in(&Store::new(&work, &cfg.user_dir()), &VideoStore::new(&work, &cfg.user_dir()), &settings)
 }
 
 fn clear_in(store: &Store, videos: &VideoStore, s: &Settings) -> Cleared {
@@ -56,18 +56,19 @@ fn clear_in(store: &Store, videos: &VideoStore, s: &Settings) -> Cleared {
         }
     }
     if s.clear_videos_on_close {
-        for c in videos.list() {
-            match videos.delete(&c.id) {
+        // `work/videos/` alone: a starred clip is in `user/favorite_clips/`.
+        for c in videos.list(Shelf::Work) {
+            match videos.delete(Shelf::Work, &c.id) {
                 Ok(()) => out.videos += 1,
                 Err(e) => log(e),
             }
         }
-        // A clip's enlarged frames: `Engine::enlarge_clip` writes them to
-        // `work/output/{id}-x{factor}/`, the only directories anything puts
-        // there. All of them rather than only the listed clips', since an
-        // enlargement outlives a clip deleted from the grid and would
-        // otherwise never go. Matched on the name it is given, not on
-        // "is a directory", so a folder the user made is left alone.
+        // A clip's enlarged frames as older builds wrote them, unasked, to
+        // `work/output/{id}-x{factor}/` (an enlarge is a version inside the
+        // clip now). All of them rather than only the listed clips', since an
+        // enlargement outlived a clip deleted from the grid. Matched on the
+        // name it was given, not on "is a directory", so a folder the user
+        // made is left alone.
         if let Ok(entries) = std::fs::read_dir(store.output_dir()) {
             for e in entries.flatten() {
                 let path = e.path();
@@ -78,11 +79,10 @@ fn clear_in(store: &Store, videos: &VideoStore, s: &Settings) -> Cleared {
                         log(anyhow::Error::new(err).context(format!("deleting {}", path.display())));
                     }
                 }
-                // A clip's video file, `{id}.avi`, and an enlargement's,
-                // `{id}-x{factor}.avi` (`Settings::video_save`).
-                let clip_file = name
-                    .strip_suffix(".avi")
-                    .is_some_and(|stem| is_clip_id(stem) || is_enlarged_clip(stem));
+                // An old enlargement's video file, `{id}-x{factor}.avi`. Not a
+                // clip's own `{id}.avi`: that is in Outputs only because *Save
+                // to output* put it there, and the outputs switch is its clear.
+                let clip_file = name.strip_suffix(".avi").is_some_and(is_enlarged_clip);
                 if path.is_file() && clip_file {
                     if let Err(err) = std::fs::remove_file(&path) {
                         log(anyhow::Error::new(err).context(format!("deleting {}", path.display())));
@@ -120,7 +120,7 @@ mod tests {
         ));
         let work = dir.join("work");
         let store = Store::new(&work, &dir.join("user"));
-        let videos = VideoStore::new(&work);
+        let videos = VideoStore::new(&work, &dir.join("user"));
         let png = dir.join("src.png");
         image::RgbaImage::from_pixel(32, 16, image::Rgba([7, 7, 7, 255]))
             .save(&png)

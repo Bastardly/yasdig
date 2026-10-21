@@ -28,13 +28,13 @@
 
 use crate::area::Area;
 use crate::brush::{self, Brushes, Stroke, Tool};
-use crate::config::{Config, Filters, FiltersPatch, LoraRef, Profile, MAX_STRENGTH, MIN_STRENGTH};
+use crate::config::{Config, Filters, FiltersPatch, LoraRef, Profile, MAX_STRENGTH, MIN_STRENGTH, VideoModel};
 use crate::edits;
 use crate::redraw;
 use crate::fsr::Fsr;
 use crate::sd::{Monitor, SdRunner, VideoIo};
 use crate::variables;
-use crate::videos::{Clip, VideoStore};
+use crate::videos::{shot_prompt, Clip, Segment, VideoStore};
 use crate::workitems::{self, Shelf, WorkItem};
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
@@ -492,12 +492,37 @@ pub struct VideoRequest {
     pub parts: Option<std::collections::BTreeMap<String, Option<String>>>,
     /// The Video tab's LoRA picks; `None` keeps none, `Some([])` is none.
     pub loras: Option<Vec<crate::config::VideoLora>>,
-    /// A long clip: one segment per shot, each from the last one's final
-    /// frame, conditioned on `"{prompt}. {shot}"`. Empty is one clip.
+    /// A long clip's shots after the first — the Prompt is shot 1 — each from
+    /// the last one's final frame and conditioned on its own text. Empty is
+    /// one clip.
     pub shots: Vec<String>,
-    /// A clip id whose frames this one starts with; its shots (or the prompt
-    /// alone) go on from that clip's last frame.
-    pub continue_from: Option<String>,
+    /// The Prompts panel's *Every shot*: what goes in front of every shot's
+    /// text, the Prompt's included ([`crate::videos::shot_prompt`]).
+    pub every: Option<String>,
+}
+
+/// *Extend clip*: shots to add to clip `id`, or with `drop_last` its last
+/// shot to cut off. See [`Engine::extend_clip`].
+#[derive(Debug, Clone, Default)]
+pub struct ExtendClipRequest {
+    pub id: String,
+    pub shots: Vec<String>,
+    pub every: Option<String>,
+    /// `None` keeps the clip's own.
+    pub negative: Option<String>,
+    /// Negative = pick one; the shots after the first take `seed + j`.
+    pub seed: i64,
+    pub drop_last: bool,
+}
+
+/// The note a long clip cut short carries: a Stop, or a failed shot, after
+/// `k` of `n` were done — which are kept.
+fn cut_short(e: &anyhow::Error, k: usize, n: usize) -> String {
+    if format!("{e:#}").contains(crate::sd::CANCELLED) {
+        format!("Stopped during shot {} of {n}; the {k} before it are kept.", k + 1)
+    } else {
+        format!("Shot {} of {n} failed ({e:#}); the {k} before it are kept.", k + 1)
+    }
 }
 
 /// More shots than this is past what one queued job should be: about a
@@ -510,11 +535,6 @@ pub const MAX_SHOTS: usize = 20;
 pub struct VideoResult {
     pub clip: Clip,
     pub gen_ms: u128,
-    /// The video file [`Settings::video_save`] asked for, under `work/output/`;
-    /// `None` when frames were asked for.
-    ///
-    /// [`Settings::video_save`]: crate::settings::Settings::video_save
-    pub saved: Option<PathBuf>,
     /// Why a long clip has fewer shots than were asked for: a Stop, or a
     /// shot that failed after others were done.
     pub note: Option<String>,
@@ -1224,7 +1244,7 @@ impl Engine {
         // so the archives under `work/` are out of its reach.
         purge_pngs(&work_dir);
         let items = workitems::Store::new(&work_dir, &cfg.user_dir());
-        let videos = VideoStore::new(&work_dir);
+        let videos = VideoStore::new(&work_dir, &cfg.user_dir());
         let fsr = Arc::new(Mutex::new(Fsr::new()?));
         let retained = Arc::new(Mutex::new(Retained::with_store(workitems::Store::new(&work_dir, &cfg.user_dir()))));
         // Fail fast with a friendly message if the sd binary is missing.
@@ -2066,91 +2086,89 @@ impl Engine {
         let typed_prompt = variables::typed(&req.prompt, &prompt);
         let typed_negative = variables::typed(&negative, &rolled);
         let negative = rolled;
-        // A long clip's shots, as typed and as conditioned: the Prompt is the
-        // scene, a shot what happens in it. Each rolls its variables off its
-        // own seed, `seed + k`, as a batch image does.
-        let typed_shots: Vec<String> =
+        // A long clip's shots: the Prompt is shot 1, each later one its own
+        // text, and *Every shot* goes in front of all of them (`shot_prompt`).
+        // That box rolls once, off the clip's seed, so a rolled character is
+        // the same one in every shot; a shot rolls off its own, `seed + k`, as
+        // a batch image does.
+        let every_typed = req.every.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        let every = match &every_typed {
+            Some(e) => variables::expand(e, &vars, seed)?,
+            None => String::new(),
+        };
+        let later: Vec<String> =
             req.shots.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-        let continues = req.continue_from.clone().filter(|s| !s.is_empty());
-        if (!typed_shots.is_empty() || continues.is_some()) && !m.family.chains() {
+        if !later.is_empty() && !m.family.chains() {
             bail!(
                 "a {} model can't go on from a clip's last frame (its -i is not a first frame), so it \
                  makes one clip at a time — remove the shots, or pick a TI2V-5B, A14B or H3 model",
                 m.family.label()
             );
         }
-        if typed_shots.len() > MAX_SHOTS {
-            bail!("a long clip has at most {MAX_SHOTS} shots; this one has {}", typed_shots.len());
+        if later.len() + 1 > MAX_SHOTS {
+            bail!("a long clip has at most {MAX_SHOTS} shots; this one has {}", later.len() + 1);
         }
-        let continued = match &continues {
-            Some(from) => Some(self.videos.load(from)?),
-            None => None,
-        };
-        let segments: Vec<String> = if typed_shots.is_empty() {
-            vec![prompt.clone()]
-        } else {
-            typed_shots
-                .iter()
-                .enumerate()
-                .map(|(k, shot)| Ok(format!("{prompt}. {}", variables::expand(shot, &vars, seed.wrapping_add(k as i64))?)))
-                .collect::<Result<_>>()?
-        };
+        let mut segments = vec![Segment {
+            text: req.prompt.trim().to_string(),
+            conditioned: shot_prompt(&every, &prompt),
+            seed,
+            start: 0,
+        }];
+        for (k, shot) in later.iter().enumerate() {
+            let seed = seed.wrapping_add(k as i64 + 1);
+            segments.push(Segment {
+                text: shot.clone(),
+                conditioned: shot_prompt(&every, &variables::expand(shot, &vars, seed)?),
+                seed,
+                start: 0,
+            });
+        }
         let n = segments.len();
 
         let id = workitems::new_id(seed);
         // A soundtrack only survives in a container — see `videos::CONTAINER`.
         let sound = m.audio_vae.is_some();
         let (pattern, mut dir) = self.videos.prepare(&id, sound)?;
-        if let Some(from) = &continues {
-            self.videos.seed_from(&id, from)?;
-        }
 
         let t = Instant::now();
-        let mut shot_starts = Vec::new();
+        let mut done = 0;
         let mut note = None;
-        for (k, text) in segments.iter().enumerate() {
-            // The first segment of a fresh clip renders into the clip itself,
-            // from the picked first frame; every other one into a folder of
-            // its own, from the clip's last frame so far, and is then joined.
-            let fresh = k == 0 && continued.is_none();
-            let last = (!fresh).then(|| self.videos.frames(&id).pop()).flatten();
-            let out = if fresh { pattern.clone() } else { self.videos.prepare_segment(&id, k, sound)? };
-            let ran = self.sd().video(
-                &m,
-                text,
-                &negative,
-                seed.wrapping_add(k as i64),
-                &VideoIo {
-                    init: if fresh { init.as_deref() } else { last.as_deref() },
-                    control: None,
-                    out: &out,
-                },
-                (n > 1).then_some((k + 1, n)),
-            );
+        for k in 0..n {
+            // The first shot renders into the clip itself, from the picked
+            // first frame; every other one into a folder of its own, from the
+            // clip's last frame so far, and is then joined.
+            let ran = if k == 0 {
+                self.sd().video(
+                    &m,
+                    &segments[0].conditioned,
+                    &negative,
+                    seed,
+                    &VideoIo { init: init.as_deref(), control: None, out: &pattern },
+                    (n > 1).then_some((1, n)),
+                )
+            } else {
+                self.render_shot(&id, &m, &segments[k], &negative, k, n)
+            };
             if let Err(e) = ran {
                 // Shots already done are minutes of work: a Stop or a failure
                 // past the first keeps them as the clip, and says so.
                 if k == 0 {
                     return Err(e);
                 }
-                let stopped = format!("{e:#}").contains(crate::sd::CANCELLED);
-                note = Some(if stopped {
-                    format!("Stopped during shot {} of {n}; the {k} before it are the clip.", k + 1)
-                } else {
-                    format!("Shot {} of {n} failed ({e:#}); the {k} before it are the clip.", k + 1)
-                });
+                note = Some(cut_short(&e, k, n));
                 break;
             }
-            if fresh {
+            if k == 0 {
                 if sound {
                     self.videos.unpack(&id)?;
                 }
-                shot_starts.push(0);
             } else {
-                shot_starts.push(self.videos.append_segment(&id, k, m.effective_fps())?);
+                segments[k].start = self.videos.append_segment(&id, k, m.effective_fps())?;
             }
+            done = k + 1;
         }
-        if n > 1 || continued.is_some() {
+        segments.truncate(done);
+        if n > 1 {
             self.videos.drop_container(&id);
         }
         let gen_ms = t.elapsed().as_millis();
@@ -2178,62 +2196,72 @@ impl Engine {
             audio: false,
             video: m,
             versions: Vec::new(),
-            shots: typed_shots,
-            shot_starts: if n > 1 { shot_starts } else { Vec::new() },
-            continues,
+            every: every_typed,
+            segments,
+            favorite: false,
+            shots: Vec::new(),
+            shot_starts: Vec::new(),
         };
         self.videos.finish(&mut clip)?;
         // Past every `?`, so the guard stops being a sweeper. Everything before
         // this point leaves no half-written clip behind — which is the ordinary
-        // path, not the rare one, because that is what Stop does.
+        // path, not the rare one, because that is what Stop does. Nothing goes
+        // to `work/output/`: a clip is a work item until *Save to output*.
         dir.keep();
-        // After `keep`: a clip whose file couldn't be written is still a clip,
-        // and the error says what went wrong with the file alone.
-        let saved = if self.cfg.settings().video_save == crate::settings::VIDEO_FILE {
-            let dest = self.items.output_dir().join(format!("{}.avi", clip.id));
-            self.videos
-                .export(&clip, 0, &dest)
-                .with_context(|| format!("the clip is in the Clips grid, but its video file wasn't written ({})", dest.display()))?;
-            Some(dest)
-        } else {
-            None
-        };
-        Ok(VideoResult { clip, gen_ms, saved, note })
+        Ok(VideoResult { clip, gen_ms, note })
     }
 
-    /// Add one shot to clip `id`, in place: a segment from its last frame,
-    /// conditioned on the clip's own prompt and `shot`, joined as a long
-    /// clip's shots are — the clip dialog's *Extend*. With `replace_last`, the
-    /// clip's last added shot goes first (*Regenerate*); with no `shot`, that
-    /// is all (*Undo*). The clip's enlarged versions no longer cover it and go.
+    /// Shot `k` of `n` of clip `id`: a segment from the clip's last frame so
+    /// far, into `seg{k}/`, which [`VideoStore::append_segment`] then joins.
+    fn render_shot(&mut self, id: &str, m: &VideoModel, seg: &Segment, negative: &str, k: usize, n: usize) -> Result<()> {
+        let last = self.videos.frames(id).pop().context("the clip has no frames")?;
+        let out = self.videos.prepare_segment(id, k, m.audio_vae.is_some())?;
+        let ran = self.sd().video(
+            m,
+            &seg.conditioned,
+            negative,
+            seg.seed,
+            &VideoIo { init: Some(&last), control: None, out: &out },
+            Some((k + 1, n)),
+        );
+        if ran.is_err() {
+            let _ = std::fs::remove_dir_all(self.videos.dir(id).join(format!("seg{k}")));
+        }
+        ran.map(|_| ())
+    }
+
+    /// Add shots to clip `id`, in place — the Prompts panel's *Extend clip*:
+    /// each a segment from the clip's last frame, conditioned on its own text
+    /// with *Every shot* in front, joined as a long clip's shots are. With
+    /// `drop_last`, the clip's last shot is cut off instead, and nothing drawn.
+    /// The clip's enlarged versions no longer cover it and go.
     ///
-    /// Runs on the model as the clip recorded it, so the new shot matches the
-    /// old ones: size, steps, LoRAs, parts.
-    pub fn extend_clip(
-        &mut self,
-        id: &str,
-        shot: Option<&str>,
-        seed: i64,
-        replace_last: bool,
-    ) -> Result<VideoResult> {
+    /// Runs on the model as the clip recorded it, so the new shots match the
+    /// old ones: size, steps, LoRAs, parts. What it takes from the panel is
+    /// only words — *Every shot*, the negative — and the seed.
+    pub fn extend_clip(&mut self, req: &ExtendClipRequest) -> Result<VideoResult> {
+        let id = req.id.as_str();
         let mut clip = self.videos.load(id)?;
         let m = clip.video.clone();
         if !m.family.chains() {
             bail!("a {} clip can't go on from its last frame", m.family.label());
         }
         let fps = clip.fps.max(1);
-        let mut note = None;
-        if replace_last {
-            if clip.shot_starts.len() < 2 {
-                bail!("this clip has no added shot to take back");
-            }
-            let start = clip.shot_starts.pop().expect("checked above");
-            clip.shots.pop();
-            self.videos.truncate(id, start, fps)?;
-        }
         let t = Instant::now();
-        if let Some(shot) = shot.map(str::trim).filter(|s| !s.is_empty()) {
-            if clip.shot_starts.len() >= MAX_SHOTS {
+        let mut note = None;
+        if req.drop_last {
+            if clip.segments.len() < 2 {
+                bail!("the first shot is the clip; there is no added shot to take back");
+            }
+            let last = clip.segments.pop().expect("checked above");
+            self.videos.truncate(id, last.start, fps)?;
+        } else {
+            let shots: Vec<String> =
+                req.shots.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            if shots.is_empty() {
+                bail!("say what happens next: add a shot below the ones already drawn");
+            }
+            if clip.segments.len() + shots.len() > MAX_SHOTS {
                 bail!("a long clip has at most {MAX_SHOTS} shots");
             }
             let missing = m.missing();
@@ -2241,48 +2269,52 @@ impl Engine {
                 bail!("the model this clip was made with is missing files: {}", missing.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "));
             }
             self.cfg.check_video_loras(&m.picked_loras, m.family)?;
-            let seed = if seed < 0 { random_seed() } else { seed };
             let vars = self.cfg.settings().variables;
-            let text = format!("{}. {}", clip.prompt, variables::expand(shot, &vars, seed)?);
-            // A clip made in one go is its own first shot, starting at frame 0.
-            if clip.shot_starts.is_empty() {
-                clip.shot_starts.push(0);
-                clip.shots.push(String::new());
-            }
-            let k = clip.shot_starts.len();
-            let last = self.videos.frames(id).pop().context("the clip has no frames")?;
-            let out = self.videos.prepare_segment(id, k, m.audio_vae.is_some())?;
-            let ran = self.sd().video(
-                &m,
-                &text,
-                &clip.negative,
-                seed,
-                &VideoIo { init: Some(&last), control: None, out: &out },
-                Some((k + 1, k + 1)),
-            );
-            if let Err(e) = ran {
-                let _ = std::fs::remove_dir_all(self.videos.dir(id).join(format!("seg{k}")));
-                // A shot taken back for this one is gone: say so rather than
-                // leave the clip looking untouched.
-                if replace_last {
-                    self.videos.finish(&mut clip)?;
+            let seed = if req.seed < 0 { random_seed() } else { req.seed };
+            // *Every shot* rolls off the clip's own seed, as it did for the
+            // shots already drawn, so a rolled character stays the same one.
+            let every_typed = req.every.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+            let every = match &every_typed {
+                Some(e) => variables::expand(e, &vars, clip.seed)?,
+                None => String::new(),
+            };
+            let negative = match &req.negative {
+                Some(n) => variables::expand(n, &vars, clip.seed)?,
+                None => clip.negative.clone(),
+            };
+            let n = clip.segments.len() + shots.len();
+            for (j, shot) in shots.iter().enumerate() {
+                let k = clip.segments.len();
+                let seed = seed.wrapping_add(j as i64);
+                let mut seg = Segment {
+                    text: shot.clone(),
+                    conditioned: shot_prompt(&every, &variables::expand(shot, &vars, seed)?),
+                    seed,
+                    start: 0,
+                };
+                if let Err(e) = self.render_shot(id, &m, &seg, &negative, k, n) {
+                    if j == 0 {
+                        return Err(e);
+                    }
+                    note = Some(cut_short(&e, j, shots.len()));
+                    break;
                 }
-                return Err(e);
+                seg.start = self.videos.append_segment(id, k, fps)?;
+                clip.segments.push(seg);
+                // The words the clip goes on with now.
+                clip.every = every_typed.clone();
             }
-            clip.shot_starts.push(self.videos.append_segment(id, k, fps)?);
-            clip.shots.push(shot.to_string());
-        }
-        // One shot left is a clip made in one go again.
-        if clip.shot_starts.len() < 2 {
-            clip.shot_starts.clear();
-            clip.shots.clear();
         }
         let dropped = self.videos.invalidate(&mut clip);
         if dropped > 0 {
-            note = Some(format!("Its {dropped} enlarged version(s) no longer covered it and were removed."));
+            let more = format!("Its {dropped} enlarged version(s) no longer covered it and were removed.");
+            note = Some(match note {
+                Some(n) => format!("{n} {more}"),
+                None => more,
+            });
         }
         self.videos.finish(&mut clip)?;
-        Ok(VideoResult { clip, gen_ms: t.elapsed().as_millis(), saved: None, note })
+        Ok(VideoResult { clip, gen_ms: t.elapsed().as_millis(), note })
     }
 
     /// FSR every frame of clip `id` into a new version of it (`v{n}/` inside

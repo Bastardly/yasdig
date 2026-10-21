@@ -6,6 +6,12 @@
 //!   work/videos/{id}/clip.json      the settings that produced it
 //! ```
 //!
+//! A starred clip is the same folder moved to `user/favorite_clips/{id}/`
+//! ([`VideoStore::favorite`]). An id names one clip wherever it lives, so
+//! every reader goes through [`VideoStore::dir`], which looks in both; only
+//! listing and deleting take a [`Shelf`] — the work items' rule, and for its
+//! reason: *Delete all* and Close server's clear reach `work/` alone.
+//!
 //! A clip is a **directory**, which is the one structural difference from
 //! `src/workitems.rs` and the reason this is a separate module rather than a
 //! wider `WorkItem`: everything about a still is one file and a sidecar, and
@@ -22,7 +28,7 @@
 //! which is [`ClipDir`].
 
 use crate::config::VideoModel;
-use crate::workitems::{valid_id, THUMB_HEIGHT};
+use crate::workitems::{valid_id, Shelf, THUMB_HEIGHT};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -92,15 +98,104 @@ pub struct Clip {
     /// the clip deletes them and nothing lands in `work/output/` unasked.
     #[serde(default)]
     pub versions: Vec<ClipVersion>,
-    /// A long clip's shots as they were typed, one per segment, and the frame
-    /// each began at. Empty for a clip made in one go.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub shots: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub shot_starts: Vec<u32>,
-    /// The clip this one continues, whose frames it starts with.
+    /// The Prompts panel's *Every shot* box as typed: what goes in front of
+    /// every shot's own text ([`shot_prompt`]). `None` when it was empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub continues: Option<String>,
+    pub every: Option<String>,
+    /// The clip's shots, first to last; a clip made in one go is one. Shot 1
+    /// is the Prompt. Never empty once read ([`Clip::normalize`]).
+    #[serde(default)]
+    pub segments: Vec<Segment>,
+    /// Whether the clip is starred — where it lives, not something stored:
+    /// [`VideoStore::load`] sets it.
+    #[serde(default, skip_deserializing)]
+    pub favorite: bool,
+    /// The record before `segments`: every shot was conditioned on
+    /// `"{prompt}. {shot}"`, which is why a line spoken in the Prompt was
+    /// spoken again in every shot. Read, never written.
+    #[serde(default, skip_serializing)]
+    pub(crate) shots: Vec<String>,
+    #[serde(default, skip_serializing)]
+    pub(crate) shot_starts: Vec<u32>,
+}
+
+/// One shot of a clip: what was typed for it, what sd-cli was conditioned on,
+/// its seed, and the frame it begins at in the clip's one frame sequence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Segment {
+    /// As typed, `{variables}` and all. The page's row holds this, and a row
+    /// that still matches it is a shot that is done.
+    pub text: String,
+    pub conditioned: String,
+    pub seed: i64,
+    pub start: u32,
+}
+
+/// What a shot is conditioned on: the *Every shot* text in front of its own.
+/// Never another shot's text, and never the Prompt's on a later shot — the
+/// Prompt is shot 1, and an action or a line of dialogue in it must happen once.
+pub fn shot_prompt(every: &str, text: &str) -> String {
+    match (every.trim(), text.trim()) {
+        ("", t) => t.to_string(),
+        (e, "") => e.to_string(),
+        (e, t) => format!("{e}. {t}"),
+    }
+}
+
+impl Clip {
+    /// A clip as one shot, for a record that names none: made in one go, or
+    /// read from before shots were recorded.
+    pub fn single_segment(&self) -> Segment {
+        Segment {
+            text: self.typed_prompt.clone().unwrap_or_else(|| self.prompt.clone()),
+            conditioned: self.prompt.clone(),
+            seed: self.seed,
+            start: 0,
+        }
+    }
+
+    /// Bring an older record into the `segments` shape. Its `prompt` was the
+    /// scene every shot was conditioned with, which is now what *Every shot*
+    /// holds; a one-go clip that was extended had a blank first shot, meaning
+    /// "the Prompt alone", and keeps its Prompt as shot 1.
+    fn normalize(&mut self) {
+        if !self.segments.is_empty() {
+            self.shots.clear();
+            self.shot_starts.clear();
+            return;
+        }
+        let shots = std::mem::take(&mut self.shots);
+        let starts = std::mem::take(&mut self.shot_starts);
+        let start = |k: usize| starts.get(k).copied().unwrap_or(0);
+        if shots.is_empty() {
+            self.segments = vec![self.single_segment()];
+        } else if shots[0].is_empty() {
+            let mut segs = vec![self.single_segment()];
+            for (k, s) in shots.iter().enumerate().skip(1) {
+                segs.push(Segment {
+                    text: s.clone(),
+                    conditioned: format!("{}. {s}", self.prompt),
+                    seed: self.seed,
+                    start: start(k),
+                });
+            }
+            self.segments = segs;
+        } else {
+            let scene = self.typed_prompt.take().unwrap_or_else(|| self.prompt.clone());
+            self.segments = shots
+                .iter()
+                .enumerate()
+                .map(|(k, s)| Segment {
+                    text: s.clone(),
+                    conditioned: format!("{}. {s}", self.prompt),
+                    seed: self.seed.wrapping_add(k as i64),
+                    start: start(k),
+                })
+                .collect();
+            self.prompt = shots[0].clone();
+            self.every = Some(scene);
+        }
+    }
 }
 
 /// One enlarged version of a clip: what made it, and its frames' size.
@@ -139,23 +234,44 @@ fn frames_in(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// `work/videos/`. Holds nothing but its path, like `workitems::Store`, so the
-/// GPU worker and each connection thread build their own.
+/// `work/videos/` and `user/favorite_clips/`. Holds nothing but its paths,
+/// like `workitems::Store`, so the GPU worker and each connection thread build
+/// their own.
 pub struct VideoStore {
     root: PathBuf,
+    favorites: PathBuf,
 }
 
 impl VideoStore {
-    pub fn new(work_dir: &Path) -> VideoStore {
+    /// Both roots, spelled out, for `Store::new`'s reason: `user/` is a
+    /// sibling of `work/` that only `Config` knows.
+    pub fn new(work_dir: &Path, user_dir: &Path) -> VideoStore {
         let store = VideoStore {
             root: work_dir.join("videos"),
+            favorites: user_dir.join("favorite_clips"),
         };
         std::fs::create_dir_all(&store.root).ok();
+        std::fs::create_dir_all(&store.favorites).ok();
         store
     }
 
+    /// The one place a [`Shelf`] becomes a directory.
+    fn shelf_dir(&self, shelf: Shelf) -> &Path {
+        match shelf {
+            Shelf::Work => &self.root,
+            Shelf::Favorites => &self.favorites,
+        }
+    }
+
+    /// Where clip `id` is: starred, or in `work/videos/` — which is also where
+    /// a clip not made yet goes, so [`VideoStore::prepare`] needs nothing else.
     pub fn dir(&self, id: &str) -> PathBuf {
-        self.root.join(id)
+        let fav = self.favorites.join(id);
+        if fav.is_dir() {
+            fav
+        } else {
+            self.root.join(id)
+        }
     }
 
     pub fn thumb_path(&self, id: &str) -> PathBuf {
@@ -266,19 +382,6 @@ impl VideoStore {
     /// first shot alone must not stand in for it on *Download*.
     pub fn drop_container(&self, id: &str) {
         let _ = std::fs::remove_file(self.dir(id).join(CONTAINER));
-    }
-
-    /// Start clip `id` with every frame (and the sound) of clip `from` — for
-    /// *Continue this clip*, whose shots then run from its last frame.
-    pub fn seed_from(&self, id: &str, from: &str) -> Result<()> {
-        for (i, f) in self.frames(from).iter().enumerate() {
-            std::fs::copy(f, self.frame_path(id, i as u32))
-                .with_context(|| format!("copying {} to continue it", f.display()))?;
-        }
-        if let Some(a) = self.audio_path(from) {
-            std::fs::copy(a, self.dir(id).join(AUDIO))?;
-        }
-        Ok(())
     }
 
     /// Split the AVI sd-cli wrote for a clip with sound into numbered PNG
@@ -415,14 +518,18 @@ impl VideoStore {
         let path = self.sidecar_path(id);
         let bytes = std::fs::read(&path)
             .with_context(|| format!("that clip is gone ({})", path.display()))?;
-        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+        let mut clip: Clip =
+            serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
+        clip.normalize();
+        clip.favorite = path.starts_with(&self.favorites);
+        Ok(clip)
     }
 
-    /// Every archived clip, newest first. A directory without a readable
+    /// The clips on one shelf, newest first. A directory without a readable
     /// `clip.json` is skipped — that's a run that died part way through, and one
     /// of them shouldn't cost the user the whole grid.
-    pub fn list(&self) -> Vec<Clip> {
-        let Ok(entries) = std::fs::read_dir(&self.root) else {
+    pub fn list(&self, shelf: Shelf) -> Vec<Clip> {
+        let Ok(entries) = std::fs::read_dir(self.shelf_dir(shelf)) else {
             return Vec::new();
         };
         let mut out: Vec<Clip> = entries
@@ -440,19 +547,83 @@ impl VideoStore {
         out
     }
 
-    /// Remove a clip, frames and all. Missing is not an error — the point is
-    /// that afterwards it's gone.
-    pub fn delete(&self, id: &str) -> Result<()> {
+    /// What a grid shows: Current is both shelves (a starred clip stays where
+    /// it was found, flagged `favorite`), Favorites its own alone.
+    pub fn listing(&self, shelf: Shelf) -> Vec<Clip> {
+        if shelf == Shelf::Favorites {
+            return self.list(Shelf::Favorites);
+        }
+        let mut out = self.list(Shelf::Favorites);
+        let starred: std::collections::HashSet<String> = out.iter().map(|c| c.id.clone()).collect();
+        out.extend(self.list(Shelf::Work).into_iter().filter(|c| !starred.contains(&c.id)));
+        out.sort_by(|a, b| b.created_ms.cmp(&a.created_ms));
+        out
+    }
+
+    /// Remove a clip from one shelf, frames and all. Missing is not an error —
+    /// the point is that afterwards it's gone. One shelf only: a delete that
+    /// reached both would take the favourites with the rest.
+    pub fn delete(&self, shelf: Shelf, id: &str) -> Result<()> {
         if !valid_id(id) {
             bail!("'{id}' is not a clip id");
         }
-        let dir = self.dir(id);
+        let dir = self.shelf_dir(shelf).join(id);
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e).with_context(|| format!("deleting {}", dir.display())),
         }
     }
+
+    /// Star a clip: move its folder into `user/favorite_clips/`, out of reach
+    /// of *Delete all* and Close server's clear. Already starred is success.
+    pub fn favorite(&self, id: &str) -> Result<()> {
+        self.shelve(id, Shelf::Work, Shelf::Favorites)
+    }
+
+    /// Un-star: back into `work/videos/`. Never a delete.
+    pub fn unfavorite(&self, id: &str) -> Result<()> {
+        self.shelve(id, Shelf::Favorites, Shelf::Work)
+    }
+
+    fn shelve(&self, id: &str, from: Shelf, to: Shelf) -> Result<()> {
+        if !valid_id(id) {
+            bail!("'{id}' is not a clip id");
+        }
+        let (src, dest) = (self.shelf_dir(from).join(id), self.shelf_dir(to).join(id));
+        if !src.is_dir() {
+            if dest.is_dir() {
+                return Ok(());
+            }
+            bail!("that clip is gone ({})", src.display());
+        }
+        if dest.exists() {
+            bail!("{} is already there", dest.display());
+        }
+        // A rename where `work/` and `user/` share a filesystem, which is the
+        // ordinary layout; otherwise copied, then the original removed — a
+        // crash between the two leaves it on both shelves, listed once.
+        if std::fs::rename(&src, &dest).is_ok() {
+            return Ok(());
+        }
+        copy_tree(&src, &dest).with_context(|| format!("copying {} to {}", src.display(), dest.display()))?;
+        std::fs::remove_dir_all(&src).with_context(|| format!("removing {}", src.display()))
+    }
+}
+
+/// `src` into `dest`, folders and all — a clip's versions are folders.
+fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for e in std::fs::read_dir(src)? {
+        let e = e?;
+        let to = dest.join(e.file_name());
+        if e.file_type()?.is_dir() {
+            copy_tree(&e.path(), &to)?;
+        } else {
+            std::fs::copy(e.path(), &to)?;
+        }
+    }
+    Ok(())
 }
 
 /// Removes a half-written clip directory unless [`ClipDir::keep`] is called.
@@ -532,9 +703,11 @@ t5xxl = "t.gguf"
             audio: false,
             video: model(),
             versions: Vec::new(),
+            every: None,
+            segments: Vec::new(),
+            favorite: false,
             shots: Vec::new(),
             shot_starts: Vec::new(),
-            continues: None,
         }
     }
 
@@ -544,7 +717,7 @@ t5xxl = "t.gguf"
     fn a_clip_with_sound_is_unpacked_into_frames_and_a_soundtrack() {
         let dir = std::env::temp_dir().join(format!("yasdig-vid-snd-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let store = VideoStore::new(&dir);
+        let store = VideoStore::new(&dir, &dir);
         let (out, mut guard) = store.prepare("100-7", true).unwrap();
         assert!(out.ends_with(CONTAINER));
         // What sd-cli would have written: frames and a soundtrack in one AVI.
@@ -578,7 +751,7 @@ t5xxl = "t.gguf"
     #[test]
     fn a_clip_is_measured_from_its_frames() {
         let dir = std::env::temp_dir().join(format!("yasdig-vid-{}", std::process::id()));
-        let store = VideoStore::new(&dir);
+        let store = VideoStore::new(&dir, &dir);
 
         let (pattern, mut guard) = store.prepare("100-7", false).unwrap();
         assert!(pattern.ends_with("frame_%03d.png"), "{}", pattern.display());
@@ -616,7 +789,7 @@ t5xxl = "t.gguf"
     #[test]
     fn listing_skips_runs_that_never_finished() {
         let dir = std::env::temp_dir().join(format!("yasdig-vid2-{}", std::process::id()));
-        let store = VideoStore::new(&dir);
+        let store = VideoStore::new(&dir, &dir);
 
         for (id, ms) in [("100-7", 100u128), ("200-7", 200)] {
             let (_, mut guard) = store.prepare(id, false).unwrap();
@@ -640,16 +813,16 @@ t5xxl = "t.gguf"
         .unwrap();
         empty.keep();
 
-        let ids: Vec<String> = store.list().into_iter().map(|c| c.id).collect();
+        let ids: Vec<String> = store.list(Shelf::Work).into_iter().map(|c| c.id).collect();
         assert_eq!(ids, ["200-7", "100-7"], "newest first, finished only");
 
-        store.delete("100-7").unwrap();
+        store.delete(Shelf::Work, "100-7").unwrap();
         assert!(!store.dir("100-7").exists());
-        assert_eq!(store.list().len(), 1);
+        assert_eq!(store.list(Shelf::Work).len(), 1);
         // Deleting what isn't there is a no-op.
-        store.delete("100-7").unwrap();
+        store.delete(Shelf::Work, "100-7").unwrap();
         assert!(store.load("100-7").is_err());
-        assert!(store.delete("../work").is_err());
+        assert!(store.delete(Shelf::Work, "../work").is_err());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -660,7 +833,7 @@ t5xxl = "t.gguf"
     #[test]
     fn an_unfinished_clip_directory_removes_itself() {
         let dir = std::env::temp_dir().join(format!("yasdig-vid3-{}", std::process::id()));
-        let store = VideoStore::new(&dir);
+        let store = VideoStore::new(&dir, &dir);
         {
             let (_, _guard) = store.prepare("100-7", false).unwrap();
             write_frames(&store.dir("100-7"), 3, 8, 8);
@@ -670,7 +843,7 @@ t5xxl = "t.gguf"
             !store.dir("100-7").exists(),
             "the guard should have swept it"
         );
-        assert!(store.list().is_empty());
+        assert!(store.list(Shelf::Work).is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -680,7 +853,7 @@ t5xxl = "t.gguf"
     #[test]
     fn finishing_an_empty_clip_is_an_error() {
         let dir = std::env::temp_dir().join(format!("yasdig-vid4-{}", std::process::id()));
-        let store = VideoStore::new(&dir);
+        let store = VideoStore::new(&dir, &dir);
         let (_, _guard) = store.prepare("100-7", false).unwrap();
         let err = store
             .finish(&mut clip("100-7", 100))
@@ -692,11 +865,11 @@ t5xxl = "t.gguf"
 
     /// A long clip's next shot starts from the clip's last frame, which sd-cli
     /// draws again as the shot's first: joined, that one is dropped and the
-    /// rest follow on, numbered after the clip's. Continue copies a clip in.
+    /// rest follow on, numbered after the clip's.
     #[test]
     fn a_shot_joins_the_clip_without_repeating_its_seam() {
         let dir = std::env::temp_dir().join(format!("yasdig-vid-shots-{}", std::process::id()));
-        let store = VideoStore::new(&dir);
+        let store = VideoStore::new(&dir, &dir);
         let (_, mut guard) = store.prepare("100-7", false).unwrap();
         let shade = |p: &Path, v: u8| image::GrayImage::from_pixel(4, 4, image::Luma([v])).save(p).unwrap();
         for i in 0..3u8 {
@@ -722,12 +895,89 @@ t5xxl = "t.gguf"
             shade(&seg.with_file_name(format!("frame_{i:03}.png")), 100 + i);
         }
         store.append_segment("100-7", 1, 24).unwrap();
-
-        let (_, mut g2) = store.prepare("200-7", false).unwrap();
-        store.seed_from("200-7", "100-7").unwrap();
-        assert_eq!(store.frames("200-7").len(), 5);
+        assert_eq!(store.frames("100-7").len(), 5);
         guard.keep();
-        g2.keep();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The extend bug: a line spoken in the Prompt was spoken again in every
+    /// shot, because every shot was `"{prompt}. {shot}"`. Now a shot is its own
+    /// text, with only the *Every shot* box in front.
+    #[test]
+    fn a_shot_is_conditioned_on_its_own_text_and_every_shot() {
+        assert_eq!(shot_prompt("", "she says hello"), "she says hello");
+        assert_eq!(shot_prompt("a red-haired woman, film grain", "she waves"), "a red-haired woman, film grain. she waves");
+        assert_eq!(shot_prompt("  a beach ", ""), "a beach");
+    }
+
+    /// Records from before `segments` read as shots: a long clip's old Prompt
+    /// was the scene every shot carried, so it becomes *Every shot*; an
+    /// extended one-go clip keeps its Prompt as shot 1.
+    #[test]
+    fn an_older_record_reads_as_segments() {
+        let mut one = clip("100-7", 1);
+        one.normalize();
+        assert_eq!(one.segments.len(), 1);
+        assert_eq!(one.segments[0].text, "a lovely fluffy {animal}, walking");
+        assert_eq!(one.segments[0].conditioned, "a lovely fluffy crab, walking");
+        assert!(one.every.is_none());
+
+        let mut long = clip("100-7", 1);
+        long.typed_prompt = None;
+        long.prompt = "a beach at dusk".into();
+        long.shots = vec!["a crab walks".into(), "it lifts a claw".into()];
+        long.shot_starts = vec![0, 33];
+        long.normalize();
+        assert_eq!(long.every.as_deref(), Some("a beach at dusk"));
+        assert_eq!(long.prompt, "a crab walks");
+        let texts: Vec<_> = long.segments.iter().map(|s| (s.text.as_str(), s.start, s.seed)).collect();
+        assert_eq!(texts, [("a crab walks", 0, 7), ("it lifts a claw", 33, 8)]);
+        assert_eq!(long.segments[1].conditioned, "a beach at dusk. it lifts a claw");
+
+        let mut grown = clip("100-7", 1);
+        grown.shots = vec![String::new(), "it turns".into()];
+        grown.shot_starts = vec![0, 33];
+        grown.normalize();
+        assert!(grown.every.is_none());
+        assert_eq!(grown.segments[0].text, "a lovely fluffy {animal}, walking");
+        assert_eq!((grown.segments[1].text.as_str(), grown.segments[1].start), ("it turns", 33));
+
+        // And the old fields are never written back.
+        let json = serde_json::to_string(&grown).unwrap();
+        assert!(!json.contains("shot_starts"), "{json}");
+    }
+
+    /// A star moves the clip to `user/favorite_clips/`: it is still read by
+    /// id, still listed on Current, and out of reach of a delete there.
+    #[test]
+    fn a_favourite_clip_survives_deleting_current() {
+        let dir = std::env::temp_dir().join(format!("yasdig-vid-fav-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = VideoStore::new(&dir.join("work"), &dir.join("user"));
+        for (id, ms) in [("100-7", 100u128), ("200-7", 200)] {
+            let (_, mut guard) = store.prepare(id, false).unwrap();
+            write_frames(&store.dir(id), 2, 8, 8);
+            store.finish(&mut clip(id, ms)).unwrap();
+            guard.keep();
+        }
+        store.favorite("100-7").unwrap();
+        store.favorite("100-7").unwrap();
+        assert!(store.dir("100-7").starts_with(dir.join("user")));
+        assert!(store.load("100-7").unwrap().favorite);
+        assert_eq!(store.frames("100-7").len(), 2);
+
+        let current: Vec<_> = store.listing(Shelf::Work).into_iter().map(|c| (c.id, c.favorite)).collect();
+        assert_eq!(current, [("200-7".to_string(), false), ("100-7".to_string(), true)]);
+        assert_eq!(store.listing(Shelf::Favorites).len(), 1);
+        // What *Delete all* and Close server's clear go through.
+        assert_eq!(store.list(Shelf::Work).len(), 1);
+
+        store.delete(Shelf::Work, "100-7").unwrap();
+        assert!(store.load("100-7").is_ok(), "a delete on Current never reaches a favourite");
+
+        store.unfavorite("100-7").unwrap();
+        assert!(!store.load("100-7").unwrap().favorite);
+        assert_eq!(store.list(Shelf::Favorites).len(), 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -151,10 +151,10 @@ pub struct Settings {
     /// (and Krea 2's Wan VAE from 3.3 s to 1.2 s).
     /// Page-level: how this machine computes, not a checkpoint's choice.
     pub vae_conv_direct: bool,
-    /// What a finished clip leaves in `work/output/`, one of [`VIDEO_SAVES`]:
-    /// `file`, an `{id}.avi` beside the frames (`crate::avi`), or `frames`,
-    /// nothing more than the PNG frames in `work/videos/{id}/` — what a clip
-    /// always was. *Enlarge* follows it too. Page-level.
+    /// What the clip dialog's *Save to output* writes into `work/output/`, one
+    /// of [`VIDEO_SAVES`]: `file`, an `{id}[-v{n}].avi` (`crate::avi`), or
+    /// `frames`, a folder of the PNG frames. Nothing reaches `work/output/`
+    /// without that press. Page-level.
     pub video_save: String,
     /// Write the settings that made a picture into the PNG when it is saved to
     /// output: A1111's `parameters` text and yasdig's own record

@@ -514,8 +514,13 @@ needs a Vulkan device and nothing else.
     "width": 832, "height": 480, "frames": 33, "fps": 24,
     "steps": 20, "cfg_scale": 6.0, "high_noise_steps": 8, "high_noise_cfg_scale": 3.5,
     "flow_shift": 3.0, "sampler": "euler", "vae_tiling": true,
-    "parts": { "vae": "video/vae/wan2.2_vae.safetensors", "audio_vae": null } }
+    "parts": { "vae": "video/vae/wan2.2_vae.safetensors", "audio_vae": null },
+    "shots": ["she turns to the door", "she walks out"], "every": "a red-haired woman, a rainy street" }
   ```
+  `prompt` is shot 1; `shots` are the shots after it, each rendered from the previous
+  one's last frame (only on families that chain: TI2V-5B, A14B, H3), up to 20 in all.
+  Every shot is conditioned on `"{every}. {its own text}"` — never on another shot's
+  text — and `every`'s variables roll once, off the clip's seed.
   `parts` picks the model's separate files, by name under the models dir as `/video-models`
   lists them; `null` leaves out an optional one (H3's audio VAE, VACE's CLIP-Vision), and
   an absent key keeps the model's own.
@@ -526,17 +531,26 @@ needs a Vulkan device and nothing else.
   own record. Takes **minutes** — poll `/progress`. Response:
   ```json
   { "clip": { "id": "…", "frames": 33, "fps": 24, "width": 832, "height": 480, "audio": false, … },
-    "gen_ms": 214000, "saved": "…/work/output/1758104523000-12345.avi" }
+    "gen_ms": 214000, "note": null }
   ```
-  `saved` is the video file `video_save = "file"` writes (MJPEG AVI, `null` for
-  `"frames"`). A model with a soundtrack (MiniMax H3 with its audio VAE) is generated
+  `clip.segments` is one record per shot, `{text, conditioned, seed, start}` (typed
+  text, what sd-cli was told, its seed, its first frame); `clip.every` the typed
+  *Every shot*. `note` says why a long clip has fewer shots than asked for (a Stop, or a
+  shot that failed after others). Nothing is written to `work/output/` — that is
+  `/videos/save`. A model with a soundtrack (MiniMax H3 with its audio VAE) is generated
   into an AVI by sd-cli — the only way it keeps the sound — and split into the frames
   and `audio.wav`, so `clip.audio` is true.
   `clip.width`, `height` and `frames` are measured from the frames on disk rather than
   echoed from the request, because sd.cpp aligns a size up and a frame count down and
   only warns about it.
-- `GET /videos` — every archived clip, newest first; each carries its full sidecar
-  including the resolved model under `video`.
+- `GET /videos` — Current: every clip, newest first, starred ones included with
+  `favorite: true`; each carries its full sidecar including the resolved model under
+  `video`.
+- `GET /favorite-clips` — the starred clips alone (`user/favorite_clips/`).
+- `POST /favorite-clips/add`, `/favorite-clips/remove` — `{ "ids": ["…"] }`. Star or
+  un-star: each moves the clip's folder between `work/videos/` and
+  `user/favorite_clips/`. Its id and every `/videos/{id}/…` URL stay the same.
+- `POST /favorite-clips/delete` — `{ "ids": ["…"] }`, from the favourites only.
 - `GET /videos/{id}/thumb.png` — the first frame, `THUMB_HEIGHT` tall.
 - `GET /videos/{id}/frames/{n}.png` — one frame, numbered from 0. The page fetches all of
   them and plays the sequence on a canvas. A non-numeric `{n}` is `404`, not the
@@ -546,18 +560,27 @@ needs a Vulkan device and nothing else.
   own AVI for a clip with sound, otherwise its frames encoded on first request and kept
   in the clip's folder.
 - `POST /videos/enlarge` — `{ "id": "…", "upscale": 2.0, "sharpness": 0.0, "clarity": 0.0 }`.
-  FSR over every frame into `work/output/{id}-x{factor}/` — or, with `video_save =
-  "file"`, encoded with the clip's sound into `work/output/{id}-x{factor}.avi`. Returns
-  `{ "dir": "…", "frames": 33, "width": 1664, "height": 960, "ms": 1820 }`. Filters only
-  — it never re-diffuses, for the reason under "Video" above.
-- `POST /videos/delete` — `{ "ids": ["…"] }`. Removes each clip's whole directory.
+  FSR over every frame of the original into a new version inside the clip
+  (`{id}/v{n}/`, served at `/videos/{id}/v{n}/frames/{k}.png`). Returns
+  `{ "clip": {…}, "version": 1, "ms": 1820 }`. Filters only — it never re-diffuses,
+  for the reason under "Video" above.
+- `POST /videos/extend` — `{ "id": "…", "shots": ["…"], "every": "…", "negative": "…",
+  "seed": -1 }` draws the shots onto the clip in place, each from its last frame, on the
+  model and settings the clip recorded; `{ "id": "…", "drop_last": true }` cuts its last
+  shot off instead (never shot 1). Queued; answers like `/video`. Enlarged versions are
+  removed, since they no longer cover the clip.
+- `POST /videos/save` — `{ "id": "…", "version": 0 }`. The version into `work/output/`,
+  as `{id}[-v{n}].avi` (or a frames folder with `video_save = "frames"`). Answers
+  `{ "saved": "…" }`.
+- `POST /videos/delete` — `{ "ids": ["…"] }`. Removes each clip's whole directory from
+  `work/videos/`; a starred clip is out of its reach.
 
 The archive listing, the thumbnail and the delete never touch the GPU, so they answer
 immediately even while a render is in flight. `/progress` and `/cancel` do the same for
 a sharper reason: they are *about* the render in flight, so answering them through the
 job queue would mean progress that arrives only once the render has finished, and a Stop
 that becomes possible only when there is nothing left to stop. The whole video family
-splits the same way: `/video` and `/videos/enlarge` are GPU work and queue, and
+splits the same way: `/video`, `/videos/extend` and `/videos/enlarge` are GPU work and queue, and
 everything else about a clip is filesystem-only and doesn't — which matters most here,
 since a clip holds the worker for minutes and the frame player is fetching 33 PNGs.
 

@@ -28,6 +28,26 @@ import './prompt-box.js';
 
 // ---- Tabs -------------------------------------------------------------------
 
+// Every status card's ×: a message it holds — an error, a note like "its
+// enlarged versions were removed", a finished job's line — sits over the
+// stage and can cover a button, so it can be put away. Only the messages go;
+// a live preview and Stop belong to a job still running. Shown by CSS only
+// while there is a message.
+function initStatusCards() {
+  for (const card of document.querySelectorAll('.statuscard')) {
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'fpclose cardclose';
+    x.setAttribute('aria-label', 'Dismiss');
+    x.title = 'Dismiss';
+    x.textContent = '×';
+    x.addEventListener('click', () => {
+      for (const el of card.querySelectorAll(':scope > .err, :scope > .sub')) el.replaceChildren();
+    });
+    card.prepend(x);
+  }
+}
+
 function showTab(name) {
   for (const b of document.querySelectorAll('.tab')) {
     b.classList.toggle('active', b.dataset.tab === name);
@@ -147,6 +167,7 @@ async function closeServer() {
 initViewer();
 initHints();
 initBusy();
+initStatusCards();
 // Before initImage(): its model list calls syncRefs as soon as it loads.
 initRefs();
 initImage();

@@ -3,8 +3,10 @@ import { floatPanels } from './panels.js';
 import { MEMORY_LABELS, showError } from './memory.js';
 import { setBusy, setIdle, cancelRun } from './busy.js';
 import { soonJobs } from './jobs.js';
-import { clip, renderClip } from './player.js';
+import { clip, renderClip, stopPlayback } from './player.js';
 import { initClipView, openClipView } from './clipview.js';
+import { gridMarks, star, wireStars } from './gridmark.js';
+import { shotState } from './shots.js';
 import { sourceSlot } from './source-slot.js';
 import { partRows } from './parts.js';
 import { loraPicker } from './loras.js';
@@ -25,9 +27,6 @@ import { loadModelSettings } from './modelsettings.js';
 // than watching.
 
 let videoModels = [];
-// The last /videos listing, and which clips are marked for deletion.
-let clips = [];
-const vselected = new Set();
 // A clip generation in flight. Only ever one — there is no batch here, because
 // a single clip already owns the GPU for minutes.
 let vrunning = false;
@@ -54,63 +53,81 @@ const videoLoras = loraPicker({
 // ---- Shots -------------------------------------------------------------------
 //
 // A long clip is one segment per shot, each made from the last one's final
-// frame (`Engine::video`); the Prompt is the scene and a shot what happens in
-// it. The rows hold their own text, so a redraw is only for adding or removing.
-// `continueFrom` is a clip id the next one starts with — *Continue this clip*.
-let continueFrom = null;
+// frame (`Engine::video`). The Prompt is shot 1 and each row here a later
+// one, conditioned on its own text with *Every shot* in front — never the
+// Prompt's, or a line spoken in it is spoken again in every shot. The rows
+// hold their own text, so a redraw is only for adding or removing; the marks
+// are `syncShots`'s, against the clip on the stage (`shots.js`).
+
+// The later shots' boxes, as typed.
+const rowBoxes = () => [...$('vshots').querySelectorAll('textarea')];
 
 function shotList() {
-  return [...$('vshots').querySelectorAll('textarea')].map((t) => t.value.trim()).filter(Boolean);
+  return rowBoxes().map((t) => t.value.trim()).filter(Boolean);
 }
 
+// Whether a clip's own family can go on from its last frame — by the clip's
+// family, since the model it was made with may be listed under another name
+// now (or be a [[video]] entry since removed).
+const chains = (c) => !!c && videoModels.some((m) => m.family === c.video?.family && m.chains);
+
+// The rows against the clip on the stage: which are done, what Extend draws.
+const shotsNow = () => shotState([$('vprompt').value, ...rowBoxes().map((t) => t.value)], clip, chains(clip));
+
 function drawShots(list) {
-  $('vshots').innerHTML = list.map((text, i) => `
-    <div class="shotrow">
-      <b>${i + 1}</b>
-      <textarea class="short" aria-label="Shot ${i + 1}" placeholder="what happens in this shot">${esc(text)}</textarea>
-      <button type="button" class="btn btn-danger" data-del="${i}" title="Remove this shot">&times;</button>
+  $('vshots').innerHTML = (list.length ? `
+    <div class="shotrow shotfirst" data-k="0"><b>1</b><p class="sub">The Prompt above</p></div>` : '')
+    + list.map((text, i) => `
+    <div class="shotrow" data-k="${i + 1}">
+      <b>${i + 2}</b>
+      <textarea class="short" aria-label="Shot ${i + 2}" placeholder="what happens in this shot">${esc(text)}</textarea>
+      <button type="button" class="btn btn-danger" data-x="${i + 1}">&times;</button>
     </div>`).join('');
   syncShots();
 }
 
-// What the shots add up to: their count times one segment's length, the
-// segment being the Frames box after the model's rounding.
+// The marks, the × buttons, Extend, and what the shots add up to: their count
+// times one segment's length, the segment being the Frames box after the
+// model's rounding.
 function syncShots() {
   const m = currentVideoModel();
-  const rows = $('vshots').querySelectorAll('textarea').length;
-  const n = shotList().length;
+  const rows = rowBoxes().length;
+  const st = shotsNow();
+  for (const row of $('vshots').querySelectorAll('.shotrow')) {
+    const k = Number(row.dataset.k);
+    row.classList.toggle('done', k < st.done);
+    const x = row.querySelector('[data-x]');
+    if (!x) continue;
+    // A done shot stays: the shots after it start from its frames. Only the
+    // clip's last one can be cut off, and the cut leaves its text in the row.
+    x.hidden = k < st.done && k !== st.dropLast;
+    x.title = k === st.dropLast ? 'Cut this shot off the clip — its text stays, to draw it again' : 'Remove this shot';
+  }
+  $('vevery').hidden = !rows && !$('veverytext').value.trim();
+  $('vextendfoot').hidden = !st.canExtend || vrunning;
+  $('vextend').textContent = `Extend clip — ${st.pending.length} shot${st.pending.length === 1 ? '' : 's'}`;
   const note = $('vshotnote');
   note.classList.remove('err');
   if (!m) { note.textContent = ''; return; }
   const frames = alignFrames(parseInt($('vframes').value, 10), m.frame_grid);
   const fps = m.forced_fps ?? (parseInt($('vfps').value, 10) || 1);
   const seg = frames / fps;
-  if ((rows || continueFrom) && !m.chains) {
+  const n = 1 + shotList().length;
+  if (rows && !m.chains) {
     note.textContent = `${m.name} can't go on from a clip's last frame, so it makes one clip at a time — `
       + 'TI2V-5B, A14B and H3 can.';
     note.classList.add('err');
-  } else if (n > 1 || (n && continueFrom)) {
-    note.textContent = `${n} shots × ${seg.toFixed(1)} s ≈ ${(n * seg).toFixed(1)} s`
-      + (continueFrom ? ', after the clip it continues' : '');
+  } else if (clip && st.done > 0 && !st.whole) {
+    note.textContent = `Shot ${st.done + 1} differs from the clip on screen: Generate makes a new clip from every row. `
+      + 'Extend only adds to the end of a clip.';
+  } else if (st.canExtend) {
+    note.textContent = `Extend clip draws ${st.pending.length} more onto the clip on screen, from its last frame, `
+      + 'with its own model and settings.';
+  } else if (n > 1) {
+    note.textContent = `${n} shots × ${seg.toFixed(1)} s ≈ ${(n * seg).toFixed(1)} s`;
   } else {
-    note.textContent = rows ? 'One shot is one clip; add another to make it longer.' : '';
+    note.textContent = rows ? '' : 'Add a shot to make the clip longer.';
   }
-  $('vcontinue').hidden = !continueFrom;
-  if (continueFrom) {
-    $('vcontinue').innerHTML = `Continues <code>${esc(continueFrom)}</code> from its last frame `
-      + '<button type="button" class="btn" id="vcontinueclear" title="Make a fresh clip instead">Don’t</button>';
-    $('vcontinueclear').onclick = () => { continueFrom = null; syncShots(); syncVideoSummaries(); };
-  }
-}
-
-// Set up the next clip to go on from `c` — the clip dialog's *Continue this
-// clip*: its settings back in the boxes, its shots cleared for new ones.
-export function continueClip(c) {
-  applyClip(c);
-  continueFrom = c.id;
-  drawShots(['']);
-  $('vfold-prompt').open = true;
-  $('vshots').querySelector('textarea')?.focus();
 }
 
 // The model's missing files, less any a pick replaced: a Wan VAE that only
@@ -151,11 +168,11 @@ function partsDeparted() {
 // anything that sets the boxes without an event (`syncVideo`, `applyClip`).
 function syncVideoSummaries() {
   const p = $('vprompt').value.trim();
-  const shots = shotList().length;
+  const shots = 1 + shotList().length;
   $('vsum-prompt').textContent = (p ? `— ${p.length > 60 ? p.slice(0, 60) + '…' : p}` : '')
-    + (shots > 1 ? ` · ${shots} shots` : '') + (continueFrom ? ' · continues a clip' : '');
+    + (shots > 1 ? ` · ${shots} shots` : '');
   // A long clip is a departure from one clip a Generate: the rail's dot says so.
-  $('vsum-prompt').classList.toggle('on', shots > 1 || !!continueFrom);
+  $('vsum-prompt').classList.toggle('on', shots > 1);
   const m = $('vmodel').value;
   const picked = partsDeparted();
   const loras = videoLoras.get();
@@ -365,8 +382,9 @@ function vidPayload() {
     parts: videoParts.picked(),
     // Always sent, `[]` included: the picker is the whole answer.
     loras: videoLoras.get(),
+    // The shots after the first: the Prompt is shot 1.
     shots: shotList(),
-    continue_from: continueFrom,
+    every: $('veverytext').value,
   };
 }
 
@@ -378,6 +396,7 @@ async function startClip() {
   $('vstop').disabled = false;
   $('vstop').textContent = 'Stop';
   setBusy('vgo', 'Generating clip…', 'video');
+  syncShots();
   const shownAtStart = clip?.id;
   try {
     const pending = post('/video', vidPayload());
@@ -385,12 +404,9 @@ async function startClip() {
     const data = await pending;
     // Onto the stage unless another clip was opened while this one rendered:
     // then it only joins the grid, and the one being looked at stays.
-    if (!clip || clip.id === shownAtStart) renderClip(data.clip, data.gen_ms, data.saved);
+    if (!clip || clip.id === shownAtStart) renderClip(data.clip, data.gen_ms);
     // A long clip cut short says why — a Stop or a failed shot — and is kept.
     if (data.note) $('verr').textContent = data.note;
-    // Continuing is for one clip: the next Generate starts afresh.
-    continueFrom = null;
-    syncShots();
     loadClips();
   } catch (e) {
     const msg = String(e.message || e);
@@ -409,85 +425,205 @@ async function startClip() {
     // Only the button: the boxes keep what made this clip, so the next one
     // starts from it. `syncVideo` here used to put the model's defaults back.
     syncReady();
+    syncShots();
   }
+}
+
+// *Extend clip*: the pending rows drawn onto the clip on the stage, in place,
+// each from its last frame — on the clip's own model and settings, so the
+// join is seamless; only the words and the seed come from the panel. A shot
+// that fails or is stopped after others keeps those, as a long clip's does.
+async function extendClip() {
+  const c = clip;
+  const st = shotsNow();
+  if (vrunning || !st.canExtend) return;
+  const seed = parseInt($('vseed').value, 10);
+  await runOnClip('vextend', 'Drawing shots…', {
+    id: c.id,
+    shots: st.pending,
+    every: $('veverytext').value,
+    negative: $('vnegative').value,
+    seed: Number.isFinite(seed) ? seed : -1,
+  });
+}
+
+// The × on the clip's last shot: cut off, its text left in the row, so it
+// can be drawn again with a press of Extend.
+const cutLastShot = () => clip && runOnClip('vgo', 'Cutting the last shot…', { id: clip.id, drop_last: true });
+
+// One `/videos/extend` on the clip on the stage, with Stop and errors where a
+// Generate has them. The clip that comes back replaces it everywhere.
+async function runOnClip(btn, label, body) {
+  if (vrunning) return;
+  vrunning = true;
+  $('verr').textContent = '';
+  $('vstop').hidden = false;
+  $('vstop').disabled = false;
+  $('vstop').textContent = 'Stop';
+  setBusy(btn, label, 'video');
+  syncShots();
+  try {
+    const pending = post('/videos/extend', body);
+    soonJobs();
+    const data = await pending;
+    clipChanged(data.clip);
+    if (data.note) $('verr').textContent = data.note;
+  } catch (e) {
+    const msg = String(e.message || e);
+    showError($('verr'), msg.includes('cancelled by request')
+      ? 'Stopped. The clip is as it was before this shot.'
+      : msg, e.oom, { memory: 'vmemory' });
+  } finally {
+    vrunning = false;
+    $('vstop').hidden = true;
+    setIdle(btn);
+    syncReady();
+    syncShots();
+  }
+}
+
+// A clip's record changed — shots added or cut, an enlarge: the stage plays
+// it as it now is, the grids hold it, the rows are marked against it.
+function clipChanged(c) {
+  if (clip?.id === c.id) renderClip(c);
+  loadClips();
+  syncShots();
 }
 
 const cancelClip = () => cancelRun('vstop', 'video');
 
-// ---- The clip grid ----------------------------------------------------------
+// ---- The clip grids ----------------------------------------------------------
+//
+// The Image tab's two shelves, for clips: Current is `work/videos/` (and
+// lists starred clips too, from `user/favorite_clips/`), Favorites the starred
+// alone. A star moves a clip between the two (`VideoStore::favorite`); its id
+// stays, and so does every URL under `/videos/{id}/`. `shelfGrid` in
+// `workitems.js` is the same shape for stills.
+function clipGrid({ list, del, grid, mode, delBtn, all, empty }) {
+  let items = [];
+  let seq = 0;
+  const onFavorites = list === '/favorite-clips';
+  const marks = gridMarks({
+    grid,
+    mode,
+    // On Current, only what lives there: a starred clip is out of reach of a
+    // delete here until it is un-starred.
+    ids: () => items.filter((c) => onFavorites || !c.favorite).map((c) => c.id),
+    reload: loadClips,
+    err: (msg) => { $('verr').textContent = msg; },
+    onMode: () => mark(),
+    actions: [{
+      value: 'delete',
+      button: delBtn,
+      mark: 'sel',
+      label: (n) => `Delete ${n} selected`,
+      route: () => del,
+      key: 'ids',
+      ...(all ? { all: { button: all, noun: 'clip', label: (n) => (n ? `Delete all ${n} unstarred` : 'Delete all unstarred') } } : {}),
+    }],
+  });
 
-const vDeleteMode = () =>
-  document.querySelector('input[name=vmode]:checked').value === 'delete';
+  async function load() {
+    const mine = ++seq;
+    let got = [];
+    try {
+      const data = await getJSON(list);
+      if (!Array.isArray(data)) throw new Error('unexpected response');
+      got = data;
+    } catch (e) {
+      $('verr').textContent = 'Could not load clips: ' + (e.message || e);
+    }
+    if (mine !== seq) return;
+    items = got;
+    marks.prune(items.map((c) => c.id));
+    draw();
+  }
 
-async function loadClips() {
-  try {
-    const data = await getJSON('/videos');
-    if (!Array.isArray(data)) throw new Error('unexpected response');
-    clips = data;
-  } catch (e) {
-    clips = [];
-    $('verr').textContent = 'Could not load clips: ' + (e.message || e);
+  function draw() {
+    const el = $(grid);
+    if (!items.length) {
+      el.innerHTML = `<p class="sub">${empty}</p>`;
+      marks.sync();
+      return;
+    }
+    el.innerHTML = items.map((c) => `<span class="tile">
+      <button type="button" data-id="${esc(c.id)}"
+        title="${esc(c.prompt)}&#10;${c.width}×${c.height} · ${c.frames} frames @ ${c.fps} fps · ${(c.segments ?? []).length || 1} shot(s) · seed ${c.seed}&#10;Click to show it; click again to open it (Enlarge, History, Save to output)">
+        <img src="/videos/${esc(c.id)}/thumb.png" alt="" loading="lazy"
+          width="${c.thumb_width}" height="${c.thumb_height}"></button>${star(c.favorite)}</span>`).join('');
+    for (const b of el.querySelectorAll('button[data-id]')) {
+      b.addEventListener('click', () => click(b.dataset.id));
+    }
+    wireStars(el, {
+      of: (btn) => {
+        const id = btn.previousElementSibling.dataset.id;
+        return { favorite: !!items.find((x) => x.id === id)?.favorite, body: { ids: [id] } };
+      },
+      add: '/favorite-clips/add',
+      remove: '/favorite-clips/remove',
+      reload: loadClips,
+      err: (msg) => { $('verr').textContent = msg; },
+    });
+    mark();
   }
-  for (const id of [...vselected]) {
-    if (!clips.some((c) => c.id === id)) vselected.delete(id);
+
+  function mark() {
+    for (const b of $(grid).querySelectorAll('button[data-id]')) {
+      marks.mark(b, b.dataset.id);
+      b.classList.toggle('active', !!clip && b.dataset.id === clip.id);
+    }
+    marks.sync();
   }
-  renderClips();
+
+  function click(id) {
+    if (marks.toggle(id)) {
+      mark();
+      return;
+    }
+    const c = items.find((x) => x.id === id);
+    if (c) clickClip(c);
+  }
+
+  return { init: () => marks.init(), load, mark };
 }
 
-function renderClips() {
-  const grid = $('vgrid');
-  if (!clips.length) {
-    grid.innerHTML = '<p class="sub">No clips yet.</p>';
-    syncVDelete();
-    return;
-  }
-  grid.innerHTML = clips.map((c) => `
-    <button type="button" data-id="${esc(c.id)}"
-      title="${esc(c.prompt)}&#10;${c.width}×${c.height} · ${c.frames} frames @ ${c.fps} fps · seed ${c.seed}&#10;Click to show it; click again to open it (Extend, Enlarge, History)">
-      <img src="/videos/${esc(c.id)}/thumb.png" alt="" loading="lazy"
-        width="${c.thumb_width}" height="${c.thumb_height}"></button>`).join('');
-  for (const b of grid.querySelectorAll('button')) {
-    b.addEventListener('click', () => clickClip(b.dataset.id));
-  }
-  markClips();
+const grids = [
+  clipGrid({
+    list: '/videos', del: '/videos/delete', grid: 'vgrid', mode: 'vmode', delBtn: 'vdelete', all: 'vdeleteall',
+    empty: 'No clips yet — generate one.',
+  }),
+  clipGrid({
+    list: '/favorite-clips', del: '/favorite-clips/delete', grid: 'vfgrid', mode: 'vfmode', delBtn: 'vfdelete',
+    empty: 'No favorites yet — star a clip to keep it.',
+  }),
+];
+
+// Both shelves: a generate, a star, a delete or an extend can change either.
+function loadClips() {
+  return Promise.all(grids.map((g) => g.load()));
 }
 
 function markClips() {
-  for (const b of $('vgrid').querySelectorAll('button')) {
-    b.classList.toggle('sel', vselected.has(b.dataset.id));
-    b.classList.toggle('active', !!clip && b.dataset.id === clip.id);
-  }
-  syncVDelete();
-}
-
-function syncVDelete() {
-  $('vdelete').hidden = vselected.size === 0;
-  $('vdelete').textContent = `Delete ${vselected.size} selected`;
+  for (const g of grids) g.mark();
 }
 
 // Opening a clip needs no server round trip at all: the frames are already on
 // disk under /videos/{id}/frames/, so this is the player pointed at them. The
 // settings come back from the listing, which carries each clip's whole sidecar.
-function clickClip(id) {
-  if (vDeleteMode()) {
-    if (!vselected.delete(id)) vselected.add(id);
-    markClips();
-    return;
-  }
-  // Allowed while a clip renders: opening one only reads disk, and setting up
-  // the next job from another clip is exactly what the wait is for.
-  const c = clips.find((x) => x.id === id);
+// Allowed while a clip renders: opening one only reads disk, and setting up
+// the next job from another clip is exactly what the wait is for.
+function clickClip(c) {
   // A second click on the clip already on the stage opens the clip dialog —
-  // Extend, Enlarge, History — as a click on the stage does.
-  if (c && clip?.id === id) {
+  // Enlarge, History, Save to output — as a click on the stage does.
+  if (clip?.id === c.id) {
     openClipView(clip);
     return;
   }
-  if (!c) return;
   $('verr').textContent = '';
   applyClip(c);
   renderClip(c);
   markClips();
+  syncShots();
 }
 
 // Put a clip's stored settings back in the controls, so the next Generate starts
@@ -523,28 +659,13 @@ function applyClip(c) {
   $('vhsteps').value = v.high_noise_steps ?? '';
   $('vhcfg').value = v.high_noise_cfg_scale ?? '';
   vSource.set(c.source);
-  // Its shots, to make it again or to edit; a reopen is not a continuation.
-  continueFrom = null;
-  drawShots(c.shots ?? []);
+  // Its shots — the Prompt is shot 1 — to extend, to make again, or to edit.
+  $('veverytext').value = c.every ?? '';
+  drawShots((c.segments ?? []).slice(1).map((s) => s.text));
   // Its picked LoRAs; a clip from before picks has none.
   videoLoras.set(v.picked_loras ?? []);
   syncVideoNote();
   syncVideoSummaries();
-}
-
-async function deleteClips() {
-  const ids = [...vselected];
-  if (!ids.length) return;
-  $('vdelete').disabled = true;
-  try {
-    await post('/videos/delete', { ids });
-    vselected.clear();
-    await loadClips();
-  } catch (e) {
-    $('verr').textContent = String(e.message || e);
-  } finally {
-    $('vdelete').disabled = false;
-  }
 }
 
 // ---- The first frame --------------------------------------------------------
@@ -559,14 +680,15 @@ export const vSource = sourceSlot({
 });
 
 // The tab is a workspace like the Image tab's: its panels kept the folds' ids,
-// and the first time Prompts and Generation are open, Clips in the corner.
+// and the first time Prompts and Generation are open, Current in the corner.
 let wsPanels = null;
 const PANEL_DEFS = [
   { id: 'vid-prompt', el: 'vfold-prompt', open: true },
   { id: 'vid-gen', el: 'vfold-gen', open: true },
   { id: 'vid-adv', el: 'vfold-adv' },
   { id: 'vid-info' },
-  { id: 'vid-clips', open: true, corner: 'bottom-right' },
+  { id: 'vid-current', open: true, corner: 'bottom-right' },
+  { id: 'vid-favorites' },
 ];
 
 // A rail button's dot is its panel header's line in the accent.
@@ -598,21 +720,27 @@ export function initVideo() {
     syncVideoSummaries();
   });
   $('vshots').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-del]');
+    const b = e.target.closest('[data-x]');
     if (!b) return;
-    const list = [...$('vshots').querySelectorAll('textarea')].map((t) => t.value);
-    list.splice(Number(b.dataset.del), 1);
+    const k = Number(b.dataset.x);
+    // The clip's last shot is cut off the clip; any other row only leaves
+    // the panel.
+    if (k === shotsNow().dropLast) { cutLastShot(); return; }
+    const list = rowBoxes().map((t) => t.value);
+    list.splice(k - 1, 1);
     drawShots(list);
     syncVideoSummaries();
   });
-  $('vshots').addEventListener('input', syncShots);
-  for (const id of ['vframes', 'vfps']) $(id).addEventListener('input', syncShots);
+  // The Prompt and Every shot count as much as the rows: a changed shot 1
+  // is a new clip.
+  $('tab-video').addEventListener('input', syncShots);
+  $('vextend').addEventListener('click', extendClip);
   $('vclearmodel').addEventListener('click', () => saveVideoDefaults(true));
   $('vstop').addEventListener('click', cancelClip);
   vSource.init();
   videoLoras.init();
   $('pickclose').addEventListener('click', () => $('picker').close());
-  $('vdelete').addEventListener('click', deleteClips);
+  for (const g of grids) g.init();
   $('vmodel').addEventListener('change', syncVideo);
   for (const id of ['vw', 'vh', 'vframes', 'vfps']) {
     $(id).addEventListener('input', syncVideoNote);
@@ -633,33 +761,12 @@ export function initVideo() {
   });
   $('vseed').addEventListener('input', syncVSeedLine);
   syncVSeedLine();
-  for (const r of document.querySelectorAll('input[name=vmode]')) {
-    r.addEventListener('change', () => {
-      if (!vDeleteMode()) vselected.clear();
-      // The mark the hover rule reads. `data-mark` rather than a class,
-      // because `gridmark.js` has two actions to name and one vocabulary for
-      // both grids is the point of it.
-      $('vgrid').dataset.mark = vDeleteMode() ? 'delete' : '';
-      markClips();
-    });
-  }
-
   // An enlarge in the clip dialog adds a version: the grid's copy of the
   // clip, and the stage's, are the record it changed.
   initClipView({
-    // Only a family that chains can go on from a clip's last frame — by the
-    // clip's own family, since the model it was made with may be listed under
-    // another name now (or be a [[video]] entry since removed).
-    canContinue: (c) => videoModels.some((m) => m.family === c.video?.family && m.chains),
-    onContinue: continueClip,
-    onClipChange: (c) => {
-      const i = clips.findIndex((x) => x.id === c.id);
-      if (i >= 0) clips[i] = c;
-      // The stage plays it as it now is: a shot added or taken back changes
-      // its frames, an enlarge its versions.
-      if (clip?.id === c.id) renderClip(c);
-      renderClips();
-    },
+    onClipChange: clipChanged,
+    // One clip plays at a time: the dialog's player is the one looked at.
+    onOpen: stopPlayback,
   });
 
   loadVideoModels();

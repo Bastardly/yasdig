@@ -87,10 +87,9 @@ async function loadFrames(c) {
   }
   const scrub = $('vscrub');
   if (scrub) scrub.max = Math.max(0, vframes.length - 1);
-  if (vframes.length) {
-    drawFrame(0);
-    togglePlay();
-  }
+  // Shown, not played: a clip that lands, or is opened, waits for Play —
+  // judging it starts from its first frame, at the user's moment.
+  if (vframes.length) drawFrame(0);
   if (vframes.length !== c.frames) {
     $('verr').textContent =
       `${c.frames - vframes.length} of ${c.frames} frames could not be loaded.`;
@@ -109,7 +108,8 @@ const fileName = (p) => String(p).split(/[\\/]/).pop();
 // The Info panel: what is known about the clip on screen, the Image tab's
 // panel of the same name. The prompt as it was conditioned only when it isn't
 // what the box holds — a rolled `{variable}`, or a clip reopened from the grid.
-function renderInfo(c, ms, saved) {
+// A long clip lists its shots as they were conditioned, *Every shot* and all.
+function renderInfo(c, ms) {
   const v = c.video;
   const secs = (c.frames / Math.max(1, c.fps)).toFixed(2);
   const took = ms
@@ -127,11 +127,9 @@ function renderInfo(c, ms, saved) {
     <p class="sub">${esc(c.model)} · ${v.steps} steps · CFG ${v.cfg_scale} · ${esc(v.sampler)}${shift}${moe}
       ${v.vae_tiling ? ' · VAE tiling' : ''}${c.audio ? ' · with sound' : ''}</p>
     ${c.source ? `<p class="sub">First frame: <code>${esc(c.source)}</code></p>` : ''}
-    ${c.continues ? `<p class="sub">Continues <code>${esc(c.continues)}</code></p>` : ''}
-    ${(c.shots ?? []).length > 1 ? `<ol class="sub">${c.shots.map((s, i) =>
-      `<li>${esc(s || '(the Prompt alone)')}${c.shot_starts?.[i] != null ? ` <span class="val">· from ${(c.shot_starts[i] / Math.max(1, c.fps)).toFixed(1)} s</span>` : ''}</li>`).join('')}</ol>` : ''}
-    <table class="helptable"><tbody>${files}</tbody></table>
-    ${saved ? `<p class="sub">Saved <code>${esc(saved)}</code></p>` : ''}`;
+    ${(c.segments ?? []).length > 1 ? `<ol class="sub">${c.segments.map((s) =>
+      `<li>${esc(s.conditioned)} <span class="val">· from ${(s.start / Math.max(1, c.fps)).toFixed(1)} s · seed ${s.seed}</span></li>`).join('')}</ol>` : ''}
+    <table class="helptable"><tbody>${files}</tbody></table>`;
   // Opt-in, as on the Image tab: the box keeps what was typed until this is
   // clicked.
   $('vseedval').addEventListener('click', () => {
@@ -141,10 +139,10 @@ function renderInfo(c, ms, saved) {
 }
 
 // The clip, rebuilt per clip: the player on the stage and what is known about
-// it in the Info panel; the clip dialog does the rest. `ms` and `saved` are
-// only there for a clip that was just generated — opening one from the grid
-// has no timing to report, and inventing one would be worse than leaving it out.
-export function renderClip(c, ms, saved) {
+// it in the Info panel; the clip dialog does the rest. `ms` is only there for
+// a clip that was just generated — opening one from the grid has no timing to
+// report, and inventing one would be worse than leaving it out.
+export function renderClip(c, ms) {
   clip = c;
   $('vresult').innerHTML = `
     <canvas id="vcanvas"></canvas>
@@ -156,7 +154,7 @@ export function renderClip(c, ms, saved) {
         title="The clip as one .avi file${c.audio ? ', with its sound' : ''}">Download</a>
     </div>
     ${c.audio ? `<audio id="vaudio" preload="auto" src="/videos/${encodeURIComponent(c.id)}/audio.wav"></audio>` : ''}`;
-  renderInfo(c, ms, saved);
+  renderInfo(c, ms);
   // The canvas opens the clip dialog — Enlarge, History, Save to output — as
   // the Image tab's picture opens Refine & adjust.
   $('vcanvas').title = 'Click to enlarge, compare and save';

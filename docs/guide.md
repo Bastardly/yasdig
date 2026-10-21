@@ -738,27 +738,40 @@ defaults for this model*. While a clip renders the status card loops a blurry
 preview of it, and you can open other clips and set up the next one.
 
 **Long clips are shots.** A model of this size runs out of memory a few seconds in,
-so a longer clip is made a shot at a time: the Prompts panel's *Shots* list, one line
-per shot, each a segment of the Frames box made from the previous shot's last frame.
-The Prompt stays the scene — who, where, the look — and a shot says what happens next;
-five shots of 3 s are a 15 s clip, up to 20. Only one frame carries across a seam, so
-motion can change direction there; write shots that agree. TI2V-5B, A14B and H3 can
-do it (the others don't take a first frame). Stop, or a failing shot, keeps the shots
-already made.
+so a longer clip is made a shot at a time: the Prompts panel's *Shots* list. The
+Prompt is shot 1, and each row below is a later shot, a segment of the Frames box
+made from the previous shot's last frame. A shot is conditioned on **its own text**,
+never the Prompt's, so a line spoken in the Prompt is spoken once. What every shot
+should share — the characters, the place, the look — goes in **Every shot**, which is
+put in front of each one (its `{variables}` roll once, so a rolled character stays the
+same). Five shots of 3 s are a 15 s clip, up to 20. Only one frame carries across a
+seam, so motion can change direction there; write shots that agree. TI2V-5B, A14B and
+H3 can do it (the others don't take a first frame). Stop, or a failing shot, keeps the
+shots already made.
 
-You can also build a clip without planning it: the clip dialog's **Extend** adds one
-shot to the clip from its last frame, with the clip's own prompt and settings. Not
-right? *Regenerate last shot* draws it again with a new seed (and the new text, if you
-changed it); *Undo last shot* takes it off. The clip stays one tile; its enlarged
-versions are removed when it changes, since they no longer cover it.
+**Extending a clip.** With a clip on the stage, the rows it already has are ticked
+green. Add a row below them and **Extend clip** appears at the foot of the Prompts
+panel: it draws the new shots onto that clip from its last frame, with the clip's own
+model and settings so the seam matches, and the panel's words and seed. Not right? The
+**×** on the clip's last shot cuts it off and leaves its text in the row — change it,
+or not, and Extend again for a new take. Shot 1 is the clip itself; editing it (or any
+ticked row) means a new clip, which *Generate clip* makes from every row. A clip's
+enlarged versions are removed when it changes, since they no longer cover it.
+
+**Current and Favorites.** Every clip is kept in `work/videos/` and listed on the
+**Current** panel, the Image tab's way: click once to show it, again to open the clip
+dialog; *Click to delete* marks clips for *Delete N selected*, and *Delete all
+unstarred* clears the shelf. The **star** on a tile moves a clip to
+`user/favorite_clips/`, where Delete all and Close server's clear never reach it; it
+stays in Current and shows on **Favorites** too. Nothing goes to Outputs on its own.
 
 **The clip dialog.** Click the clip on the stage. *Enlarge* runs FSR over every frame
 into a new version (sharpness and clarity are fixed kernels, so they don't flicker),
-*History* lists the original and each version — click to play one, *Compare* to split
+*History* lists the original and each version — click to show one, *Compare* to split
 the frame between it and the original — and *Save to output* writes the version on
 screen to the output folder, where it shows in Outputs with a play mark and opens in
-the same dialog. *Continue this clip* sets up a new clip that starts with this one and
-goes on from its last frame.
+the same dialog. Clips don't play by themselves: press Play. Opening the dialog stops
+the clip on the stage.
 
 ## Convert
 

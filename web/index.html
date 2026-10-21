@@ -560,7 +560,8 @@
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-gen">Generation</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-adv">Advanced</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-info">Info</button>
-    <button type="button" class="btn btn-choice railbtn" data-panel="vid-clips">Clips</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="vid-current">Current</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="vid-favorites">Favorites</button>
     <div class="railfoot">
       <!-- Not the image tab's Stop, which finishes the image in flight and then
            ends the run. There is only ever one clip in flight, so stopping it
@@ -591,13 +592,24 @@
         <textarea id="vnegative" class="short"></textarea>
       </prompt-box>
 
-      <!-- A long clip: one segment per shot, each going on from the last one's
-           final frame. The Prompt is the scene, a shot what happens in it. -->
+      <!-- A long clip: the Prompt is shot 1, and each shot below goes on from
+           the last one's final frame, conditioned on its own text with Every
+           shot in front. A row the clip on the stage already has is marked
+           done (`shots.js`); Extend clip draws the rest onto that clip. -->
       <label class="grouphead" data-help="vshots">Shots</label>
+      <div id="vevery" hidden>
+        <label for="veverytext" data-help="vevery">Every shot</label>
+        <prompt-box>
+          <textarea id="veverytext" class="short" placeholder="who and where: a red-haired woman in a green coat, a rainy street at night, film grain"></textarea>
+        </prompt-box>
+      </div>
       <div id="vshots"></div>
       <button type="button" id="vshotadd" class="btn spaced">+ Add shot</button>
       <p class="sub" id="vshotnote"></p>
-      <p class="sub" id="vcontinue" hidden></p>
+    </div>
+    <div class="fpfoot" id="vextendfoot" hidden>
+      <button type="button" id="vextend" class="btn btn-run btn-block"
+        title="Draw the new shots onto the clip on screen, from its last frame">Extend clip</button>
     </div>
   </section>
   <section class="fpanel" id="vfold-gen" aria-label="Generation" hidden>
@@ -741,8 +753,13 @@
     <header class="fphead"><b>Info</b><button type="button" class="fpclose" aria-label="Close Info">&times;</button></header>
     <div class="fpbody" id="vresultinfo"><p class="sub">No clip yet.</p></div>
   </section>
-  <section class="fpanel" id="panel-vid-clips" aria-label="Clips" hidden>
-    <header class="fphead"><b>Clips</b><button type="button" class="fpclose" aria-label="Close Clips">&times;</button></header>
+  <!-- Every clip is kept with the settings that made it, the Image tab's two
+       shelves: work/videos/, which "Delete all" empties and which lists
+       starred clips too, and user/favorite_clips/, which nothing here touches
+       unasked. A clip reaches Outputs only by the clip dialog's Save to
+       output. -->
+  <section class="fpanel" id="panel-vid-current" aria-label="Current" hidden>
+    <header class="fphead"><b>Current</b><button type="button" class="fpclose" aria-label="Close Current">&times;</button></header>
     <div class="fpbody">
       <div class="wihead">
         <span class="wimodes">
@@ -750,8 +767,22 @@
           <label><input type="radio" name="vmode" value="delete"> Click to delete</label>
         </span>
         <button id="vdelete" class="btn btn-danger" hidden></button>
+        <button id="vdeleteall" class="btn btn-danger" hidden></button>
       </div>
       <div id="vgrid" class="wigrid"></div>
+    </div>
+  </section>
+  <section class="fpanel" id="panel-vid-favorites" aria-label="Favorites" hidden>
+    <header class="fphead"><b>Favorites</b><button type="button" class="fpclose" aria-label="Close Favorites">&times;</button></header>
+    <div class="fpbody">
+      <div class="wihead">
+        <span class="wimodes">
+          <label><input type="radio" name="vfmode" value="open" checked> Click to open</label>
+          <label><input type="radio" name="vfmode" value="delete"> Click to delete</label>
+        </span>
+        <button id="vfdelete" class="btn btn-danger" hidden></button>
+      </div>
+      <div id="vfgrid" class="wigrid"></div>
     </div>
   </section>
   <div class="statuscard">
@@ -939,17 +970,15 @@
      picture is gone. So: an explicit x, plus Escape, which <dialog> gives free. -->
 <!-- The clip dialog (clipview.js): a clip played full size, its enlarged
      versions as History with Compare, Enlarge, and Save to output — Refine &
-     adjust's shape (`.lbrail`, floating panels). A clip from the Clips grid
-     has all of it; one saved to output only plays. -->
+     adjust's shape (`.lbrail`, floating panels). A clip from the Video tab's
+     grids has all of it; one saved to output only plays. Shots are added on
+     the Video tab, in the Prompts panel, where Generate is. -->
 <dialog id="clipbox">
   <nav class="lbrail" aria-label="Clip">
     <b class="railtitle">Clip</b>
-    <button type="button" class="btn btn-choice railbtn" data-panel="cb-extend">Extend</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="cb-enlarge">Enlarge</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="cb-history">History</button>
     <div class="railfoot">
-      <button type="button" id="cbcontinue" class="btn btn-block" hidden
-        title="Set up a new clip that starts with this one and goes on from its last frame">Continue this clip</button>
       <a id="cbdownload" class="btn btn-block" download
         title="The version on screen as one .avi file, to your computer">Download</a>
       <button type="button" id="cbsave" class="btn btn-run btn-block"
@@ -965,23 +994,6 @@
     </div>
     <audio id="cbaudio" preload="auto" hidden></audio>
   </div>
-  <!-- One shot at a time, on the clip itself: what happens next, from its
-       last frame — and if it comes out wrong, Regenerate or Undo it. -->
-  <section class="fpanel" id="panel-cb-extend" aria-label="Extend" hidden>
-    <header class="fphead"><b>Extend</b> <span class="foldstate" id="sum-cb-extend"></span><button type="button" class="fpclose" aria-label="Close Extend">&times;</button></header>
-    <div class="fpbody">
-      <label for="cbshot" data-help="cbshot">What happens next</label>
-      <textarea id="cbshot" class="short" placeholder="she turns and walks toward the door"></textarea>
-      <p class="sub" id="cbextendnote"></p>
-      <div class="btnrow" id="cblastrow" hidden>
-        <button type="button" id="cbregen" class="btn" title="Draw the last shot again with a new seed — and the text above, if you changed it">Regenerate last shot</button>
-        <button type="button" id="cbundo" class="btn" title="Take the last shot off the clip">Undo last shot</button>
-      </div>
-    </div>
-    <div class="fpfoot">
-      <button type="button" id="cbextend" class="btn btn-run btn-block">Extend</button>
-    </div>
-  </section>
   <section class="fpanel" id="panel-cb-enlarge" aria-label="Enlarge" hidden>
     <header class="fphead"><b>Enlarge</b> <span class="foldstate" id="sum-cb-enlarge"></span><button type="button" class="fpclose" aria-label="Close Enlarge">&times;</button></header>
     <div class="fpbody">

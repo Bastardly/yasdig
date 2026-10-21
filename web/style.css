@@ -411,6 +411,12 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .shotrow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--sp-2); align-items: start; margin-top: var(--sp-2); }
 .shotrow b { padding-top: var(--sp-2); color: var(--text-dim); }
 .shotrow .btn { padding: var(--sp-2); }
+/* A shot the clip on the stage already has (`shots.js`): ticked in the
+   departure green, which here means "drawn". Row 1 stands for the Prompt. */
+.shotrow.done b { color: var(--go); }
+.shotrow.done b::after { content: " \2713"; }
+.shotrow.done textarea { border-color: var(--go); }
+.shotfirst p { margin: var(--sp-2) 0 0; }
 /* The A14B pair's expert choice, under its row. */
 .loraexpert { width: 100%; margin-top: var(--sp-1); }
 
@@ -685,6 +691,10 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 }
 .statuscard:not(:has(> .err:not(:empty), .livepreview:not([hidden]), > .sub:not(:empty), .runstop > button:not([hidden]))) { display: none; }
 .statuscard > .err { max-height: 40vh; overflow-y: auto; }
+/* Dismisses the card's messages (`initStatusCards`); there only while one is. */
+.cardclose { position: absolute; top: var(--sp-1); right: var(--sp-1); }
+.statuscard:not(:has(> .err:not(:empty), > .sub:not(:empty))) > .cardclose { display: none; }
+.statuscard:has(> .cardclose) > .err, .statuscard:has(> .cardclose) > .sub { padding-right: var(--sp-5); }
 /* The dialog's foot line, under everything: panels may cover it. Centred over
    the pane, not the window. */
 .lbfoot {

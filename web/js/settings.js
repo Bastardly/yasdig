@@ -138,10 +138,10 @@ export const FIELDS = [
   { key: 'weight_type', label: 'Weight type', help: 'setwtype', kind: 'text', blank: BLANK },
   { key: 'extra_args', label: 'Extra sd-cli arguments', help: 'setargs', kind: 'lines' },
 
-  // The Video tab's own: what a finished clip leaves behind.
+  // The Video tab's own: what *Save to output* writes for a clip.
   SECTION('Video', { rail: 'Video' }),
   { key: 'video_save', page: true, label: 'Save clips as', help: 'setvideosave', kind: 'choice',
-    options: [['file', 'A video file (.avi), and the frames'], ['frames', 'Frames only (PNG)']] },
+    options: [['file', 'A video file (.avi)'], ['frames', 'Frames (PNG folder)']] },
 ];
 
 // The label of the control this is the default for, without the (i) `wireHints`

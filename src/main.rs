@@ -82,11 +82,15 @@
 //!                        thumbnail through the /outputs routes, by stem)
 //!   GET  /video-models -> the [[video]] table, with each family's grid rules
 //!   POST /video       -> generate a clip (minutes; watch GET /progress)
-//!   GET  /videos      -> every archived clip, newest first
+//!   GET  /videos      -> Current: every clip, starred ones too, newest first
 //!   GET  /videos/{id}/thumb.png
 //!   GET  /videos/{id}/frames/{n}.png   one frame; the page plays the sequence
 //!   POST /videos/enlarge -> {id, upscale} FSR over every frame
-//!   POST /videos/delete  -> {ids:[..]}
+//!   POST /videos/extend  -> {id, shots, every?, negative?, seed?, drop_last?}
+//!   POST /videos/delete  -> {ids:[..]} from work/videos/ only
+//!   GET  /favorite-clips -> the starred clips alone (user/favorite_clips/)
+//!   POST /favorite-clips/add|remove -> {ids:[..]} star / un-star (a move)
+//!   POST /favorite-clips/delete     -> {ids:[..]}
 //!   GET  /outputs/{stem}/thumb.png   generated on first request
 //!   POST /save-output      -> {image_id} keep the image on screen
 //!   POST /outputs/overwrite -> {image_id} save it over the output it was opened from
@@ -265,13 +269,8 @@ enum Work {
         sharpness: Option<f32>,
         clarity: Option<f32>,
     },
-    /// One shot added to a clip, or its last one taken back (`Engine::extend_clip`).
-    ExtendClip {
-        id: String,
-        shot: Option<String>,
-        seed: i64,
-        replace_last: bool,
-    },
+    /// Shots added to a clip, or its last one cut off (`Engine::extend_clip`).
+    ExtendClip(pipeline::ExtendClipRequest),
 }
 
 impl Work {
@@ -286,7 +285,7 @@ impl Work {
             | Work::Edit { id, .. }
             | Work::Extend { id, .. }
             | Work::Upscale { id, .. } => Some(*id),
-            Work::Run(_) | Work::Video(_) | Work::Convert(_) | Work::EnlargeClip { .. } | Work::ExtendClip { .. } => None,
+            Work::Run(_) | Work::Video(_) | Work::Convert(_) | Work::EnlargeClip { .. } | Work::ExtendClip(_) => None,
         }
     }
 }
@@ -649,10 +648,7 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
                 )
                 .and_then(|r| json_body(&r)),
         ),
-        Work::ExtendClip { id, shot, seed, replace_last } => queue.finish(
-            t.id,
-            engine.extend_clip(&id, shot.as_deref(), seed, replace_last).and_then(|r| json_body(&r)),
-        ),
+        Work::ExtendClip(req) => queue.finish(t.id, engine.extend_clip(&req).and_then(|r| json_body(&r))),
     }
 }
 
@@ -1001,7 +997,11 @@ fn route(
         ("POST", "/video") => handle_video(conn, lanes, &req.body),
         ("POST", "/videos/enlarge") => handle_enlarge_clip(conn, lanes, &req.body),
         ("POST", "/videos/extend") => handle_extend_clip(conn, lanes, &req.body),
-        ("GET", "/videos") => handle_list_clips(conn, cfg),
+        ("GET", "/videos") => handle_list_clips(conn, cfg, Shelf::Work),
+        ("GET", "/favorite-clips") => handle_list_clips(conn, cfg, Shelf::Favorites),
+        ("POST", "/favorite-clips/add") => handle_favorite_clips(conn, cfg, &req.body, true),
+        ("POST", "/favorite-clips/remove") => handle_favorite_clips(conn, cfg, &req.body, false),
+        ("POST", "/favorite-clips/delete") => handle_delete_clips(conn, cfg, &req.body, Shelf::Favorites),
         // Two guard arms rather than one, because a clip serves both a
         // thumbnail and its frames and only the frame route has a number in it.
         ("GET", p) if p.starts_with("/videos/") && p.ends_with("/thumb.png") => {
@@ -1023,7 +1023,7 @@ fn route(
             handle_clip_media(conn, cfg, p.trim_start_matches("/videos/").trim_end_matches("/clip.avi"), true)
         }
         ("POST", "/videos/save") => handle_save_clip(conn, cfg, &req.body),
-        ("POST", "/videos/delete") => handle_delete_clips(conn, cfg, &req.body),
+        ("POST", "/videos/delete") => handle_delete_clips(conn, cfg, &req.body, Shelf::Work),
         ("GET", "/outputs") => handle_list_outputs(conn, cfg, Gallery::Output),
         ("POST", "/outputs/open") => handle_open_output(conn, lanes, &req.body),
         ("POST", "/image/model") => handle_set_model(conn, lanes, &req.body),
@@ -1179,7 +1179,7 @@ fn clip_version(head: &str) -> Option<(&str, u32)> {
 
 /// The clip archive, for a connection thread. Same reasoning as [`store`].
 fn video_store(cfg: &Config) -> videos::VideoStore {
-    videos::VideoStore::new(&cfg.base_dir.join("work"))
+    videos::VideoStore::new(&cfg.base_dir.join("work"), &cfg.user_dir())
 }
 
 /// A `[[video]]` entry as the page needs it: the entry itself, plus the things
@@ -1548,7 +1548,7 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         #[serde(default)]
         shots: Vec<String>,
         #[serde(default)]
-        continue_from: Option<String>,
+        every: Option<String>,
     }
 
     let dto: Dto = match parse_json::<Dto>(conn, body)? {
@@ -1577,26 +1577,31 @@ fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Resu
         parts: dto.parts,
         loras: dto.loras,
         shots: dto.shots,
-        continue_from: dto.continue_from,
+        every: dto.every,
     };
 
     let label = req.model.clone();
     enqueue_wait(conn, lanes, jobs::Kind::Video, label, Work::Video(req), false, 500)
 }
 
-/// `POST /videos/extend {id, shot?, seed?, replace_last?}`: a shot added to a
-/// clip from its last frame, or (`replace_last`) its last one redrawn, or
-/// with no `shot` taken back. Through the queue, as a clip is.
+/// `POST /videos/extend {id, shots, every?, negative?, seed?, drop_last?}`:
+/// shots added to a clip from its last frame — the Prompts panel's *Extend
+/// clip* — or with `drop_last` its last shot cut off. Through the queue, as a
+/// clip is, so a cut never lands under a shot being drawn onto the same clip.
 fn handle_extend_clip(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
         id: String,
         #[serde(default)]
-        shot: Option<String>,
+        shots: Vec<String>,
+        #[serde(default)]
+        every: Option<String>,
+        #[serde(default)]
+        negative: Option<String>,
         #[serde(default)]
         seed: Option<i64>,
         #[serde(default)]
-        replace_last: bool,
+        drop_last: bool,
     }
     match parse_json::<Dto>(conn, body)? {
         Some(dto) => enqueue_wait(
@@ -1604,7 +1609,14 @@ fn handle_extend_clip(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -
             lanes,
             jobs::Kind::Video,
             format!("extend {}", dto.id),
-            Work::ExtendClip { id: dto.id, shot: dto.shot, seed: dto.seed.unwrap_or(-1), replace_last: dto.replace_last },
+            Work::ExtendClip(pipeline::ExtendClipRequest {
+                id: dto.id,
+                shots: dto.shots,
+                every: dto.every,
+                negative: dto.negative,
+                seed: dto.seed.unwrap_or(-1),
+                drop_last: dto.drop_last,
+            }),
             false,
             500,
         ),
@@ -1705,8 +1717,8 @@ fn handle_convert(
     }
 }
 
-fn handle_list_clips(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
-    let clips = video_store(cfg).list();
+fn handle_list_clips(conn: &mut http::Connection, cfg: &Config, shelf: Shelf) -> Result<()> {
+    let clips = video_store(cfg).listing(shelf);
     match serde_json::to_vec(&clips) {
         Ok(body) => conn.respond(200, "application/json", &body),
         Err(e) => conn.respond(
@@ -1830,7 +1842,7 @@ fn handle_save_clip(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> R
     }
 }
 
-fn handle_delete_clips(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+fn handle_delete_clips(conn: &mut http::Connection, cfg: &Config, body: &[u8], shelf: Shelf) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
         ids: Vec<String>,
@@ -1843,7 +1855,7 @@ fn handle_delete_clips(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -
     let store = video_store(cfg);
     let mut failed = Vec::new();
     for id in &dto.ids {
-        if let Err(e) = store.delete(id) {
+        if let Err(e) = store.delete(shelf, id) {
             failed.push(format!("{id}: {e:#}"));
         }
     }
@@ -2158,6 +2170,33 @@ fn handle_favorite_outputs(
         "application/json",
         format!("{{\"favorited\":{favorited}}}").as_bytes(),
     )
+}
+
+/// `/favorite-clips/add|remove {ids}`: star or un-star clips, each a move
+/// between `work/videos/` and `user/favorite_clips/`. `handle_favorite_outputs`
+/// for the Video tab's grids.
+fn handle_favorite_clips(conn: &mut http::Connection, cfg: &Config, body: &[u8], keep: bool) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        ids: Vec<String>,
+    }
+
+    let Some(dto) = parse_json::<Dto>(conn, body)? else {
+        return Ok(());
+    };
+    let store = video_store(cfg);
+    let mut failed = Vec::new();
+    for id in &dto.ids {
+        let moved = if keep { store.favorite(id) } else { store.unfavorite(id) };
+        if let Err(e) = moved {
+            failed.push(format!("{id}: {e:#}"));
+        }
+    }
+    if failed.is_empty() {
+        conn.respond(200, "application/json", br#"{"moved":true}"#)
+    } else {
+        conn.respond(500, "application/json", error_json(&failed.join("; ")).as_bytes())
+    }
 }
 
 /// `/save-output` mints a new file; `/outputs/overwrite` writes back over the

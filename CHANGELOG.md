@@ -9,6 +9,31 @@ What changed in each release of yasdig. Each release's executables are on the
 
 - **The version is shown under the YASDIG wordmark**, so you can see which one is
   running.
+- **Video tab**:
+  - **Current and Favorites**, the Image tab's two panels, replace *Clips*. The star
+    on a tile moves a clip to `user/favorite_clips/`, where *Delete all unstarred*
+    and Close server's clear never reach it.
+  - **Extend clip, in the Prompts panel.** With a clip on the stage, the shots it
+    already has are ticked green; add a row and *Extend clip* draws it onto that
+    clip from its last frame. The × on the clip's last shot cuts it off and keeps its
+    text, to draw it again. The clip dialog's Extend panel and *Continue this clip*
+    are gone.
+  - **Every shot**: words put in front of every shot (the characters, the place, the
+    look), with its variables rolled once so a rolled character stays the same.
+
+### Changed
+
+- **A message in the status card can be dismissed** with its ×, so a note or an error
+  no longer sits over a button until the next job.
+- **Each shot of a long clip is conditioned on its own text.** The Prompt is shot 1;
+  it used to go in front of every shot, so an action or a line spoken in it happened
+  again in every shot. Clips made before this open with their old Prompt in *Every
+  shot*, which redraws them the way they were made.
+- **A clip reaches Outputs only by *Save to output*** in the clip dialog. Every clip
+  used to be written there as it finished. *Save clips as* now says what that save
+  writes, and *Clear videos* on close no longer deletes clips saved to output.
+- **Clips don't play by themselves** when they finish or are opened, and opening the
+  clip dialog stops the clip on the stage, so only one plays at a time.
 
 ## 0.4.0 — 2026-10-21
 

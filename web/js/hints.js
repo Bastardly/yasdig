@@ -165,18 +165,21 @@ const HELP = [
         + 'change of size, and every Refine and Hi-res pass is told them again at '
         + 'its own size. The model card calls this experimental: it guides, it '
         + 'doesn’t trace.' },
-  { ids: ['cbshot'],
-    text: 'One more shot, on this clip: what happens next, drawn from its last frame '
-        + 'with the clip’s own prompt (the scene) and settings. If it comes out wrong, '
-        + 'Regenerate draws it again with a new seed — and this text, if you changed '
-        + 'it — and Undo takes it off. Building a clip a shot at a time like this needs '
-        + 'no plan; the Shots list on the Prompts panel makes several in one go.' },
   { ids: ['vshots'],
-    text: 'A longer clip, one shot at a time. Each shot is a segment of the '
-        + 'Frames above, made from the previous shot’s last frame, and says what '
-        + 'happens next — the Prompt stays the scene: who, where, the look. Five '
-        + 'shots of 3 s make a 15 s clip. Only one frame carries across a seam, so '
-        + 'motion can change direction there. TI2V-5B, A14B and H3 can do it.' },
+    text: 'A longer clip, one shot at a time. The Prompt is shot 1; each shot '
+        + 'here is a segment of the Frames above, made from the one before’s last '
+        + 'frame, and says only what happens in it — an action or a line in the '
+        + 'Prompt happens once. Shots the clip on screen already has are ticked '
+        + 'green; add one below and Extend clip draws it onto that clip, or press '
+        + 'Generate clip to make the whole list again. The × on the clip’s last '
+        + 'shot cuts it off and keeps its text, to draw it again. TI2V-5B, A14B and '
+        + 'H3 can do it.' },
+  { ids: ['vevery'],
+    text: 'Words that go in front of every shot, the first included: who and where '
+        + '— the characters, the place, the look. One frame is all that carries '
+        + 'across a seam, so a face that turns away is drawn again from these. '
+        + 'Keep actions and dialogue out: they belong to a shot. Its {variables} '
+        + 'roll once, so a rolled character is the same one in every shot.' },
   { ids: ['vloras'],
     text: 'LoRAs for the video model, from models/loras/ — only the ones for this '
         + 'model’s size are offered (a TI2V-5B LoRA does nothing to a 14B). On the '
@@ -383,8 +386,9 @@ const HELP = [
         + 'saved images and uploads alike. Favorite outputs are never touched. '
         + 'Only Close server does this.' },
   { ids: ['setclearvid'],
-    text: 'When you press Close server, delete every clip on the Video tab, and '
-        + 'the enlarged frames made from them. Only Close server does this.' },
+    text: 'When you press Close server, delete every unstarred clip on the Video '
+        + 'tab, enlarged versions and all. Starred clips are kept, and so is what you '
+        + 'saved to output. Only Close server does this.' },
   { ids: ['setembedpng'],
     text: 'Writes the prompt, negative prompt, model, seed, steps, sampler and CFG '
         + 'into each image you save to output, in the format A1111, Forge and Civitai '
@@ -393,11 +397,11 @@ const HELP = [
         + 'and would rather your prompts did not travel with them. No file paths are '
         + 'ever written.' },
   { ids: ['setvideosave'],
-    text: 'What each finished clip leaves in the output folder. A video file is an '
-        + '.avi that any video player opens (with sound, for a model that makes it), '
-        + 'saved beside the frames the Video tab plays. Frames only keeps the PNG '
-        + 'frames, one file each, which is what an editor wants. Enlarge follows the '
-        + 'same choice.' },
+    text: 'What the clip dialog’s Save to output writes into the output folder. A '
+        + 'video file is an .avi that any video player opens (with sound, for a model '
+        + 'that makes it). Frames only writes the PNG frames into a folder, one file '
+        + 'each, which is what an editor wants. A clip only reaches the output folder '
+        + 'when you save it.' },
   { ids: ['setvaedirect'],
     text: 'Computes the VAE — the step that turns the result into pixels — without '
         + 'first unrolling the whole image into a huge temporary buffer. Same picture, '

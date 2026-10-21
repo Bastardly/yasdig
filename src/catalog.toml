@@ -475,8 +475,7 @@ bytes = 335304388
 sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
 
 # ---------------------------------------------------------------------------
-# Video models (nightly): the Video tab's families, served only while that tab
-# is on. Same shape as `[[entry]]`, with three differences: `family` is a
+# Video models: the Video tab's families. Same shape as `[[entry]]`, with three differences: `family` is a
 # `VideoFamily` name, `dest` is relative to the video dir (`[sd].video_dir`,
 # `models/video/` by default) — where discovery assembles a video model from —
 # and the A14B's second expert is `slot = "high_noise"`, its file name keeping

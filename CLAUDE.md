@@ -284,7 +284,9 @@ Break silently:
 Convert's and Settings' columns end in `<div class="dock">` (`position: sticky;
 bottom: 0`): error box, progress, `.runstop`, amber button. A dock with nothing
 showing hides itself by CSS. The workspaces and the Refine & adjust dialog have a
-rail foot and a status card instead (same rules for the preview and the caps).
+rail foot and a status card instead (same rules for the preview and the caps); every
+status card gets a × (`initStatusCards` in app.js) that empties its `.err`/`.sub`,
+shown by CSS only while one holds something.
 
 - **It must stay the column's last child, opaque.** Page scrolls, card is the
   containing block.
@@ -1398,10 +1400,10 @@ from `family` goes on `VideoModelDto`.
   - **Sound only survives in a container**: sd-cli drops audio with a `%03d` `-o`. A
     model with `audio_vae` generates into `clip.avi` (`VideoStore::prepare(id, true)`),
     `unpack` splits it into frames + `audio.wav`; the AVI is kept for download.
-  - **`Settings::video_save`** (`file` default | `frames`, page-level): `file` writes
-    `work/output/{id}.avi` after `keep()` (`crate::avi`, MJPEG + PCM, our encoder at q95)
-    and Enlarge writes `{id}-x{N}.avi` instead of its frames folder. Close server's clear
-    takes both (`is_clip_id`). The output gallery lists PNGs only.
+  - **Nothing reaches `work/output/` unasked**: only `/videos/save` writes a clip there,
+    as `Settings::video_save` says (`file` default, `crate::avi` MJPEG + PCM at q95 |
+    `frames`, page-level). Close server's clip clear leaves saved outputs to the outputs
+    switch (it still sweeps old builds' `{id}-x{N}` enlargements, `is_enlarged_clip`).
   - **MoE expert halves are told apart by filename only** (`noise_marker`); no marker →
     `wan_dense`, not a guess.
   - A missing component is listed greyed out with the conventional path in its role
@@ -1418,10 +1420,19 @@ from `family` goes on `VideoModelDto`.
     `loadVideoModels({refill:false})` after a download. Only a model `change` refills.
   - **Clips open while one renders** (`clickClip` has no busy gate); a clip landing
     while another is open joins the grid without taking the stage.
+  - **Current and Favorites** (`clipGrid` in video.js, `shelfGrid`'s shape): a star
+    moves the clip's folder to `user/favorite_clips/` (`VideoStore::favorite`, rename
+    or copy-then-delete). **An id names one clip wherever it lives**: every reader goes
+    through `VideoStore::dir`, which looks in both, so no `/videos/{id}/…` URL changes;
+    only `list`/`delete` take a `Shelf`, and *Delete all*/Close server's clear use
+    `Shelf::Work`. `load` sets `Clip.favorite` from where it was read.
+  - **No autoplay, one player**: `loadFrames` and the dialog's `show` draw frame 0
+    only; opening the dialog calls the stage's `stopPlayback` (`initClipView`'s
+    `onOpen`), and `showTab` stops it off the tab.
   - The size boxes snap up to `size_multiple` on `change` (`snapSize`); the seed has
     the Image tab's rail line (`#vseedline`) and Reset.
-  - **The clip dialog** (`#clipbox`, `web/js/clipview.js`, its own player — the
-    stage keeps playing): opened from the stage's canvas, or an Outputs ▶ tile
+  - **The clip dialog** (`#clipbox`, `web/js/clipview.js`, its own player): Enlarge,
+    History, Save to output — no shots. Opened from the stage's canvas, or an Outputs ▶ tile
     (`openOutputClip`, play only). **Enlarges are versions inside the clip**
     (`work/videos/{id}/v{n}/`, `Clip.versions`, always from the original's frames),
     served at `/videos/{id}/v{n}/frames/{k}.png` and `…/v{n}/clip.avi`
@@ -1434,22 +1445,31 @@ from `family` goes on `VideoModelDto`.
     save compares against (`update_video_model`: typed round trip first, `memory`
     against `memory_mode()`); a saved part is kept only when it isn't discovery's.
     `POST /model-settings {kind: "video"}`; `reconcile` takes a video `exists` too.
-  - **Long clips are shots** (`VideoRequest.shots`, `continue_from`): one sd-cli
-    run per shot in one job, seed `seed + k`, conditioned `"{prompt}. {shot}"`.
-    Shot 1 of a fresh clip renders into the clip; every other into `seg{k}/` from
-    the clip's last frame, then `append_segment` drops its first frame (the seam,
-    redrawn from `-i`) and its sound's first frame. Only `VideoFamily::chains()`
-    (5B, A14B, H3 — `-i` is a first frame there; VACE reads it as a reference, T2V
-    ignores it). Failure or Stop at shot k>1 keeps 1..k-1 with `VideoResult.note`.
-    A multi-shot clip drops sd-cli's `clip.avi` (it is shot 1 alone).
-  - **Extend is in place** (`Engine::extend_clip`, `POST /videos/extend {id, shot?,
-    replace_last}`, `Work::ExtendClip` on the queue): one segment from the clip's
-    last frame on `clip.video` as recorded, appended to the *same* clip;
-    `replace_last` first `truncate`s back to the last `shot_starts` entry
-    (Regenerate), no `shot` stops there (Undo). A one-go clip becomes shot 1 (`""`)
-    on its first extend, and back to none when one shot is left. Any change
-    `invalidate`s what was made from the frames (container, cached download,
-    enlarged versions) and re-`finish`es. *Save to output* always rewrites.
+  - **Long clips are shots** (`VideoRequest.shots` = the shots *after* the Prompt,
+    `every`): one sd-cli run per shot in one job, seed `seed + k`, each conditioned on
+    **`videos::shot_prompt(every, its own text)`** — never `"{prompt}. {shot}"`, which
+    made a line spoken in the Prompt be spoken in every shot. `every` rolls once, off
+    the clip's seed. Recorded as `Clip.segments` (`{text, conditioned, seed, start}`,
+    never empty; `Clip::normalize` reads the old `shots`/`shot_starts` with the old
+    prompt as `every`, and never writes them). Shot 1 renders into the clip; every
+    other into `seg{k}/` from the clip's last frame (`render_shot`), then
+    `append_segment` drops its first frame (the seam, redrawn from `-i`) and its
+    sound's first frame. Only `VideoFamily::chains()` (5B, A14B, H3 — `-i` is a first
+    frame there; VACE reads it as a reference, T2V ignores it; H3's real references
+    are refused beside a keyframe by sd.cpp, so they can't chain). Failure or Stop at
+    shot k>1 keeps 1..k-1 with `VideoResult.note` (`cut_short`). A multi-shot clip
+    drops sd-cli's `clip.avi` (it is shot 1 alone).
+  - **Extend is in place, from the Prompts panel** (`Engine::extend_clip`,
+    `ExtendClipRequest`, `POST /videos/extend {id, shots, every?, negative?, seed?,
+    drop_last?}`, `Work::ExtendClip` on the queue): the pending rows drawn onto the
+    clip on the stage on `clip.video` as recorded (only words and seed come from the
+    panel); `drop_last` `truncate`s the last segment (never shot 1). **Done is
+    computed, never stored** (`shots.js` `shotState`, `shots.test.js`): row k is done
+    when the stage clip's `segments[k].text` matches it; an edited done row breaks
+    `whole` and hides *Extend clip*, leaving Generate. The × on `dropLast` cuts and
+    keeps the text. Any change `invalidate`s what was made from the frames
+    (container, cached download, enlarged versions) and re-`finish`es. *Save to
+    output* always rewrites.
   - **A saved clip is an output**: `list_outputs` lists `{stem}.avi` with
     `video: true`; `find_output` stays PNG-only (it resolves image sources), and
     `find_clip_output` finds the clip; `free_stem` checks both; delete, star
