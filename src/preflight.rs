@@ -132,6 +132,25 @@ pub fn check(cfg: &Config) -> Report {
         info.push(format!("stable-diffusion.cpp ({whose}): {}", bin.display()));
     }
 
+    // 1a) The network sandbox (`sandbox`). Off Linux it's a plain fact, not a
+    // warning every start; on Linux a kernel that can't run it means sd-cli
+    // won't launch, so that one is loud and names the way out.
+    match (crate::sandbox::kernel_ready(), crate::sandbox::opted_out()) {
+        (None, _) => info.push("sd-cli network sandbox: Linux only for now, so not on this OS".into()),
+        (Some(_), true) => warnings.push(format!(
+            "{}=1 is set, so sd-cli runs with network access.\n\
+             Unset it unless this kernel can't run the seccomp filter.",
+            crate::sandbox::OPT_OUT
+        )),
+        (Some(true), false) => info.push("sd-cli network sandbox: on (seccomp; no internet sockets)".into()),
+        (Some(false), false) => warnings.push(format!(
+            "this kernel doesn't advertise the seccomp actions the sd-cli network\n\
+             sandbox uses (/proc/sys/kernel/seccomp/actions_avail), so sd-cli may\n\
+             fail to start. If it does, run with {}=1.",
+            crate::sandbox::OPT_OUT
+        )),
+    }
+
     // 1b) The settings file. `Config::load` creates it if it is missing, so by
     // the time this runs the only interesting cases are "it is there" and "it is
     // there and unreadable" — and the second has to be loud, because generation

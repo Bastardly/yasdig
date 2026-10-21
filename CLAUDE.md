@@ -1366,6 +1366,10 @@ from `family` goes on `VideoModelDto`.
     never behind a render.
   - `/outputs/{stem}/thumb.png` generates on first request (`ensure_output_thumb`),
     via a counter-suffixed temp name and rename.
+- **Every sd-cli `Command` comes from `SdRunner::command`**, which installs the
+  network sandbox (`src/sandbox.rs`, seccomp in `pre_exec`; namespaces fail on
+  Ubuntu's AppArmor). The filter's jump offsets are checked by a BPF interpreter in
+  its tests — renumber them with it. `curl` for downloads is deliberately outside it.
 - **`SdRunner::run` streams; never go back to `Command::output()`.**
   - Progress is on **stdout**; stderr gets its own draining thread (deadlock otherwise).
   - `drain` splits on `\r` **and** `\n`.

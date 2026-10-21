@@ -20,6 +20,10 @@ bytemuck = { version = "1", features = ["derive"] }
 base64 = "0.22"
 anyhow = "1"
 
+# The sd-cli network sandbox (`src/sandbox.rs`); already in the tree via wgpu.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 # Shader validation in tests. The WGSL is otherwise only compiled when a GPU
 # device is created, so a typo would surface as a startup failure on the worker
 # thread rather than at build time. Pinned to the naga wgpu 27 uses.

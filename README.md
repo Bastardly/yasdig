@@ -111,7 +111,10 @@ you trust.
 
 **Model files are read, never run.** There is no Python inside, so a `.ckpt` or
 `.pth` file is parsed for its weights and nothing in it is executed. A file it can't
-make sense of is refused, not guessed at.
+make sense of is refused, not guessed at. On Linux the program that reads them
+(stable-diffusion.cpp) also runs **without network access**, so even a file crafted
+to exploit a bug in it couldn't send anything anywhere; `yasdig doctor` shows it's
+on. Windows doesn't have this yet.
 
 **Saved pictures carry their settings.** *Save to output* and *Download* write the
 prompt, model names and settings into the PNG, so others can recreate your picture

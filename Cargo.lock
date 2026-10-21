@@ -1428,6 +1428,7 @@ dependencies = [
  "base64",
  "bytemuck",
  "image",
+ "libc",
  "naga",
  "pollster",
  "serde",

@@ -71,6 +71,14 @@ impl<'a> SdRunner<'a> {
         self.cfg.sd_binary()
     }
 
+    /// Every sd-cli `Command` starts here, so none skips the network sandbox
+    /// ([`crate::sandbox`]): sd-cli parses downloaded model files in C++.
+    fn command(&self) -> Command {
+        let mut cmd = Command::new(self.binary());
+        crate::sandbox::confine(&mut cmd);
+        cmd
+    }
+
     /// Verify the sd binary exists; returns a friendly error if not.
     pub fn preflight(&self) -> Result<()> {
         let bin = self.binary();
@@ -369,7 +377,7 @@ impl<'a> SdRunner<'a> {
         seed: i64,
         io: &VideoIo,
     ) -> Command {
-        let mut cmd = Command::new(self.binary());
+        let mut cmd = self.command();
         // Not `cfg.sd.mode`: that one is the image mode, and it is configurable
         // because old builds spelled it `txt2img`. `vid_gen` has only ever had
         // one spelling.
@@ -512,7 +520,7 @@ impl<'a> SdRunner<'a> {
     /// came back — the structural half of the same guard, which also catches a
     /// 1× model that ran fine and enlarged nothing.
     pub fn upscale(&self, model: &Path, input: &Path, output: &Path) -> Result<()> {
-        let mut cmd = Command::new(self.binary());
+        let mut cmd = self.command();
         cmd.args(["-M", "upscale"]);
         cmd.args(["-i", &path_str(input)]);
         cmd.args(["-o", &path_str(output)]);
@@ -542,7 +550,7 @@ impl<'a> SdRunner<'a> {
     /// produces a valid file full of misnamed tensors rather than an error. See
     /// [`crate::convert`].
     fn convert_cmd(&self, plan: &crate::convert::Plan) -> Command {
-        let mut cmd = Command::new(self.binary());
+        let mut cmd = self.command();
         cmd.args(["-M", "convert"]);
         cmd.args([plan.slot, &path_str(&plan.source)]);
         cmd.args(["--type", &plan.ty]);
@@ -588,7 +596,7 @@ impl<'a> SdRunner<'a> {
         out: &Path,
         cfg_scale: f32,
     ) -> Command {
-        let mut cmd = Command::new(self.binary());
+        let mut cmd = self.command();
         cmd.args(["-M", &self.cfg.sd.mode]);
         // A bundled checkpoint is one `-m`. A bare DiT is `--diffusion-model`
         // plus a flag per separate file — the flag also decides the prefix
@@ -732,7 +740,20 @@ impl<'a> SdRunner<'a> {
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd
             .spawn()
-            .with_context(|| format!("failed to launch sd-cli for {label}"))?;
+            .with_context(|| {
+                // A filter the kernel refuses fails the spawn itself, with an
+                // OS error that wouldn't otherwise point at the sandbox.
+                let hint = if crate::sandbox::enabled() {
+                    format!(
+                        " (it runs without network access; if this kernel can't set that \
+                         up, {}=1 turns it off — `yasdig doctor` says which)",
+                        crate::sandbox::OPT_OUT
+                    )
+                } else {
+                    String::new()
+                };
+                format!("failed to launch sd-cli for {label}{hint}")
+            })?;
         let stdout = child.stdout.take().expect("stdout was piped");
         let stderr = child.stderr.take().expect("stderr was piped");
         let errors = std::thread::spawn(move || drain(stderr, |_| {}));

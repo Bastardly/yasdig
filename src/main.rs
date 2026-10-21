@@ -126,6 +126,7 @@ mod pipeline;
 mod pngmeta;
 mod redraw;
 mod preflight;
+mod sandbox;
 mod sd;
 mod settings;
 mod shutdown;

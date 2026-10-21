@@ -49,6 +49,12 @@ What changed in each release of yasdig. Each release's executables are on the
   - **The seed** has the Image tab's line in the rail and a Reset button, width and
     height have a swap button, and the size boxes snap to what the model will run.
 
+- **stable-diffusion.cpp runs without network access on Linux.** Models are
+  downloaded from strangers, and the C++ that reads them is where a crafted file
+  could do harm, so sd-cli (and anything it starts) can't open an internet
+  connection. `yasdig doctor` says it's on; `YASDIG_NO_SANDBOX=1` turns it off for
+  a kernel that can't run it.
+
 ### Fixed
 
 - **Video tab**: finishing a clip no longer resets the settings to the
