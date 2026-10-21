@@ -86,6 +86,17 @@ function initTabs() {
     e.preventDefault();
     openHelp('about');
   });
+  showVersion();
+}
+
+// The version under the wordmark, drawn by `.tabs h1::after` from the
+// attribute so the wordmark's own box never changes. `/instance` is where the
+// server already says who it is; an older one without `version` shows nothing.
+async function showVersion() {
+  try {
+    const { version } = await (await fetch('/instance')).json();
+    if (version) document.querySelector('.tabs h1').dataset.version = `v${version}`;
+  } catch { /* no line, nothing else lost */ }
 }
 
 // ---- Close server -----------------------------------------------------------

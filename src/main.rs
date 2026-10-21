@@ -871,9 +871,10 @@ fn route(
             200,
             "application/json",
             format!(
-                "{{\"app\":\"yasdig\",\"home\":{},\"build\":{}}}",
+                "{{\"app\":\"yasdig\",\"home\":{},\"build\":{},\"version\":{}}}",
                 json_str(&cfg.base_dir.display().to_string()),
-                json_str(startup::build_id())
+                json_str(startup::build_id()),
+                json_str(env!("CARGO_PKG_VERSION"))
             )
             .as_bytes(),
         ),

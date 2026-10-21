@@ -167,6 +167,17 @@ h1 {
   font: var(--fs-display) var(--font-num);
   letter-spacing: -.02em;
 }
+/* The version under it, out of flow so the wordmark keeps its place in the
+   row. `line-height: 1` makes the h1's box the glyphs, which leaves the row's
+   bottom padding for this line. */
+.tabs h1 { position: relative; line-height: 1; }
+.tabs h1[data-version]::after {
+  content: attr(data-version);
+  position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  margin-top: 2px;
+  font: var(--fs-micro)/1 var(--font-num); letter-spacing: 0;
+  color: var(--text-dim); white-space: nowrap; pointer-events: none;
+}
 
 /* A note under something, which is what every use of it is. */
 .sub { color: var(--text-dim); font-size: var(--fs-sm); margin: var(--sp-2) 0 0; }
