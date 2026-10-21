@@ -354,6 +354,12 @@ struct Lanes {
 const MAX_RUN: u32 = 1000;
 
 fn main() -> Result<()> {
+    // The Windows sd-cli launcher (`sandbox`), before anything else — before
+    // `build_id`, the home folder and any output of ours: it is a few lines
+    // between yasdig and sd-cli, and its arguments needn't be UTF-8.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(sandbox::HELPER)) {
+        sandbox::helper_main(std::env::args_os().skip(2).collect());
+    }
     let args: Vec<String> = std::env::args().collect();
     let double_clicked = args.len() == 1;
     let result = run(&args);
@@ -3757,7 +3763,23 @@ fn run_upscale_cli(args: &[String]) -> Result<()> {
     // is shared between two lanes; here nobody else holds it.
     let fsr = std::sync::Mutex::new(fsr::Fsr::new()?);
     let start = std::time::Instant::now();
-    let model_ms = pipeline::enlarge(&fsr, &runner, &in_png, &out_png, factor, Some(&model))?;
+    // sd-cli's sandbox reaches only yasdig's own folders on Windows
+    // (`Config::sandbox_roots`), and these two paths are anyone's: an ESRGAN
+    // reads and writes through scratch, as every server run does.
+    let model_ms = if matches!(arch, sr::arch::Arch::Esrgan { .. }) {
+        let scratch = pipeline::scratch_dir(&cfg.base_dir.join("work"));
+        std::fs::create_dir_all(&scratch)?;
+        let id = std::process::id();
+        let (src, dst) = (scratch.join(format!("upscale-{id}-in.png")), scratch.join(format!("upscale-{id}-out.png")));
+        std::fs::copy(&in_png, &src).with_context(|| format!("reading {}", in_png.display()))?;
+        let ran = pipeline::enlarge(&fsr, &runner, &src, &dst, factor, Some(&model))
+            .and_then(|ms| std::fs::copy(&dst, &out_png).map(|_| ms).with_context(|| format!("writing {}", out_png.display())));
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dst);
+        ran?
+    } else {
+        pipeline::enlarge(&fsr, &runner, &in_png, &out_png, factor, Some(&model))?
+    };
     let (w, h) = image::image_dimensions(&out_png)
         .with_context(|| format!("reading {}", out_png.display()))?;
     println!(

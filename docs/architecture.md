@@ -8,11 +8,15 @@ How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the detail
   connection threads enqueue a job and wait for the reply.
 - **Shell-out, not FFI.** The server runs `sd-cli` as a subprocess per request — clean
   isolation, easy debugging, and it keeps everything Python-free.
-- **sd-cli has no network** (Linux). It parses downloaded model files in C++, so a
-  crafted file exploiting a loader bug is the one way a model could act; a seccomp
-  filter installed between fork and exec (`src/sandbox.rs`) refuses it every internet
-  socket, for itself and anything it starts. `YASDIG_NO_SANDBOX=1` turns it off;
-  `doctor` says whether it's on. Not yet on Windows.
+- **sd-cli has no network** (Linux and Windows). It parses downloaded model files in
+  C++, so a crafted file exploiting a loader bug is the one way a model could act.
+  On Linux a seccomp filter installed between fork and exec (`src/sandbox.rs`)
+  refuses it every internet socket, for itself and anything it starts. On Windows it
+  runs in an AppContainer with no capabilities — no internet, LAN or loopback — and
+  can open only the folders yasdig grants it (`work/`, the model folders, sd-cli's
+  own); yasdig re-runs itself as a small launcher (`yasdig sandbox-run`) to start it
+  there, and the first run checks with `curl.exe` that a connection from inside is
+  refused. `YASDIG_NO_SANDBOX=1` turns it off; `doctor` says whether it's on.
 - **Layout:**
   ```
   src/main.rs      server + routing + single GPU worker + CLI subcommands
@@ -23,7 +27,7 @@ How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the detail
   src/foldscale.rs fold a scaled-fp8 GGUF's per-tensor scales into its weights
   src/preflight.rs startup environment checks, shared with `doctor`
   src/sd.rs        sd-cli subprocess wrapper (txt2img + img2img + vid_gen)
-  src/sandbox.rs   the seccomp filter that keeps sd-cli off the network
+  src/sandbox.rs   keeps sd-cli off the network: seccomp (Linux), AppContainer (Windows)
   src/settings.rs  user/settings.toml and user/model-settings.toml
   src/pipeline.rs  orchestrate sd -> fsr -> escalations, with timings + result cache
   src/workitems.rs durable storage: work/workitems/ + work/output/

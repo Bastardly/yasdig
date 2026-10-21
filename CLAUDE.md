@@ -1380,10 +1380,29 @@ from `family` goes on `VideoModelDto`.
     never behind a render.
   - `/outputs/{stem}/thumb.png` generates on first request (`ensure_output_thumb`),
     via a counter-suffixed temp name and rename.
-- **Every sd-cli `Command` comes from `SdRunner::command`**, which installs the
-  network sandbox (`src/sandbox.rs`, seccomp in `pre_exec`; namespaces fail on
-  Ubuntu's AppArmor). The filter's jump offsets are checked by a BPF interpreter in
-  its tests — renumber them with it. `curl` for downloads is deliberately outside it.
+- **Every sd-cli spawn is `SdRunner::run_tail`'s, which confines it**
+  (`sandbox::confine`, after the arguments are read; the builders stay plain, so
+  their `argv` tests hold on every OS). `curl` for downloads is deliberately outside.
+  - **Linux**: seccomp in `pre_exec` (namespaces fail on Ubuntu's AppArmor). The
+    filter's jump offsets are checked by a BPF interpreter in its tests — renumber
+    them with it.
+  - **Windows**: an AppContainer (`yasdig.sd-cli`, zero capabilities). `confine`
+    rewrites the command into `yasdig.exe sandbox-run <sd-cli> <args…>`, since std
+    can't pass process attributes on stable; **the `sandbox::HELPER` dispatch must
+    stay first in `main()`**, before `build_id`. The launcher re-quotes the
+    arguments (`quote_into`, round-tripped by a test-only MSVC splitter), passes
+    only its std handles (stdin is NUL — a console handle can't go on the handle
+    list), and holds sd-cli in a kill-on-close job, so Stop's kill of the launcher
+    takes sd-cli too.
+  - **The container opens only what is granted**: `Config::sandbox_roots` (`work/`,
+    every model folder — writable, Convert writes beside its source — and sd-cli's
+    folder), as inheritable ACEs added once. **A path sd-cli is handed must be under
+    one**: the `upscale` CLI stages an ESRGAN's files in scratch.
+  - **Enforcement is the firewall's filtering engine**, which a third-party firewall
+    can replace, so the first spawn of a run checks it (`sandbox::probe`: `curl.exe`
+    inside against our loopback port; a connection that *arrives* refuses every
+    run). `NO_GPU` (`ggml_vulkan: No devices found.`) under the container stops the
+    run, or sd.cpp would quietly fall back to the CPU.
 - **`SdRunner::run` streams; never go back to `Command::output()`.**
   - Progress is on **stdout**; stderr gets its own draining thread (deadlock otherwise).
   - `drain` splits on `\r` **and** `\n`.

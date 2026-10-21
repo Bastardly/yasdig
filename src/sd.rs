@@ -22,6 +22,10 @@ use std::sync::{Arc, Mutex};
 /// Stop from a crash without a second channel for it.
 pub const CANCELLED: &str = "cancelled by request";
 
+/// ggml-vulkan's line for a loader that found no device
+/// (`ggml_vk_instance_init`), after which sd.cpp runs on the CPU.
+const NO_GPU: &str = "ggml_vulkan: No devices found.";
+
 /// The reference images onto a command: one `-r` each, in the order the
 /// prompt names them. Only ever the `refs` a caller hands over — never
 /// `Profile::references`, which every pass shares through `base_cmd`: a refine
@@ -71,12 +75,12 @@ impl<'a> SdRunner<'a> {
         self.cfg.sd_binary()
     }
 
-    /// Every sd-cli `Command` starts here, so none skips the network sandbox
-    /// ([`crate::sandbox`]): sd-cli parses downloaded model files in C++.
+    /// Every sd-cli `Command` starts here. It is confined at its one spawn,
+    /// in [`SdRunner::run_tail`] ([`crate::sandbox`]: sd-cli parses downloaded
+    /// model files in C++), so the builders stay plain and their tests read
+    /// sd-cli's own arguments on every OS.
     fn command(&self) -> Command {
-        let mut cmd = Command::new(self.binary());
-        crate::sandbox::confine(&mut cmd);
-        cmd
+        Command::new(self.binary())
     }
 
     /// Verify the sd binary exists; returns a friendly error if not.
@@ -705,7 +709,7 @@ impl<'a> SdRunner<'a> {
     /// [`SdRunner::run`], handing back the stderr tail of a run that succeeded —
     /// for the one mode, `upscale`, whose failures don't always reach the exit
     /// status.
-    fn run_tail(&self, mut cmd: Command, label: &str) -> Result<VecDeque<String>> {
+    fn run_tail(&self, cmd: Command, label: &str) -> Result<VecDeque<String>> {
         // Before the spawn, not in `Monitor::begin`, which runs after it: a
         // child that wrote its first preview in that gap would lose it. Every
         // run clears it, so one that passes no `--preview` (video, convert,
@@ -740,6 +744,9 @@ impl<'a> SdRunner<'a> {
                 _ => None,
             });
         }
+        // After the arguments are read: on Windows this is a new command, the
+        // launcher's, with sd-cli's own as its arguments.
+        let mut cmd = crate::sandbox::confine(cmd, &self.cfg.sandbox_roots())?;
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd
             .spawn()
@@ -748,7 +755,7 @@ impl<'a> SdRunner<'a> {
                 // OS error that wouldn't otherwise point at the sandbox.
                 let hint = if crate::sandbox::enabled() {
                     format!(
-                        " (it runs without network access; if this kernel can't set that \
+                        " (it runs without network access; if this system can't set that \
                          up, {}=1 turns it off — `yasdig doctor` says which)",
                         crate::sandbox::OPT_OUT
                     )
@@ -759,7 +766,23 @@ impl<'a> SdRunner<'a> {
             })?;
         let stdout = child.stdout.take().expect("stdout was piped");
         let stderr = child.stderr.take().expect("stderr was piped");
-        let errors = std::thread::spawn(move || drain(stderr, |_| {}));
+        // A Vulkan loader that finds no GPU from inside the Windows container
+        // isn't an error to sd.cpp: it falls back to the CPU and takes an hour.
+        // So that line stops the run, and the error says it was the sandbox.
+        let blind = Arc::new(AtomicBool::new(false));
+        let watch = cfg!(windows) && crate::sandbox::enabled();
+        let spot = {
+            let (blind, monitor) = (blind.clone(), self.monitor.clone());
+            move |line: &str| {
+                if watch && line.contains(NO_GPU) && !blind.swap(true, Ordering::SeqCst) {
+                    monitor.cancel();
+                }
+            }
+        };
+        let errors = {
+            let spot = spot.clone();
+            std::thread::spawn(move || drain(stderr, spot))
+        };
 
         self.monitor.begin(label, child);
         // The last progress seen, kept here because `end` clears the monitor's
@@ -771,6 +794,7 @@ impl<'a> SdRunner<'a> {
         // and the last bar overall says "loading" mid-drawing.
         let mut last_step: Option<(u32, u32)> = None;
         let out_tail = drain(stdout, |line| {
+            spot(line);
             if let Some((step, steps, rate)) = parse_progress(line) {
                 self.monitor.advance(label, step, steps, rate);
                 let phase = Phase::of_rate(rate);
@@ -808,6 +832,14 @@ impl<'a> SdRunner<'a> {
             None => bail!("sd-cli {label}: the child went missing while it ran"),
         };
         let err_tail = errors.join().unwrap_or_default();
+        if blind.load(Ordering::SeqCst) {
+            bail!(
+                "sd-cli {label}: no GPU is visible from inside the sandbox sd-cli runs in \
+                 (\"{NO_GPU}\"), so it was stopped before it fell back to the CPU. \
+                 {}=1 runs sd-cli without the sandbox.",
+                crate::sandbox::OPT_OUT
+            );
+        }
         if !status.success() {
             // Checked before the crash message, because a killed process exits
             // on a signal and reporting the user's own Stop as a crash would be

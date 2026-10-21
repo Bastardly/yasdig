@@ -443,6 +443,8 @@ Each is used under the licence named — where a choice is offered, any of them.
 | wgpu-core-deps-windows-linux-android | 27.0.0 | MIT OR Apache-2.0 |
 | wgpu-hal | 27.0.4 | MIT OR Apache-2.0 |
 | wgpu-types | 27.0.1 | MIT OR Apache-2.0 |
+| windows-link | 0.2.1 | MIT OR Apache-2.0 |
+| windows-sys | 0.61.2 | MIT OR Apache-2.0 |
 | winnow | 0.7.15 | MIT |
 | winnow | 1.0.4 | MIT |
 | zerocopy | 0.8.57 | BSD-2-Clause OR Apache-2.0 OR MIT |

@@ -20,9 +20,23 @@ bytemuck = { version = "1", features = ["derive"] }
 base64 = "0.22"
 anyhow = "1"
 
-# The sd-cli network sandbox (`src/sandbox.rs`); already in the tree via wgpu.
+# The sd-cli network sandbox (`src/sandbox.rs`) on Linux; already in the tree via wgpu.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+
+# The Windows side of it: an AppContainer. Already in the tree via wgpu.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Isolation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 # Shader validation in tests. The WGSL is otherwise only compiled when a GPU
 # device is created, so a typo would surface as a startup failure on the worker

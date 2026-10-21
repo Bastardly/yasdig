@@ -178,9 +178,6 @@ jobs:
           $bad = $deps | Where-Object { $_ -match '^(vcruntime|msvcp|vcomp|libgomp|libstdc)' }
           if ($bad) { Write-Error "sd-cli needs a runtime DLL users won't have: $bad"; exit 1 }
 
-      - name: Test
-        run: cargo test
-
       - name: Package
         # A zip, not a bare .exe: Edge's SmartScreen warns hard about
         # downloading an unsigned executable and much less about an archive.
@@ -199,6 +196,11 @@ jobs:
           name: yasdig-windows-x86_64
           path: yasdig-windows-x86_64.zip
           retention-days: ${{ github.ref_type == 'tag' && 90 || 14 }}
+
+      # After the upload, so a master build is there to try even when a test
+      # fails — a release still waits on this job, test included.
+      - name: Test
+        run: cargo test
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')

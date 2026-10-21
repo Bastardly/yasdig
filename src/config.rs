@@ -2616,6 +2616,29 @@ impl Config {
         }
     }
 
+    /// The folders sd-cli reaches from inside its sandbox (on Windows the
+    /// container is granted these and nothing else): `work/`, where every run
+    /// reads its inputs and writes its outputs (invariant 8); every model
+    /// folder, writable since Convert writes beside its source; and the
+    /// binary's own folder, to read and run.
+    pub fn sandbox_roots(&self) -> Vec<crate::sandbox::Root> {
+        use crate::sandbox::Root;
+        let mut roots: Vec<Root> = [
+            self.base_dir.join("work"),
+            self.models_dir(),
+            self.video_dir(),
+            self.lora_dir(),
+            self.upscaler_dir(),
+        ]
+        .into_iter()
+        .map(|path| Root { path, write: true })
+        .collect();
+        if let Some(dir) = self.sd_binary().parent() {
+            roots.push(Root { path: dir.to_path_buf(), write: false });
+        }
+        roots
+    }
+
     /// Every model-shaped file in the upscaler dir, for `GET /upscalers` and
     /// `doctor`, each identified by [`crate::sr::identify`]. Recomputed per
     /// call, like [`Config::list_loras`]: reading a header or a `.pth`'s pickle

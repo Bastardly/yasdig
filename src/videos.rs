@@ -922,7 +922,7 @@ t5xxl = "t.gguf"
         // Undo of that shot: back to the clip's own three frames.
         store.truncate("100-7", 3, 24).unwrap();
         assert_eq!(store.frames("100-7").len(), 3);
-        assert_eq!(store.append_segment("100-7", 1, 24, true).is_err(), true, "the segment is gone");
+        assert!(store.append_segment("100-7", 1, 24, true).is_err(), "the segment is gone");
         let seg = store.prepare_segment("100-7", 1, false).unwrap();
         for i in 0..3u8 {
             shade(&seg.with_file_name(format!("frame_{i:03}.png")), 100 + i);

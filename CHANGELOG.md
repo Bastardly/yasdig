@@ -3,6 +3,16 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### New
+
+- **On Windows, sd-cli now runs without network access too**, in an AppContainer:
+  Windows' own app sandbox, which needs no admin rights. It can't reach the internet,
+  the local network or this computer's own ports, and can open only yasdig's own
+  folders. The first run checks the block holds, and `doctor` says so.
+  `YASDIG_NO_SANDBOX=1` turns it off.
+
 ## 0.5.0 — 2026-10-21
 
 ### New
