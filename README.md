@@ -113,12 +113,13 @@ you trust.
 `.pth` file is parsed for its weights and nothing in it is executed. A file it can't
 make sense of is refused, not guessed at.
 
-**Models load in a sandbox with no network (Linux, since 0.4.0).** Model files come
+**Models load in a sandbox with no network (Linux and Windows).** Model files come
 from strangers, and the code that reads them (stable-diffusion.cpp, written in C++)
 could have a bug a crafted file exploits to run code on your computer. So the program
 that loads and runs every model is started unable to open an internet connection —
 nor can anything it starts — and the lock can't be lifted from inside. Even a file
 that broke in couldn't send your pictures or anything else anywhere, or fetch more.
+On Windows it also can't open your files outside yasdig's own folders.
 
 **Saved pictures carry their settings.** *Save to output* and *Download* write the
 prompt, model names and settings into the PNG, so others can recreate your picture
