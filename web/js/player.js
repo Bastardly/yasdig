@@ -149,6 +149,7 @@ export function clearClip() {
 export function renderClip(c, ms) {
   clip = c;
   $('vresult').innerHTML = `
+    <p class="stagehint">Click to enlarge, compare and save</p>
     <canvas id="vcanvas"></canvas>
     <div class="player">
       <button type="button" id="vplay" class="btn btn-icon" title="Play" aria-label="Play">${ICONS.play}</button>

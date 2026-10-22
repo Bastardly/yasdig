@@ -3,6 +3,14 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## 0.5.3 — 2026-10-22
+
+### New
+
+- **The picture and the clip say what a click does.** A small line just above the
+  Image tab's picture ("Click to refine and adjust") and the Video tab's clip ("Click to
+  enlarge, compare and save"), in the type of the version number under the logo.
+
 ## 0.5.2 — 2026-10-22
 
 ### New

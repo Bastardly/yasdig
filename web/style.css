@@ -753,6 +753,16 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 }
 .stage > img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--r-lg); cursor: zoom-in; }
 .stage:empty::after { content: attr(data-empty); color: var(--text-dim); }
+/* "Click to edit" just over the picture or clip, in the version line's type.
+   The stage stacks it, so the picture gives up the line's height. */
+.stage:has(> .stagehint) { flex-direction: column; --stagehint-h: calc(var(--fs-micro) + 2px); }
+.stagehint {
+  margin: 0 0 2px; font: var(--fs-micro)/1 var(--font-num); letter-spacing: 0;
+  color: var(--text-dim); white-space: nowrap; pointer-events: none;
+}
+.stage:has(> .stagehint) > img { max-height: calc(100% - var(--stagehint-h)); }
+/* Clear of the Picture | Layout switch, which floats over the stage's top. */
+.stage:has(> .stagehint):has(~ .stagemode:not([hidden])) { padding-top: calc(var(--sp-2) + 36px); }
 
 /* Layout boxes (layout.js): the Picture | Layout switch floats over the
    stage's top edge, and the layout view covers the stage beside the rail —
@@ -795,8 +805,10 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 
 /* The Video stage: the canvas, and the player's row under it. */
 .vstage { flex-direction: column; }
-.vstage:not(:empty) > #vcanvas { max-width: 100%; max-height: calc(100% - 56px); width: auto; }
+.vstage:not(:empty) > #vcanvas { max-width: 100%; max-height: calc(100% - 56px - var(--stagehint-h, 0px)); width: auto; }
 .vstage .player { width: min(100%, 640px); }
+/* The hint's 2px is the gap, as over the Image tab's picture. */
+.vstage > .stagehint + #vcanvas { margin-top: 0; }
 /* A panel is narrower than the old column: the picker's smaller strip. */
 .workspace .wigrid img { height: var(--thumb-h-pick); }
 /* min-width:0 because a flex item's default min-width is its content: a 3072 px

@@ -854,7 +854,8 @@ export function render(data) {
   // The picture on the stage; what is known about it in the Info panel. Every
   // pass on it — Hi-res, Refine, Edit, Extend, Scale — and Save to output are
   // in the Refine & adjust dialog, which a click on the picture opens.
-  P('result').innerHTML = `<img src="${S.currentSrc}" alt="result" title="Click to refine and adjust">`;
+  P('result').innerHTML = `<p class="stagehint">Click to refine and adjust</p>`
+    + `<img src="${S.currentSrc}" alt="result" title="Click to refine and adjust">`;
   P('info').innerHTML = `
     <div class="meta"><b>${data.width}×${data.height}</b> · seed
       <b id="seedval" class="pin" title="Put this seed in the box, to generate it again">${data.seed}</b>
