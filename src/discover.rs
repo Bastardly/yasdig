@@ -241,6 +241,8 @@ pub enum LoraBase {
     /// 14B models (Wan 2.1 and 2.2 alike), 1536 the 1.3B. See
     /// [`LoraBase::fits_video`].
     Wan(Option<u64>),
+    /// A MiniMax H3 LoRA (its `token_refiner`), video too.
+    MinimaxH3,
     /// No marker matched. Offered anyway: refusing a file that works because
     /// this couldn't read it is worse than the mismatch the check exists for.
     Unknown,
@@ -261,7 +263,7 @@ impl LoraBase {
                 matches!(family, ImageFamily::Flux3Klein | ImageFamily::Flux3KleinBase)
             }
             LoraBase::Image(f) => f == family,
-            LoraBase::Other(_) | LoraBase::Wan(_) => false,
+            LoraBase::Other(_) | LoraBase::Wan(_) | LoraBase::MinimaxH3 => false,
             LoraBase::Unknown => true,
         }
     }
@@ -269,11 +271,11 @@ impl LoraBase {
     /// Whether a LoRA for this base belongs on a `family` video model. By
     /// width, since a family is a training recipe and the width is what the
     /// weights must match: one 5120-wide LoRA fits every 14B family. VACE and
-    /// the dense family come at 1.3B and 14B, so both widths fit them. Nothing
-    /// reads an H3 LoRA yet, so only an unidentified one is offered there.
+    /// the dense family come at 1.3B and 14B, so both widths fit them.
     pub fn fits_video(self, family: crate::config::VideoFamily) -> bool {
         use crate::config::VideoFamily as V;
         match self {
+            LoraBase::MinimaxH3 => family == V::MinimaxH3,
             LoraBase::Wan(None) => family != V::MinimaxH3,
             LoraBase::Wan(Some(3072)) => family == V::Wan22Ti2v5b,
             LoraBase::Wan(Some(5120)) => matches!(family, V::Wan22A14b | V::Wan21Vace | V::WanDense),
@@ -292,6 +294,7 @@ impl LoraBase {
             LoraBase::Wan(Some(5120)) => "Wan 14B",
             LoraBase::Wan(Some(1536)) => "Wan 1.3B",
             LoraBase::Wan(_) => "Wan",
+            LoraBase::MinimaxH3 => "MiniMax H3",
             LoraBase::Unknown => "",
         }
     }
@@ -719,7 +722,17 @@ pub fn classify(t: &Tensors) -> Role {
         || t.has(".hada_w1_a")
         || t.has(".lokr_w1")
     {
-        return Role::Lora(lora_base(t));
+        let base = lora_base(t);
+        // sd.cpp places a DiT LoRA's tensor only under a prefix it knows
+        // (`convert_tensor_name`); larryvrh's H3 turbo ships bare `blocks.…`
+        // names, which load, match nothing, and render the clip unchanged.
+        if base == LoraBase::MinimaxH3 && !t.tensors.iter().any(|x| has_dit_prefix(&x.name)) {
+            return Role::Unknown(
+                "an H3 LoRA whose tensor names lack the diffusion_model. prefix sd.cpp needs, so it would change nothing"
+                    .into(),
+            );
+        }
+        return Role::Lora(base);
     }
     // Architectures sd.cpp names and this build doesn't run. Before everything
     // below, because two of them carry a generic marker a supported family
@@ -929,8 +942,27 @@ pub fn classify(t: &Tensors) -> Role {
 /// before Wan's `blocks.N.cross_attn` would matter; and the UNet test goes
 /// before Z-Image's, since a UNet LoRA's text-encoder keys have `layers` in
 /// them too.
+/// Whether a LoRA tensor's name starts with a prefix sd.cpp maps onto the
+/// diffusion model (`convert_tensor_name`'s `prefix_map`), after the `lora.`
+/// it may carry; kohya's `lora_unet_` too.
+fn has_dit_prefix(name: &str) -> bool {
+    let name = name.strip_prefix("lora.").unwrap_or(name);
+    ["model.diffusion_model.", "diffusion_model.", "transformer.", "unet.", "lora_unet_"]
+        .iter()
+        .any(|p| name.starts_with(p))
+}
+
 fn lora_base(t: &Tensors) -> LoraBase {
     let either = |dotted: &str, flat: &str| t.has(dotted) || t.has(flat);
+
+    // H3's text refiner, in its own names and diffusers' (`token_refiner.
+    // refiner_blocks`). Whole as a path segment: Hunyuan Video's is
+    // `individual_token_refiner`.
+    if t.tensors.iter().any(|x| x.name.starts_with("token_refiner.") || x.name.contains(".token_refiner."))
+        || t.has("unet_token_refiner_")
+    {
+        return LoraBase::MinimaxH3;
+    }
 
     // `txtfusion` is sd.cpp's own Krea 2 marker and `text_fusion` diffusers'
     // spelling of it. `attn.wq` and `attn.to_gate` catch a LoRA that left the
@@ -1899,6 +1931,35 @@ mod tests {
         assert!(at(1536).fits_video(V::WanDense) && !at(1536).fits_video(V::Wan22A14b));
         assert!(!big.fits(ImageFamily::Krea2));
         assert!(LoraBase::Unknown.fits_video(V::MinimaxH3));
+    }
+
+    /// drbaph's pruned DMD turbo, keys and shapes off its header: an H3 LoRA,
+    /// for H3 alone. larryvrh's original names the same layers bare, which
+    /// sd.cpp would load and apply none of. Hunyuan Video's refiner is
+    /// `individual_token_refiner`, never H3's.
+    #[test]
+    fn an_h3_lora_fits_h3_only_and_needs_its_prefix() {
+        use crate::config::VideoFamily as V;
+        let dmd = t(&[
+            ("diffusion_model.blocks.0.adaln_proj.linear.lora_A.weight", &[16, 8]),
+            ("diffusion_model.blocks.0.attn.qkv_proj.lora_A.weight", &[192, 5376]),
+            ("diffusion_model.token_refiner.blocks.0.attn.qkv_proj.lora_A.weight", &[192, 5376]),
+        ]);
+        assert_eq!(classify(&dmd), Role::Lora(LoraBase::MinimaxH3));
+        assert!(LoraBase::MinimaxH3.fits_video(V::MinimaxH3));
+        assert!(!LoraBase::MinimaxH3.fits_video(V::Wan22A14b) && !LoraBase::MinimaxH3.fits(ImageFamily::Flux));
+
+        let bare = t(&[
+            ("blocks.0.attn.qkv_proj.lora_A.weight", &[64, 5376]),
+            ("token_refiner.blocks.0.attn.qkv_proj.lora_A.weight", &[64, 5376]),
+        ]);
+        assert!(matches!(classify(&bare), Role::Unknown(why) if why.contains("prefix")));
+
+        let hunyuan = t(&[(
+            "transformer.txt_in.individual_token_refiner.blocks.0.self_attn_qkv.lora_A.weight",
+            &[32, 3072],
+        )]);
+        assert_ne!(classify(&hunyuan), Role::Lora(LoraBase::MinimaxH3));
     }
 
     /// LyCORIS carries the base model's tensor names exactly as a LoRA does, so

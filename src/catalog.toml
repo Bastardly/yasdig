@@ -541,6 +541,7 @@ id = "minimax-h3-pruned-q4"
 family = "minimax_h3"
 label = "MiniMax H3 (pruned, Q4_K_M GGUF)"
 note = "Video with sound, at 24 fps. About 35 GB of files, the largest here: its text encoder alone is an 18 GB Qwen3-VL-32B, so it streams from the SSD rather than sitting in RAM. Its licence restricts where it may be used; read it on the model's page before downloading."
+loras = ["minimax-h3-dmd8"]
 
 [[video.file]]
 slot = "model"
@@ -641,3 +642,19 @@ dest = "qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors"
 bytes = 913314512
 sha256 = "208dd43250e1e01467ba190572ae2e7107a7870ec1ff026bc65f791fa1e80e95"
 turbo = { steps = 8, cfg_scale = 1.0, sigmas = "qwen-image-2.1-turbo" }
+
+# drbaph's DMD distillation of H3 for its *pruned* bases: the one H3 turbo
+# whose names sd.cpp places (`diffusion_model.`) and whose time-modulation
+# pairs are 8 wide, as the pruned GGUF's `adaln_proj` is. larryvrh's original
+# is bare-named and 2688 wide, and the `*_pruned_comfyui` ones drop those
+# pairs for ComfyUI's node to put back. Its file is "8step"; 6 looked fine
+# on a 7900 XTX (2026-10-22), 8 is what it was distilled for.
+[[lora]]
+id = "minimax-h3-dmd8"
+family = "minimax_h3"
+label = "MiniMax H3 8-step (DMD, pruned)"
+url = "https://huggingface.co/drbaph/MiniMax-H3-Turbo-Lora-ComfyUI/resolve/main/experimental/minimax_h3_dmd_fl2va_8step_turbo_pruned.safetensors"
+dest = "minimax_h3_dmd_fl2va_8step_turbo_pruned.safetensors"
+bytes = 2285989092
+sha256 = "9104b190815d8f6f49c77e313988a9a0561a59b3ee611231b8cc421ad050bd2c"
+turbo = { steps = 8, cfg_scale = 1.0 }

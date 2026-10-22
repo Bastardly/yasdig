@@ -4,7 +4,7 @@ import { isBusy, setBusy, setIdle, onIdle, redrawBusy } from './busy.js';
 import { cancelPost, onPassResult, onViewerResult, setLook, setPost, setViewerImage, showFullSize } from './viewer.js';
 import { activeLoop, onJobs, onNotice, onResult, runningJob, soonJobs, stopJob } from './jobs.js';
 import { applyWorkItem, loadWorkItems, markGrid } from './workitems.js';
-import { loraPicker } from './loras.js';
+import { loraPicker, turboMemory } from './loras.js';
 import { sourceSlot } from './source-slot.js';
 import { wireHints } from './hints.js';
 import { onRefsChange, references, refsActive, syncRefs } from './refs.js';
@@ -43,19 +43,7 @@ export const imageLoras = loraPicker({
 // so the default lives here: on, unless it was switched off for this model in
 // this browser.
 let turboSeq = 0;
-const turboKey = (name) => `yasdig.turbo.${name}`;
-function turboWanted(name) {
-  try {
-    return localStorage.getItem(turboKey(name)) !== '0';
-  } catch {
-    return true;
-  }
-}
-function rememberTurbo(name, on) {
-  try {
-    localStorage.setItem(turboKey(name), on ? '1' : '0');
-  } catch { /* a private window: the default holds */ }
-}
+const turboMem = turboMemory('turbo');
 
 const turboOf = (m) => (m ? imageLoras.turboFor(m.family) : undefined);
 const turboOn = () => !$('turborow').hidden && $('turbo').checked;
@@ -390,7 +378,7 @@ function syncAdvanced() {
   imageLoras.refresh().then(() => {
     if (seq !== turboSeq || currentModel() !== m) return;
     imageLoras.dropTurbos(m.family);
-    if (turboOf(m) && turboWanted(m.name)) setTurbo(true);
+    if (turboOf(m) && turboMem.wanted(m.name)) setTurbo(true);
     syncTurboBox();
   });
   // The References button is the model's to show (`references` on /models),
@@ -838,6 +826,7 @@ export function render(data) {
     // Where the weights were when any were off the card — what explains a
     // slow pass before it becomes one that ran out of memory.
     + (t.weights ? `<p class="sub">Weights: ${esc(t.weights)}</p>` : '')
+    + (t.lora_note ? `<p class="sub">${esc(t.lora_note)}</p>` : '')
     + stageLine(t);
 
   S.imageId = data.image_id;
@@ -930,9 +919,18 @@ const sameImage = (a, b) => !!a && !!b && a.image_id === b.image_id && a.step ==
 // Also where an escalation's own answer goes, for the same reason: it can wait
 // behind a batch for minutes now, and the tab it was pressed on may not be the
 // one showing when it lands.
+// The LoRA note `takeResult` last put in the status card.
+let loraShown = '';
+
 export function takeResult(data) {
   if (sameImage(data, lastImage) && S.imageId === data.image_id) return;
   loadWorkItems();
+  // Once per new picture, not per re-filter: a LoRA sd.cpp left out renders
+  // fine and says so only in its log. A later picture without one takes the
+  // note down, unless something else has replaced it since.
+  const note = data.timings?.lora_note ?? '';
+  if (note || $('err').textContent === loraShown) $('err').textContent = note;
+  loraShown = note;
   if (S.pane === 'image') render(data); else lastImage = data;
 }
 
@@ -1474,7 +1472,7 @@ export function initImage() {
   $('savemodel').addEventListener('click', saveModelDefaults);
   $('turbo').addEventListener('change', () => {
     const m = currentModel();
-    if (m) rememberTurbo(m.name, $('turbo').checked);
+    if (m) turboMem.remember(m.name, $('turbo').checked);
     setTurbo($('turbo').checked);
   });
   // A note about the model that was selected is stale once another one is.

@@ -3,6 +3,25 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### New
+
+- **Turbo for MiniMax H3.** The H3 card also fetches drbaph's 8-step DMD LoRA for the
+  pruned H3 files, and the Video tab gets the Image tab's *Turbo* switch: 8 steps at
+  CFG 1 instead of 20. H3 LoRAs are now recognised as such and offered for H3 only.
+
+- **A LoRA that didn't take now says so.** sd.cpp renders without a LoRA that doesn't fit
+  the model, and says so only in its log. yasdig now reads those lines and shows a note
+  on the picture or clip — what happened in plain words first ("The LoRA “x” had no
+  effect: none of it fits this model…"), then sd.cpp's own count of what it applied.
+
+### Fixed
+
+- **An H3 LoRA sd.cpp would silently ignore is now greyed out with the reason.**
+  larryvrh's original H3 turbo names its tensors without the `diffusion_model.` prefix,
+  so it loaded, matched nothing, and rendered the clip unchanged.
+
 ## 0.5.1 — 2026-10-21
 
 ### New

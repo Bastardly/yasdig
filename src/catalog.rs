@@ -58,7 +58,8 @@ pub struct Catalog {
 #[derive(Debug, Deserialize)]
 pub struct Lora {
     pub id: String,
-    pub family: ImageFamily,
+    /// An image family, or a video one (MiniMax H3's DMD), as on a card.
+    pub family: Family,
     pub label: String,
     pub url: String,
     /// Relative to the LoRA dir, `/`-separated — and so the name the page's
@@ -136,6 +137,22 @@ impl Family {
 
     pub fn is_video(self) -> bool {
         matches!(self, Family::Video(_))
+    }
+
+    /// Every video family this build lists is one it runs.
+    pub fn runnable(self) -> bool {
+        match self {
+            Family::Image(f) => f.runnable(),
+            Family::Video(_) => true,
+        }
+    }
+
+    /// Whether a LoRA read as `base` belongs on this family's models.
+    pub fn takes_lora(self, base: crate::discover::LoraBase) -> bool {
+        match self {
+            Family::Image(f) => base.fits(f),
+            Family::Video(f) => base.fits_video(f),
+        }
     }
 }
 
@@ -417,7 +434,7 @@ fn check_loras(c: &Catalog) -> Result<()> {
             bail!("catalog: lora {} needs a size, a sha256 and its steps", l.id);
         }
         if let Some(s) = &l.turbo.sigmas {
-            if !crate::config::SIGMA_PRESETS.iter().any(|(n, f, _)| *n == s && *f == l.family) {
+            if !crate::config::SIGMA_PRESETS.iter().any(|(n, f, _)| *n == s && Family::Image(*f) == l.family) {
                 bail!("catalog: lora {}'s sigmas {s:?} is no {} preset", l.id, l.family.label());
             }
         }
@@ -425,7 +442,7 @@ fn check_loras(c: &Catalog) -> Result<()> {
     for e in c.entry.iter().chain(&c.video) {
         for id in &e.loras {
             match c.lora(id) {
-                Some(l) if e.family == Family::Image(l.family) => {}
+                Some(l) if e.family == l.family => {}
                 Some(_) => bail!("catalog: {} fetches lora {id}, which is for another family", e.id),
                 None => bail!("catalog: {} fetches lora {id}, which isn't listed", e.id),
             }

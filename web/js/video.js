@@ -11,7 +11,7 @@ import { editRefs } from './refs.js';
 import { wireHints } from './hints.js';
 import { sourceSlot } from './source-slot.js';
 import { partRows } from './parts.js';
-import { loraPicker } from './loras.js';
+import { loraPicker, turboMemory } from './loras.js';
 import { loadModelSettings } from './modelsettings.js';
 
 // ---- Video ------------------------------------------------------------------
@@ -57,8 +57,49 @@ const videoLoras = loraPicker({
   rows: 'vloras', add: 'vloraadd',
   family: () => currentVideoModel()?.family ?? null,
   experts: () => !!currentVideoModel()?.is_moe,
-  onChange: () => syncVideoSummaries(),
+  onChange: () => {
+    syncVTurboBox();
+    syncVideoSummaries();
+  },
 });
+
+// ---- Turbo -------------------------------------------------------------------
+//
+// The Image tab's switch (see image.js) over this picker: H3's DMD LoRA. On
+// picks it and sets the steps and CFG it was distilled for; off puts the
+// model's back. Default on, per model in this browser.
+let vTurboSeq = 0;
+const vTurboMem = turboMemory('vturbo');
+const vTurboOf = (m) => (m ? videoLoras.turboFor(m.family) : undefined);
+const vTurboOn = () => !$('vturborow').hidden && $('vturbo').checked;
+
+// Reflects, never applies, as on the Image tab.
+function syncVTurboBox() {
+  const t = vTurboOf(currentVideoModel());
+  $('vturborow').hidden = !t;
+  $('vturbo').checked = !!t && videoLoras.has(t.name);
+  if (t) $('vturbolabel').textContent = `Turbo — ${t.turbo.steps} steps at CFG ${t.turbo.cfg_scale}`;
+}
+
+function setVBox(id, v) {
+  $(id).value = v;
+  $(id).dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function setVTurbo(on) {
+  const m = currentVideoModel();
+  const t = vTurboOf(m);
+  if (!t) return;
+  if (on) {
+    videoLoras.add(t.name);
+    setVBox('vsteps', t.turbo.steps);
+    setVBox('vcfg', t.turbo.cfg_scale);
+  } else {
+    videoLoras.remove(t.name);
+    setVBox('vsteps', m.steps);
+    setVBox('vcfg', m.cfg_scale);
+  }
+}
 
 // ---- Shots -------------------------------------------------------------------
 //
@@ -431,8 +472,15 @@ function syncVideo() {
   $('vnegative').value = m.negative_prompt ?? '';
   videoParts.draw(m.parts);
   // Re-greys the LoRA rows for this family (and shows the expert choice on
-  // the pair).
-  videoLoras.refresh();
+  // the pair), then sets Turbo to this model's default. After the boxes
+  // below are filled, since it overwrites steps and CFG.
+  const seq = ++vTurboSeq;
+  videoLoras.refresh().then(() => {
+    if (seq !== vTurboSeq || currentVideoModel() !== m) return;
+    videoLoras.dropTurbos(m.family);
+    if (vTurboOf(m) && vTurboMem.wanted(m.name)) setVTurbo(true);
+    syncVTurboBox();
+  });
   $('vw').value = m.width;
   $('vh').value = m.height;
   $('vw').step = m.size_multiple;
@@ -478,6 +526,8 @@ async function saveVideoDefaults(clear) {
   for (const [key, id, kind] of VIDEO_KNOBS) {
     if (clear) { values[key] = null; continue; }
     if (kind === 'moe' && !m.is_moe) continue;
+    // Turbo's steps and CFG are its LoRA's: saved, unticking would put them back.
+    if ((key === 'steps' || key === 'cfg_scale') && vTurboOn() && !clear) continue;
     // A new row's length: the first shot's.
     if (kind === 'shot1') {
       const f = rowEls()[0] && readRow(rowEls()[0]).frames;
@@ -541,6 +591,8 @@ export async function loadVideoModels({ refill = true } = {}) {
     else {
       $('vclearmodel').hidden = !currentVideoModel()?.tuned;
       syncReady();
+      // A download may have brought a speed LoRA: Turbo shows once it is here.
+      videoLoras.reload();
     }
   } catch (e) {
     $('verr').textContent = 'Could not load video models: ' + (e.message || e);
@@ -874,6 +926,8 @@ function newClip() {
 // from what made the clip on screen rather than from whatever was last typed.
 function applyClip(c) {
   const v = c.video;
+  // Its own LoRAs and steps win over a model change's pending Turbo default.
+  vTurboSeq++;
   // The typed negative where the roll made one — see `applyWorkItem`. Each
   // row's seed restores its roll.
   $('vnegative').value = c.typed_negative ?? c.negative ?? '';
@@ -1022,6 +1076,11 @@ export function initVideo() {
   $('pickclose').addEventListener('click', () => $('picker').close());
   for (const g of grids) g.init();
   $('vmodel').addEventListener('change', syncVideo);
+  $('vturbo').addEventListener('change', () => {
+    const m = currentVideoModel();
+    if (m) vTurboMem.remember(m.name, $('vturbo').checked);
+    setVTurbo($('vturbo').checked);
+  });
   for (const id of ['vw', 'vh', 'vfps']) {
     $(id).addEventListener('input', syncVideoNote);
   }

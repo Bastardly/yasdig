@@ -14,7 +14,7 @@
 //!   GET  /jobs        -> {jobs:[{id, kind, label, done, total, state}],
 //!                         latest_seq, notices, progress}
 //!   GET  /jobs/latest -> the newest image a job made: {image_base64, width,
-//!                         height, seed, image_id, can_hires, timings}
+//!                         height, seed, image_id, can_hires, timings (lora_note: a LoRA that didn't take)}
 //!   POST /jobs/stop   -> {id}  remove a waiting job, or stop a running one
 //!   POST /jobs/skip   -> {id}  cancel the image a run has in flight; the run
 //!                        goes on to its next image
@@ -3446,7 +3446,7 @@ fn result_json(res: &GenResult) -> String {
         "{{\"image_base64\":\"{}\",\"width\":{},\"height\":{},\"seed\":{},\"refine_passes\":{},\
          \"hires_passes\":{},\"step\":{},\"history\":{},\"at\":{},\"image_id\":{},\"work_id\":{},\"can_hires\":{},\"model\":{},\"can_edit\":{},\
          \"filters\":{},\"filters_start\":{},\"area\":{},\"brushes\":{},\"restore_from\":{},\"prompt\":{},\
-         \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{},\"weights\":{},\"load_ms\":{},\"stages\":{}}}}}",
+         \"timings\":{{\"gen_ms\":{},\"upscale_ms\":{},\"fsr_ms\":{},\"refine_ms\":{},\"hires_ms\":{},\"redraw_ms\":{},\"cache_skipped\":{},\"cache_steps\":{},\"weights\":{},\"load_ms\":{},\"stages\":{},\"lora_note\":{}}}}}",
         b64,
         res.width,
         res.height,
@@ -3485,6 +3485,7 @@ fn result_json(res: &GenResult) -> String {
         res.timings.weights.as_deref().map_or("null".to_string(), json_str),
         res.timings.load_ms,
         serde_json::to_string(&res.timings.stages).unwrap_or_else(|_| "null".into()),
+        res.timings.lora_note.as_deref().map_or("null".to_string(), json_str),
     )
 }
 

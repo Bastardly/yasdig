@@ -359,6 +359,13 @@ Paste is a document listener per slot, gated to its visible tab.
 
 - **Empty `--lora-model-dir` skips tag extraction** (tags conditioned as words), so
   `base_cmd` emits it **unconditionally**.
+- **A LoRA that matched nothing is no line at all.** sd.cpp counts what it applied
+  (`LoraModel::stat`), but at runtime (any quantized model) a part left with no
+  tensors drops the LoRA unannounced, and the counts never say `Only` there. So
+  `run_tail` collects the lines (`parse_lora_line`) and `lora_note` judges them per
+  `<lora:…>` tag: no line = nothing applied, runtime counts add across parts, merged
+  ones count per device group against the whole file. No mode line = no verdict. The
+  note is `Timings::lora_note` / `VideoResult.note`, worded first, counts after.
 - **A missing LoRA is a `LOG_WARN` and a dropped tag.** `Config::check_loras` is called
   from all four places a profile reaches `SdRunner` — `run`, `img2img`, `refine`,
   `hires`.
@@ -393,6 +400,11 @@ Video tab's picker; `loras: Vec<String>` stays the hand-written `[[video]]` pins
 sd.cpp's high-noise spelling, a plain tag the low-noise model). `video_cmd` always
 sends `--lora-model-dir` (`m.lora_dir` or `Config::lora_dir`); `check_video_loras`
 in `Engine::video` shares `check_lora_files` with the image side.
+**H3 LoRAs** are `LoraBase::MinimaxH3` (a `token_refiner` path segment — Hunyuan's is
+`individual_token_refiner`). sd.cpp places a DiT LoRA's tensors only under a prefix it
+knows (`has_dit_prefix`), so a bare-named one is `Role::Unknown` with the reason, never
+offered. Pruned H3 bases take an 8-wide `adaln_proj` input (`adaln_t_table`), so
+only a LoRA made for pruned bases patches their time modulation; the catalog's DMD is one.
 
 **Speed LoRAs / Turbo**: catalog `[[lora]]` (`catalog::Lora`, `dest` under
 `Config::lora_dir`, had only at its own dest *and* length — `lora_is`), fetched with
@@ -403,7 +415,9 @@ applies); ticking sets steps/CFG, unticking puts the model's back. Default on, p
 model in `localStorage` — never server-side (`Profile.loras` stays request-only).
 `syncAdvanced` applies the default after the LoRA listing lands, guarded by
 `turboSeq`, which `applyWorkItem` bumps (`holdTurbo`) so a reopened item's steps
-win. *Save as defaults* skips steps/CFG while Turbo is on.
+win. *Save as defaults* skips steps/CFG while Turbo is on. A `[[lora]]`'s `family` is
+a `catalog::Family`, so a video family has one too: the Video tab's `#vturbo` is the
+same view (`syncVideo`/`vTurboSeq`, bumped by `applyClip`; memory `turboMemory`).
 
 **`Profile.loras` is request-only** — no per-model config; `as_profile` builds it empty
 (`a_model_brings_no_loras_of_its_own`). It's on `Profile` because `base_cmd` is shared

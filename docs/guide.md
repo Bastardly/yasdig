@@ -385,7 +385,8 @@ that LoRA and sets Steps and CFG to what it was distilled for (8 steps at CFG 1,
 against the model's own 50 at CFG 3); off, it removes it and puts the model's own
 numbers back. It is on by default and remembered per model in your browser. Removing
 the LoRA's row by hand unticks it, and *Save as defaults* never saves Turbo's steps and
-CFG as the model's. A reopened image comes back with Turbo as it was made.
+CFG as the model's. A reopened image comes back with Turbo as it was made. The Video
+tab has the same switch for MiniMax H3 (see *Video*).
 
 The Flux LoRAs are the case where the names say least: Flux.1 and every Flux.2 share
 `double_blocks`, so a Flux LoRA is placed by how wide the model it patches is (Klein 9B
@@ -736,6 +737,12 @@ the model runs), LoRAs picked from `models/loras/` (only the ones for the model'
 on the A14B pair each says which expert it patches), a first frame from your outputs or
 an upload, and *Save as defaults for this model*. While a clip renders the status card
 loops a blurry preview of it, and you can open other clips and set up the next one.
+
+**Turbo (MiniMax H3).** The H3 card also fetches an 8-step DMD LoRA made for the
+pruned H3 files, and with it installed the Generation panel shows the Image tab's
+**Turbo** switch: 8 steps at CFG 1 instead of 20, with a little less detail. A LoRA
+for H3 whose tensor names sd.cpp can't place (larryvrh's original turbo is one: it
+would load and change nothing) is listed greyed out, with the reason.
 
 **A clip is shots.** A model of this size runs out of memory a few seconds in, so a
 longer clip is made a shot at a time, in the **Shots** panel: **Every shot** first,

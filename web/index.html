@@ -623,6 +623,10 @@
       <div id="vpartrows"></div>
       <!-- The Image tab's LoRA picker, for the video model's family; on the
            A14B pair each row also says which expert it patches. -->
+      <!-- The Image tab's Turbo, for a video model's speed LoRA (video.js). -->
+      <div class="checks" id="vturborow" hidden>
+        <label data-help="turbo"><input type="checkbox" id="vturbo"> <span id="vturbolabel">Turbo</span></label>
+      </div>
       <label data-help="vloras">LoRAs</label>
       <div id="vloras"></div>
       <button type="button" id="vloraadd" class="btn spaced">+ Add LoRA</button>

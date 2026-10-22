@@ -68,6 +68,27 @@ const options = (selected, family) => available.map((l) => {
 // so whether each row picks which one it patches; sent as `expert`.
 const EXPERTS = [['both', 'Both experts'], ['low', 'Low noise'], ['high', 'High noise']];
 
+// Whether a tab's *Turbo* switch is wanted for a model: on, unless it was
+// switched off for that model in this browser. `prefix` keeps the tabs apart,
+// since an image model and a video one may share a name.
+export function turboMemory(prefix) {
+  const key = (name) => `yasdig.${prefix}.${name}`;
+  return {
+    wanted(name) {
+      try {
+        return localStorage.getItem(key(name)) !== '0';
+      } catch {
+        return true;
+      }
+    },
+    remember(name, on) {
+      try {
+        localStorage.setItem(key(name), on ? '1' : '0');
+      } catch { /* a private window: the default holds */ }
+    },
+  };
+}
+
 export function loraPicker({ rows, add, family = () => null, onChange = () => {}, experts = null }) {
   // The rows, in order. Held here rather than read back out of the DOM because a
   // re-render rebuilds the elements and would lose a half-typed strength.

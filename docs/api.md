@@ -151,7 +151,9 @@ needs a Vulkan device and nothing else.
     "timings": { "gen_ms": 0, "upscale_ms": 0, "fsr_ms": 0, "refine_ms": 0, "hires_ms": 0 } }
   ```
   `upscale_ms` is an ESRGAN model's share of the enlarge, reduce included, and `0` when
-  EASU did it. `image_id` addresses the retained intermediates; `can_hires` says whether that
+  EASU did it. `timings.lora_note`, when present, says in words which LoRA sd.cpp left
+  out in whole or part, then its counts ("… (sd.cpp applied 0 of its 518 tensors.)"):
+  sd.cpp renders without it and says so only in its log. `image_id` addresses the retained intermediates; `can_hires` says whether that
   image is still inside the hi-res budget (whether a pass has steps is the request's
   `refine_steps`/`hires_steps`, so the client decides that); `filters` reports all ten display filters as
   actually applied, which is what the UI's sliders reflect, and `filters_start` reports
@@ -551,7 +553,7 @@ needs a Vulkan device and nothing else.
   the seam — and whether it was a cut with references); `clip.prompt`/`clip.seed` are
   shot 1's; `clip.every` the typed
   *Every shot*. `note` says why a long clip has fewer shots than asked for (a Stop, or a
-  shot that failed after others). Nothing is written to `work/output/` — that is
+  shot that failed after others), and which LoRA sd.cpp left out (as `timings.lora_note`). Nothing is written to `work/output/` — that is
   `/videos/save`. A model with a soundtrack (MiniMax H3 with its audio VAE) is generated
   into an AVI by sd-cli — the only way it keeps the sound — and split into the frames
   and `audio.wav`, so `clip.audio` is true.

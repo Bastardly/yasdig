@@ -543,7 +543,7 @@ fn file_state(models: &Path, e: &'static Entry, f: &'static File, found: &[Found
 /// LoRA its family takes — not when some other LoRA fits (see [`Lora`]).
 fn lora_is(dest: &Path, l: &Lora) -> bool {
     std::fs::metadata(dest).is_ok_and(|m| m.is_file() && m.len() == l.bytes)
-        && matches!(discover::identify(dest), discover::Role::Lora(b) if b.fits(l.family))
+        && matches!(discover::identify(dest), discover::Role::Lora(b) if l.family.takes_lora(b))
 }
 
 /// [`file_state`] for a card's speed LoRA, under the LoRA dir.

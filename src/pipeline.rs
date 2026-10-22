@@ -524,6 +524,14 @@ pub struct ExtendClipRequest {
     pub negative: Option<String>,
 }
 
+/// Two notes as one, either or both absent.
+fn also(note: Option<String>, more: Option<String>) -> Option<String> {
+    match (note, more) {
+        (Some(n), Some(m)) => Some(format!("{n} {m}")),
+        (n, m) => n.or(m),
+    }
+}
+
 /// The note a long clip cut short carries: a Stop, or a failed shot, after
 /// `k` of `n` were done — which are kept.
 fn cut_short(e: &anyhow::Error, k: usize, n: usize) -> String {
@@ -835,6 +843,9 @@ pub struct Timings {
     pub load_ms: u64,
     /// Where the pass's time went, stage by stage (`sd::Stages`).
     pub stages: crate::sd::Stages,
+    /// A LoRA that didn't (all) take, in words (`Monitor::lora_note`): sd.cpp
+    /// renders without it and says so only in its log.
+    pub lora_note: Option<String>,
 }
 
 pub struct GenResult {
@@ -1639,6 +1650,7 @@ impl Engine {
         let (cache_skipped, cache_steps) = self.monitor.cache_skip().unwrap_or_default();
         let load_ms = self.monitor.load_ms();
         let stages = self.monitor.stages();
+        let lora_note = self.monitor.lora_note();
 
         // 2) Upscale, unsharpened — EASU by default, which is cheap and enough
         //    on its own for a draft, or an ESRGAN model. Quality is escalated
@@ -1738,6 +1750,7 @@ impl Engine {
             weights: self.monitor.placement(),
             load_ms,
             stages,
+            lora_note,
             ..Default::default()
         });
         // `pin` is a run holding this image for the hi-res and refine still to
@@ -1915,6 +1928,7 @@ impl Engine {
         let (cache_skipped, cache_steps) = self.monitor.cache_skip().unwrap_or_default();
         let load_ms = self.monitor.load_ms();
         let stages = self.monitor.stages();
+        let lora_note = self.monitor.lora_note();
 
         // 3) Sharpen for display. Dimensions come from here, not from `fit_to`:
         //    sd.cpp rounds an init image to the latent grid and only warns.
@@ -1988,6 +2002,7 @@ impl Engine {
             weights: self.monitor.placement(),
             load_ms,
             stages,
+            lora_note,
             ..Default::default()
         });
         lock(&self.retained).store(id, Slot::Image, entry, pin);
@@ -2120,6 +2135,8 @@ impl Engine {
         let t = Instant::now();
         let mut done = 0;
         let mut note = None;
+        // Every shot carries the same LoRAs, so the first word on them holds.
+        let mut lora = None;
         for k in 0..n {
             // The first shot renders into the clip itself, from the picked
             // first frame; every other one into a folder of its own, from the
@@ -2141,11 +2158,13 @@ impl Engine {
                 note = Some(cut_short(&e, k, n));
                 break;
             }
+            lora = lora.or_else(|| self.monitor.lora_note());
             if k == 0 && sound {
                 self.videos.unpack(&id)?;
             }
             done = k + 1;
         }
+        let note = also(note, lora);
         segments.truncate(done);
         if n > 1 {
             self.videos.drop_container(&id);
@@ -2323,10 +2342,14 @@ impl Engine {
         }
         let total = planned.len();
         let n = clip.segments.len() + total;
+        let mut lora = None;
         for (j, mut seg) in planned.into_iter().enumerate() {
             let k = clip.segments.len();
             match self.render_shot(id, &m, &seg, &negative, k, n) {
-                Ok(start) => seg.start = start,
+                Ok(start) => {
+                    seg.start = start;
+                    lora = lora.or_else(|| self.monitor.lora_note());
+                }
                 // Nothing changed yet: the clip is as it was, so this is a
                 // plain failure. After a cut, the clip on disk is shorter
                 // than the one on the stage, so it answers with the clip.
@@ -2342,12 +2365,9 @@ impl Engine {
         }
         let dropped = self.videos.invalidate(&mut clip);
         if dropped > 0 {
-            let more = format!("Its {dropped} enlarged version(s) no longer covered it and were removed.");
-            note = Some(match note {
-                Some(n) => format!("{n} {more}"),
-                None => more,
-            });
+            note = also(note, Some(format!("Its {dropped} enlarged version(s) no longer covered it and were removed.")));
         }
+        let note = also(note, lora);
         self.videos.finish(&mut clip)?;
         Ok(VideoResult { clip, gen_ms: t.elapsed().as_millis(), note })
     }
@@ -2499,7 +2519,7 @@ impl Engine {
             ..p
         };
         let entry = advance(&prev, entry, step_label("Refine", over.refine_prompt.as_deref()));
-        let result = entry.result(id, png, Timings { fsr_ms, refine_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), ..Default::default() });
+        let result = entry.result(id, png, Timings { fsr_ms, refine_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), lora_note: self.monitor.lora_note(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }
@@ -2633,7 +2653,7 @@ impl Engine {
         // "Area" is what the page calls a redraw: the dialog's Refine with
         // something painted.
         let entry = advance(&prev, entry, step_label("Area", req.prompt.as_deref()));
-        let result = entry.result(id, png, Timings { fsr_ms, redraw_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), ..Default::default() });
+        let result = entry.result(id, png, Timings { fsr_ms, redraw_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), lora_note: self.monitor.lora_note(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }
@@ -2745,6 +2765,7 @@ impl Engine {
             weights: self.monitor.placement(),
             load_ms: self.monitor.load_ms(),
             stages: self.monitor.stages(),
+            lora_note: self.monitor.lora_note(),
             ..Default::default()
         });
         self.keep(id, entry);
@@ -2891,7 +2912,7 @@ impl Engine {
             format!("Edit and rescale {}", req.expand.describe())
         };
         let entry = advance(&prev, entry, step_label(&what, Some(instruction)));
-        let result = entry.result(id, png, Timings { gen_ms, fsr_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), ..Default::default() });
+        let result = entry.result(id, png, Timings { gen_ms, fsr_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), lora_note: self.monitor.lora_note(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }
@@ -3099,7 +3120,7 @@ impl Engine {
             ..p
         };
         let entry = advance(&prev, entry, step_label(&format!("Hi-res {upscale}×"), over.hires_prompt.as_deref()));
-        let result = entry.result(id, png, Timings { fsr_ms, hires_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), ..Default::default() });
+        let result = entry.result(id, png, Timings { fsr_ms, hires_ms, weights: self.monitor.placement(), load_ms: self.monitor.load_ms(), stages: self.monitor.stages(), lora_note: self.monitor.lora_note(), ..Default::default() });
         self.keep(id, entry);
         Ok(result)
     }

@@ -124,7 +124,11 @@ const passHandlers = {};
 export const onPassResult = (pane, fn) => { passHandlers[pane] = fn; };
 export function passLander() {
   const pane = S.pane, id = S.imageId;
-  return (data) => passHandlers[pane]?.(data, id);
+  return (data) => {
+    passHandlers[pane]?.(data, id);
+    // A LoRA sd.cpp left out renders fine and says so only in its log.
+    if (data?.timings?.lora_note) $('lberr').textContent = data.timings.lora_note;
+  };
 }
 // The Refine half of the dialog (redraw.js) follows every state the viewer is
 // handed, and gets ready on every open. Hooks, so this module needn't import it.
