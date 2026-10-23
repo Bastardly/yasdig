@@ -843,8 +843,8 @@ pub struct Timings {
     pub load_ms: u64,
     /// Where the pass's time went, stage by stage (`sd::Stages`).
     pub stages: crate::sd::Stages,
-    /// A LoRA that didn't (all) take, in words (`Monitor::lora_note`): sd.cpp
-    /// renders without it and says so only in its log.
+    /// A LoRA sd.cpp warned it didn't (all) apply, in words
+    /// (`Monitor::lora_note`): it renders anyway and says so only in its log.
     pub lora_note: Option<String>,
 }
 

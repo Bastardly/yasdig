@@ -151,9 +151,9 @@ needs a Vulkan device and nothing else.
     "timings": { "gen_ms": 0, "upscale_ms": 0, "fsr_ms": 0, "refine_ms": 0, "hires_ms": 0 } }
   ```
   `upscale_ms` is an ESRGAN model's share of the enlarge, reduce included, and `0` when
-  EASU did it. `timings.lora_note`, when present, says in words which LoRA sd.cpp left
-  out in whole or part, then its counts ("… (sd.cpp applied 0 of its 518 tensors.)"):
-  sd.cpp renders without it and says so only in its log. `image_id` addresses the retained intermediates; `can_hires` says whether that
+  EASU did it. `timings.lora_note`, when present, is a LoRA sd.cpp warned about — part of it
+  not applied, or tensors skipped for the wrong shape — in words, then sd.cpp's counts.
+  Only sd.cpp's own warnings make one; a suspicion goes to the server's console. `image_id` addresses the retained intermediates; `can_hires` says whether that
   image is still inside the hi-res budget (whether a pass has steps is the request's
   `refine_steps`/`hires_steps`, so the client decides that); `filters` reports all ten display filters as
   actually applied, which is what the UI's sliders reflect, and `filters_start` reports

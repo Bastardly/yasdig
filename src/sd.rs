@@ -800,33 +800,35 @@ impl<'a> SdRunner<'a> {
         let mut last_step: Option<(u32, u32)> = None;
         // sd.cpp's LoRA lines, judged once the run has finished.
         let mut loras: Vec<LoraLine> = Vec::new();
-        let out_tail = drain(stdout, |line| {
-            spot(line);
-            if let Some((step, steps, rate)) = parse_progress(line) {
-                self.monitor.advance(label, step, steps, rate);
-                let phase = Phase::of_rate(rate);
-                if matches!(phase, Phase::Sampling) {
-                    last_step = Some((step, steps));
+        let out_tail = drain(stdout, |whole| {
+            spot(whole);
+            for line in glued(whole) {
+                if let Some((step, steps, rate)) = parse_progress(line) {
+                    self.monitor.advance(label, step, steps, rate);
+                    let phase = Phase::of_rate(rate);
+                    if matches!(phase, Phase::Sampling) {
+                        last_step = Some((step, steps));
+                    }
+                    last = Some((phase, step, steps));
+                } else if let Some(spec) = parse_auto_fit(line) {
+                    if diffusion {
+                        self.monitor.set_placement(spec.as_deref().and_then(describe_params));
+                    }
+                } else if let Some(skip) = parse_cache_skip(line) {
+                    if let Ok(mut s) = self.monitor.0.cache_skip.lock() {
+                        *s = Some(skip);
+                    }
+                } else if let Some(ms) = parse_load_ms(line) {
+                    if let Ok(mut total) = self.monitor.0.load_ms.lock() {
+                        *total += ms;
+                    }
+                } else if let Some((stage, ms)) = parse_stage(line) {
+                    if let Ok(mut s) = self.monitor.0.stages.lock() {
+                        s.add(stage, ms);
+                    }
+                } else if let Some(l) = parse_lora_line(line) {
+                    loras.push(l);
                 }
-                last = Some((phase, step, steps));
-            } else if let Some(spec) = parse_auto_fit(line) {
-                if diffusion {
-                    self.monitor.set_placement(spec.as_deref().and_then(describe_params));
-                }
-            } else if let Some(skip) = parse_cache_skip(line) {
-                if let Ok(mut s) = self.monitor.0.cache_skip.lock() {
-                    *s = Some(skip);
-                }
-            } else if let Some(ms) = parse_load_ms(line) {
-                if let Ok(mut total) = self.monitor.0.load_ms.lock() {
-                    *total += ms;
-                }
-            } else if let Some((stage, ms)) = parse_stage(line) {
-                if let Ok(mut s) = self.monitor.0.stages.lock() {
-                    s.add(stage, ms);
-                }
-            } else if let Some(l) = parse_lora_line(line) {
-                loras.push(l);
             }
         });
         // Taken back out before waiting, since `wait` blocks and the lock it
@@ -913,9 +915,12 @@ impl<'a> SdRunner<'a> {
         // runtime counts after the last decode.
         if diffusion {
             let prompt = args.iter().position(|a| a == "-p").and_then(|i| args.get(i + 1));
-            let note = prompt.and_then(|p| lora_note(&lora_tags(p), &loras));
+            let report = prompt.map(|p| lora_report(&lora_tags(p), &loras)).unwrap_or_default();
+            for line in &report.possible {
+                eprintln!("[yasdig] {label}: {line}");
+            }
             if let Ok(mut held) = self.monitor.0.lora_note.lock() {
-                *held = note;
+                *held = report.note;
             }
         }
         Ok(err_tail)
@@ -1335,8 +1340,8 @@ struct MonitorInner {
     /// What step caching skipped in the last run, off sd-cli's own log line.
     /// Reset when a run begins, so it never describes the run before.
     cache_skip: Mutex<Option<(u32, u32)>>,
-    /// What the last diffusion run's LoRAs didn't do, in words
-    /// ([`lora_note`]): `None` when each took whole. Like the placement, only
+    /// What sd.cpp warned the last diffusion run's LoRAs didn't do, in words
+    /// ([`lora_report`]): `None` when it warned of nothing. Like the placement, only
     /// a run with a prompt touches it.
     lora_note: Mutex<Option<String>>,
     /// Milliseconds the last run spent loading weights: the sum of sd.cpp's
@@ -1434,7 +1439,7 @@ impl Monitor {
         self.0.placement.lock().ok()?.clone()
     }
 
-    /// What the last run's LoRAs didn't do, or `None` when each took whole.
+    /// What sd.cpp warned the last run's LoRAs didn't do, or `None`.
     pub fn lora_note(&self) -> Option<String> {
         self.0.lora_note.lock().ok()?.clone()
     }
@@ -1641,11 +1646,13 @@ enum LoraMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LoraLine {
     Mode(LoraMode),
-    /// `(applied / compatible) LoRA tensors have been applied` — with `Only`
-    /// in front when they differ, except at runtime, which never says `Only`.
-    Applied { path: String, applied: u64, of: u64 },
+    /// `(applied / compatible) LoRA tensors have been applied`. `warned` is
+    /// sd.cpp's own `Only` in front: its verdict that some of what it loaded
+    /// wasn't applied. It says that at the end of a runtime run only; merging
+    /// counts each staging group against the whole file and never warns.
+    Applied { path: String, applied: u64, of: u64, warned: bool },
     /// `(skipped / total) incompatible LoRA tensors have been skipped`: the
-    /// name matched and the shape didn't.
+    /// name matched and the shape didn't. A warning in every mode.
     Skipped { path: String, skipped: u64, of: u64 },
 }
 
@@ -1660,7 +1667,8 @@ fn parse_lora_line(line: &str) -> Option<LoraLine> {
         .iter()
         .enumerate()
         .find_map(|(k, m)| line.split_once(m).map(|(h, r)| (h, k, r)))?;
-    let (a, b) = head.rsplit_once('(')?.1.strip_suffix(')')?.split_once(" / ")?;
+    let (before, counts) = head.rsplit_once('(')?;
+    let (a, b) = counts.strip_suffix(')')?.split_once(" / ")?;
     let (a, b): (u64, u64) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
     // The bracketed format puts the source location in front; the short one
     // ends with it, ` - lora.hpp:1044`, which isn't part of the path.
@@ -1670,10 +1678,23 @@ fn parse_lora_line(line: &str) -> Option<LoraLine> {
     };
     let path = path.trim().to_string();
     Some(if kind == 0 {
-        LoraLine::Applied { path, applied: a, of: b }
+        LoraLine::Applied { path, applied: a, of: b, warned: before.trim_end().ends_with("Only") }
     } else {
         LoraLine::Skipped { path, skipped: a, of: b }
     })
+}
+
+/// A log line sd.cpp printed while a progress bar was open, split off it. The
+/// bar ends in an erase-to-end-of-line and gets no newline until its last
+/// step (`print_progress_line`), so a line logged mid-bar arrives as
+/// `<bar> 3/8 - 1.20s/it\x1b[K[INFO ] …` — one line, which the progress
+/// parser would take whole.
+fn glued(line: &str) -> impl Iterator<Item = &str> {
+    let (bar, rest) = match line.split_once("\u{1b}[K") {
+        Some((bar, rest)) => (bar, Some(rest)),
+        None => (line, None),
+    };
+    std::iter::once(bar).chain(rest.filter(|r| !r.trim().is_empty()))
 }
 
 /// The LoRA names in a prompt's `<lora:name:weight>` tags — sd-cli's own
@@ -1694,21 +1715,29 @@ fn lora_tags(prompt: &str) -> Vec<String> {
     names
 }
 
-/// What to tell someone whose LoRA didn't (all) take, or `None` when every one
-/// did — or when the log can't say: no mode line means sd.cpp never reached
-/// its LoRAs, and silence there is no evidence.
-///
-/// sd.cpp says nothing when a LoRA fits nothing: at runtime each part of the
-/// model keeps only the tensors named for it, and one left empty is dropped
-/// without a count. So a tag with no line is a LoRA that did nothing. At
-/// runtime the parts' counts are disjoint and add up; merged, each device
-/// group counts against the whole file, so the totals don't add — the applied
-/// do, since each tensor lands in one group.
-fn lora_note(tags: &[String], lines: &[LoraLine]) -> Option<String> {
-    let mode = lines.iter().rev().find_map(|l| match l {
+/// What sd.cpp said about a run's LoRAs, sorted by how sure it is.
+#[derive(Debug, Default, PartialEq)]
+struct LoraReport {
+    /// For the page: built only from sd.cpp's own warnings — `Only (a / b)`
+    /// and `incompatible … skipped` — and worded no stronger than they are.
+    note: Option<String>,
+    /// For the console: what the counts suggest without sd.cpp saying it. A
+    /// tag with no count line, or merge counts that fall short. Either can be
+    /// a line this parser never saw, which is why it stays off the page: the
+    /// MOSS DMD LoRA once read as "no effect" while it plainly worked.
+    possible: Vec<String>,
+}
+
+/// Judge one run's LoRA lines against the tags it was handed. No mode line
+/// means sd.cpp never reached its LoRAs, and then there is nothing to say.
+fn lora_report(tags: &[String], lines: &[LoraLine]) -> LoraReport {
+    let mut report = LoraReport::default();
+    let Some(mode) = lines.iter().rev().find_map(|l| match l {
         LoraLine::Mode(m) => Some(*m),
         _ => None,
-    })?;
+    }) else {
+        return report;
+    };
     let ours = |path: &str, tag: &str| {
         let (path, tag) = (path.replace('\\', "/"), tag.replace('\\', "/"));
         let high = |s: &str| s.starts_with("|high_noise|");
@@ -1716,37 +1745,57 @@ fn lora_note(tags: &[String], lines: &[LoraLine]) -> Option<String> {
         let (p, t) = (bare(&path), bare(&tag));
         high(&path) == high(&tag) && (p == t || p.ends_with(&format!("/{t}")) || has_ext_of(&p, &t))
     };
-    let notes: Vec<String> = tags
-        .iter()
-        .filter_map(|tag| {
-            let (mut applied, mut of, mut skipped, mut total, mut seen) = (0, 0, 0, 0, false);
-            for l in lines {
-                match l {
-                    LoraLine::Applied { path, applied: a, of: b } if ours(path, tag) => {
-                        seen = true;
-                        applied += a;
-                        match mode {
-                            LoraMode::Runtime => of += b,
-                            LoraMode::Immediate => of = of.max(*b),
-                        }
-                    }
-                    LoraLine::Skipped { path, skipped: s, of: t } if ours(path, tag) => {
-                        seen = true;
-                        skipped += s;
-                        total = total.max(*t);
-                    }
-                    _ => {}
+    let mut notes = Vec::new();
+    for tag in tags {
+        let name = lora_label(tag);
+        // Runtime parts are disjoint, so their counts add; merged groups each
+        // count against the whole file, so only the applied add.
+        let (mut applied, mut of, mut warned) = (0, 0, false);
+        let (mut skipped, mut total, mut seen) = (0, 0, false);
+        for l in lines {
+            match l {
+                LoraLine::Applied { path, applied: a, of: b, warned: w } if ours(path, tag) => {
+                    seen = true;
+                    warned |= w;
+                    applied += a;
+                    of = match mode {
+                        LoraMode::Runtime => of + b,
+                        LoraMode::Immediate => of.max(*b),
+                    };
                 }
+                LoraLine::Skipped { path, skipped: s, of: t } if ours(path, tag) => {
+                    seen = true;
+                    skipped += s;
+                    total = total.max(*t);
+                }
+                _ => {}
             }
-            let total = match mode {
-                LoraMode::Runtime => of + skipped,
-                // Each group's `of` is the file less what that group skipped.
-                LoraMode::Immediate => total.max(of),
-            };
-            lora_shortfall(tag, seen, applied, total, skipped)
-        })
-        .collect();
-    (!notes.is_empty()).then(|| notes.join(" "))
+        }
+        let mut said = Vec::new();
+        if warned {
+            said.push(format!("sd.cpp applied only {applied} of the {of} tensors it loaded for this model"));
+        }
+        if skipped > 0 {
+            said.push(format!("it skipped {skipped} of its {total} tensors because their shapes don't match this model"));
+        }
+        if !said.is_empty() {
+            notes.push(format!(
+                "The LoRA “{name}” may not have fully taken effect, so it may look weaker than intended: {}.",
+                said.join(", and ")
+            ));
+        } else if !seen {
+            report.possible.push(format!(
+                "possible LoRA problem: sd.cpp printed no count for “{name}”, so it may not have been applied \
+                 (or its line was missed)"
+            ));
+        } else if applied < of {
+            report.possible.push(format!(
+                "possible LoRA problem: the counts read for “{name}” add up to {applied} of {of} tensors applied"
+            ));
+        }
+    }
+    report.note = (!notes.is_empty()).then(|| notes.join(" "));
+    report
 }
 
 /// A tag sd-cli completed with an extension (`<lora:x:1>` → `x.safetensors`).
@@ -1755,32 +1804,11 @@ fn has_ext_of(path: &str, tag: &str) -> bool {
         .is_some_and(|(stem, _)| stem == tag || stem.ends_with(&format!("/{tag}")))
 }
 
-/// The sentence for one LoRA: what happened in words first, sd.cpp's numbers
-/// after, so the note reads without knowing what a tensor is.
-fn lora_shortfall(tag: &str, seen: bool, applied: u64, total: u64, skipped: u64) -> Option<String> {
+/// A tag as the picker names the file: no folder, no `.safetensors`.
+fn lora_label(tag: &str) -> &str {
     let name = tag.trim_start_matches("|high_noise|");
     let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    let name = name.strip_suffix(".safetensors").unwrap_or(name);
-    let shapes = if skipped > 0 { format!(", {skipped} skipped for the wrong shape") } else { String::new() };
-    if !seen || applied == 0 {
-        let numbers = if seen {
-            format!("sd.cpp applied 0 of its {total} tensors{shapes}")
-        } else {
-            "sd.cpp matched none of its tensors to this model".to_string()
-        };
-        return Some(format!(
-            "The LoRA “{name}” had no effect: none of it fits this model, so it was left out. \
-             It is likely made for another model, or its tensors are named in a way sd.cpp \
-             can't place. ({numbers}.)"
-        ));
-    }
-    (applied < total).then(|| {
-        format!(
-            "The LoRA “{name}” only partly took effect, so it may look weaker or different \
-             than intended. Part of it doesn't fit this model — it may be made for a variant \
-             of it. (sd.cpp applied {applied} of its {total} tensors{shapes}.)"
-        )
-    })
+    name.strip_suffix(".safetensors").unwrap_or(name)
 }
 
 /// What sd-cli's `p-%04d.png` makes of preview `n` (`format_frame_idx`).
@@ -2348,11 +2376,11 @@ binary = "/opt/sd-cli"
     /// the only proof it engaged, so nothing else may be read as one.
     #[test]
     fn a_lora_line_is_read_in_either_log_format() {
-        let applied = |path: &str| LoraLine::Applied { path: path.into(), applied: 5, of: 7 };
+        let applied = |path: &str, warned| LoraLine::Applied { path: path.into(), applied: 5, of: 7, warned };
         for (line, want) in [
-            ("[WARN ] lora.hpp:1041 - Only (5 / 7) LoRA tensors have been applied, lora_file_path = /m/loras/x.safetensors", applied("/m/loras/x.safetensors")),
-            ("[W] Only (5 / 7) LoRA tensors have been applied, lora_file_path = C:\\m\\x y.safetensors - lora.hpp:1041", applied("C:\\m\\x y.safetensors")),
-            ("[I] (5 / 7) LoRA tensors have been applied, lora_file_path = |high_noise|/m/w.safetensors - lora.hpp:1044", applied("|high_noise|/m/w.safetensors")),
+            ("[WARN ] lora.hpp:1041 - Only (5 / 7) LoRA tensors have been applied, lora_file_path = /m/loras/x.safetensors", applied("/m/loras/x.safetensors", true)),
+            ("[W] Only (5 / 7) LoRA tensors have been applied, lora_file_path = C:\\m\\x y.safetensors - lora.hpp:1041", applied("C:\\m\\x y.safetensors", true)),
+            ("[I] (5 / 7) LoRA tensors have been applied, lora_file_path = |high_noise|/m/w.safetensors - lora.hpp:1044", applied("|high_noise|/m/w.safetensors", false)),
             (
                 "[WARN ] lora.hpp:1048 - (2 / 9) incompatible LoRA tensors have been skipped, lora_file_path = /m/x.safetensors",
                 LoraLine::Skipped { path: "/m/x.safetensors".into(), skipped: 2, of: 9 },
@@ -2366,50 +2394,69 @@ binary = "/opt/sd-cli"
         assert_eq!(lora_tags("a <lora:x.safetensors:1> b <lora:|high_noise|w:0.5><lora:x.safetensors:2>"), ["x.safetensors", "|high_noise|w"]);
     }
 
-    /// The cases, as sd.cpp logs them: what fit says nothing; a LoRA none of
-    /// whose names fit is the line that never comes (larryvrh's H3 turbo on a
-    /// quantized model); counts add across parts at runtime and across device
-    /// groups merged, where each group counts against the whole file.
+    /// A line sd.cpp logs while a progress bar is open arrives glued to the
+    /// bar: both halves must still be read, the bar as progress.
     #[test]
-    fn a_lora_that_didnt_take_is_said_in_words_first() {
+    fn a_line_logged_mid_bar_is_split_off_it() {
+        let line = "  |==>      | 3/8 - 1.20s/it\u{1b}[K[INFO ] lora.hpp:1044 - (12 / 12) LoRA tensors have been applied, lora_file_path = /m/loras/x.safetensors";
+        let parts: Vec<&str> = glued(line).collect();
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert_eq!(parse_progress(parts[0]), Some((3, 8, "1.20s/it")));
+        assert!(matches!(parse_lora_line(parts[1]), Some(LoraLine::Applied { applied: 12, of: 12, warned: false, .. })));
+        // A bar with nothing behind its erase is one line, as before.
+        assert_eq!(glued("  |==>   | 3/8 - 1.20s/it\u{1b}[K").count(), 1);
+        assert_eq!(glued("[INFO ] plain").collect::<Vec<_>>(), ["[INFO ] plain"]);
+    }
+
+    /// Only sd.cpp's own warnings reach the page; what the counts merely
+    /// suggest goes to the console. The MOSS DMD LoRA, merged lazily, once
+    /// read as "no effect" from a count line the parser never saw.
+    #[test]
+    fn only_what_sd_cpp_warns_reaches_the_page() {
         use LoraLine::*;
         let rt = Mode(LoraMode::Runtime);
         let now = Mode(LoraMode::Immediate);
-        let ap = |p: &str, a, b| Applied { path: p.into(), applied: a, of: b };
+        let ap = |p: &str, a, b| Applied { path: p.into(), applied: a, of: b, warned: false };
+        let only = |p: &str, a, b| Applied { path: p.into(), applied: a, of: b, warned: true };
         let tag = |t: &str| vec![t.to_string()];
         let x = "/m/loras/x.safetensors";
+        let quiet = LoraReport::default();
 
-        assert_eq!(lora_note(&tag("x.safetensors"), &[rt.clone(), ap(x, 518, 518)]), None);
+        assert_eq!(lora_report(&tag("x.safetensors"), &[rt.clone(), ap(x, 518, 518)]), quiet);
         // A tag without its extension, which sd-cli completes.
-        assert_eq!(lora_note(&tag("x"), &[rt.clone(), ap(x, 518, 518)]), None);
+        assert_eq!(lora_report(&tag("x"), &[rt.clone(), ap(x, 518, 518)]), quiet);
 
-        let none = lora_note(&tag("x.safetensors"), std::slice::from_ref(&rt)).unwrap();
-        assert!(none.starts_with("The LoRA “x” had no effect"), "{none}");
-        assert!(none.contains("matched none of its tensors"), "{none}");
+        // No count line: a suspicion, for the console only.
+        let none = lora_report(&tag("x.safetensors"), std::slice::from_ref(&rt));
+        assert_eq!(none.note, None);
+        assert!(none.possible.len() == 1 && none.possible[0].contains("printed no count for “x”"), "{none:?}");
 
-        // Text encoder whole, the model in part: 110 of 410.
-        let part = lora_note(&tag("x.safetensors"), &[rt.clone(), ap(x, 10, 10), ap(x, 100, 400)]).unwrap();
-        assert!(part.starts_with("The LoRA “x” only partly took effect"), "{part}");
-        assert!(part.contains("110 of its 410"), "{part}");
+        // Merged: one group's count against the whole file is no verdict.
+        let merged = lora_report(&tag("x.safetensors"), &[now.clone(), ap(x, 300, 518)]);
+        assert_eq!(merged.note, None);
+        assert!(merged.possible[0].contains("300 of 518"), "{merged:?}");
+        assert_eq!(lora_report(&tag("x.safetensors"), &[now.clone(), ap(x, 300, 518), ap(x, 218, 518)]), quiet);
 
-        // Merged across two device groups: all 518 landed somewhere.
-        assert_eq!(lora_note(&tag("x.safetensors"), &[now.clone(), ap(x, 300, 518), ap(x, 218, 518)]), None);
-        let shapes = lora_note(
+        // sd.cpp's own `Only`: the text encoder whole, the model in part.
+        let part = lora_report(&tag("x.safetensors"), &[rt.clone(), ap(x, 10, 10), only(x, 100, 400)]);
+        let note = part.note.unwrap();
+        assert!(note.starts_with("The LoRA “x” may not have fully taken effect"), "{note}");
+        assert!(note.contains("applied only 110 of the 410 tensors"), "{note}");
+
+        // Its shape warning, in either mode.
+        let shapes = lora_report(
             &tag("x.safetensors"),
-            &[now.clone(), ap(x, 500, 510), Skipped { path: x.into(), skipped: 8, of: 518 }],
-        )
-        .unwrap();
-        assert!(shapes.contains("500 of its 518 tensors, 8 skipped for the wrong shape"), "{shapes}");
+            &[now.clone(), ap(x, 510, 518), Skipped { path: x.into(), skipped: 8, of: 518 }],
+        );
+        assert!(shapes.note.unwrap().contains("skipped 8 of its 518 tensors"));
 
-        // The A14B's experts are two LoRAs to sd.cpp: the high-noise one took,
-        // the low-noise one is the one that didn't.
+        // The A14B's experts are two LoRAs to sd.cpp; each is judged alone.
         let pair = vec!["|high_noise|w.safetensors".to_string(), "w.safetensors".to_string()];
-        let note = lora_note(&pair, &[rt.clone(), ap("|high_noise|/m/loras/w.safetensors", 40, 40)]).unwrap();
-        assert!(note.starts_with("The LoRA “w” had no effect") && note.matches("The LoRA").count() == 1, "{note}");
+        let r = lora_report(&pair, &[rt.clone(), ap("|high_noise|/m/loras/w.safetensors", 40, 40)]);
+        assert!(r.note.is_none() && r.possible.len() == 1 && r.possible[0].contains("“w”"), "{r:?}");
 
-        // No mode line: sd.cpp never reached its LoRAs, and silence there
-        // proves nothing.
-        assert_eq!(lora_note(&tag("x.safetensors"), &[]), None);
+        // No mode line: sd.cpp never reached its LoRAs.
+        assert_eq!(lora_report(&tag("x.safetensors"), &[]), quiet);
     }
 
     #[test]

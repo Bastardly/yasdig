@@ -3,6 +3,18 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### Fixed
+
+- **A LoRA that worked could be reported as having no effect** (MOSS-Image's 8-step
+  LoRA, and possibly others on unquantized models). The note on a picture or clip now
+  appears only when sd.cpp itself reports that part of a LoRA wasn't applied or didn't
+  fit. What yasdig can only suspect is printed in the server's console instead.
+- **Log lines printed during a progress bar are read again.** sd.cpp writes them onto
+  the same line as the bar, and yasdig took the whole line as progress. This could
+  also lose some loading-time and stage timings.
+
 ## 0.5.3 — 2026-10-22
 
 ### New

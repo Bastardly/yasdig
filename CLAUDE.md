@@ -359,13 +359,15 @@ Paste is a document listener per slot, gated to its visible tab.
 
 - **Empty `--lora-model-dir` skips tag extraction** (tags conditioned as words), so
   `base_cmd` emits it **unconditionally**.
-- **A LoRA that matched nothing is no line at all.** sd.cpp counts what it applied
-  (`LoraModel::stat`), but at runtime (any quantized model) a part left with no
-  tensors drops the LoRA unannounced, and the counts never say `Only` there. So
-  `run_tail` collects the lines (`parse_lora_line`) and `lora_note` judges them per
-  `<lora:…>` tag: no line = nothing applied, runtime counts add across parts, merged
-  ones count per device group against the whole file. No mode line = no verdict. The
-  note is `Timings::lora_note` / `VideoResult.note`, worded first, counts after.
+- **The page gets only what sd.cpp warns about LoRAs** (`lora_report`): its own
+  `Only (a / b) … applied` (end of a runtime run) and `incompatible … skipped`, worded
+  first, its counts after (`Timings::lora_note` / `VideoResult.note`). **Inference goes
+  to the console** (`[yasdig] … possible LoRA problem`): no count line for a tag (at
+  runtime a part left with no tensors drops it unannounced), or merge counts short.
+  The inference was on the page in v0.5.2 and fired on MOSS's working DMD LoRA:
+  unquantized models merge lazily, one count per staging group against the whole
+  file, and a line logged mid-bar arrives glued to the bar (no newline until the last
+  step), which `glued` now splits before any parser sees it.
 - **A missing LoRA is a `LOG_WARN` and a dropped tag.** `Config::check_loras` is called
   from all four places a profile reaches `SdRunner` — `run`, `img2img`, `refine`,
   `hires`.
