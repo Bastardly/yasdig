@@ -845,6 +845,12 @@ export function render(data) {
   const box = $('prompt');
   const rolled = data.prompt && data.prompt !== box.value
     ? `<div class="meta">${esc(data.prompt)}</div>` : '';
+  // A picture the agent drew says so, and why; the chat's name opens it.
+  const trace = S.agentTrace;
+  const byAgent = trace && data.work_id === trace.id
+    ? `<div class="meta">Drawn by the agent in <b id="agenttrace" class="pin" `
+      + `title="Open this chat on the Agent tab">${esc(trace.title || 'a chat')}</b>, round ${trace.round}`
+      + `${trace.reason ? `: ${esc(trace.reason)}` : ''}</div>` : '';
 
   const times = n => n > 1 ? ` ×${n}` : '';
   const tags = (data.refine_passes ? ` · refined${times(data.refine_passes)}` : '')
@@ -861,9 +867,15 @@ export function render(data) {
       <b id="seedval" class="pin" title="Put this seed in the box, to generate it again">${data.seed}</b>
       · total <b>${total} ms</b>${tags}</div>
     ${rolled}
+    ${byAgent}
     <div class="bars">${bars}</div>${cached}
     `;
   P('result').querySelector('img').addEventListener('click', () => showFullSize(S.currentSrc));
+  // The Agent tab opens it; an event rather than an import keeps the two
+  // tabs' modules out of each other.
+  $('agenttrace')?.addEventListener('click', () => {
+    document.dispatchEvent(new CustomEvent('yasdig:openchat', { detail: trace.chat }));
+  });
   // The dialog can already be open when this runs: a pass from it, a step
   // back, or a batch image landing. A new state of the same picture keeps the
   // view where it was; a different picture is re-centred.
@@ -1028,9 +1040,12 @@ export const escalateSettings = () => {
 // the pickers, which is the one thing a work item used to lose. The escalation
 // routes take theirs as `model` instead, because there it is the pass about to
 // run and there is exactly one of them.
+// Read from the Image tab by id, not through `P()`: a generate body is the Image
+// tab's whatever pane was last shown, and a new agent chat builds one from the
+// Agent tab — after Outputs, `P()` is a pane with no pickers.
 export const escalateModels = () => ({
-  refine_model: P('refmodel').value || null,
-  hires_model: P('hiresmodel').value || null,
+  refine_model: $('refmodel').value || null,
+  hires_model: $('hiresmodel').value || null,
 });
 
 // Each pass sends its own checkpoint: empty means "the one that made the

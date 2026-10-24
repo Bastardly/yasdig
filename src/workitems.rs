@@ -146,7 +146,24 @@ pub struct WorkItem {
     /// put the source thumbnail back when a work item is reopened.
     #[serde(default)]
     pub source: Option<String>,
+    /// Drawn by the agent: which chat and round, and why — what the Info
+    /// panel says about a picture the person didn't ask for directly. Never
+    /// in a PNG (`pngmeta::Embedded` is curated) or an output sidecar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentTrace>,
     pub profile: Profile,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentTrace {
+    pub chat: String,
+    /// The chat's title when the picture was drawn.
+    #[serde(default)]
+    pub title: String,
+    pub round: u32,
+    /// The agent's words for what this round tries; empty when it gave none.
+    #[serde(default)]
+    pub reason: String,
 }
 
 /// A work item id or output stem: ASCII alphanumerics and `-` only, non-empty,
@@ -285,6 +302,14 @@ impl Store {
             .save(self.thumb_path(Shelf::Work, &item.id))
             .context("writing work item thumbnail")?;
         write_sidecar(&self.sidecar_path(Shelf::Work, &item.id), item)
+    }
+
+    /// Mark a just-archived generation as the agent's. It is on the work
+    /// shelf: nothing can have starred it between `save` and this.
+    pub fn set_agent(&self, id: &str, trace: AgentTrace) -> Result<()> {
+        let mut item = self.load(Shelf::Work, id)?;
+        item.agent = Some(trace);
+        write_sidecar(&self.sidecar_path(Shelf::Work, id), &item)
     }
 
     pub fn load(&self, shelf: Shelf, id: &str) -> Result<WorkItem> {
@@ -599,6 +624,7 @@ impl Store {
             clarity: 0.0,
             source: None,
             profile: Profile::default(),
+            agent: None,
         };
         write_sidecar(&self.output.join(format!("{stem}.json")), &item)?;
         if let Err(e) = self.ensure_output_thumb(&stem) {
@@ -1063,6 +1089,7 @@ mod tests {
             clarity: 0.0,
             source: None,
             profile: Profile::default(),
+            agent: None,
         }
     }
 

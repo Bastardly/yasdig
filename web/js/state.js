@@ -40,6 +40,9 @@ export const S = {
   upFactor: 2,
   // Which of the two image panes is showing.
   pane: 'image',
+  // The agent's note on the work item last reopened (`{ id, chat, title, round,
+  // reason }`), shown in Info while that item's picture is up.
+  agentTrace: null,
 };
 
 export const PANES = {

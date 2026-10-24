@@ -491,6 +491,11 @@ export function initAgent() {
   for (const g of grids) g.init();
   initGrip();
   $('anew').addEventListener('click', newChat);
+  // The Image tab's Info names the chat a picture came from (`render` in image.js).
+  document.addEventListener('yasdig:openchat', (e) => {
+    document.querySelector('.tab[data-tab="agent"]')?.click();
+    openChat(e.detail);
+  });
   $('asend').addEventListener('click', () => send('chat'));
   $('asession').addEventListener('click', () => send('session'));
   $('adescribe').addEventListener('click', () => send('describe'));

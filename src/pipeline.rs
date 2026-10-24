@@ -1725,6 +1725,7 @@ impl Engine {
             // A txt2img has no source image by definition.
             source: None,
             profile: profile.clone(),
+            agent: None,
         };
         let work_id = match self.items.save(&raw, &mut item) {
             Ok(()) => Some(item.id),
@@ -1980,6 +1981,7 @@ impl Engine {
             clarity: profile.clarity,
             source: Some(req.source.clone()),
             profile: profile.clone(),
+            agent: None,
         };
         let work_id = match self.items.save(&raw, &mut item) {
             Ok(()) => Some(item.id),
@@ -3997,6 +3999,7 @@ impl Display {
             clarity: p.filters.clarity,
             source: p.source.clone(),
             profile: p.profile.clone(),
+            agent: None,
         }
     }
 }

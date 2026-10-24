@@ -141,6 +141,31 @@ pub fn summary(settings: &Value) -> String {
     parts.join(", ")
 }
 
+/// The agent's words for what round `round` tries: the reason of a change it
+/// made just before, else what it told the person. Empty when it said nothing
+/// (a round drawn on the person's own settings).
+pub fn round_reason(chat: &Chat, round: u32) -> String {
+    let at = chat.messages.iter().position(|m| matches!(m, Msg::Batch { round: r, .. } if *r == round));
+    let Some(at) = at else { return String::new() };
+    chat.messages[..at]
+        .iter()
+        .rev()
+        .take_while(|m| !matches!(m, Msg::Batch { .. }))
+        .find_map(|m| match m {
+            Msg::Agent { changes, reply, .. } => {
+                let reason = chat
+                    .changes
+                    .iter()
+                    .filter(|c| changes.contains(&c.id) && c.state == ChangeState::Applied)
+                    .map(|c| c.reason.trim())
+                    .find(|r| !r.is_empty());
+                Some(reason.unwrap_or(reply.trim()).to_string())
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
 /// A picture of the round landed.
 pub fn image_done(chat: &mut Chat, img: super::chat::ImageRef) {
     let round = chat.session.round;
@@ -603,6 +628,25 @@ mod tests {
         apply_reply(&mut c, Mode::Chat, unsaid, &t, &Locks::default(), vec![], Default::default());
         start_round(&mut c, 400);
         assert_eq!(round_size(&c), 1, "one picture when no number was said");
+    }
+
+    #[test]
+    fn a_round_is_explained_by_the_change_that_led_to_it_else_the_reply() {
+        let mut c = chat();
+        c.session.goal.clear();
+        c.session.mode = Mode::Chat;
+        let t = tk(&c);
+        let said = |reason: &str, prompt: &str| reply(json!({"notes": "", "action": "generate", "count": 1, "seeds": "new",
+            "change": {"prompt": prompt}, "reason": reason, "reply": "Here is a cat."}));
+        apply_reply(&mut c, Mode::Chat, said("black fur, as asked", "a black cat"), &t, &Locks::default(), vec![], Default::default());
+        start_round(&mut c, 100);
+        image_done(&mut c, img("a"));
+        assert_eq!(round_reason(&c, 1), "black fur, as asked");
+        // The same prompt again is no change, so the reply is the explanation.
+        apply_reply(&mut c, Mode::Chat, said("", "a black cat"), &t, &Locks::default(), vec![], Default::default());
+        start_round(&mut c, 200);
+        assert_eq!(round_reason(&c, 2), "Here is a cat.");
+        assert_eq!(round_reason(&c, 9), "", "no such round");
     }
 
     #[test]

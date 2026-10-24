@@ -658,6 +658,7 @@ mod tests {
             clarity: 0.0,
             source: Some("someone-elses-stem".into()),
             profile,
+            agent: None,
         }
     }
 

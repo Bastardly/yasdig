@@ -387,6 +387,17 @@ fn picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, round: u32
     };
     let r = engine.run_in(&req, false, Slot::Agent)?;
     let work_id = r.work_id.clone().ok_or_else(|| anyhow!("the picture wasn't archived"))?;
+    let trace = crate::workitems::AgentTrace {
+        chat: chat.id.clone(),
+        title: chat.title.clone(),
+        round,
+        reason: session::round_reason(chat, round),
+    };
+    // The trace is a courtesy: a picture that lost it is still the picture.
+    let items = crate::workitems::Store::new(&engine.cfg().base_dir.join("work"), &engine.cfg().user_dir());
+    if let Err(e) = items.set_agent(&work_id, trace) {
+        eprintln!("[yasdig] agent: could not mark work item {work_id} as the agent's: {e:#}");
+    }
     let file = format!("r{round}-{k}.png");
     keep_picture(store, &chat.id, &file, &r.png)?;
     store.update(&chat.id, |c| {

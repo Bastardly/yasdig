@@ -209,6 +209,8 @@ export async function openWorkItem(id) {
 // that only mean something on the machine that made it.
 export function applyWorkItem(item) {
   const p = item.profile;
+  // A PNG's record never carries one, so a dropped file clears it.
+  S.agentTrace = item.agent ? { id: item.id, ...item.agent } : null;
   // The prompt as it was typed, where the roll made those two different things:
   // `{animal}` goes back in the box, not the crab it drew. Lossless because the
   // seed goes back with it two lines down — same seed, same roll — so pressing
