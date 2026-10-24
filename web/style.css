@@ -1108,6 +1108,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chatlog {
   flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--sp-3);
   padding: var(--sp-2) var(--sp-1);
+  /* Nothing in a chat is wider than the column: a long word or settings line
+     breaks, and a picture wider than the log is scaled to fit. */
+  overflow-wrap: anywhere;
 }
 .chatlog:empty::after { content: attr(data-empty); color: var(--text-dim); margin: auto; text-align: center; max-width: 36em; }
 .chatgrip {
@@ -1135,10 +1138,10 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* A round, and any picture in the conversation: a strip at one height, its
    number, the agent's marks and a Describe that shows on hover. */
 .chatpics { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
-.chatpic { position: relative; margin: 0; line-height: 0; }
-.chatpicimg { padding: 0; border: 2px solid transparent; border-radius: var(--r-md); background: none; cursor: pointer; }
+.chatpic { position: relative; margin: 0; line-height: 0; max-width: 100%; }
+.chatpicimg { padding: 0; border: 2px solid transparent; border-radius: var(--r-md); background: none; cursor: pointer; max-width: 100%; }
 .chatpicimg:hover { border-color: var(--state); }
-.chatpic img { height: var(--chat-pic); width: auto; display: block; border-radius: var(--r-sm); }
+.chatpic img { height: var(--chat-pic); width: auto; max-width: 100%; object-fit: contain; display: block; border-radius: var(--r-sm); }
 .chatpicno, .chatchecks, .chatbadge {
   position: absolute; line-height: 1; font-size: var(--fs-micro); padding: 2px var(--sp-1);
   border-radius: var(--r-sm); background: var(--scrim-soft); color: var(--text);
@@ -1176,8 +1179,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chip img { height: 56px; width: auto; border-radius: var(--r-sm); }
 .chip .hint { position: absolute; top: 2px; right: 2px; line-height: 1; background: var(--scrim-soft); }
 
-/* A chat's tile: its newest picture, or its title where it has none yet. */
-.chatgrid .chattile > button { display: flex; flex-direction: column; align-items: center; justify-content: center;
+/* A chat's tile: its newest picture, or its title where it has none yet.
+   `:not(.star)`: the star is the tile's other child (`.wigrid .star`). */
+.chatgrid .chattile > button:not(.star) { display: flex; flex-direction: column; align-items: center; justify-content: center;
   min-width: calc(var(--thumb-h) * .75); min-height: var(--thumb-h); background: var(--ink-800); }
 .chatgrid .chattile img { height: calc(var(--thumb-h) - 2 * var(--fs-sm)); }
 .chattiletitle {
