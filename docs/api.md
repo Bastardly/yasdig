@@ -378,6 +378,8 @@ needs a Vulkan device and nothing else.
 - `POST /workitems/open` — `{ "id": "1758104523000-12345" }`. Copies the archived image
   back into the working set and returns the `/generate` shape with a fresh `image_id`,
   so the escalations and the sliders work on it immediately. No diffusion runs.
+  `"pane": "agent"` opens it in the Agent tab's viewer instead (`Slot::Chat`), which
+  takes neither the Image tab's picture nor a round the agent is drawing.
 - `POST /workitems/delete` — `{ "ids": ["…", "…"] }`. Returns `{ "deleted": 2 }`.
 - `POST /favorites/add` — `{ "ids": ["…", "…"] }`. Moves those work items — image,
   thumbnail and sidecar — into `user/favorite/`, out of reach of `Delete all` and the
@@ -603,34 +605,31 @@ needs a Vulkan device and nothing else.
 ### The agent
 
 The Agent tab's chats (`work/chats/{id}/`, starred ones in `user/favorite_chats/`). Every
-route but `/agent/send` and `/agent/approve` reads or writes files and answers at once;
-those two queue a *leg* on the job queue (kind `agent`) and answer `{ "job": id }` — the
-reply arrives in the chat, whose `rev` moves on every write.
+route but `/agent/send` reads or writes files and answers at once; that one queues a
+*leg* on the job queue (kind `agent`) and answers `{ "job": id }` — the reply arrives in
+the chat, whose `rev` moves on every write.
 
 - `GET /agents` — `{ models: [{name, label, arch, vision, bytes, fits, n_ctx, note}],
-  driver, vram, dir }`: the agent models in the agents dir, paired by folder, and whether
-  this build has the driver.
+  driver, vram, dir, default, knobs: [{key, label, help}], actions: [{key, label, help}],
+  max_batch, max_rounds }`: the agent models in the agents dir, paired by folder, whether
+  this build has the driver, the agent a new chat starts with, and the table Settings →
+  Agent draws its whitelist from (`[agent]` in `user/settings.toml`).
 - `GET /chats` / `GET /favorite-chats` — `[{id, title, updated_ms, created_ms, favorite,
   state, thumb}]`, newest change first; Current lists starred ones too.
-- `POST /chats/new` — `{ settings, agent? }`, `settings` a `/generate` body (the Image
-  tab's); `count`, `loop`, `after` and `seed` are dropped. Answers `{ chat, toolkit }`.
+- `POST /chats/new` — `{ template, agent? }`: a chat on that model, whose rounds start
+  from its saved defaults (and its catalog Turbo LoRA when installed). `agent` absent is
+  Settings' default. Answers `{ chat, toolkit }`.
 - `GET /chats/{id}` — `{ chat, toolkit }`: the chat as stored, and the knob table
-  resolved for it — each knob's `perm`, bounds, `locked` reason and value, the passes,
-  the models it could pick, `locks`.
+  resolved for it under Settings → Agent — each knob's `allowed`, limits, `locked` reason
+  and value, the passes, the models it could pick, `locks`.
 - `GET /chats/{id}/live` — the reply being written while a turn runs: `{ seq, text,
   phase, step, steps }`, or `{ seq: null }`.
 - `GET /chats/{id}/thumb.png`, `GET /chats/{id}/img/{name}.png` — the chat's own copies
   of its pictures; names are `[a-z0-9-]+.png`.
-- `POST /chats/settings` — `{ id, rev, settings }`: replace the chat's settings. `409`
-  when `rev` isn't the chat's (the agent changed them meanwhile).
-- `POST /chats/permissions` — `{ id, permissions }`, the `[agent]` table's shape.
 - `POST /chats/agent` — `{ id, agent }`; `POST /chats/rename` — `{ id, title }`.
 - `POST /agent/send` — `{ chat, text, images: [{kind: "item"|"output", id}], mode }`,
   `mode` `chat` (default), `session` (the text is the goal) or `describe`. At most four
   pictures, copied into the chat. `409` while the agent is working on the chat.
-- `POST /agent/approve` — `{ chat, changes: [{id, approve}], actions: [{id, approve}] }`:
-  the answers to what an *Ask first* setting or pass proposed. `{ job }` when the session
-  goes on, `{ job: null }` when it doesn't.
 - `POST /agent/undo` — `{ chat, change }`: put an applied change's settings back, if they
   still hold what it set (else `409`). Recorded as a change of yours.
 - `POST /agent/stop` — `{ chat }`: end the chat's leg, killing a reply or a render in flight.

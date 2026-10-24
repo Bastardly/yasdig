@@ -1,16 +1,21 @@
 //! The agent's bounded workflow, as pure functions over a [`Chat`]: what the
-//! next step is, what a reply does to the chat, what an approval resumes.
+//! next step is, what a reply does to the chat.
 //! The worker (`agent::step`) only carries them out — a turn, an image, a
 //! pass — so the decisions are tested here without a GPU.
 //!
 //! A session runs **plan → round → critique → round → … → done**, at most
 //! `rounds` rounds, and a plain chat turn may start the same loop by asking to
 //! generate. Each step is one job-queue step, so a button press on the Image
-//! tab runs between any two of them. Anything set to *ask first* ends the leg
-//! as `awaiting`: nothing holds the queue while the person decides.
+//! tab runs between any two of them.
+//!
+//! **The agent sizes its own work** from what the person wrote — pictures in
+//! a round, rounds in a session — under the caps in code
+//! ([`knobs::MAX_BATCH`], [`knobs::MAX_ROUNDS`]). A chat round is one picture
+//! unless asked; a session the plan didn't size is [`SESSION_ROUNDS`] of
+//! [`SESSION_BATCH`].
 
 use super::chat::{ActionRec, ActionState, Change, ChangeState, Chat, CheckRow, Mode, Msg, Next, State};
-use super::knobs::{self, Locks, Perm};
+use super::knobs::{self, Locks, MAX_BATCH, MAX_ROUNDS};
 use super::toolkit::Toolkit;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -29,7 +34,6 @@ pub fn next_step(chat: &Chat) -> Step {
     let s = &chat.session;
     match s.next {
         Next::Nothing => Step::End,
-        _ if chat.pending() => Step::End,
         Next::Turn => Step::Turn(s.mode),
         Next::Critique => Step::Turn(Mode::Critique),
         Next::Batch => {
@@ -49,19 +53,34 @@ pub fn next_step(chat: &Chat) -> Step {
 fn current_batch(chat: &Chat) -> Option<(u32, u32, u32)> {
     chat.messages.iter().rev().find_map(|m| match m {
         Msg::Batch { round, images, size, .. } if *round == chat.session.round => {
-            Some((*round, images.len() as u32, size_or_batch(chat, *size)))
+            Some((*round, images.len() as u32, whole(*size)))
         }
         _ => None,
     })
 }
 
-fn size_or_batch(chat: &Chat, size: u32) -> u32 {
-    if size == 0 { chat.permissions.batch } else { size }
+/// A session's rounds and their size when its plan didn't say.
+pub const SESSION_ROUNDS: u32 = 3;
+pub const SESSION_BATCH: u32 = 4;
+
+/// A round's size as recorded: 0 in chats from before a round was sized,
+/// which drew four.
+fn whole(size: u32) -> u32 {
+    if size == 0 { SESSION_BATCH } else { size }
+}
+
+/// Pictures per round of the session, and its rounds.
+fn per_round(chat: &Chat) -> u32 {
+    if chat.session.per_round == 0 { SESSION_BATCH } else { chat.session.per_round.min(MAX_BATCH) }
+}
+
+pub fn session_limit(chat: &Chat) -> u32 {
+    if chat.session.rounds == 0 { SESSION_ROUNDS } else { chat.session.rounds.min(MAX_ROUNDS) }
 }
 
 /// How many pictures the current round holds when whole.
 pub fn round_size(chat: &Chat) -> u32 {
-    current_batch(chat).map_or(chat.permissions.batch, |(_, _, size)| size)
+    current_batch(chat).map_or(per_round(chat), |(_, _, size)| size)
 }
 
 /// The newest round, when it is whole and nothing was drawn after it: what a
@@ -91,8 +110,8 @@ pub fn start_round(chat: &mut Chat, random_seed: i64) {
         chat.session.base_seed = random_seed.max(1);
     }
     let size = match chat.session.count {
-        0 => chat.permissions.batch,
-        c => c.min(chat.permissions.batch),
+        0 => per_round(chat),
+        c => c.min(MAX_BATCH),
     };
     chat.session.count = 0;
     chat.session.fresh = false;
@@ -169,7 +188,6 @@ pub fn round_reason(chat: &Chat, round: u32) -> String {
 /// A picture of the round landed.
 pub fn image_done(chat: &mut Chat, img: super::chat::ImageRef) {
     let round = chat.session.round;
-    let batch = chat.permissions.batch;
     // A round a chat turn asked for is shown and left to the person, even
     // with a session's checks still on the chat: the person is steering now.
     let judge = !chat.session.checks.is_empty() && chat.session.mode != Mode::Chat;
@@ -177,7 +195,7 @@ pub fn image_done(chat: &mut Chat, img: super::chat::ImageRef) {
         if let Msg::Batch { round: r, images, size, .. } = m {
             if *r == round {
                 images.push(img);
-                let size = if *size == 0 { batch } else { *size };
+                let size = whole(*size);
                 if images.len() as u32 >= size {
                     chat.session.next = if judge { Next::Critique } else { Next::Nothing };
                 }
@@ -201,7 +219,11 @@ pub struct ReplyJson {
     pub reason: String,
     #[serde(default)]
     pub action: Option<String>,
-    /// Chat: how many pictures to draw, and whether to keep the last seeds.
+    /// Plan: how many rounds the session runs.
+    #[serde(default)]
+    pub rounds: Option<u32>,
+    /// How many pictures to draw (a plan: per round), and whether to keep
+    /// the last round's seeds.
     #[serde(default)]
     pub count: Option<u32>,
     #[serde(default)]
@@ -243,64 +265,29 @@ pub fn parse_reply(text: &str) -> anyhow::Result<ReplyJson> {
     }
 }
 
-/// What a reply did, for the worker.
-#[derive(Debug, Default, PartialEq)]
-pub struct Outcome {
-    /// Something waits for the person.
-    pub awaiting: bool,
-}
-
 /// Record a reply on the chat and decide what comes next.
-pub fn apply_reply(chat: &mut Chat, mode: Mode, r: ReplyJson, t: &Toolkit, locks: &Locks, skills: Vec<String>, stats: crate::llm::Stats) -> Outcome {
+pub fn apply_reply(chat: &mut Chat, mode: Mode, r: ReplyJson, t: &Toolkit, locks: &Locks, skills: Vec<String>, stats: crate::llm::Stats) {
     let n = chat.next_n();
     let mut change_ids = Vec::new();
     let mut notes_out = Vec::new();
-    // Settings: auto knobs now, ask knobs as one pending change.
+    // Settings: whatever is on the whitelist, at once.
     if let Some(change) = r.change.as_ref().filter(|c| !c.is_empty()) {
-        let models = t.model_names();
-        let auto = knobs::apply(&mut chat.settings, change, &chat.permissions, locks, &models, &[Perm::Auto]);
-        notes_out.extend(auto.notes.iter().filter(|n| !n.contains("isn't the agent's to change")).cloned());
-        if !auto.set.is_empty() {
+        let applied = knobs::apply(&mut chat.settings, change, &t.rules, locks, &t.model_names());
+        notes_out.extend(applied.notes.iter().filter(|n| !n.contains("isn't the agent's to change")).cloned());
+        if !applied.set.is_empty() {
             chat.settings_rev += 1;
             let id = chat.next_change_id();
             chat.changes.push(Change {
                 id,
                 by: "agent".into(),
                 state: ChangeState::Applied,
-                set: auto.set.clone(),
-                before: auto.before,
+                set: applied.set,
+                before: applied.before,
                 reason: r.reason.clone(),
                 msg: n,
                 notes: Vec::new(),
             });
             change_ids.push(id);
-        }
-        // What is left that the person asked to be asked about.
-        let asked: Map<String, Value> = change
-            .iter()
-            .filter(|(k, _)| !auto.set.contains_key(*k))
-            .filter(|(k, _)| knobs::knob(k).is_some_and(|kn| chat.permissions.knob(kn).perm == Perm::Ask))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        if !asked.is_empty() {
-            // A dry run says what it would become, so the card shows the
-            // clamped value and Approve applies exactly that.
-            let mut probe = chat.settings.clone();
-            let would = knobs::apply(&mut probe, &asked, &chat.permissions, locks, &models, &[Perm::Ask]);
-            if !would.set.is_empty() {
-                let id = chat.next_change_id();
-                chat.changes.push(Change {
-                    id,
-                    by: "agent".into(),
-                    state: ChangeState::Pending,
-                    set: would.set,
-                    before: would.before,
-                    reason: r.reason.clone(),
-                    msg: n,
-                    notes: would.notes,
-                });
-                change_ids.push(id);
-            }
         }
     }
 
@@ -318,8 +305,11 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, r: ReplyJson, t: &Toolkit, locks
                 .map(|a| a.iter().filter_map(|q| q.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect())
                 .unwrap_or_default();
             chat.session.checks = qs.into_iter().take(super::schema::MAX_CHECKS as usize).collect();
+            // How long and how wide, as the goal said; unsaid is the default.
+            chat.session.rounds = r.rounds.map_or(0, |n| n.clamp(1, MAX_ROUNDS));
+            chat.session.per_round = r.count.map_or(0, |n| n.clamp(1, MAX_BATCH));
             // A round just drawn is judged first, unless the plan rewrote the
-            // prompt (applied or proposed): then those pictures answer another goal.
+            // prompt (the change just made): then those pictures answer another goal.
             let rewrote = chat.changes.iter().any(|c| change_ids.contains(&c.id) && c.set.contains_key("prompt"));
             match judgeable(chat) {
                 Some((round, _)) if !rewrote => {
@@ -352,12 +342,15 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, r: ReplyJson, t: &Toolkit, locks
             keepers.dedup();
             let action = r.action.as_deref().unwrap_or("done");
             chat.session.next = match action {
-                "generate" if session_rounds(chat) < chat.permissions.rounds => {
-                    chat.session.fresh = !chat.permissions.seed_lock;
+                "generate" if session_rounds(chat) < session_limit(chat) => {
+                    // The same seeds unless it asks for new ones, so a difference
+                    // between rounds is the change.
+                    chat.session.fresh = r.seeds.as_deref() == Some("new");
+                    chat.session.count = r.count.map_or(0, |n| n.clamp(1, MAX_BATCH));
                     Next::Batch
                 }
                 "generate" => {
-                    notes_out.push(format!("That was round {} of {}, so the session stops here.", session_rounds(chat), chat.permissions.rounds));
+                    notes_out.push(format!("That was round {} of {}, so the session stops here.", session_rounds(chat), session_limit(chat)));
                     Next::Nothing
                 }
                 "escalate" => match escalation(chat, r.escalate.as_ref(), t, n) {
@@ -377,7 +370,7 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, r: ReplyJson, t: &Toolkit, locks
             chat.session.next = match r.action.as_deref() {
                 Some("generate") => {
                     // One picture unless the person asked for more.
-                    chat.session.count = r.count.unwrap_or(1).clamp(1, chat.permissions.batch);
+                    chat.session.count = r.count.unwrap_or(1).clamp(1, MAX_BATCH);
                     // New seeds unless asked to keep the composition.
                     chat.session.fresh = r.seeds.as_deref() != Some("same");
                     Next::Batch
@@ -409,14 +402,9 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, r: ReplyJson, t: &Toolkit, locks
     }
     // A new round is begun by the worker (it draws the seed), so a reply only
     // says "a round next"; the round itself starts when the leg goes on.
-    let awaiting = chat.pending();
-    if awaiting {
-        chat.session.state = State::Awaiting;
-    }
-    Outcome { awaiting }
 }
 
-/// The pass a critique asked for, as a queued or pending action.
+/// The pass a critique asked for, queued.
 fn escalation(chat: &mut Chat, e: Option<&EscalateJson>, t: &Toolkit, msg: u32) -> Result<u64, String> {
     let e = e.ok_or("the agent asked for a pass without saying which picture")?;
     let a = t
@@ -444,50 +432,12 @@ fn escalation(chat: &mut Chat, e: Option<&EscalateJson>, t: &Toolkit, msg: u32) 
         kind: a.key.to_string(),
         item: item.id,
         instruction,
-        state: if a.perm == Perm::Auto { ActionState::Queued } else { ActionState::Pending },
+        state: ActionState::Queued,
         result: None,
         msg,
         error: None,
     });
     Ok(id)
-}
-
-/// The person's answers to what waited. Returns whether the leg should go on.
-pub fn approve(
-    chat: &mut Chat,
-    changes: &[(u64, bool)],
-    actions: &[(u64, bool)],
-    locks: &Locks,
-    models: &[String],
-) -> bool {
-    for (id, yes) in changes {
-        let Some(i) = chat.changes.iter().position(|c| c.id == *id && c.state == ChangeState::Pending) else { continue };
-        if *yes {
-            let set = chat.changes[i].set.clone();
-            let applied = knobs::apply(&mut chat.settings, &set, &chat.permissions, locks, models, &[Perm::Ask, Perm::Auto]);
-            let c = &mut chat.changes[i];
-            c.before = applied.before;
-            c.set = applied.set;
-            c.notes.extend(applied.notes);
-            c.state = ChangeState::Applied;
-            chat.settings_rev += 1;
-        } else {
-            chat.changes[i].state = ChangeState::Rejected;
-        }
-    }
-    for (id, yes) in actions {
-        if let Some(a) = chat.actions.iter_mut().find(|a| a.id == *id && a.state == ActionState::Pending) {
-            a.state = if *yes { ActionState::Queued } else { ActionState::Rejected };
-        }
-    }
-    if chat.session.next == Next::Escalate && !chat.actions.iter().any(|a| a.state == ActionState::Queued) {
-        chat.session.next = Next::Nothing;
-    }
-    let go_on = !chat.pending() && chat.session.next != Next::Nothing;
-    if !chat.pending() && chat.session.state == State::Awaiting {
-        chat.session.state = if go_on { State::Idle } else { finished(chat) };
-    }
-    go_on
 }
 
 /// How a leg ends when nothing is next: a session is done, a chat is idle.
@@ -537,16 +487,16 @@ pub fn undo(chat: &mut Chat, id: u64) -> Result<u64, String> {
 #[cfg(test)]
 mod tests {
     use super::super::chat::ImageRef;
-    use super::super::knobs::Permissions;
+    use super::super::knobs::Rules;
     use super::super::toolkit::build;
     use super::*;
     use crate::config::ImageFamily;
     use serde_json::json;
 
     fn chat() -> Chat {
-        let mut c = Chat::new("1-0".into(), json!({"prompt": "a fox", "cfg_scale": 6.0}), Permissions::default(), None);
-        c.permissions.batch = 2;
-        c.permissions.rounds = 2;
+        let mut c = Chat::new("1-0".into(), json!({"prompt": "a fox", "cfg_scale": 6.0}), None);
+        c.session.per_round = 2;
+        c.session.rounds = 2;
         c.session.goal = "a fox in a red hat".into();
         c.session.next = Next::Turn;
         c.session.mode = Mode::Plan;
@@ -554,7 +504,11 @@ mod tests {
     }
 
     fn tk(c: &Chat) -> Toolkit {
-        build(&c.permissions, &c.settings, &Locks::default(), vec![], Some(ImageFamily::Sdxl))
+        tk_under(c, &Rules::default())
+    }
+
+    fn tk_under(c: &Chat, rules: &Rules) -> Toolkit {
+        build(rules, &c.settings, &Locks::default(), vec![], Some(ImageFamily::Sdxl))
     }
 
     fn img(id: &str) -> ImageRef {
@@ -570,7 +524,7 @@ mod tests {
         let mut c = chat();
         assert_eq!(next_step(&c), Step::Turn(Mode::Plan));
         let t = tk(&c);
-        apply_reply(&mut c, Mode::Plan, reply(json!({"notes": "", "checks": ["Is there a hat?", "Is it red?"], "reply": "ok"})), &t, &Locks::default(), vec![], Default::default());
+        apply_reply(&mut c, Mode::Plan, reply(json!({"notes": "", "checks": ["Is there a hat?", "Is it red?"], "rounds": 2, "count": 2, "reply": "ok"})), &t, &Locks::default(), vec![], Default::default());
         assert_eq!(c.session.checks.len(), 2);
         assert_eq!(c.session.next, Next::Batch);
         start_round(&mut c, 100);
@@ -603,7 +557,6 @@ mod tests {
         let mut c = chat();
         c.session.goal.clear();
         c.session.mode = Mode::Chat;
-        c.permissions.batch = 4;
         let t = tk(&c);
         let draw = |count: u32, seeds: &str| reply(json!({"notes": "", "action": "generate", "count": count, "seeds": seeds,
                                                        "change": {"prompt": "a cat"}, "reason": "", "reply": "a cat"}));
@@ -612,10 +565,10 @@ mod tests {
         assert_eq!(round_size(&c), 1, "one asked for is one drawn");
         image_done(&mut c, img("a"));
         assert_eq!(next_step(&c), Step::End);
-        apply_reply(&mut c, Mode::Chat, draw(9, "same"), &t, &Locks::default(), vec![], Default::default());
+        apply_reply(&mut c, Mode::Chat, draw(99, "same"), &t, &Locks::default(), vec![], Default::default());
         start_round(&mut c, 200);
-        assert_eq!((round_size(&c), seed_for(&c, 0)), (4, 100), "clamped to a round; the same seeds");
-        for k in ["b", "c", "d", "e"] {
+        assert_eq!((round_size(&c), seed_for(&c, 0)), (MAX_BATCH, 100), "clamped to the cap; the same seeds");
+        for k in ["b", "c", "d", "e", "e2", "e3", "e4", "e5"] {
             image_done(&mut c, img(k));
         }
         apply_reply(&mut c, Mode::Chat, draw(2, "new"), &t, &Locks::default(), vec![], Default::default());
@@ -685,20 +638,21 @@ mod tests {
     }
 
     #[test]
-    fn ask_first_pauses_and_an_approval_resumes() {
+    fn a_plan_sizes_its_session_inside_the_caps() {
         let mut c = chat();
-        c.permissions.knobs.get_mut("prompt").unwrap().perm = Perm::Ask;
-        c.session.mode = Mode::Chat;
+        c.session.rounds = 0;
+        c.session.per_round = 0;
         let t = tk(&c);
-        let out = apply_reply(&mut c, Mode::Chat, reply(json!({"notes": "", "reply": "x", "action": "generate", "change": {"prompt": "a dog"}})), &t, &Locks::default(), vec![], Default::default());
-        assert!(out.awaiting);
-        assert_eq!(c.session.state, State::Awaiting);
-        assert_eq!(c.settings["prompt"], json!("a fox"), "not applied yet");
-        assert_eq!(next_step(&c), Step::End, "nothing runs while it waits");
-        let id = c.changes.iter().find(|x| x.state == ChangeState::Pending).unwrap().id;
-        assert!(approve(&mut c, &[(id, true)], &[], &Locks::default(), &[]));
-        assert_eq!(c.settings["prompt"], json!("a dog"));
-        assert_eq!(c.session.next, Next::Batch);
+        let plan = |rounds: u32, count: u32| reply(json!({"notes": "", "checks": ["Is it a fox?"], "rounds": rounds, "count": count,
+                                                        "change": {"prompt": "a fox"}, "reason": "", "reply": ""}));
+        apply_reply(&mut c, Mode::Plan, plan(2, 3), &t, &Locks::default(), vec![], Default::default());
+        start_round(&mut c, 100);
+        assert_eq!((session_limit(&c), round_size(&c)), (2, 3), "two rounds of three, as asked");
+        apply_reply(&mut c, Mode::Plan, plan(50, 50), &t, &Locks::default(), vec![], Default::default());
+        assert_eq!((session_limit(&c), per_round(&c)), (MAX_ROUNDS, MAX_BATCH), "held to the caps");
+        let unsaid = reply(json!({"notes": "", "checks": ["Is it a fox?"], "change": {"prompt": "a fox"}, "reason": "", "reply": ""}));
+        apply_reply(&mut c, Mode::Plan, unsaid, &t, &Locks::default(), vec![], Default::default());
+        assert_eq!((session_limit(&c), per_round(&c)), (SESSION_ROUNDS, SESSION_BATCH));
     }
 
     #[test]
@@ -712,8 +666,9 @@ mod tests {
         apply_reply(&mut c, Mode::Critique, r(), &t, &Locks::default(), vec![], Default::default());
         assert_eq!(c.session.next, Next::Nothing, "hires is off by default");
         assert!(c.actions.is_empty());
-        c.permissions.actions.insert("hires".into(), Perm::Auto);
-        let t = tk(&c);
+        let mut rules = Rules::default();
+        rules.actions.insert("hires".into());
+        let t = tk_under(&c, &rules);
         apply_reply(&mut c, Mode::Critique, r(), &t, &Locks::default(), vec![], Default::default());
         let id = c.actions[0].id;
         assert_eq!(c.actions[0].item, "a");

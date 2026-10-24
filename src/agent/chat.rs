@@ -14,7 +14,6 @@
 //! threads (the person's edits) — so every write is [`ChatStore::update`]:
 //! read, change, write a `.part`, rename, under one process-wide lock.
 
-use crate::agent::knobs::Permissions;
 use crate::workitems::{valid_id, Shelf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -51,8 +50,6 @@ pub struct Chat {
     /// Moves with every change to `settings`; a batch records the one it ran.
     #[serde(default)]
     pub settings_rev: u64,
-    #[serde(default)]
-    pub permissions: Permissions,
     #[serde(default)]
     pub messages: Vec<Msg>,
     #[serde(default)]
@@ -165,7 +162,8 @@ pub enum Msg {
         #[serde(default)]
         summary: String,
         /// How many pictures the round holds when whole; 0 in chats written
-        /// before a round could be sized, which meant `permissions.batch`.
+        /// before a round could be sized, which meant the default four
+        /// (`session::SESSION_BATCH`).
         #[serde(default)]
         size: u32,
         images: Vec<ImageRef>,
@@ -192,12 +190,13 @@ impl Msg {
 pub enum ChangeState {
     #[default]
     Applied,
-    Pending,
+    /// Set aside; also what an ask-first proposal of an older chat reads as.
+    #[serde(alias = "pending")]
     Rejected,
     Undone,
 }
 
-/// A settings change: the agent's, an approval's or the person's.
+/// A settings change: the agent's, or the person's undo.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Change {
     pub id: u64,
@@ -221,9 +220,9 @@ pub struct Change {
 #[serde(rename_all = "lowercase")]
 pub enum ActionState {
     #[default]
-    Pending,
     Queued,
     Done,
+    #[serde(alias = "pending")]
     Rejected,
     Failed,
 }
@@ -250,12 +249,12 @@ pub struct ActionRec {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum State {
+    /// Also what an older chat paused on an ask-first proposal reads as.
     #[default]
+    #[serde(alias = "awaiting")]
     Idle,
     Queued,
     Running,
-    /// Paused on an ask-first change or pass; nothing holds the queue.
-    Awaiting,
     Done,
     Stopped,
     Failed,
@@ -305,9 +304,16 @@ pub struct Session {
     /// `base_seed + k`.
     #[serde(default)]
     pub base_seed: i64,
-    /// The next round's size; 0 is a full round (`permissions.batch`).
+    /// The next round's size; 0 is the session's `per_round`.
     #[serde(default)]
     pub count: u32,
+    /// Rounds this session may draw (the plan's, from the goal); 0 is
+    /// `session::SESSION_ROUNDS`.
+    #[serde(default)]
+    pub rounds: u32,
+    /// Pictures per round of this session; 0 is `session::SESSION_BATCH`.
+    #[serde(default)]
+    pub per_round: u32,
     /// The next round draws new seeds rather than the last round's.
     #[serde(default)]
     pub fresh: bool,
@@ -326,7 +332,7 @@ impl Session {
 }
 
 impl Chat {
-    pub fn new(id: String, settings: Value, permissions: Permissions, agent: Option<String>) -> Chat {
+    pub fn new(id: String, settings: Value, agent: Option<String>) -> Chat {
         let ms = now_ms();
         Chat {
             v: 1,
@@ -338,7 +344,6 @@ impl Chat {
             agent,
             settings,
             settings_rev: 0,
-            permissions,
             messages: Vec::new(),
             changes: Vec::new(),
             actions: Vec::new(),
@@ -362,12 +367,6 @@ impl Chat {
     pub fn note(&mut self, text: impl Into<String>) {
         let n = self.next_n();
         self.messages.push(Msg::Note { n, ms: now_ms(), text: text.into() });
-    }
-
-    /// Anything waiting for the person's yes or no.
-    pub fn pending(&self) -> bool {
-        self.changes.iter().any(|c| c.state == ChangeState::Pending)
-            || self.actions.iter().any(|a| a.state == ActionState::Pending)
     }
 
     /// A title from the first thing the person said, if there is none yet.
@@ -598,7 +597,7 @@ mod tests {
     }
 
     fn chat(id: &str) -> Chat {
-        Chat::new(id.into(), serde_json::json!({"prompt": "a cat", "template": "sdxl"}), Permissions::default(), None)
+        Chat::new(id.into(), serde_json::json!({"prompt": "a cat", "template": "sdxl"}), None)
     }
 
     #[test]
@@ -644,6 +643,23 @@ mod tests {
         let c = s.load("4-0").unwrap();
         assert_eq!(c.session.state, State::Interrupted);
         assert_eq!(c.session.job, None);
+    }
+
+    /// A chat written while ask-first existed: its own permissions, a
+    /// proposal and a pass waiting, the session paused on them.
+    #[test]
+    fn a_chat_from_before_the_whitelist_still_reads() {
+        let old = serde_json::json!({
+            "id": "5-0", "settings": {"prompt": "a cat"},
+            "permissions": {"batch": 4, "rounds": 3, "knobs": {"prompt": {"perm": "ask"}}},
+            "changes": [{"id": 1, "by": "agent", "state": "pending", "set": {"prompt": "a dog"}}],
+            "actions": [{"id": 1, "kind": "hires", "item": "a", "state": "pending"}],
+            "session": {"state": "awaiting"},
+        });
+        let c: Chat = serde_json::from_value(old).unwrap();
+        assert_eq!(c.changes[0].state, ChangeState::Rejected);
+        assert_eq!(c.actions[0].state, ActionState::Rejected);
+        assert_eq!(c.session.state, State::Idle);
     }
 
     #[test]

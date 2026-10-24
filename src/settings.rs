@@ -165,11 +165,11 @@ pub struct Settings {
     /// Page-level.
     pub embed_png_settings: bool,
 
-    /// The `[agent]` table: what a new chat's agent may change and how far
-    /// (`crate::agent::knobs::Permissions`). Each chat takes a copy when it
-    /// starts and keeps its own. Page-level; a table, so declared after every
-    /// plain value, before `[variables]` (see its note).
-    pub agent: crate::agent::knobs::Permissions,
+    /// The `[agent]` table: what the agent may change in every chat, and the
+    /// agent a new chat starts with (`crate::agent::knobs::Rules`). Read
+    /// afresh each turn. Page-level; a table, so declared after every plain
+    /// value, before `[variables]` (see its note).
+    pub agent: crate::agent::knobs::Rules,
 
     /// The `[variables]` table: `{animal}` in a prompt and the words it can
     /// stand for. See [`crate::variables`].
@@ -341,7 +341,7 @@ impl Default for Settings {
             video_save: VIDEO_FILE.into(),
             embed_png_settings: true,
             // Prompt, negative and a bounded CFG on; the rest is asked for.
-            agent: crate::agent::knobs::Permissions::default(),
+            agent: crate::agent::knobs::Rules::default(),
             // What the default prompt names. A file with no `[variables]`
             // table gets these too, which is what keeps that prompt from being
             // a 400; one the page emptied is written as an empty table and
@@ -1370,6 +1370,20 @@ mod tests {
         assert!(text.find("[variables]") > text.find("steps = 9"), "{text}");
         assert_eq!(Settings::load(&dir).unwrap(), s);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A file saved while each chat had its own permissions: `[agent]` with
+    /// round rules and tables of off/ask/auto. It loads, as the whitelist's
+    /// defaults, and the rest of the file is kept.
+    #[test]
+    fn an_old_agent_table_loads_as_the_whitelist_defaults() {
+        let old = "steps = 12\n\n[agent]\nseed_lock = true\nbatch = 4\n\n[agent.actions]\nhires = \"ask\"\n\n\
+                   [agent.knobs.cfg_scale]\nperm = \"auto\"\nmin = 1.0\n\n[variables]\nanimal = [\"crab\"]\n";
+        let s: Settings = toml::from_str(old).unwrap();
+        assert_eq!(s.steps, 12);
+        assert_eq!(s.agent, crate::agent::knobs::Rules::default());
+        assert_eq!(s.variables["animal"], ["crab"]);
+        s.validate().unwrap();
     }
 
     /// A file with no table gets the defaults, which the default prompt needs.

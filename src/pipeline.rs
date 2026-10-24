@@ -79,6 +79,24 @@ pub enum Slot {
     /// picture off the screen — `diffuse` publishes only `Slot::Image` results
     /// as the latest.
     Agent,
+    /// The Agent tab's viewer: a chat's picture opened in Refine & adjust.
+    /// Apart from `Agent`, so a session drawing its next round never takes the
+    /// picture being looked at.
+    Chat,
+}
+
+/// Whether opening a live entry into `asked` leaves it in the slot it is in
+/// (`here`). The agent works on a live entry where it is: taking it into
+/// `Slot::Agent` would take the person's picture off the Image tab. The
+/// Agent tab's viewer takes a round's picture out of `Agent`, so the next
+/// round can't take it from the viewer, but leaves one on the Image tab there
+/// for the same reason.
+fn stays_where_it_is(asked: Slot, here: Option<Slot>) -> bool {
+    match asked {
+        Slot::Agent => true,
+        Slot::Chat => here == Some(Slot::Image),
+        _ => false,
+    }
 }
 
 struct Live {
@@ -3668,12 +3686,10 @@ impl Display {
     /// under its own id, so the pass lands on what is shown; otherwise its
     /// `.edits/` folder is copied in. A folder that can't be read opens the
     /// original, said in the log: it must never cost the picture.
-    pub fn open(&mut self, work_id: &str, shelf: Shelf) -> Result<GenResult> {
-        self.open_in(work_id, shelf, Slot::Image)
-    }
-
-    /// [`Display::open`] into `slot` — the agent opens its keeper into
-    /// `Slot::Agent` to run a pass on it.
+    ///
+    /// Into `slot`: `Slot::Image` from the Image tab, `Slot::Chat` from the
+    /// Agent tab's viewer, and `Slot::Agent` where the agent opens its keeper
+    /// to run a pass on it.
     pub fn open_in(&mut self, work_id: &str, shelf: Shelf, slot: Slot) -> Result<GenResult> {
         let item = self.items.load(shelf, work_id)?;
         // The validated id, never the sidecar's own `id` field: a copied-in
@@ -3687,11 +3703,12 @@ impl Display {
             let (png, _, _) =
                 publish(&self.fsr, &p.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes, p.restore_source(p.at))?;
             let result = p.result(id, png, Timings { fsr_ms: t.elapsed().as_millis(), ..Default::default() });
-            // The agent works on a live entry where it is: taking it into
-            // `Slot::Agent` would take the person's picture off the Image tab.
-            if slot != Slot::Agent {
-                lock(&self.retained).store(id, slot, p, false);
+            let mut retained = lock(&self.retained);
+            let here = retained.live.get(&id).and_then(|l| l.slot);
+            if !stays_where_it_is(slot, here) {
+                retained.store(id, slot, p, false);
             }
+            drop(retained);
             return Ok(result);
         }
 
@@ -3832,7 +3849,7 @@ impl Display {
     /// Bring a finished image in `work/output/` back as a live result, so the
     /// viewer's sliders can work on it. The Outputs tab's one route.
     ///
-    /// A near-twin of [`Display::open`] — copy in, `publish`, mint a `Pending` —
+    /// A near-twin of [`Display::open_in`] — copy in, `publish`, mint a `Pending` —
     /// and it is copied into scratch for exactly the same reason: that file
     /// belongs to the user, and a `Pending` pointing at it would have
     /// `remove_files` delete it. Invariant 8, in the third place it applies.
@@ -4872,6 +4889,25 @@ mod tests {
 
     /// A pass that finishes on an image the user has since switched away from
     /// updates that image, and leaves the one on screen in the slot.
+    /// The Agent tab's viewer has its own slot: opening a round's picture
+    /// there evicts neither the Image tab's picture nor the round being
+    /// drawn, and a picture already on the Image tab stays there.
+    #[test]
+    fn the_agent_viewer_takes_no_other_slot() {
+        let dir = scratch("chat-slot");
+        let mut r = Retained::default();
+        r.store(1, Slot::Image, live(&dir, "a"), false);
+        r.store(2, Slot::Agent, live(&dir, "b"), false);
+        r.store(3, Slot::Chat, live(&dir, "c"), false);
+        assert_eq!((r.slot_of(1), r.slot_of(2), r.slot_of(3)), (Slot::Image, Slot::Agent, Slot::Chat));
+        r.store(4, Slot::Agent, live(&dir, "d"), false);
+        assert_eq!(r.slot_of(3), Slot::Chat, "the next round leaves the viewer alone");
+        assert!(super::stays_where_it_is(Slot::Chat, Some(Slot::Image)));
+        assert!(!super::stays_where_it_is(Slot::Chat, Some(Slot::Agent)), "a round's picture moves into the viewer");
+        assert!(super::stays_where_it_is(Slot::Agent, Some(Slot::Chat)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_late_pass_never_takes_the_slot_back() {
         let dir = scratch("late-pass");

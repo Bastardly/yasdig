@@ -9,7 +9,6 @@ const chat = (over = {}) => ({
   messages: [],
   changes: [],
   actions: [],
-  permissions: { rounds: 3 },
   session: { state: 'idle', goal: '', checks: [], round: 0 },
   ...over,
 });
@@ -22,17 +21,17 @@ test('what the model wrote is escaped, never markup', () => {
   assert.ok(html.includes('&lt;img src=x'));
 });
 
-test('a pending change asks, an applied one offers Undo', () => {
+test('an applied change offers Undo, and nothing asks for an answer', () => {
   const c = chat({
     changes: [
-      { id: 1, by: 'agent', state: 'pending', set: { cfg_scale: 7 }, before: { cfg_scale: 6 }, reason: 'harder' },
+      { id: 1, by: 'agent', state: 'applied', set: { cfg_scale: 7 }, before: { cfg_scale: 6 }, reason: 'harder' },
       { id: 2, by: 'agent', state: 'applied', set: { prompt: 'a dog' }, before: { prompt: 'a cat' } },
     ],
     messages: [{ role: 'agent', n: 0, mode: 'chat', reply: 'ok', changes: [1, 2] }],
   });
   const html = renderChat(c);
-  assert.ok(html.includes('data-approve-change="1"') && html.includes('data-reject-change="1"'));
-  assert.ok(html.includes('data-undo="2"'));
+  assert.ok(html.includes('data-undo="1"') && html.includes('data-undo="2"'));
+  assert.ok(!/data-approve|data-reject/.test(html), 'no Approve or Reject: what is allowed applies');
   assert.ok(html.includes('6 → 7'));
 });
 
@@ -57,10 +56,21 @@ test('the reply shows while it is still being written', () => {
   assert.equal(liveReply('{"no'), '');
 });
 
+test("an older chat's unanswered proposal reads as set aside", () => {
+  const c = chat({
+    changes: [{ id: 1, by: 'agent', state: 'rejected', set: { prompt: 'a dog' } }],
+    messages: [{ role: 'agent', n: 0, mode: 'chat', reply: '', changes: [1] }],
+  });
+  const html = renderChat(c);
+  assert.ok(html.includes('Set aside') && !html.includes('data-undo'));
+});
+
 test('values and states read as words', () => {
   assert.equal(valueText('size', { width: 1024, height: 768 }), '1024×768');
   assert.equal(valueText('cfg_scale', 5.5), '5.5');
-  assert.equal(stateText(chat({ session: { state: 'running', goal: 'g', round: 2, checks: [] } })), 'Working · round 2 of 3');
+  assert.equal(stateText(chat({ session: { state: 'running', goal: 'g', round: 2, checks: [] } })), 'Working · round 2 of 3',
+    'three rounds when the plan said none');
+  assert.equal(stateText(chat({ session: { state: 'done', goal: 'g', round: 2, rounds: 2, checks: [] } })), 'Done · round 2 of 2');
   assert.equal(stateText(chat({ session: { state: 'running', goal: 'g', round: 5, first_round: 3, checks: [] } })), 'Working · round 2 of 3',
     'a session counts its own rounds');
 });

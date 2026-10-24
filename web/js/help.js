@@ -317,24 +317,32 @@ export const TOPICS = [
       models has some, from about 4 GB.</p>
 
       <h3>What it changes</h3>
-      <p>Each chat starts with a copy of the Image tab’s settings, and the agent
-      changes that copy, never the Image tab while you work there.
-      <i>Open on Image tab</i> puts the chat’s settings on the Image tab when you
-      want them. Every change it makes is a card in the chat with its reason and
-      an <b>Undo</b>.</p>
-      <p>The <b>Permissions</b> panel says what it may change — prompt, negative
-      prompt and CFG at first, within a range — and for each, whether it changes
-      it on its own or asks first. A model distilled to run without CFG
-      (Z-Image, Flux, the Kleins, Krea 2, or a Turbo LoRA) locks CFG and the
-      negative prompt: they would do nothing.</p>
+      <p>A chat starts on the model picked on the Image tab, with that model’s saved
+      defaults (Settings → Per model) and its Turbo LoRA when you have it, as the
+      Image tab’s Turbo does, and keeps its own settings from there: the
+      agent never changes the Image tab while you work there. Every change it
+      makes is a card in the chat with its reason and an <b>Undo</b>.</p>
+      <p><b>Settings → Agent</b> says what it may change, for every chat: a tick
+      per setting (prompt, negative prompt, CFG, size and model at first) and per
+      pass it may run on a keeper. With Model ticked it may switch to any
+      installed model, and uses the one you name (“make it with Flux”). A model
+      distilled to run without CFG (Z-Image, Flux, the Kleins, Krea 2, or a Turbo
+      LoRA) locks CFG and the negative prompt: they would do nothing. The agent
+      a new chat talks to is set there too; the picker beside the message box
+      switches it for one chat.</p>
+      <p>Click one of its pictures to open it in Refine &amp; adjust, right there:
+      ←/→ step through the chat’s pictures, and <i>Open on Image tab</i> takes
+      one there with its settings. Its passes run on the model that drew it.</p>
 
       <h3>A session</h3>
       <p>Write what the picture should show and press <b>Run a session</b>. The
       agent turns the goal into yes/no checks (“Is there a red hat?”), draws a
       round, answers every check for every picture, changes one or two settings
       and draws again, until a picture passes, it decides it can’t do better, or
-      the rounds run out. With <i>Same seeds every round</i> on, a difference
-      between rounds is the change, not luck. Pictures every check said yes to
+      the rounds run out. How many pictures and rounds is yours to say (“two
+      rounds of three”); unsaid, it draws three rounds of four, and never more than
+      six rounds of eight. It keeps the seeds between rounds unless it says
+      otherwise, so a difference between rounds is the change, not luck. Pictures every check said yes to
       are marked <b>All checks</b> beside the ones the agent picked: a small
       model is a lenient judge of its own work, so both are shown.</p>
       <p>A session is steps on the job queue — a reply, a picture, a pass — so a

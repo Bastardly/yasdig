@@ -12,13 +12,15 @@ What changed in each release of yasdig. Each release's executables are on the
   machine. It writes and rewrites prompts, describes a picture as a prompt in the style
   the current model wants (tags for SDXL, sentences for Flux and the rest), and, given a
   goal, runs a **session**: it writes yes/no checks, draws a round, judges every picture
-  against them, adjusts a setting or two and goes again, for up to the rounds you allow.
-  Its pictures land in Current like any other.
-- **You decide what it may touch.** Each setting is Off, Ask first or Auto, inside a
-  range you set; it starts with the prompt, the negative prompt and CFG. A chat edits
-  its own copy of the Image tab's settings, never the Image tab itself, and every change
-  it makes has its reason and an Undo. Models that run without CFG lock CFG and the
-  negative prompt. Hi-res, Refine and Edit on a keeper are there to switch on.
+  against them, adjusts a setting or two and goes again — as many rounds of as many
+  pictures as you say. Its pictures land in Current like any other, and a click on one
+  opens it in Refine & adjust right on the Agent tab.
+- **You decide what it may touch**, in Settings → Agent: a tick per setting — prompt,
+  negative prompt, CFG, size and model at first — and per pass on a keeper (Hi-res,
+  Refine, Edit). With Model ticked it may use any installed model, and the one you name.
+  A chat starts on the Image tab's model and its saved defaults, never changes the Image
+  tab itself, and every change it makes has its reason and an Undo. Models that run
+  without CFG lock CFG and the negative prompt.
 - **Agent models in Get models**, from 4 GB (Qwen3.5 4B) to 19 GB (Gemma 4 26B A4B), and
   any llama.cpp model with its vision projector in a folder under `models/agents/`.
 - **Skills**: short notes the agent gets with each reply — how yasdig works, how each

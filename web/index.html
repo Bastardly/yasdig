@@ -792,9 +792,6 @@
        the agent changes that copy, never the Image tab. -->
   <div class="workspace" id="tab-agent" hidden>
   <nav class="wsrail" aria-label="Agent">
-    <button type="button" class="btn btn-choice railbtn" data-panel="agent-model">Model</button>
-    <button type="button" class="btn btn-choice railbtn" data-panel="agent-settings">Settings</button>
-    <button type="button" class="btn btn-choice railbtn" data-panel="agent-perms">Permissions</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="agent-session">Session</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="agent-current">Current</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="agent-favorites">Favorites</button>
@@ -824,43 +821,18 @@
           <input type="file" id="afile" accept="image/*" multiple hidden>
           <button type="button" id="adescribe" class="btn" disabled
             title="Turn the attached picture into a prompt for the chat's model">Describe as prompt</button>
+          <select id="amodel" class="composeragent" aria-label="Agent"
+            title="The agent this chat talks to. Settings → Agent sets the one new chats start with, and what it may change."></select>
           <span class="grow"></span>
           <button type="button" id="asession" class="btn"
             title="Treat the text as a goal: the agent writes checks, draws rounds and judges them">Run a session</button>
           <button type="button" id="asend" class="btn" title="Send (Enter)">Send</button>
         </div>
+        <p class="sub" id="amodelnote"></p>
       </div>
       <div class="chatgrip" id="chatgrip" title="Drag to change the width; double-click resets it"></div>
     </div>
   </div>
-  <section class="fpanel" id="panel-agent-model" aria-label="Model" hidden>
-    <header class="fphead"><b>Model</b><button type="button" class="fpclose" aria-label="Close Model">&times;</button></header>
-    <div class="fpbody">
-      <label for="amodel" data-help="amodel">Agent model</label>
-      <select id="amodel"></select>
-      <p class="sub" id="amodelnote"></p>
-    </div>
-  </section>
-  <section class="fpanel" id="panel-agent-settings" aria-label="Settings" hidden>
-    <header class="fphead"><b>Settings</b><button type="button" class="fpclose" aria-label="Close Settings">&times;</button></header>
-    <div class="fpbody" id="asettings"></div>
-    <div class="fpfoot btnrow">
-      <button type="button" id="asettingscopy" class="btn" title="Take the Image tab's settings as they are now">Copy from Image tab</button>
-      <button type="button" id="asettingsuse" class="btn" title="Put these settings on the Image tab">Open on Image tab</button>
-      <button type="button" id="asettingssave" class="btn btn-run">Save</button>
-    </div>
-  </section>
-  <section class="fpanel" id="panel-agent-perms" aria-label="Permissions" hidden>
-    <header class="fphead"><b>Permissions</b><button type="button" class="fpclose" aria-label="Close Permissions">&times;</button></header>
-    <div class="fpbody">
-      <div id="aperms"></div>
-      <p class="sub" id="apermsnote"></p>
-    </div>
-    <div class="fpfoot btnrow">
-      <button type="button" id="apermsdefault" class="btn" title="Start every new chat with these">Save as default for new chats</button>
-      <button type="button" id="apermssave" class="btn btn-run">Save</button>
-    </div>
-  </section>
   <section class="fpanel" id="panel-agent-session" aria-label="Session" hidden>
     <header class="fphead"><b>Session</b><button type="button" class="fpclose" aria-label="Close Session">&times;</button></header>
     <div class="fpbody" id="asessionbody"></div>
@@ -1197,9 +1169,14 @@
       <!-- The Image tab's keep-this-one, and the rail's main action there
            (amber): what is on screen into work/output/, look and all. Only
            generations are archived on their own. Shown from the start, since
-           the page opens on the Image tab; `showTab` hides it on Outputs. -->
+           the page opens on the Image tab; `showTab` hides it on Outputs (the
+           Agent tab shows it too). -->
       <button type="button" id="saveout" class="btn btn-run btn-block"
         title="Save the picture as you see it to work/output/ — the Outputs tab.">Save to output</button>
+      <!-- The Agent tab's: the chat's picture, on the Image tab with its
+           settings, as a reopened work item. -->
+      <button type="button" id="lbtoimage" class="btn btn-block" hidden
+        title="Open this picture on the Image tab, with the settings that made it.">Open on Image tab</button>
       <!-- A copy, beside the original: for keeping both. Neutral, since
            Save changes below is what an edit usually ends with. -->
       <button type="button" id="lbsave" class="btn btn-block" hidden
@@ -1238,8 +1215,11 @@
         <label for="rdmodel">Refine with</label>
         <select id="rdmodel"></select>
       </div>
-      <div data-mirror="refmodel"></div>
-      <div data-mirror="rsteps rcfg"></div>
+      <!-- The Image tab's model and numbers describe its own model: a chat's
+           picture passes on the one that drew it (`escalateSettings`). -->
+      <div data-mirror="refmodel" class="notonagent"></div>
+      <div data-mirror="rsteps rcfg" class="notonagent"></div>
+      <p class="sub onagent">On the model that drew it, at that model's own steps and CFG.</p>
       <!-- One box, two numbers: the label says which. Whole image is the
            Refine pass panel's strength; area keeps its own (redraw.js). -->
       <div class="rdrow">
@@ -1323,8 +1303,9 @@
   <section class="fpanel" id="panel-hires" aria-label="Hi-res" hidden>
     <header class="fphead"><b>Hi-res</b><button type="button" class="fpclose" aria-label="Close Hi-res">&times;</button></header>
     <div class="fpbody">
-      <div data-mirror="hiresmodel"></div>
-      <div data-mirror="hsteps hcfg"></div>
+      <div data-mirror="hiresmodel" class="notonagent"></div>
+      <div data-mirror="hsteps hcfg" class="notonagent"></div>
+      <p class="sub onagent">On the model that drew it, at that model's own steps and CFG.</p>
       <div data-mirror="hstrength hiresscale"></div>
       <p class="sub" id="rdhiresnote"></p>
       <div data-mirror="hprompt" data-label="Prompt for this pass"></div>

@@ -5,7 +5,7 @@
 //! what brings it back: every History step's raw, every brush mask, and
 //! `edits.json` naming them with the look (filters, area, brush amounts).
 //! Written on every write-back of an edited work item (`Retained`), so a new
-//! History step is a save, and read by `Display::open`.
+//! History step is a save, and read by `Display::open_in`.
 //!
 //! Invariant 8 holds both ways: files are **linked or copied out** of scratch
 //! and **copied in** on open, so `Pending::remove_files` never reaches here

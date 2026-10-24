@@ -15,7 +15,7 @@ import { initHints } from './hints.js';
 import { initImage, layoutImageTab, restoreImage } from './image.js';
 import { initJobs, jobCount } from './jobs.js';
 import { initBusy } from './busy.js';
-import { initWorkItems, markGrid } from './workitems.js';
+import { initWorkItems, loadWorkItems, markGrid } from './workitems.js';
 import { initOutputs, loadOutputs } from './outputs.js';
 import { initVideo, layoutVideoTab } from './video.js';
 import { initAgent, layoutAgentTab } from './agent.js';
@@ -75,13 +75,15 @@ function showTab(name) {
   // it.
   $('lbsave').hidden = name !== 'outputs';
   $('lbsavechanges').hidden = name !== 'outputs';
-  $('saveout').hidden = name !== 'image';
+  $('saveout').hidden = name !== 'image' && name !== 'agent';
+  $('lbtoimage').hidden = name !== 'agent';
+  $('lightbox').classList.toggle('onagent', name === 'agent');
 
-  // The two image panes share one `imageId`, so leaving one has to empty it.
+  // The image panes share one `imageId`, so leaving one has to empty it.
   // Otherwise the picture stays on screen beside Refine and Hi-res buttons that
   // now address whatever the other tab produces next — which would work, and
   // would apply the pass to an image other than the one being looked at.
-  if (name === 'image' || name === 'outputs') {
+  if (name === 'image' || name === 'outputs' || name === 'agent') {
     if (S.pane !== name) {
       clearPane(S.pane);
       S.imageId = null;
@@ -97,6 +99,10 @@ function showTab(name) {
     // Re-read on entry: the Image tab's Save writes into this directory, so the
     // grid is stale the moment you come back from having used it.
     if (name === 'outputs') loadOutputs();
+    // Likewise Current and Favorites: an agent's rounds are archived there
+    // without landing as this tab's result (`Slot::Agent`), so nothing else
+    // tells the grid they exist.
+    if (name === 'image') loadWorkItems();
   }
 }
 

@@ -280,6 +280,8 @@ export const modelNamed = (name) => models.find((m) => m.name === name);
 // before it checks. An empty box sends nothing, so the profile's own count
 // stands — the picked model's here, the nearest thing the page holds.
 export function passSteps(which) {
+  // The Agent tab's dialog sends none: the server reads the picture's own.
+  if (S.pane === 'agent') return 1;
   const n = parseInt($(which === 'hires' ? 'hsteps' : 'rsteps').value, 10);
   if (Number.isFinite(n)) return n;
   return passModel(which === 'hires' ? 'hiresmodel' : 'refmodel')?.[`${which}_steps`] ?? 0;
@@ -1016,18 +1018,20 @@ async function escalate(which, path, payload, label, kind, err = escErr, land = 
 // share. Which is also why nothing strips a stray `model` key out of this any
 // more on the way to /generate.
 export const escalateSettings = () => {
+  // A chat's picture, in the Agent tab's dialog: its own model's pass steps
+  // and CFG, since the Image tab's boxes describe whatever model is picked
+  // there. Absent keeps the retained profile's; the mirrored fields are hidden.
+  const own = S.pane === 'agent';
   return {
     // Every pass: a Refine that ran out of memory is retried with this changed.
     memory: $('memory').value || null,
-    refine_steps: numOr('rsteps'),
+    ...(own ? {} : { refine_steps: numOr('rsteps'), hires_steps: numOr('hsteps') }),
     refine_strength: numOr('rstrength'),
-    hires_steps: numOr('hsteps'),
     hires_strength: numOr('hstrength'),
     // Here null is a value, not an omission: clearing the box unsets the override
     // so the pass follows the knob below it again. Sending nothing would pin
     // whatever was last set, which is the one thing these must never do.
-    refine_cfg_scale: numOr('rcfg'),
-    hires_cfg_scale: numOr('hcfg'),
+    ...(own ? {} : { refine_cfg_scale: numOr('rcfg'), hires_cfg_scale: numOr('hcfg') }),
     // Each pass's own prompt: blank is the image's own, on the server. Read by
     // a run's after-each passes, and by the dialog when its own box is blank.
     refine_prompt: $('rprompt').value.trim() || null,
@@ -1041,8 +1045,8 @@ export const escalateSettings = () => {
 // routes take theirs as `model` instead, because there it is the pass about to
 // run and there is exactly one of them.
 // Read from the Image tab by id, not through `P()`: a generate body is the Image
-// tab's whatever pane was last shown, and a new agent chat builds one from the
-// Agent tab — after Outputs, `P()` is a pane with no pickers.
+// tab's whatever pane was last shown — after Outputs, `P()` is a pane with no
+// pickers.
 export const escalateModels = () => ({
   refine_model: $('refmodel').value || null,
   hires_model: $('hiresmodel').value || null,
@@ -1057,16 +1061,20 @@ export const escalateModels = () => ({
 // nobody reads. On Outputs there is no Refine pass fold's model: the dialog's
 // *Refine with* has already set the image's.
 // `extra` is the dialog's own: the references a ticked Refine follows.
+// A pass's checkpoint: the picked one, but never on the Agent tab, whose
+// pictures pass on the model that drew them (`escalateSettings`).
+const passPick = (id) => (S.pane === 'agent' ? null : $(id).value || null);
+
 export const refine = (prompt, err, land, extra = {}) => escalate('redrawgo', '/refine', {
   // The Refine pass panel's model, which the dialog's Refine panel shows too,
   // so it is the one picked on Outputs as well.
-  model: $('refmodel').value || null, ...escalateSettings(),
+  model: passPick('refmodel'), ...escalateSettings(),
   ...(prompt ? { refine_prompt: prompt } : {}), ...extra,
 }, 'Refining…', 'refine', err, land);
 // Hi-res, from the dialog's Refine panel: enlarge by the shared factor and
 // re-diffuse at the new size, with the Hi-res pass panel's settings and model.
 export const hiresPass = (err, land) => escalate('rdhires', '/hires', {
-  model: $('hiresmodel').value || null, upscale: S.upFactor,
+  model: passPick('hiresmodel'), upscale: S.upFactor,
   ...escalateSettings(),
 }, 'Hi-res pass…', 'hires', err, land);
 
@@ -1169,20 +1177,6 @@ function genPayload() {
     ...(refsActive() ? { references: references() } : {}),
   }];
 }
-
-// The Image tab's settings as a `/generate` body: what a new agent chat
-// starts from (`agent.js`). A picked source is left out — a chat's rounds are
-// text to image — with its size and output upscale taken from the boxes.
-export function chatSettings() {
-  const [route, body] = genPayload();
-  if (route === '/generate') return body;
-  const { source, max_side, source_strength, ...rest } = body;
-  return { ...rest, width: numOr('w'), height: numOr('h'), upscale_factor: numOr('upscale'), upscaler: $('upscaler').value };
-}
-
-// A chat's settings back on the Image tab, the person's own press (*Open on
-// Image tab*): the model first, since its `change` refills every box.
-export const useSettings = (s) => applyParams(s);
 
 // The *After each generation* fold, as the run will carry it. The checkpoint
 // selects are read from the Image tab by id: Generate only exists there.

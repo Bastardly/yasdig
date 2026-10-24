@@ -1,10 +1,9 @@
-//! The Agent tab's routes. Everything but `/agent/send` and `/agent/approve`
-//! is a file read or write and answers on the connection thread; those two
-//! queue a leg on the job queue and answer `{job}` at once — the reply arrives
+//! The Agent tab's routes. Everything but `/agent/send` is a file read or
+//! write and answers on the connection thread; that one queues a leg on the job queue and answer `{job}` at once — the reply arrives
 //! in the chat, which the page re-reads as its `rev` moves.
 
 use super::chat::{Chat, ChatStore, ImageRef, Mode, Msg, Next, State};
-use super::{session, toolkit};
+use super::{knobs, session, toolkit};
 use crate::config::Config;
 use crate::http::Connection;
 use crate::sd::Monitor;
@@ -33,12 +32,9 @@ pub fn route(
         ("POST", "/favorite-chats/delete") => delete(conn, cfg, body, Shelf::Favorites),
         ("POST", "/favorite-chats/add") => shelve(conn, cfg, body, true),
         ("POST", "/favorite-chats/remove") => shelve(conn, cfg, body, false),
-        ("POST", "/chats/settings") => edit(conn, cfg, body, Edit::Settings),
-        ("POST", "/chats/permissions") => edit(conn, cfg, body, Edit::Permissions),
         ("POST", "/chats/agent") => edit(conn, cfg, body, Edit::Agent),
         ("POST", "/chats/rename") => edit(conn, cfg, body, Edit::Rename),
         ("POST", "/agent/send") => send(conn, cfg, lanes, body),
-        ("POST", "/agent/approve") => approve(conn, cfg, lanes, body),
         ("POST", "/agent/undo") => undo(conn, cfg, body),
         ("POST", "/agent/stop") => stop(conn, cfg, lanes, monitor, body),
         ("GET", p) if p.starts_with("/chats/") => {
@@ -100,7 +96,20 @@ fn agents(conn: &mut Connection, cfg: &Config) -> Result<()> {
         })
         .collect();
     let driver = cfg.llm_binary().is_file();
-    ok(conn, json!({ "models": models, "driver": driver, "vram": vram, "dir": cfg.agent_dir().display().to_string() }))
+    // What Settings → Agent draws its whitelist from.
+    let knobs: Vec<Value> = knobs::KNOBS.iter().map(|k| json!({ "key": k.key, "label": k.label, "help": k.help })).collect();
+    let actions: Vec<Value> = knobs::ACTIONS.iter().map(|a| json!({ "key": a.key, "label": a.label, "help": a.help })).collect();
+    ok(conn, json!({
+        "models": models,
+        "driver": driver,
+        "vram": vram,
+        "dir": cfg.agent_dir().display().to_string(),
+        "knobs": knobs,
+        "actions": actions,
+        "default": super::agent_for(cfg, None).ok().map(|m| m.name),
+        "max_batch": knobs::MAX_BATCH,
+        "max_rounds": knobs::MAX_ROUNDS,
+    }))
 }
 
 fn summary(c: &Chat) -> Value {
@@ -149,38 +158,22 @@ fn live(conn: &mut Connection, monitor: &Monitor, id: &str) -> Result<()> {
 fn new_chat(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
     #[derive(Deserialize)]
     struct Dto {
-        /// The Image tab's `/generate` body, as the page builds it.
-        settings: Value,
+        /// The Image tab's model. The chat starts from its saved defaults
+        /// (the registry's profile) and holds only what the agent sets after.
+        template: String,
         #[serde(default)]
         agent: Option<String>,
     }
     let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
-    if !dto.settings.is_object() {
-        return err(conn, 400, "settings must be a /generate body");
+    if !cfg.registry().contains_key(&dto.template) {
+        return err(conn, 400, &format!("'{}' isn't an installed model", dto.template));
     }
-    let mut settings = dto.settings;
-    clean_settings(&mut settings);
-    if let Err(e) = serde_json::from_value::<crate::GenerateDto>(settings.clone()) {
-        return err(conn, 400, &format!("those settings aren't a generate request: {e}"));
-    }
-    let perms = crate::settings::Settings::load_or_default(&cfg.user_dir()).agent;
     let agent = dto.agent.or_else(|| super::agent_for(cfg, None).ok().map(|m| m.name));
-    let chat = Chat::new(super::chat::new_id(), settings, perms, agent);
+    let chat = Chat::new(super::chat::new_id(), json!({ "template": dto.template }), agent);
     let store = super::store(cfg);
     match store.create(&chat) {
         Ok(()) => ok(conn, chat_json(cfg, &chat)),
         Err(e) => err(conn, 500, &format!("{e:#}")),
-    }
-}
-
-/// What a chat's copy of the settings never carries: how many to run and
-/// what to do after each — a round is the agent's to size, and its passes
-/// are the agent's to ask for.
-fn clean_settings(s: &mut Value) {
-    if let Some(o) = s.as_object_mut() {
-        for k in ["count", "loop", "update_only", "after", "seed"] {
-            o.remove(k);
-        }
     }
 }
 
@@ -232,8 +225,6 @@ fn shelve(conn: &mut Connection, cfg: &Config, body: &[u8], keep: bool) -> Resul
 }
 
 enum Edit {
-    Settings,
-    Permissions,
     Agent,
     Rename,
 }
@@ -242,14 +233,6 @@ fn edit(conn: &mut Connection, cfg: &Config, body: &[u8], what: Edit) -> Result<
     #[derive(Deserialize)]
     struct Dto {
         id: String,
-        /// The `rev` the page last read; a settings edit over a newer one is
-        /// refused, since the agent may have changed them meanwhile.
-        #[serde(default)]
-        rev: Option<u64>,
-        #[serde(default)]
-        settings: Option<Value>,
-        #[serde(default)]
-        permissions: Option<super::knobs::Permissions>,
         #[serde(default)]
         agent: Option<String>,
         #[serde(default)]
@@ -259,22 +242,6 @@ fn edit(conn: &mut Connection, cfg: &Config, body: &[u8], what: Edit) -> Result<
     let store = super::store(cfg);
     let result = store.update(&dto.id, |c| {
         match what {
-            Edit::Settings => {
-                if dto.rev.is_some_and(|r| r != c.rev) {
-                    anyhow::bail!("conflict: the chat changed since — reload it");
-                }
-                let mut s = dto.settings.clone().ok_or_else(|| anyhow::anyhow!("no settings"))?;
-                clean_settings(&mut s);
-                serde_json::from_value::<crate::GenerateDto>(s.clone())
-                    .map_err(|e| anyhow::anyhow!("those settings aren't a generate request: {e}"))?;
-                c.settings = s;
-                c.settings_rev += 1;
-            }
-            Edit::Permissions => {
-                let p = dto.permissions.clone().ok_or_else(|| anyhow::anyhow!("no permissions"))?;
-                p.validate()?;
-                c.permissions = p;
-            }
             Edit::Agent => {
                 let name = dto.agent.clone().ok_or_else(|| anyhow::anyhow!("no agent"))?;
                 if !crate::agents::scan(&cfg.agent_dir()).models.iter().any(|m| m.name == name) {
@@ -291,7 +258,6 @@ fn edit(conn: &mut Connection, cfg: &Config, body: &[u8], what: Edit) -> Result<
     });
     match result {
         Ok(()) => get_chat(conn, cfg, &dto.id),
-        Err(e) if e.to_string().starts_with("conflict") => err(conn, 409, &format!("{e:#}")),
         Err(e) => err(conn, 400, &format!("{e:#}")),
     }
 }
@@ -372,20 +338,6 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
             c.agent = super::agent_for(cfg, None).ok().map(|m| m.name);
         }
         c.name_from(&text);
-        // A new message answers what was waiting: a proposal left unanswered
-        // is set aside, or it would hold the new turn back.
-        let mut dropped = 0;
-        for ch in c.changes.iter_mut().filter(|ch| ch.state == super::chat::ChangeState::Pending) {
-            ch.state = super::chat::ChangeState::Rejected;
-            dropped += 1;
-        }
-        for a in c.actions.iter_mut().filter(|a| a.state == super::chat::ActionState::Pending) {
-            a.state = super::chat::ActionState::Rejected;
-            dropped += 1;
-        }
-        if dropped > 0 {
-            c.note(format!("{dropped} proposal(s) left unanswered were set aside."));
-        }
         let n = c.next_n();
         c.messages.push(Msg::User { n, ms: super::chat::now_ms(), text: text.clone(), images: refs.clone() });
         if mode == Mode::Plan {
@@ -409,46 +361,6 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
     };
     let job = enqueue(lanes, &store, &c)?;
     ok(conn, json!({ "job": job }))
-}
-
-fn approve(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Result<()> {
-    #[derive(Deserialize)]
-    struct Answer {
-        id: u64,
-        approve: bool,
-    }
-    #[derive(Deserialize)]
-    struct Dto {
-        chat: String,
-        #[serde(default)]
-        changes: Vec<Answer>,
-        #[serde(default)]
-        actions: Vec<Answer>,
-    }
-    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
-    let store = super::store(cfg);
-    let changes: Vec<(u64, bool)> = dto.changes.iter().map(|a| (a.id, a.approve)).collect();
-    let actions: Vec<(u64, bool)> = dto.actions.iter().map(|a| (a.id, a.approve)).collect();
-    let go_on = store.update(&dto.chat, |c| {
-        if c.session.busy() {
-            anyhow::bail!("the agent is working on this chat");
-        }
-        let tk = toolkit::resolve(cfg, c);
-        let go = session::approve(c, &changes, &actions, &tk.locks, &tk.model_names());
-        if go {
-            c.session.state = State::Queued;
-            c.session.job = None;
-        }
-        Ok(go.then(|| c.clone()))
-    });
-    match go_on {
-        Ok(Some(c)) => {
-            let job = enqueue(lanes, &store, &c)?;
-            ok(conn, json!({ "job": job }))
-        }
-        Ok(None) => ok(conn, json!({ "job": null })),
-        Err(e) => err(conn, 409, &format!("{e:#}")),
-    }
 }
 
 fn undo(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
@@ -486,7 +398,7 @@ fn stop(conn: &mut Connection, cfg: &Config, lanes: &Lanes, monitor: &Monitor, b
     // Running: the worker ends it at once and writes "Stopped" itself.
     if !matches!(stopped, Some(jobs::Stopped::Stopping)) {
         let _ = store.update(&dto.chat, |c| {
-            if c.session.busy() || c.session.state == State::Awaiting {
+            if c.session.busy() {
                 c.session.state = State::Stopped;
                 c.session.job = None;
                 c.note("Stopped.");

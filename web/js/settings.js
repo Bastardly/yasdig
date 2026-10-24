@@ -3,6 +3,7 @@ import { floatPanels } from './panels.js';
 import { setUpFactor, loadModels, upscalersReady, upscalerOptions } from './image.js';
 import { wireHints } from './hints.js';
 import { loadModelSettings } from './modelsettings.js';
+import { drawRules, loadRuleTable, readRules } from './agentperms.js';
 
 // The Settings tab: `user/settings.toml` as an ordinary form.
 //
@@ -144,25 +145,11 @@ export const FIELDS = [
   { key: 'video_save', page: true, label: 'Save clips as', help: 'setvideosave', kind: 'choice',
     options: [['file', 'A video file (.avi)'], ['frames', 'Frames (PNG folder)']] },
 
-  // What a new chat's agent may change. Edited on the Agent tab's
-  // Permissions panel (*Save as default*); shown here so it is findable.
+  // What the agent may do in every chat, and which agent a new chat starts
+  // with (`agent::knobs::Rules`), drawn by `agentperms.js`.
   SECTION('Agent', { rail: 'Agent' }),
-  { key: 'agent', page: true, label: 'New chats start with', help: 'setagent', kind: 'agent' },
+  { key: 'agent', page: true, kind: 'agent' },
 ];
-
-// The `[agent]` table in a line: what a new chat's agent may change.
-const PERM_WORD = { auto: 'changes', ask: 'asks first', off: 'off' };
-function agentSummary(a) {
-  if (!a) return '';
-  const knobs = Object.entries(a.knobs ?? {})
-    .filter(([, k]) => k.perm !== 'off')
-    .map(([key, k]) => `${key.replace('_scale', '').replace('_', ' ')} ${PERM_WORD[k.perm]}`
-      + (k.min != null && k.max != null ? ` (${k.min}–${k.max})` : ''));
-  const passes = Object.entries(a.actions ?? {}).filter(([, p]) => p !== 'off').map(([k, p]) => `${k} ${PERM_WORD[p]}`);
-  return [knobs.length ? knobs.join(', ') : 'no settings', passes.length ? passes.join(', ') : 'no passes',
-    `${a.batch} pictures a round, up to ${a.rounds} rounds`, a.seed_lock ? 'seed locked' : 'fresh seeds']
-    .map(esc).join(' · ');
-}
 
 // The label of the control this is the default for, without the (i) `wireHints`
 // puts inside it. Text nodes only, so it reads the same whether this runs before
@@ -241,12 +228,10 @@ function control(f) {
     case 'choice':
       return `<select id="${id}">${f.options.map(([v, label]) =>
         `<option value="${v}">${esc(label)}</option>`).join('')}</select>`;
-    // Read-only here: the table is edited on the Agent tab's Permissions panel,
-    // and carried through this form unchanged (`put` keeps it, `take` hands
-    // it back), so a save from here never resets it.
+    // Checkboxes from the server's knob table, drawn by `put` (`drawRules`)
+    // and read back by `take`, like the variable rows.
     case 'agent':
-      return `<p class="sub" id="${id}"></p>
-        <button type="button" class="btn" data-open-agent>Edit on the Agent tab</button>`;
+      return `<div id="${id}" class="agentrules"></div>`;
     default:
       return `<input type="number" id="${id}"${attrs}>`;
   }
@@ -296,7 +281,7 @@ function markup() {
     // The only field with no label of its own: the section heading above it is
     // the label, there being exactly one field under it, and "Prompt variables"
     // followed by "Variables" says it twice.
-    if (f.kind === 'vars') {
+    if (f.kind === 'vars' || f.kind === 'agent') {
       body.push(control(f));
       continue;
     }
@@ -342,8 +327,7 @@ function put(f, v) {
     return;
   }
   if (f.kind === 'agent') {
-    el.dataset.value = JSON.stringify(v ?? null);
-    el.innerHTML = agentSummary(v);
+    drawRules(el, v);
     return;
   }
   // A select silently falls back to its first option when the stored value
@@ -379,10 +363,7 @@ function take(f) {
   if (f.kind === 'lines') {
     return el.value.split('\n').map((s) => s.trim()).filter(Boolean);
   }
-  if (f.kind === 'agent') {
-    const v = JSON.parse(el.dataset.value || 'null');
-    return v ?? undefined;
-  }
+  if (f.kind === 'agent') return readRules(el);
   // The empty option is FSR, which the file spells as no key at all.
   if (f.kind === 'upscaler') return $(fieldId(f)).value || null;
   if (f.kind === 'choice') return typeof f.options[0][0] === 'number' ? Number(el.value) : el.value;
@@ -491,6 +472,8 @@ async function load() {
     // Before `settle`, which `put`s the stored name — into a select that has to
     // offer it by then, or `put` would add it as a stray from the file.
     await upscalersReady;
+    // And the agent's knob table, so its checkboxes are drawn from the first fill.
+    await loadRuleTable();
     $('set-upscaler').innerHTML = upscalerOptions;
     settle(s);
     // A file that won't parse still answers 200 with the built-ins, so the form
@@ -581,13 +564,6 @@ export function initSettings() {
   // both panes. A row is inserted or detached rather than the list being
   // re-rendered, so every other row keeps exactly what is typed in it.
   $('tab-settings').addEventListener('click', (e) => {
-    // The `[agent]` row's button: its editor is the Agent tab's panel.
-    if (e.target.closest('[data-open-agent]')) {
-      document.querySelector('.tab[data-tab="agent"]')?.click();
-      const perms = $('panel-agent-perms');
-      if (perms) perms.open = true;
-      return;
-    }
     const del = e.target.closest('[data-vardel]');
     const add = e.target.closest('[data-varadd]');
     if (!del && !add) return;

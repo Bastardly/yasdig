@@ -811,36 +811,46 @@ fits an 8 GB card) and helps in three ways:
 - **Describe a picture.** Attach one (Attach, paste or drop it on the composer) and press
   *Describe as prompt*, or press *Describe* on any picture in the chat. It writes a prompt
   for the chat's image model in that model's style — tags for SD 1.x, SD 2.x and SDXL,
-  sentences for the rest — with *Use in this chat* and *Copy to the Image tab*.
+  sentences for the rest — with *Copy to the Image tab*.
 - **Run a session.** Write the goal ("a fox in a red knitted hat in a snowy forest") and
   press *Run a session*. The agent writes yes/no checks for it, draws a round, answers
   every check for every picture, changes one or two settings and draws again — until a
   picture passes, it decides it can't do better, or the rounds run out. The pictures
-  land in Current on the Image tab like any generation; click one in the chat to open it
-  there. Each is marked with its answers (✓✗), the ones the agent kept, and — since a
-  small model is a lenient judge of its own work — the ones every check said yes to.
+  land in Current on the Image tab like any generation. Each is marked with its answers
+  (✓✗), the ones the agent kept, and — since a small model is a lenient judge of its
+  own work — the ones every check said yes to.
   Opened on the Image tab, a picture the agent drew says so in *Info*, with its round and
   the agent's reason; the chat's name there takes you back to the chat.
 
-**A chat has its own copy of the settings.** A new chat takes the Image tab's settings
-as they are when you first write; the agent changes that copy, and never the Image tab
-while you work there. *Settings* shows and edits it, *Copy from Image tab* takes the Image
-tab's again, and *Open on Image tab* puts the chat's there.
+**A chat starts on the Image tab's model.** A new chat takes the model picked on the
+Image tab when you first write, with that model's saved defaults (Settings → *Per
+model*) and its Turbo LoRA when you have it, as the Image tab's *Turbo* does — nothing
+else. From there the chat keeps the settings the agent sets; it never changes the Image
+tab while you work there.
 
-**Permissions** says what the agent may do, per setting: *Off*, *Ask first* (it proposes,
-and waits for Approve or Reject) or *Auto* (it changes it and says why), each within a
-range you set. It starts with the prompt, negative prompt and CFG (1 to 8) on Auto and
-the rest off; *Save as default for new chats* keeps your choice. A model distilled to run
-without CFG — Z-Image, Flux, the Klein models, Krea 2, a Turbo LoRA — locks CFG and the
-negative prompt, which would do nothing. The passes it may run on a keeper (Hi-res,
-Refine, an Edit on a model that can) are off until you turn them on; a pass it runs is a
-History step on that picture. With *Same seeds every round* (on by default) a session's
-rounds start from the same seeds, so a difference between rounds is the change.
+**Settings → Agent** says what the agent may do, in every chat: a tick per setting it
+may change and per pass it may run on a keeper. It starts with the prompt, negative
+prompt, CFG, size and model ticked, and steps and the passes not. With *Model* ticked it
+may switch to any installed model, and uses the one you name ("draw it with Flux");
+switching brings that model's own steps, CFG and size. Values stay inside yasdig's own
+limits. A model distilled to run without CFG — Z-Image, Flux, the Klein models, Krea 2,
+a Turbo LoRA — locks CFG and the negative prompt, which would do nothing. A pass it runs
+(Hi-res, Refine, an Edit on a model that can) is a History step on that picture. The
+agent a new chat talks to is set there too; the picker beside the message box switches
+it for one chat.
 
-In plain chat the agent draws one picture, or as many as you ask for (up to *Pictures
-per round*); the agent keeps the last round's seeds when you ask for a change to those
-pictures, and draws new ones when you ask for more. A session started right after a round
-judges that round first instead of drawing it again.
+**Click a picture in the chat** to open it in Refine & adjust, on the Agent tab: ←/→ step
+through the chat's pictures, *Save to output* keeps one, *Open on Image tab* takes it
+there with its settings. Its passes run on the model that drew it, at that model's own
+steps and CFG. A session drawing its next round meanwhile leaves it alone.
+
+In plain chat the agent draws one picture, or as many as you ask for (up to 8); it keeps
+the last round's seeds when you ask for a change to those pictures, and draws new ones
+when you ask for more. A session started right after a round judges that round first
+instead of drawing it again. A session runs as many rounds of as many pictures as you say
+("two rounds of three"); when you don't say, three rounds of four, and never more than
+six rounds of eight. Between rounds it keeps the seeds unless it chooses new ones, so a
+difference between rounds is the change.
 
 A session is a run of steps on the job queue — a reply, a picture, a pass — so a Refine
 you press on the Image tab runs between them, and **Stop** ends it straight away. The

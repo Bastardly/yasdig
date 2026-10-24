@@ -140,7 +140,7 @@ mod tests {
         let videos = VideoStore::new(&work, &dir.join("user"));
         let chats = ChatStore::new(&work, &dir.join("user"));
         let chat = |id: &str| {
-            crate::agent::chat::Chat::new(id.into(), serde_json::json!({}), Default::default(), None)
+            crate::agent::chat::Chat::new(id.into(), serde_json::json!({}), None)
         };
         chats.create(&chat("1-0")).unwrap();
         chats.create(&chat("2-0")).unwrap();

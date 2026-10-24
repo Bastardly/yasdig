@@ -22,6 +22,7 @@
 //! the agent just wrote; repeating the current prompt is no change.
 
 use super::chat::Mode;
+use super::knobs::{MAX_BATCH, MAX_ROUNDS};
 use super::toolkit::{KnobView, Toolkit};
 use serde_json::{json, Map, Value};
 
@@ -31,6 +32,10 @@ pub const MAX_CHECKS: u32 = 6;
 
 fn text(max: u32) -> Value {
     json!({ "type": "string", "maxLength": max })
+}
+
+fn int(min: u32, max: u32) -> Value {
+    json!({ "type": "integer", "minimum": min, "maximum": max })
 }
 
 fn knob_schema(k: &KnobView, t: &Toolkit) -> Value {
@@ -47,10 +52,7 @@ fn knob_schema(k: &KnobView, t: &Toolkit) -> Value {
                 "additionalProperties": false
             })
         }
-        _ => {
-            let names: Vec<&String> = k.allowed.iter().filter(|a| t.models.iter().any(|m| &m.name == *a)).collect();
-            json!({ "enum": names })
-        }
+        _ => json!({ "enum": t.model_names() }),
     }
 }
 
@@ -64,9 +66,6 @@ pub fn writes_prompt(t: &Toolkit) -> bool {
 fn change(t: &Toolkit, need_prompt: bool) -> Option<Value> {
     let mut props = Map::new();
     for k in t.offered_knobs() {
-        if k.kind == "model" && k.allowed.is_empty() {
-            continue;
-        }
         props.insert(k.key.to_string(), knob_schema(k, t));
     }
     if props.is_empty() {
@@ -113,6 +112,9 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32) -> Value {
                 "checks".into(),
                 json!({ "type": "array", "items": text(120), "minItems": 1, "maxItems": MAX_CHECKS }),
             );
+            // How long the session runs, read off the goal's words.
+            props.insert("rounds".into(), int(1, MAX_ROUNDS));
+            props.insert("count".into(), int(1, MAX_BATCH));
             // A plan is followed by the first round, so it writes that round's
             // prompt — unless a round was just drawn (`batch` > 0), which it judges first.
             with_change(&mut props, t, batch == 0);
@@ -156,6 +158,9 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32) -> Value {
                 })
             });
             props.insert("action".into(), json!({ "enum": actions }));
+            // The next round's size and seeds, read when the action is "generate".
+            props.insert("count".into(), int(1, MAX_BATCH));
+            props.insert("seeds".into(), json!({ "enum": ["same", "new"] }));
             if let Some(e) = escalate {
                 props.insert("escalate".into(), e);
             }
@@ -174,7 +179,7 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32) -> Value {
             talk.insert("reply".into(), text(REPLY_CHARS));
             let mut draw = props;
             draw.insert("action".into(), json!({ "const": "generate" }));
-            draw.insert("count".into(), json!({ "type": "integer", "minimum": 1, "maximum": t.batch.max(1) }));
+            draw.insert("count".into(), int(1, MAX_BATCH));
             draw.insert("seeds".into(), json!({ "enum": ["new", "same"] }));
             with_change(&mut draw, t, true);
             draw.insert("reply".into(), text(REPLY_CHARS));
@@ -185,14 +190,20 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::super::knobs::{Locks, Perm, Permissions};
+    use super::super::knobs::{Locks, Rules};
     use super::super::toolkit::{build, ModelChoice};
     use super::*;
     use crate::config::ImageFamily;
 
-    fn toolkit(perms: &Permissions, locks: &Locks) -> Toolkit {
-        let models = vec![ModelChoice { name: "sdxl".into(), family: "sdxl", label: "SDXL" }];
-        build(perms, &json!({"prompt": "x"}), locks, models, Some(ImageFamily::Sdxl))
+    fn models() -> Vec<ModelChoice> {
+        vec![
+            ModelChoice { name: "sdxl".into(), family: "sdxl", label: "SDXL" },
+            ModelChoice { name: "klein".into(), family: "flux2-klein-4b", label: "FLUX.2 Klein 4B" },
+        ]
+    }
+
+    fn toolkit(rules: &Rules, locks: &Locks) -> Toolkit {
+        build(rules, &json!({"prompt": "x"}), locks, models(), Some(ImageFamily::Sdxl))
     }
 
     fn keys(v: &Value) -> Vec<String> {
@@ -205,16 +216,17 @@ mod tests {
     }
 
     #[test]
-    fn only_what_is_on_and_unlocked_is_a_property() {
-        let t = toolkit(&Permissions::default(), &Locks::default());
+    fn only_what_is_allowed_and_unlocked_is_a_property() {
+        let t = toolkit(&Rules::default(), &Locks::default());
         let s = output(Mode::Chat, &t, 4, 2);
         let (talk, _) = branches(&s);
         assert_eq!(keys(talk)[0], "notes", "the scratchpad comes first");
-        assert_eq!(keys(&talk["properties"]["change"]), ["prompt", "negative", "cfg_scale"]);
-        let locked = toolkit(&Permissions::default(), &Locks::of(true, false, None));
+        assert_eq!(keys(&talk["properties"]["change"]), ["prompt", "negative", "cfg_scale", "size", "model"]);
+        assert_eq!(talk["properties"]["change"]["properties"]["model"]["enum"], json!(["sdxl", "klein"]), "every runnable model");
+        let locked = toolkit(&Rules::default(), &Locks::of(true, false, None));
         let s = output(Mode::Chat, &locked, 4, 2);
         let (talk, _) = branches(&s);
-        assert_eq!(keys(&talk["properties"]["change"]), ["prompt"]);
+        assert_eq!(keys(&talk["properties"]["change"]), ["prompt", "size", "model"]);
     }
 
     /// llama.cpp writes required properties first, so every one is required
@@ -222,7 +234,7 @@ mod tests {
     /// reply, or the prompt ends up in the reply.
     #[test]
     fn every_reply_is_written_in_order_and_a_drawing_writes_its_prompt() {
-        let t = toolkit(&Permissions::default(), &Locks::default());
+        let t = toolkit(&Rules::default(), &Locks::default());
         let chat = output(Mode::Chat, &t, 4, 2);
         let (talk, draw) = branches(&chat);
         for b in [talk, draw] {
@@ -230,18 +242,19 @@ mod tests {
         }
         assert_eq!(keys(talk), ["notes", "action", "change", "reason", "reply"]);
         assert_eq!(keys(draw), ["notes", "action", "count", "seeds", "change", "reason", "reply"]);
-        assert_eq!(draw["properties"]["count"]["maximum"], json!(t.batch));
+        assert_eq!(draw["properties"]["count"]["maximum"], json!(MAX_BATCH));
         assert_eq!(draw["properties"]["action"]["const"], "generate");
         assert_eq!(draw["properties"]["change"]["required"], json!(["prompt"]));
         assert!(talk["properties"]["change"].get("required").is_none());
 
-        let mut p = Permissions::default();
-        p.actions.insert("hires".into(), Perm::Ask);
-        let s = output(Mode::Critique, &toolkit(&p, &Locks::default()), 4, 3);
-        assert_eq!(keys(&s), ["notes", "checks", "keepers", "action", "escalate", "change", "reason", "reply"]);
+        let mut r = Rules::default();
+        r.actions.insert("hires".into());
+        let s = output(Mode::Critique, &toolkit(&r, &Locks::default()), 4, 3);
+        assert_eq!(keys(&s), ["notes", "checks", "keepers", "action", "count", "seeds", "escalate", "change", "reason", "reply"]);
         assert_eq!(s["required"], json!(keys(&s)));
         let s = output(Mode::Plan, &t, 0, 0);
-        assert_eq!(keys(&s), ["notes", "checks", "change", "reason", "reply"]);
+        assert_eq!(keys(&s), ["notes", "checks", "rounds", "count", "change", "reason", "reply"]);
+        assert_eq!(s["properties"]["rounds"]["maximum"], json!(MAX_ROUNDS));
         assert_eq!(s["properties"]["change"]["required"], json!(["prompt"]));
         let judging = output(Mode::Plan, &t, 4, 0);
         assert!(judging["properties"]["change"].get("required").is_none(), "a plan judging a round needn't rewrite the prompt");
@@ -249,44 +262,40 @@ mod tests {
 
     #[test]
     fn without_the_prompt_a_drawing_draws_the_current_one() {
-        let mut p = Permissions::default();
-        p.knobs.get_mut("prompt").unwrap().perm = Perm::Off;
-        let s = output(Mode::Chat, &toolkit(&p, &Locks::default()), 4, 2);
+        let mut r = Rules::default();
+        r.knobs.remove("prompt");
+        let s = output(Mode::Chat, &toolkit(&r, &Locks::default()), 4, 2);
         let (_, draw) = branches(&s);
         assert!(draw["properties"]["change"].get("required").is_none());
     }
 
     #[test]
     fn a_critique_answers_every_check_for_every_picture() {
-        let mut p = Permissions::default();
-        let t = toolkit(&p, &Locks::default());
-        let s = output(Mode::Critique, &t, 4, 3);
+        let mut r = Rules::default();
+        let s = output(Mode::Critique, &toolkit(&r, &Locks::default()), 4, 3);
         let checks = &s["properties"]["checks"];
         assert_eq!((checks["minItems"].clone(), checks["maxItems"].clone()), (json!(4), json!(4)));
         assert_eq!(checks["items"]["minItems"], json!(3));
         assert_eq!(s["properties"]["action"]["enum"], json!(["generate", "done"]), "no pass is on");
         assert!(s["properties"].get("escalate").is_none());
-        p.actions.insert("hires".into(), Perm::Ask);
-        let s = output(Mode::Critique, &toolkit(&p, &Locks::default()), 4, 3);
+        r.actions.insert("hires".into());
+        let s = output(Mode::Critique, &toolkit(&r, &Locks::default()), 4, 3);
         assert_eq!(s["properties"]["escalate"]["anyOf"][0]["properties"]["pass"]["enum"], json!(["hires"]));
     }
 
     #[test]
     fn nothing_to_change_means_no_change_field() {
-        let mut p = Permissions::default();
-        for k in p.knobs.values_mut() {
-            k.perm = Perm::Off;
-        }
-        let s = output(Mode::Chat, &toolkit(&p, &Locks::default()), 4, 2);
+        let r = Rules { knobs: Default::default(), ..Rules::default() };
+        let s = output(Mode::Chat, &toolkit(&r, &Locks::default()), 4, 2);
         let (talk, draw) = branches(&s);
         assert!(talk["properties"].get("change").is_none() && draw["properties"].get("change").is_none());
     }
 
     #[test]
     fn a_describe_offers_a_negative_only_where_the_model_reads_one() {
-        let t = toolkit(&Permissions::default(), &Locks::of(true, false, None));
+        let t = toolkit(&Rules::default(), &Locks::of(true, false, None));
         assert!(output(Mode::Describe, &t, 0, 0)["properties"].get("negative").is_none());
-        let t = toolkit(&Permissions::default(), &Locks::default());
+        let t = toolkit(&Rules::default(), &Locks::default());
         assert!(output(Mode::Describe, &t, 0, 0)["properties"].get("negative").is_some());
     }
 }

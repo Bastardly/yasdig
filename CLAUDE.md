@@ -503,7 +503,7 @@ nothing sweeps it.
 - **Un-star is `/favorites/remove` (moves back); `/favorites/delete` deletes.**
 - **An id on both shelves** (kept by the copying build) lists once, as the
   favourite. `copy_picture` keeps mtime (the output gallery sorts by it).
-- **Reopening a favourite is copy-in/copy-out** (`Display::open` takes a `Shelf`).
+- **Reopening a favourite is copy-in/copy-out** (`Display::open_in` takes a `Shelf`).
 - **`list`/`list_outputs` stay one directory**; only the routes' listings merge.
 
 Page: **two grids, two panels** — `shelfGrid` instances in `workitems.js`, Current
@@ -673,8 +673,8 @@ card omits them (`fields_mark_exactly_the_page_only_keys`). The page then shows 
 ## The agent
 
 The Agent tab (`src/agent/`, `src/llm.rs`, `src/agents.rs`, `llm/yasdig-llm.cpp`,
-`web/js/agent.js`): a chat with a local VLM over a chat-owned copy of the Image tab's
-settings. A turn is one run of our driver on the job queue; nothing stays loaded.
+`web/js/agent.js`): a chat with a local VLM over its own settings, started from the
+Image tab's model. A turn is one run of our driver on the job queue; nothing stays loaded.
 
 **The driver, not llama.cpp's CLIs** (checked at v0.7.0): `llama-mtmd-cli` is one-shot
 only with both `-p` and `--image` and takes no conversation; `llama-cli` talks to an
@@ -707,11 +707,27 @@ offered as a text encoder. Catalog `[[agent]]` cards: each in its own folder
 
 Break silently:
 
-- **A chat's settings are a `/generate` body** (`GenerateDto`, `chat.settings` as JSON);
-  a round goes through `GenerateDto::run_plan` like the button. `clean_settings` strips
-  `count`/`loop`/`after`/`seed` — the round and the seed are the agent's.
+- **A chat's settings are a `/generate` body holding only what the agent set**
+  (`GenerateDto`, `chat.settings` as JSON): `/chats/new` makes `{template}`, so a round
+  (through `GenerateDto::run_plan` like the button) is that model's registry profile
+  plus the agent's keys. `with_turbo` adds the catalog Turbo LoRA (steps/CFG/sigmas)
+  when there is no `loras` key — `toolkit::locks_for` reads the same absence. A model
+  switch (`knobs::write`) removes steps/CFG/size/sampler/LoRAs/parts, keeps the prompts.
+- **The rules are Settings', read per turn** (`knobs::Rules`, `[agent]`; `toolkit::resolve`
+  loads them): a whitelist of keys, no ask-first, no bounds but `hard_bounds`. A chat
+  carries none. An old `chat.json`'s `pending`/`awaiting` read as `rejected`/`idle` (serde
+  aliases); an old `[agent]` of tables reads as the defaults (`key_list`).
+- **The agent sizes its work**: chat `count` (1 unless said), a plan's `rounds`/`count`
+  (`Session.rounds`/`per_round`, 0 = `SESSION_ROUNDS`/`SESSION_BATCH`), a critique's
+  `count`/`seeds`; `knobs::MAX_BATCH`/`MAX_ROUNDS` are the only caps.
 - **`Slot::Agent`**: rounds and passes never take the Image tab's picture. `open_in`
   into `Slot::Agent` leaves a **live** entry where it is (it may be on the Image tab).
+- **`Slot::Chat` is the Agent tab's viewer** (`/workitems/open {pane: "agent"}`,
+  `JobKind::Open.slot`), apart from `Slot::Agent` so a round never evicts the picture
+  looked at; it takes a live entry out of `Agent` but leaves one in `Image`
+  (`stays_where_it_is`). Page: `PANES.agent`, `#lightbox.onagent` hides the mirrored pass
+  model/steps/CFG, and `escalateSettings`/`passPick`/`passSteps` send none on that pane,
+  so a pass runs on the picture's own profile.
 - **A leg is `Kind::Agent`, `total: None`**, stepped like a loop (`is_stepped`), never
   the loop (`replace_loop` needs `is_run`). Stop marks `stopping` **and** kills;
   `agent::step` checks `Queue::stopping`. A panic marks the chat failed in the worker
@@ -723,7 +739,7 @@ Break silently:
   `apply` read it; `agent_knobs_agree_with_fields_and_validate` pins it to `FIELDS` and
   `Profile::validate` (`MAX_CFG` is in `config.rs`, `settings.js` and the inputs).
   `apply` never trusts the grammar (no float ranges, no property count): unknown, off or
-  locked keys are dropped with a note, numbers clamped, `max_changes` enforced.
+  locked keys are dropped with a note, numbers clamped to `hard_bounds`.
 - **Locks** (`toolkit::locks_for`): a catalog Turbo LoRA among the picks or a
   `Catalog::distilled` file locks steps and CFG; `ImageFamily::cfg_locked` (recipe CFG 1)
   locks CFG; a CFG lock locks the negative.
@@ -733,9 +749,10 @@ Break silently:
 - **Only the newest pictures are images** (`context::messages`); older rounds are their
   summary line, older turns their `notes`/`reply`. Roles alternate (merged), ending on
   the user side — Mistral's and Gemma's templates refuse otherwise.
-- **`Settings.agent` is a table declared before `[variables]`**, and `Permissions` puts
-  its plain values before its two tables (`ValueAfterTable`). Page-level, with a
-  read-only `FIELDS` row (`kind: 'agent'`) the form carries through unchanged.
+- **`Settings.agent` is a table declared before `[variables]`** (`ValueAfterTable`), plain
+  values only. Page-level; its `FIELDS` row (`kind: 'agent'`) is drawn by `agentperms.js`
+  from `GET /agents`' table and read back in the server's order (sets sorted), or the
+  dirty check never settles.
 - **Skills** (`agent::skills`): built-ins compiled in, `user/skills/*.md` re-read per
   turn, an `id` match replaces; `BUDGET` drops whole skills, lowest priority first.
 - **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.
@@ -933,7 +950,7 @@ keeps the view for the same picture at the same size).
 `GET /history/{id}/{index}.png`. Lives in scratch, and **every write-back of an edited
 work item is a save** to `{shelf}/{id}.edits/` (`Retained::persist` from `store`,
 `update`, `replace`; `crate::edits`): step raws, brush masks, `edits.json` with `at`,
-each step's profile/label, filters, area and brush amounts. `Display::open` reuses a
+each step's profile/label, filters, area and brush amounts. `Display::open_in` reuses a
 live entry for the item (on screen or pinned by a pass), else copies the folder in
 (`reopen_edits`); a folder it can't read opens the original. Moves and goes with the
 item (`Store::favorite`/`delete`), so Delete all and Close server's clear reach it.
@@ -1115,7 +1132,7 @@ only `js/app.js`.
 | `help.js` | Help tab `TOPICS` |
 | `settings.js` / `modelsettings.js` | Settings form from `FIELDS`; *Per model* card |
 | `agent.js` | Agent tab: chats, the composer, panels, following a turn |
-| `chatview.js` / `agentperms.js` | a chat as HTML, pure; the Permissions panel |
+| `chatview.js` / `agentperms.js` | a chat as HTML, pure; Settings → Agent's whitelist |
 | `app.js` | `showTab`, boot order |
 
 Break silently:
@@ -1370,7 +1387,7 @@ sharpness/clarity, no grade), stored as `postStart`; double-click one slider res
    and a profile can say 0. So `GenResult.can_hires` is the size budget
    only (`Pending::hires_fits`) and the page reads steps with `passSteps`.
 8. **Nothing a `Pending` owns lives in a durable directory.** `Engine::run` copies
-   `raw` into `work/workitems/`; `Display::open` copies it back out to
+   `raw` into `work/workitems/`; `Display::open_in` copies it back out to
    `{id}-0-raw.png`; sources, references, outputs and favourites are likewise copied
    in. Otherwise `Pending::remove_files` or `Scratch::drop` deletes the user's file.
    Scratch is `work/current/` (`pipeline::scratch_dir`), emptied on start and Close,
@@ -1379,7 +1396,7 @@ sharpness/clarity, no grade), stored as `postStart`; double-click one slider res
    (`Retained::pin`). `Pending.work_id` and `Pending.source` are ids/stems, never paths.
    **A work item's kept edits** (`{shelf}/{id}.edits/`, `src/edits.rs`) obey the same
    rule both ways: steps and masks are hard-linked (or copied) *out* of scratch, and
-   `Display::open` copies them back *in* under fresh names.
+   `Display::open_in` copies them back *in* under fresh names.
 9. **Filter a clip's frames; never re-diffuse them.** `Engine::enlarge_clip` runs
    `Fsr::process` per frame (deterministic, no flicker). Per-frame `refine` would boil
    in motion; refining a clip means a VACE `--control-video` pass. `work/videos/` is

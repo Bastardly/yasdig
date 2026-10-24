@@ -5,7 +5,7 @@ import { esc } from './dom.js';
 // The Agent tab's message list, drawn from the chat the server sent
 // (`GET /chats/{id}`). Pure — strings in, a string out — so `chatview.test.js`
 // can hold it to what it shows: every word the model wrote goes through `esc`,
-// a pending change is a card with Approve and Reject, an applied one has Undo,
+// a change is a card with Undo while it holds,
 // a round is a row of its pictures with what the agent made of each.
 //
 // The buttons carry what they act on in `data-` attributes; `agent.js` has one
@@ -31,13 +31,13 @@ const img = (chat, folder, file) => `/chats/${encodeURIComponent(chat.id)}/${fol
 function picture(chat, ref, { n, badges = '', tools = true } = {}) {
   const folder = ref.kind === 'attach' ? 'att' : 'img';
   const label = n ? `<span class="chatpicno">${n}</span>` : '';
-  // A work item reopens on the Image tab; an output or an upload only shows.
+  // A work item opens in Refine & adjust; an output or an upload only shows.
   const open = ref.kind === 'item' ? ` data-open-item="${esc(ref.id)}"` : '';
   const describe = tools
     ? `<button type="button" class="hint chatpictool" data-describe="${esc(ref.kind)}:${esc(ref.id)}"
         title="Describe this picture as a prompt">Describe</button>` : '';
   return `<figure class="chatpic">
-    <button type="button" class="chatpicimg"${open} title="${ref.kind === 'item' ? 'Open on the Image tab' : ''}${
+    <button type="button" class="chatpicimg"${open} title="${ref.kind === 'item' ? 'Open in Refine &amp; adjust' : ''}${
       ref.seed != null ? `${ref.kind === 'item' ? ' · ' : ''}seed ${ref.seed}` : ''}">
       <img src="${img(chat, folder, ref.file)}" alt="" loading="lazy"></button>
     ${label}${badges}${describe}</figure>`;
@@ -47,14 +47,13 @@ function changeCard(c) {
   const rows = Object.entries(c.set ?? {}).map(([k, v]) => `<li><b>${esc(KNOB_LABEL[k] ?? k)}</b>
     ${c.before && k in c.before ? `${esc(valueText(k, c.before[k]))} → ` : ''}${esc(valueText(k, v))}</li>`).join('');
   const state = {
-    pending: `<button type="button" class="btn btn-choice" data-approve-change="${c.id}">Approve</button>
-      <button type="button" class="btn" data-reject-change="${c.id}">Reject</button>`,
     applied: `<button type="button" class="btn" data-undo="${c.id}" title="Put these settings back as they were">Undo</button>`,
     undone: '<span class="sub">Undone</span>',
-    rejected: '<span class="sub">Rejected</span>',
+    // An older chat's proposal nobody answered.
+    rejected: '<span class="sub">Set aside</span>',
   }[c.state] ?? '';
-  const who = c.by === 'user' ? 'You changed' : c.state === 'pending' ? 'The agent asks to change' : 'The agent changed';
-  return `<div class="chatcard${c.state === 'pending' ? ' pending' : ''}">
+  const who = c.by === 'user' ? 'You changed' : c.state === 'rejected' ? 'The agent asked to change' : 'The agent changed';
+  return `<div class="chatcard">
     <p class="chatcardhead">${who}</p><ul class="chatchanges">${rows}</ul>
     ${c.reason ? `<p class="sub">${esc(c.reason)}</p>` : ''}
     ${(c.notes ?? []).map((n) => `<p class="sub">${esc(n)}</p>`).join('')}
@@ -66,15 +65,13 @@ const PASS = { hires: 'Hi-res pass', refine: 'Refine pass', edit: 'Edit' };
 function actionCard(chat, a) {
   const what = `${PASS[a.kind] ?? a.kind}${a.instruction ? `: ${esc(a.instruction)}` : ''}`;
   const state = {
-    pending: `<button type="button" class="btn btn-choice" data-approve-action="${a.id}">Run it</button>
-      <button type="button" class="btn" data-reject-action="${a.id}">Don’t</button>`,
     queued: '<span class="sub">Waiting its turn</span>',
     done: a.result ? picture(chat, a.result, { tools: false }) : '<span class="sub">Done</span>',
     rejected: '<span class="sub">Not run</span>',
     failed: `<span class="sub">Failed: ${esc(a.error ?? '')}</span>`,
   }[a.state] ?? '';
-  return `<div class="chatcard${a.state === 'pending' ? ' pending' : ''}">
-    <p class="chatcardhead">${a.state === 'pending' ? 'The agent asks to run' : 'The agent ran'} ${what}</p>
+  return `<div class="chatcard">
+    <p class="chatcardhead">${a.state === 'rejected' ? 'The agent asked to run' : 'The agent ran'} ${what}</p>
     <div class="btnrow">${state}</div></div>`;
 }
 
@@ -103,7 +100,6 @@ function agentMessage(chat, m) {
       <p class="chatcardhead">Prompt</p><p class="chatprompt">${esc(m.prompt)}</p>
       ${m.negative ? `<p class="sub">Negative: ${esc(m.negative)}</p>` : ''}
       <div class="btnrow">
-        <button type="button" class="btn btn-choice" data-use-prompt="${m.n}">Use in this chat</button>
         <button type="button" class="btn" data-copy-prompt="${m.n}">Copy to the Image tab</button>
       </div></div>` : '';
   const checks = m.mode === 'plan' && chat.session.checks.length ? `<ol class="chatchecklist">${
@@ -174,12 +170,17 @@ export function sessionRound(s) {
   return Math.max(0, s.round - (s.first_round ?? 0));
 }
 
+// The rounds the session may draw: the plan's, else three (`session::SESSION_ROUNDS`).
+export function sessionLimit(s) {
+  return s.rounds || 3;
+}
+
 // The header's line: what the agent is doing, or waiting for.
 export function stateText(chat) {
   const s = chat.session;
-  const round = s.goal ? ` · round ${sessionRound(s)} of ${chat.permissions.rounds}` : '';
+  const round = s.goal ? ` · round ${sessionRound(s)} of ${sessionLimit(s)}` : '';
   return {
-    idle: '', queued: 'Waiting for the GPU', running: `Working${round}`, awaiting: 'Waiting for your answer',
+    idle: '', queued: 'Waiting for the GPU', running: `Working${round}`,
     done: `Done${round}`, stopped: 'Stopped', failed: 'Stopped on an error', interrupted: 'Interrupted',
   }[s.state] ?? '';
 }

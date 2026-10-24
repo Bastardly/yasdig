@@ -1,22 +1,22 @@
 import { $, esc, getJSON, post } from './dom.js';
 import { floatPanels } from './panels.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
-import { onJobs, soonJobs } from './jobs.js';
-import { chatSettings, useSettings } from './image.js';
+import { onJobs, passRunning, soonJobs } from './jobs.js';
+import { S } from './state.js';
+import { cancelPost, onPassResult, onViewerResult, setLook, setViewerImage, showFullSize } from './viewer.js';
 import { openWorkItem } from './workitems.js';
 import { upload } from './source-slot.js';
-import { renderChat, sessionRound, stateText } from './chatview.js';
-import { drawPerms, readPerms } from './agentperms.js';
-import { wireHints } from './hints.js';
+import { renderChat, sessionLimit, sessionRound, stateText } from './chatview.js';
 import { openGetModels } from './getmodels.js';
 
 // ---- The Agent tab ------------------------------------------------------------
 //
 // A chat with a local vision-language model about the pictures you are making.
-// The chat keeps its own copy of the Image tab's settings (taken when it
-// starts, *Copy from Image tab* to take it again) and the agent changes that
-// copy, never the Image tab under you; *Open on Image tab* brings it back by
-// your press. Its rounds land in Current like any generation.
+// A chat starts on the Image tab's model with that model's saved defaults and
+// holds only what the agent changes after (`chat.settings`), never the Image
+// tab under you. What it may change is Settings → Agent, for every chat. Its
+// rounds land in Current like any generation, and a click on one of its
+// pictures opens it in Refine & adjust, on this tab (`Slot::Chat`).
 //
 // The server holds the chat (`work/chats/{id}/chat.json`, `agent::chat`); the
 // page draws it and re-reads it as its `rev` moves, polled with the jobs while
@@ -50,7 +50,7 @@ export async function loadAgents() {
     return;
   }
   const sel = $('amodel');
-  const want = data?.chat.agent ?? sel.value;
+  const want = data?.chat.agent ?? agentsList.default ?? sel.value;
   sel.innerHTML = agentsList.models.length
     ? agentsList.models.map((m) => `<option value="${esc(m.name)}">${esc(m.label)}${m.vision ? '' : ' (text only)'}</option>`).join('')
     : '<option value="">None installed</option>';
@@ -117,7 +117,7 @@ function draw(scroll, live = null) {
 
 function syncButtons() {
   const b = busy();
-  $('astop').hidden = !b && data?.chat.session.state !== 'awaiting';
+  $('astop').hidden = !b;
   $('asend').disabled = b;
   $('asession').disabled = b;
   $('adescribe').disabled = b || !attachments.length
@@ -128,20 +128,15 @@ function syncButtons() {
 
 function drawPanels() {
   if (!data) {
-    $('asettings').innerHTML = '<p class="sub">Start a chat to give it settings.</p>';
-    $('aperms').innerHTML = '<p class="sub">Start a chat to set what its agent may do.</p>';
     $('asessionbody').innerHTML = '<p class="sub">No chat yet.</p>';
     return;
   }
-  drawSettings();
-  drawPerms($('aperms'), data.toolkit);
-  wireHints($('tab-agent'));
   const s = data.chat.session;
   $('asessionbody').innerHTML = s.goal
     ? `<p><b>Goal</b>: ${esc(s.goal)}</p>
        ${s.checks.length ? `<p class="sub">Checks</p><ol class="chatchecklist">${s.checks.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>` : ''}
-       <p class="sub">Round ${sessionRound(s)} of ${data.chat.permissions.rounds} · ${esc(stateText(data.chat) || 'idle')}</p>`
-    : '<p class="sub">No session yet: write a goal in the box and press Run a session. The agent then writes checks, draws a round, judges it, and tries again, up to the rounds in Permissions.</p>';
+       <p class="sub">Round ${sessionRound(s)} of ${sessionLimit(s)} · ${esc(stateText(data.chat) || 'idle')}</p>`
+    : '<p class="sub">No session yet: write a goal in the box and press Run a session. The agent then writes checks, draws a round, judges it, and tries again, as many rounds as you ask for (three when you don’t say).</p>';
   if (data.chat.agent && $('amodel').value !== data.chat.agent
       && agentsList.models.some((m) => m.name === data.chat.agent)) {
     $('amodel').value = data.chat.agent;
@@ -149,60 +144,12 @@ function drawPanels() {
   }
 }
 
-// The chat's copy of the settings, as a small form: what the agent's knobs are.
-function drawSettings() {
-  const s = data.chat.settings;
-  const tk = data.toolkit;
-  const opt = (v, cur) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(v)}</option>`;
-  const num = (id, label, v, extra = '') => `<label for="${id}">${label}</label>
-    <input type="number" id="${id}" value="${v ?? ''}" ${extra} placeholder="model’s own">`;
-  const locked = (key) => tk.locks?.[key] ? `<p class="sub">${esc(tk.locks[key])}</p>` : '';
-  $('asettings').innerHTML = `
-    <label for="as-template">Model</label>
-    <select id="as-template">${tk.models.map((m) => opt(m.name, s.template)).join('')}${
-      tk.models.some((m) => m.name === s.template) ? '' : opt(s.template ?? '', s.template)}</select>
-    <label for="as-prompt">Prompt</label>
-    <prompt-box><textarea id="as-prompt" class="short">${esc(s.prompt ?? '')}</textarea></prompt-box>
-    <label for="as-negative">Negative prompt</label>
-    <prompt-box><textarea id="as-negative" class="short">${esc(s.negative ?? '')}</textarea></prompt-box>
-    ${locked('negative')}
-    ${num('as-cfg', 'CFG scale', s.cfg_scale, 'step="0.1" min="0" max="30"')}${locked('cfg_scale')}
-    ${num('as-steps', 'Steps', s.steps, 'min="1" max="100"')}${locked('steps')}
-    <div class="row">
-      <div>${num('as-w', 'Width', s.width, 'step="64" min="64" max="4096"')}</div>
-      <div>${num('as-h', 'Height', s.height, 'step="64" min="64" max="4096"')}</div>
-    </div>`;
-}
-
-function readSettings() {
-  const s = { ...data.chat.settings };
-  const n = (id) => { const v = parseFloat($(id).value); return Number.isFinite(v) ? v : null; };
-  s.template = $('as-template').value;
-  s.prompt = $('as-prompt').value;
-  s.negative = $('as-negative').value || null;
-  s.cfg_scale = n('as-cfg');
-  s.steps = n('as-steps');
-  s.width = n('as-w');
-  s.height = n('as-h');
-  return s;
-}
-
-async function saveSettings(settings) {
-  if (!data) return;
-  try {
-    show(await post('/chats/settings', { id: chatId(), rev: data.chat.rev, settings }), { scroll: false });
-  } catch (e) {
-    err(String(e.message || e));
-    // A 409 is the agent having changed them meanwhile: show what is there now.
-    if (/changed since/.test(e.message)) openChat(chatId());
-  }
-}
-
 // ---- Sending ------------------------------------------------------------------------
 
 async function ensureChat() {
   if (data) return data.chat.id;
-  const got = await post('/chats/new', { settings: chatSettings(), agent: $('amodel').value || null });
+  // The Image tab's model, which brings its own saved defaults.
+  const got = await post('/chats/new', { template: $('template').value, agent: $('amodel').value || null });
   stageSeq++;
   show(got);
   loadChats();
@@ -359,8 +306,8 @@ function markChats() {
   for (const g of grids) g.mark();
 }
 
-// *New chat*: an empty stage. The chat itself is made on the first send, from
-// the Image tab's settings as they are then.
+// *New chat*: an empty stage. The chat itself is made on the first send, on
+// the Image tab's model as it is then.
 function newChat() {
   stageSeq++;
   data = null;
@@ -438,46 +385,129 @@ async function onLogClick(e) {
   const id = chatId();
   const d = t.dataset;
   try {
-    if (d.approveChange || d.rejectChange) {
-      const cid = Number(d.approveChange ?? d.rejectChange);
-      const r = await post('/agent/approve', { chat: id, changes: [{ id: cid, approve: !!d.approveChange }] });
-      if (r.job != null) soonJobs();
-      openChat(id);
-    } else if (d.approveAction || d.rejectAction) {
-      const aid = Number(d.approveAction ?? d.rejectAction);
-      const r = await post('/agent/approve', { chat: id, actions: [{ id: aid, approve: !!d.approveAction }] });
-      if (r.job != null) soonJobs();
-      openChat(id);
-    } else if (d.undo) {
+    if (d.undo) {
       show(await post('/agent/undo', { chat: id, change: Number(d.undo) }), { scroll: false });
     } else if (d.openItem) {
-      await openWorkItem(d.openItem);
+      openItem(d.openItem);
     } else if (d.describe) {
       const [kind, pid] = d.describe.split(':');
       describe(kind, pid);
-    } else if (d.usePrompt || d.copyPrompt) {
-      const m = data.chat.messages.find((x) => x.n === Number(d.usePrompt ?? d.copyPrompt));
+    } else if (d.copyPrompt) {
+      const m = data.chat.messages.find((x) => x.n === Number(d.copyPrompt));
       if (!m?.prompt) return;
-      if (d.usePrompt) {
-        saveSettings({ ...data.chat.settings, prompt: m.prompt, ...(m.negative ? { negative: m.negative } : {}) });
-      } else {
-        $('prompt').value = m.prompt;
-        if (m.negative) $('negative').value = m.negative;
-        $('prompt').dispatchEvent(new Event('input', { bubbles: true }));
-        document.querySelector('.tab[data-tab="image"]')?.click();
-      }
+      $('prompt').value = m.prompt;
+      if (m.negative) $('negative').value = m.negative;
+      $('prompt').dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('.tab[data-tab="image"]')?.click();
     }
   } catch (ex) {
     err(String(ex.message || ex));
   }
 }
 
+// ---- A chat's pictures in Refine & adjust -------------------------------------------------------
+//
+// A click on one of the chat's pictures opens it in the dialog on this tab, as
+// Outputs opens a file (`outputs.js`), into a slot of its own on the server
+// (`Slot::Chat`): a session drawing its next round never takes the picture
+// being looked at, and one also on the Image tab stays there. ←/→ step through
+// the chat's pictures in order; *Open on Image tab* reopens it there.
+
+let pics = []; // the chat's work items, in order, as the dialog steps through them
+let at = -1;
+let opening = false;
+let queuedAt = null;
+let shownSize = '';
+
+// Every work item the chat shows, once each, in the order shown.
+function chatPictures() {
+  const ids = [];
+  for (const m of data?.chat.messages ?? []) {
+    for (const r of m.images ?? []) if (r.kind === 'item' && !ids.includes(r.id)) ids.push(r.id);
+  }
+  return ids;
+}
+
+// The dialog's caption: where the picture is among the chat's, and its size.
+function caption(got) {
+  return `${at + 1} of ${pics.length} · ${got.width}×${got.height}`;
+}
+
+function landed(got) {
+  const same = got.image_id === S.imageId && shownSize === `${got.width}×${got.height}`;
+  S.imageId = got.image_id;
+  S.currentSrc = `data:image/png;base64,${got.image_base64}`;
+  S.workId = got.work_id ?? null;
+  shownSize = `${got.width}×${got.height}`;
+  setLook(got);
+  $('lbsaved').textContent = caption(got);
+  return same;
+}
+
+async function openPicture(i) {
+  if (i < 0 || i >= pics.length) return;
+  if (opening) { queuedAt = i; return; }
+  // A re-filter still on its way belongs to the picture being left.
+  cancelPost();
+  opening = true;
+  at = i;
+  const wasOpen = $('lightbox').open;
+  err('');
+  try {
+    // A picture starred since is on the other shelf.
+    const id = pics[i];
+    const got = await post('/workitems/open', { id, pane: 'agent' })
+      .catch(() => post('/favorites/open', { id, pane: 'agent' }));
+    landed(got);
+    $('lberr').textContent = '';
+    if (wasOpen) setViewerImage(S.currentSrc); else showFullSize(S.currentSrc);
+  } catch (e) {
+    S.imageId = null;
+    const msg = String(e.message || e);
+    err(msg);
+    if ($('lightbox').open) $('lberr').textContent = msg;
+  } finally {
+    opening = false;
+    if (queuedAt !== null) { const next = queuedAt; queuedAt = null; openPicture(next); }
+  }
+}
+
+function openItem(id) {
+  pics = chatPictures();
+  const i = pics.indexOf(id);
+  if (i >= 0) openPicture(i);
+}
+
+// Clamped, as Outputs is; not while a pass runs on the picture open.
+function stepPicture(d) {
+  const i = at + d;
+  if (i >= 0 && i < pics.length && !passRunning()) openPicture(i);
+}
+
+function initViewerPane() {
+  document.addEventListener('keydown', (e) => {
+    if (S.pane !== 'agent' || !$('lightbox').open) return;
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName)) return;
+    e.preventDefault();
+    stepPicture(e.key === 'ArrowRight' ? 1 : -1);
+  });
+  // A crop, a step back, a pass: a new state of the same picture.
+  const land = (got) => setViewerImage(S.currentSrc, landed(got));
+  onViewerResult('agent', land);
+  onPassResult('agent', (got, id) => {
+    if (S.pane === 'agent' && $('lightbox').open && S.imageId === id) land(got);
+  });
+  $('lbtoimage').addEventListener('click', async () => {
+    const id = pics[at];
+    if (!id) return;
+    try { await openWorkItem(id); } catch (e) { $('lberr').textContent = String(e.message || e); }
+  });
+}
+
 // ---- Wiring -------------------------------------------------------------------------------------
 
 const PANEL_DEFS = [
-  { id: 'agent-model', open: true },
-  { id: 'agent-settings' },
-  { id: 'agent-perms' },
   { id: 'agent-session' },
   { id: 'agent-current', open: true, corner: 'bottom-right' },
   { id: 'agent-favorites' },
@@ -558,28 +588,7 @@ export function initAgent() {
       loadChats();
     } catch (e) { err(String(e.message || e)); }
   });
-  $('asettingssave').addEventListener('click', () => data && saveSettings(readSettings()));
-  $('asettingscopy').addEventListener('click', () => {
-    if (!data) return;
-    const s = chatSettings();
-    saveSettings(s);
-  });
-  $('asettingsuse').addEventListener('click', () => {
-    if (!data) return;
-    useSettings(data.chat.settings);
-    document.querySelector('.tab[data-tab="image"]')?.click();
-  });
-  $('apermssave').addEventListener('click', async () => {
-    if (!data) return;
-    try { show(await post('/chats/permissions', { id: chatId(), permissions: readPerms($('aperms')) }), { scroll: false }); } catch (e) { err(String(e.message || e)); }
-  });
-  $('apermsdefault').addEventListener('click', async () => {
-    if (!data) return;
-    try {
-      await post('/settings', { agent: readPerms($('aperms')) });
-      $('apermsnote').textContent = 'New chats will start with these.';
-    } catch (e) { err(String(e.message || e)); }
-  });
+  initViewerPane();
   onJobs(follow);
   drawPanels();
   loadAgents();

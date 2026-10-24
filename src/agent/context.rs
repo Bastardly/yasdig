@@ -57,20 +57,20 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
         if offered.is_empty() {
             s.push_str("\n\nYou may not change any settings in this chat; advise only.");
         } else {
-            s.push_str(&format!(
-                "\n\nSettings you may change (at most {} per reply, in `change`):",
-                t.max_changes
-            ));
+            s.push_str("\n\nSettings you may change, in `change`:");
             for k in &offered {
                 let range = match (k.kind, k.min, k.max) {
                     ("int" | "float" | "size", Some(a), Some(b)) => format!(" Range {a}–{b}."),
-                    ("model", ..) => format!(" One of: {}.", k.allowed.join(", ")),
+                    ("model", ..) => {
+                        let names: Vec<String> = t.models.iter().map(|m| format!("{} ({})", m.name, m.label)).collect();
+                        format!(" One of: {}. If the person names a model, use it.", names.join(", "))
+                    }
                     _ => String::new(),
                 };
                 s.push_str(&format!("\n- {}: {} Now: {}.{range}", k.key, k.about, k.value));
             }
         }
-        for k in t.knobs.iter().filter(|k| k.locked.is_some() && k.perm != super::knobs::Perm::Off) {
+        for k in t.knobs.iter().filter(|k| k.locked.is_some() && k.allowed) {
             s.push_str(&format!("\n- {} is fixed: {}.", k.label, k.locked.as_deref().unwrap_or("")));
         }
         if matches!(turn.mode, Mode::Chat | Mode::Plan) {
@@ -85,7 +85,7 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                     "\nTo draw, set `action` to \"generate\" and `count` to how many pictures the person \
                      asked for (1 to {}; 1 when they didn't say). `seeds` \"same\" keeps the last round's \
                      compositions, to try a change on the same pictures; \"new\" draws different ones.",
-                    t.batch
+                    super::knobs::MAX_BATCH
                 ));
             }
         }
@@ -95,6 +95,13 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
             for a in passes {
                 s.push_str(&format!("\n- {}: {}", a.key, a.about));
             }
+        }
+        if turn.mode == Mode::Critique {
+            s.push_str(
+                "\n\nTo draw another round, set `action` to \"generate\": `count` is its size (this round's, \
+                 unless the person asked otherwise), and `seeds` \"same\" keeps these compositions so the \
+                 difference is your change; \"new\" draws different ones.",
+            );
         }
     }
     s.push_str(&format!(
@@ -171,8 +178,12 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                 Role::User,
                 vec![Part::Text {
                     text: format!(
-                        "Goal: {}\nThe prompt now: {prompt}\nWrite the checks for this goal. {next}",
-                        turn.goal
+                        "Goal: {}\nThe prompt now: {prompt}\nWrite the checks for this goal. {next}\nSet `rounds` and \
+                         `count` (pictures per round) from the person's words: \"try 2 rounds of 2\" is 2 and 2. \
+                         When they don't say, 3 rounds of 4. At most {} rounds of {}.",
+                        turn.goal,
+                        super::knobs::MAX_ROUNDS,
+                        super::knobs::MAX_BATCH
                     ),
                 }],
             );
@@ -180,8 +191,10 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
         Mode::Critique => {
             let mut parts = vec![Part::Text {
                 text: format!(
-                    "Round {}: the {} picture(s) just drawn, in order. Goal: {}",
+                    "Round {} (the session's {} of {}): the {} picture(s) just drawn, in order. Goal: {}",
                     turn.round,
+                    super::session::session_rounds(chat),
+                    super::session::session_limit(chat),
                     turn.images.len(),
                     turn.goal
                 ),
@@ -253,13 +266,13 @@ impl Clone for Turn<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::chat::ImageRef;
-    use super::super::knobs::{Locks, Permissions};
+    use super::super::knobs::{Locks, Rules};
     use super::super::toolkit::build;
     use super::*;
     use crate::config::ImageFamily;
 
     fn chat() -> Chat {
-        let mut c = Chat::new("1-0".into(), serde_json::json!({"prompt": "a fox"}), Permissions::default(), None);
+        let mut c = Chat::new("1-0".into(), serde_json::json!({"prompt": "a fox"}), None);
         let img = |id: &str| ImageRef { kind: "item".into(), id: id.into(), file: format!("{id}.png"), seed: Some(1) };
         c.messages = vec![
             Msg::User { n: 0, ms: 0, text: "a fox in a hat".into(), images: vec![] },
@@ -274,7 +287,7 @@ mod tests {
     }
 
     fn toolkit() -> Toolkit {
-        build(&Permissions::default(), &serde_json::json!({"prompt": "a fox"}), &Locks::default(), vec![], Some(ImageFamily::Sdxl))
+        build(&Rules::default(), &serde_json::json!({"prompt": "a fox"}), &Locks::default(), vec![], Some(ImageFamily::Sdxl))
     }
 
     fn turn(mode: Mode, images: Vec<PathBuf>) -> Turn<'static> {
@@ -317,7 +330,7 @@ mod tests {
     #[test]
     fn the_system_text_names_only_what_may_change() {
         let s = system(&toolkit(), &turn(Mode::Chat, vec![]));
-        assert!(s.contains("- prompt:") && s.contains("- cfg_scale:") && s.contains("Range 1–8"));
+        assert!(s.contains("- prompt:") && s.contains("- cfg_scale:") && s.contains("Range 0–"));
         assert!(!s.contains("- steps:"), "steps is off by default");
     }
 }

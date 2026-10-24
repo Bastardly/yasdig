@@ -50,7 +50,7 @@
 //!                        it's cheap enough to drive from a slider
 //!   GET  /workitems   -> every archived generation, newest first, settings and all
 //!   GET  /workitems/{id}/thumb.png
-//!   POST /workitems/open   -> {id}       reopen one as a live image_id
+//!   POST /workitems/open   -> {id, pane?} reopen one as a live image_id (pane "agent": the Agent tab's viewer)
 //!   POST /workitems/delete -> {ids:[..]} remove them from disk
 //!   POST /favorites/add    -> {ids:[..]} move them to user/favorite/, so
 //!                        "delete all" on the grid can't reach them
@@ -91,13 +91,14 @@
 //!   GET  /favorite-clips -> the starred clips alone (user/favorite_clips/)
 //!   POST /favorite-clips/add|remove -> {ids:[..]} star / un-star (a move)
 //!   POST /favorite-clips/delete     -> {ids:[..]}
-//!   GET  /agents      -> the agent models in the agents dir, and the driver
+//!   GET  /agents      -> the agent models in the agents dir, the driver, and
+//!                        the knob table Settings → Agent draws
 //!   GET  /chats, /favorite-chats, /chats/{id}, /chats/{id}/live,
 //!        /chats/{id}/thumb.png, /chats/{id}/img/{name}.png
-//!   POST /chats/new|settings|permissions|agent|rename|delete,
+//!   POST /chats/new|agent|rename|delete,
 //!        /favorite-chats/add|remove|delete
 //!   POST /agent/send  -> queue a turn ({job}); the reply arrives in the chat
-//!   POST /agent/approve|undo|stop   (all of these: `agent::routes`)
+//!   POST /agent/undo|stop   (all of these: `agent::routes`)
 //!   GET  /outputs/{stem}/thumb.png   generated on first request
 //!   POST /save-output      -> {image_id} keep the image on screen
 //!   POST /outputs/overwrite -> {image_id} save it over the output it was opened from
@@ -201,6 +202,8 @@ enum JobKind {
     Open {
         id: String,
         shelf: Shelf,
+        /// `Slot::Image`, or `Slot::Chat` for the Agent tab's viewer.
+        slot: pipeline::Slot,
     },
     /// Reopen a finished image from `work/output/` as a live result in the
     /// Outputs tab's slot (`Slot::Output`; `fallback` the model to refine it
@@ -571,8 +574,8 @@ fn run(args: &[String]) -> Result<()> {
                     JobKind::Brush { id, tool, amount, mask, from } => {
                         display.brush(id, tool, amount, mask, from).map(|r| result_json(&r))
                     }
-                    JobKind::Open { id, shelf } => {
-                        display.open(&id, shelf).map(|r| result_json(&r))
+                    JobKind::Open { id, shelf, slot } => {
+                        display.open_in(&id, shelf, slot).map(|r| result_json(&r))
                     }
                     JobKind::OpenOutput { stem, fallback } => {
                         display.open_output(&stem, fallback.as_deref()).map(|r| result_json(&r))
@@ -2062,12 +2065,22 @@ fn handle_open_workitem(
     #[derive(serde::Deserialize)]
     struct Dto {
         id: String,
+        /// `agent` opens it in the Agent tab's viewer (`Slot::Chat`).
+        #[serde(default)]
+        pane: Option<String>,
     }
 
     match parse_json::<Dto>(conn, body)? {
         // 400, same staleness contract as the escalations: an id that isn't
         // there means the UI's copy of the grid is stale, not that we broke.
-        Some(dto) => submit(conn, &lanes.display, JobKind::Open { id: dto.id, shelf }, 400),
+        Some(dto) => {
+            let slot = match dto.pane.as_deref() {
+                None | Some("image") => pipeline::Slot::Image,
+                Some("agent") => pipeline::Slot::Chat,
+                Some(other) => return conn.respond(400, "application/json", error_json(&format!("'{other}' is not a pane")).as_bytes()),
+            };
+            submit(conn, &lanes.display, JobKind::Open { id: dto.id, shelf, slot }, 400)
+        }
         None => Ok(()),
     }
 }

@@ -37,10 +37,12 @@ pub fn store(cfg: &Config) -> ChatStore {
     ChatStore::new(&cfg.base_dir.join("work"), &cfg.user_dir())
 }
 
-/// The agent a chat runs on: the one it names, else the first installed.
+/// The agent a chat runs on: the one it names, else Settings' default, else
+/// the first installed.
 pub fn agent_for(cfg: &Config, name: Option<&str>) -> Result<AgentModel> {
     let scan = agents::scan(&cfg.agent_dir());
-    if let Some(n) = name {
+    let default = crate::settings::Settings::load_or_default(&cfg.user_dir()).agent.agent;
+    for n in [name, default.as_deref()].into_iter().flatten() {
         if let Some(m) = scan.models.iter().find(|m| m.name == n) {
             return Ok(m.clone());
         }
@@ -192,7 +194,7 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
     let result = match session::next_step(&chat) {
         Step::End => {
             store.update(id, |c| {
-                c.session.state = if c.pending() { State::Awaiting } else { session::finished(c) };
+                c.session.state = session::finished(c);
                 c.session.job = None;
                 Ok(())
             })?;
@@ -224,8 +226,6 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
                 store.update(id, |c| {
                     c.session.state = if queue.stopping(job) {
                         State::Stopped
-                    } else if c.pending() {
-                        State::Awaiting
                     } else {
                         session::finished(c)
                     };
@@ -302,7 +302,7 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
     };
     if !images.is_empty() && !model.vision() {
         bail!(
-            "{} has no vision projector, so it can't see pictures — pick an agent that can in the Model panel",
+            "{} has no vision projector, so it can't see pictures — pick one that can beside the message box",
             model.label
         );
     }
@@ -363,7 +363,7 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
     let stats = reply.stats.clone();
     store.update(&chat.id, |c| {
         // Re-resolved on the chat as it is now: the person may have changed
-        // its settings or permissions while the turn ran.
+        // Settings → Agent while the turn ran.
         let tk = toolkit::resolve(&cfg, c);
         let locks = tk.locks.clone();
         session::apply_reply(c, mode, parsed, &tk, &locks, used.clone(), stats.clone());
@@ -374,8 +374,10 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
 /// Picture `k` of round `round`: the chat's settings through `/generate`'s
 /// own conversion, into the agent's slot.
 fn picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, round: u32, k: u32) -> Result<()> {
+    let mut settings = chat.settings.clone();
+    with_turbo(engine.cfg(), &mut settings);
     let mut dto: crate::GenerateDto =
-        serde_json::from_value(chat.settings.clone()).context("the chat's settings aren't a generate request")?;
+        serde_json::from_value(settings).context("the chat's settings aren't a generate request")?;
     dto.seed = Some(session::seed_for(chat, k));
     dto.count = Some(1);
     dto.looping = false;
@@ -404,6 +406,28 @@ fn picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, round: u32
         session::image_done(c, ImageRef { kind: "item".into(), id: work_id.clone(), file: file.clone(), seed: Some(r.seed) });
         Ok(())
     })
+}
+
+/// A chat that names no LoRAs draws with its model's catalog Turbo LoRA when
+/// it is installed, at the steps, CFG and schedule it was distilled to — as
+/// the Image tab does with Turbo on, its default. `toolkit::locks_for` locks
+/// steps and CFG to match, so the agent never fights it. A chat begun on
+/// the Image tab's whole body (before chats started from the model alone)
+/// carries its own `loras` and is left as it is.
+fn with_turbo(cfg: &Config, settings: &mut serde_json::Value) {
+    let Some(obj) = settings.as_object_mut() else { return };
+    if obj.contains_key("loras") {
+        return;
+    }
+    let template = obj.get("template").and_then(|t| t.as_str()).unwrap_or("");
+    let Some(family) = cfg.registry().get(template).map(|p| p.family) else { return };
+    let Some(l) = toolkit::turbo_lora(cfg, family) else { return };
+    obj.insert("loras".into(), serde_json::json!([{ "name": l.dest, "strength": 1.0 }]));
+    obj.insert("steps".into(), l.turbo.steps.into());
+    obj.insert("cfg_scale".into(), serde_json::json!(l.turbo.cfg_scale));
+    if let Some(s) = &l.turbo.sigmas {
+        obj.insert("sigmas".into(), s.clone().into());
+    }
 }
 
 /// The pass a critique asked for, on its keeper.
@@ -436,7 +460,7 @@ fn escalate(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, action: u
                     c.session.next = Next::Nothing;
                 }
                 c.note(format!(
-                    "The {} pass is done. It is a History step on the picture: open it from Current on the Image tab.",
+                    "The {} pass is done. It is a History step on the picture: click the picture to open it.",
                     a.kind
                 ));
                 Ok(())
@@ -537,4 +561,21 @@ pub fn chat_file(cfg: &Config, id: &str, folder: &str, name: &str) -> Option<Pat
 
 pub fn user_skills_dir(cfg: &Config) -> PathBuf {
     cfg.user_dir().join("skills")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A new chat holds only its model, so a round is the model's saved
+    /// defaults (`Engine::run`'s registry profile) plus what the agent set.
+    #[test]
+    fn a_round_of_a_new_chat_overrides_nothing_it_was_not_told_to() {
+        let dto: crate::GenerateDto = serde_json::from_value(serde_json::json!({"template": "sdxl", "prompt": "a fox"})).unwrap();
+        let (plan, _) = dto.run_plan();
+        let crate::Start::Generate(req) = plan.start else { panic!("a generate") };
+        assert_eq!(req.template, "sdxl");
+        assert_eq!((req.steps, req.cfg_scale, req.width, req.height), (None, None, None, None));
+        assert!(req.loras.is_none(), "no LoRA list: the profile's, and Turbo's to add");
+    }
 }

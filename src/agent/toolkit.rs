@@ -1,11 +1,12 @@
-//! The knob table resolved for one chat: each knob's permission, bounds, lock
-//! and current value, the passes and whether its model can run them, and the
-//! models it may switch to. What `GET /chats/{id}` serves the Permissions
-//! panel, what `agent::schema` builds a reply's grammar from, and what the
-//! agent is told each turn — one value, so the three can't disagree.
+//! The knob table resolved for one chat: whether each knob is on the
+//! person's whitelist, its lock and current value, the passes and whether
+//! its model can run them, and the models it may switch to. What
+//! `GET /chats/{id}` serves the page, what `agent::schema` builds a reply's
+//! grammar from, and what the agent is told each turn — one value, so the
+//! three can't disagree.
 
 use super::chat::Chat;
-use super::knobs::{self, hard_bounds, Kind, Locks, Perm, Permissions, ACTIONS, KNOBS};
+use super::knobs::{self, hard_bounds, Kind, Locks, Rules, ACTIONS, KNOBS};
 use crate::catalog::Catalog;
 use crate::config::{Config, ImageFamily, Profile};
 use serde::Serialize;
@@ -18,12 +19,11 @@ pub struct KnobView {
     pub help: &'static str,
     /// `text`, `int`, `float`, `size` or `model`.
     pub kind: &'static str,
-    pub hard_min: Option<f64>,
-    pub hard_max: Option<f64>,
-    pub perm: Perm,
+    /// yasdig's own limits, what a value is clamped to.
     pub min: Option<f64>,
     pub max: Option<f64>,
-    pub allowed: Vec<String>,
+    /// On the whitelist in Settings → Agent.
+    pub allowed: bool,
     /// Why the model rules it out, when it does.
     pub locked: Option<String>,
     pub value: Value,
@@ -34,9 +34,9 @@ pub struct KnobView {
 }
 
 impl KnobView {
-    /// Whether a reply may name it at all: switched on, and not locked.
+    /// Whether a reply may name it at all: allowed, and not locked.
     pub fn offered(&self) -> bool {
-        self.perm != Perm::Off && self.locked.is_none()
+        self.allowed && self.locked.is_none()
     }
 }
 
@@ -45,7 +45,7 @@ pub struct ActionView {
     pub key: &'static str,
     pub label: &'static str,
     pub help: &'static str,
-    pub perm: Perm,
+    pub allowed: bool,
     /// Why the chat's model can't run it, when it can't.
     pub unavailable: Option<String>,
     #[serde(skip)]
@@ -54,7 +54,7 @@ pub struct ActionView {
 
 impl ActionView {
     pub fn offered(&self) -> bool {
-        self.perm != Perm::Off && self.unavailable.is_none()
+        self.allowed && self.unavailable.is_none()
     }
 }
 
@@ -62,18 +62,17 @@ impl ActionView {
 pub struct Toolkit {
     pub knobs: Vec<KnobView>,
     pub actions: Vec<ActionView>,
-    /// Every model the chat's settings could name — the Settings panel's
-    /// select and the allowed-models list's choices.
+    /// Every model the chat's settings could name: what the model knob picks
+    /// from.
     pub models: Vec<ModelChoice>,
     /// The family of the chat's model, as `ImageFamily::as_str`.
     pub family: Option<&'static str>,
     pub family_label: Option<&'static str>,
-    pub seed_lock: bool,
-    pub batch: u32,
-    pub rounds: u32,
-    pub max_changes: u32,
     /// What the chat's model rules out, with the reasons.
     pub locks: Locks,
+    /// The whitelist it was built under, for `knobs::apply`.
+    #[serde(skip)]
+    pub rules: Rules,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,49 +109,54 @@ pub fn runnable(registry: &std::collections::BTreeMap<String, Profile>) -> Vec<M
         .collect()
 }
 
-/// The locks the chat's model and LoRA picks impose.
+/// The family's catalog speed LoRA, when it is installed — by its own dest
+/// and length, as the page's *Turbo* switch finds it. A chat that names no
+/// LoRAs draws with it, as the Image tab does with Turbo on by default.
+pub fn turbo_lora(cfg: &Config, family: ImageFamily) -> Option<&'static crate::catalog::Lora> {
+    Catalog::get().lora.iter().find(|l| {
+        l.family == crate::catalog::Family::Image(family)
+            && std::fs::metadata(cfg.lora_dir().join(&l.dest)).is_ok_and(|m| m.is_file() && m.len() == l.bytes)
+    })
+}
+
+/// The locks the chat's model and LoRA picks impose. No `loras` key at all
+/// is the Turbo LoRA a round adds ([`turbo_lora`]).
 pub fn locks_for(cfg: &Config, profile: Option<&Profile>, settings: &Value) -> Locks {
     let Some(p) = profile else {
         return Locks::default();
     };
     let catalog = Catalog::get();
     let distilled = catalog.distilled(&cfg.models_dir(), &p.model).is_some();
-    // A speed LoRA among the picks, by its catalog dest at its own length.
-    let picked: Vec<String> = settings
-        .get("loras")
-        .and_then(|l| l.as_array())
-        .map(|a| a.iter().filter_map(|r| r.get("name")?.as_str().map(str::to_string)).collect())
-        .unwrap_or_default();
-    let turbo = catalog
-        .lora
-        .iter()
-        .find(|l| picked.contains(&l.dest) && l.family == crate::catalog::Family::Image(p.family))
-        .map(|l| l.label.as_str());
-    Locks::of(p.family.cfg_locked(), distilled, turbo)
+    let turbo = match settings.get("loras").and_then(|l| l.as_array()) {
+        // A speed LoRA among the picks, by its catalog dest.
+        Some(a) => {
+            let picked: Vec<&str> = a.iter().filter_map(|r| r.get("name")?.as_str()).collect();
+            catalog
+                .lora
+                .iter()
+                .find(|l| picked.contains(&l.dest.as_str()) && l.family == crate::catalog::Family::Image(p.family))
+        }
+        None => turbo_lora(cfg, p.family),
+    };
+    Locks::of(p.family.cfg_locked(), distilled, turbo.map(|l| l.label.as_str()))
 }
 
+/// The chat's toolkit under the rules in `user/settings.toml` now.
 pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
+    let rules = crate::settings::Settings::load_or_default(&cfg.user_dir()).agent;
     let registry = cfg.registry();
     let template = chat.settings.get("template").and_then(|t| t.as_str()).unwrap_or("");
     let profile = registry.get(template);
     let locks = locks_for(cfg, profile, &chat.settings);
-    build(&chat.permissions, &chat.settings, &locks, runnable(&registry), profile.map(|p| p.family))
+    build(&rules, &chat.settings, &locks, runnable(&registry), profile.map(|p| p.family))
 }
 
 /// [`resolve`] past the reads, for tests.
-pub fn build(
-    perms: &Permissions,
-    settings: &Value,
-    locks: &Locks,
-    models: Vec<ModelChoice>,
-    family: Option<ImageFamily>,
-) -> Toolkit {
+pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelChoice>, family: Option<ImageFamily>) -> Toolkit {
     let knobs = KNOBS
         .iter()
         .map(|k| {
-            let p = perms.knob(k);
-            let (lo, hi) = hard_bounds(k.kind).map_or((None, None), |(a, b)| (Some(a), Some(b)));
-            let bounds = perms.bounds(k);
+            let (min, max) = hard_bounds(k.kind).map_or((None, None), |(a, b)| (Some(a), Some(b)));
             KnobView {
                 key: k.key,
                 label: k.label,
@@ -164,15 +168,11 @@ pub fn build(
                     Kind::Size { .. } => "size",
                     Kind::Model => "model",
                 },
-                hard_min: lo,
-                hard_max: hi,
-                perm: p.perm,
-                min: bounds.map(|b| b.0),
-                max: bounds.map(|b| b.1),
-                // Only what is still installed: a removed model can't be picked.
-                allowed: p.allowed.iter().filter(|a| models.iter().any(|m| &m.name == *a)).cloned().collect(),
+                min,
+                max,
+                allowed: rules.allows(k),
                 locked: locks.get(k.key).map(str::to_string).or_else(|| {
-                    (k.kind == Kind::Model && p.allowed.is_empty()).then(|| "no models are on its list".to_string())
+                    (k.kind == Kind::Model && models.len() < 2).then(|| "only one model is installed".to_string())
                 }),
                 value: knobs::value_of(settings, k),
                 about: k.about,
@@ -189,7 +189,7 @@ pub fn build(
             key: a.key,
             label: a.label,
             help: a.help,
-            perm: perms.action(a.key),
+            allowed: rules.allows_action(a.key),
             unavailable: match (a.key, family) {
                 ("edit", Some(f)) if !f.takes_references() => Some(format!("{} can't edit by instruction", f.label())),
                 (_, None) => Some("the chat's model isn't installed".into()),
@@ -204,11 +204,8 @@ pub fn build(
         models,
         family: family.map(ImageFamily::as_str),
         family_label: family.map(ImageFamily::label),
-        seed_lock: perms.seed_lock,
-        batch: perms.batch,
-        rounds: perms.rounds,
-        max_changes: perms.max_changes,
         locks: locks.clone(),
+        rules: rules.clone(),
     }
 }
 
@@ -216,18 +213,34 @@ pub fn build(
 mod tests {
     use super::*;
 
+    fn choice(name: &str, f: ImageFamily) -> ModelChoice {
+        ModelChoice { name: name.into(), family: f.as_str(), label: f.label() }
+    }
+
     #[test]
     fn a_turbo_model_offers_neither_cfg_nor_negative() {
         let t = build(
-            &Permissions::default(),
+            &Rules::default(),
             &serde_json::json!({"prompt": "x", "cfg_scale": 1.0}),
             &Locks::of(true, false, None),
-            vec![],
+            vec![choice("z", ImageFamily::ZImage)],
             Some(ImageFamily::ZImage),
         );
         let offered: Vec<&str> = t.offered_knobs().map(|k| k.key).collect();
-        assert_eq!(offered, ["prompt"], "steps, size and model are off by default; CFG and negative locked");
+        assert_eq!(offered, ["prompt", "size"], "steps is off by default; CFG and negative locked; one model");
         assert!(t.offered_actions().next().is_none(), "the passes are off by default");
         assert!(t.actions.iter().find(|a| a.key == "edit").unwrap().unavailable.is_some());
+    }
+
+    #[test]
+    fn the_model_knob_offers_every_runnable_model_while_allowed() {
+        let models = vec![choice("sdxl", ImageFamily::Sdxl), choice("klein", ImageFamily::Flux2Klein4b)];
+        let s = serde_json::json!({"template": "sdxl"});
+        let t = build(&Rules::default(), &s, &Locks::default(), models.clone(), Some(ImageFamily::Sdxl));
+        assert!(t.knob("model").unwrap().offered());
+        let mut r = Rules::default();
+        r.knobs.remove("model");
+        let t = build(&r, &s, &Locks::default(), models, Some(ImageFamily::Sdxl));
+        assert!(!t.knob("model").unwrap().offered());
     }
 }
