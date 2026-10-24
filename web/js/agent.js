@@ -80,6 +80,7 @@ function syncModelNote() {
 
 async function openChat(id) {
   const mine = ++stageSeq;
+  if (id !== data?.chat.id) sessionPanel(false);
   err('');
   try {
     const got = await getJSON(`/chats/${encodeURIComponent(id)}`);
@@ -95,6 +96,8 @@ function show(got, { scroll = true } = {}) {
   data = got;
   liveSeq = null;
   draw(scroll || was?.id !== got.chat.id || was?.messages.length !== got.chat.messages.length);
+  // Coming to a chat whose session is still going opens its panel again.
+  if (was?.id !== got.chat.id && ['queued', 'running'].includes(got.chat.session.state)) sessionPanel(true);
   drawPanels();
   markChats();
 }
@@ -126,6 +129,13 @@ function syncButtons() {
 }
 
 // ---- Panels -----------------------------------------------------------------------
+
+// The Session panel has no rail button: it opens when a session starts, or
+// on coming to a chat whose session is still going, and closes when the stage
+// moves to another chat or a new one, so what it shows is always that chat's. Its × closes it as any panel's does.
+function sessionPanel(on) {
+  $('panel-agent-session').open = on;
+}
 
 function drawPanels() {
   if (!data) {
@@ -169,6 +179,7 @@ async function send(mode) {
     drawChips();
     soonJobs();
     await openChat(id);
+    if (mode === 'session') sessionPanel(true);
     loadChats();
   } catch (e) {
     err(String(e.message || e));
@@ -311,6 +322,7 @@ function markChats() {
 // the Image tab's model as it is then.
 function newChat() {
   stageSeq++;
+  sessionPanel(false);
   data = null;
   attachments = [];
   drawChips();
@@ -532,6 +544,7 @@ export const layoutAgentTab = () => wsPanels?.layout();
 export function initAgent() {
   wsPanels = floatPanels({ host: $('tab-agent'), rail: $('tab-agent').querySelector('.wsrail'), defs: PANEL_DEFS });
   wsPanels.init();
+  sessionPanel(false);
   for (const g of grids) g.init();
   initGrip();
   initLarge();

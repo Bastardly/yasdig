@@ -818,7 +818,9 @@ fits an 8 GB card) and helps in three ways:
   picture passes, it decides it can't do better, or the rounds run out. The pictures
   land in Current on the Image tab like any generation. Each is marked with its answers
   (✓✗), the ones the agent kept, and — since a small model is a lenient judge of its
-  own work — the ones every check said yes to.
+  own work — the ones every check said yes to. The *Session* panel (goal, checks, round)
+  opens when a session starts, or when you come back to a chat whose session is still
+  going, and closes when you open another chat or a new one.
   Opened on the Image tab, a picture the agent drew says so in *Info*, with its round and
   the agent's reason; the chat's name there takes you back to the chat.
 
