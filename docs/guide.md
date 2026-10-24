@@ -844,6 +844,10 @@ through the chat's pictures, *Save to output* keeps one, *Open on Image tab* tak
 there with its settings. Its passes run on the model that drew it, at that model's own
 steps and CFG. A session drawing its next round meanwhile leaves it alone.
 
+A round of one picture is drawn at the chat's width, up to 90% of the screen high; a round
+of several is a row of small ones. *Large pictures* in the Session panel draws every round
+large, one picture under the other (remembered per browser).
+
 In plain chat the agent draws one picture, or as many as you ask for (up to 8); it keeps
 the last round's seeds when you ask for a change to those pictures, and draws new ones
 when you ask for more. A session started right after a round judges that round first

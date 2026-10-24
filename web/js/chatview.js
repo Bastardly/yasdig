@@ -6,7 +6,8 @@ import { esc } from './dom.js';
 // (`GET /chats/{id}`). Pure — strings in, a string out — so `chatview.test.js`
 // can hold it to what it shows: every word the model wrote goes through `esc`,
 // a change is a card with Undo while it holds,
-// a round is a row of its pictures with what the agent made of each.
+// a round is a row of its pictures with what the agent made of each — one
+// picture alone is drawn large.
 //
 // The buttons carry what they act on in `data-` attributes; `agent.js` has one
 // delegated listener for the lot.
@@ -127,7 +128,7 @@ export function renderMessage(chat, m, i) {
       const empty = !m.images.length ? '<p class="sub">Drawing…</p>' : '';
       return `<div class="chatmsg batch" data-n="${m.n}">
         <p class="chatcardhead">Round ${m.round}<span class="sub"> · ${esc(m.summary)}</span></p>
-        <div class="chatpics">${batchPictures(chat, m, judged)}</div>${empty}</div>`;
+        <div class="chatpics${m.images.length === 1 ? ' large' : ''}">${batchPictures(chat, m, judged)}</div>${empty}</div>`;
     }
     case 'note':
       return `<p class="chatnote" data-n="${m.n}">${esc(m.text)}</p>`;

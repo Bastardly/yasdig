@@ -428,6 +428,10 @@ const HELP = [
         + 'It loads for each reply and lets go of the GPU after, so it never '
         + 'shares the card with an image model — a bigger one is slower to load, '
         + 'not slower to draw with.' },
+  { ids: ['alarge'],
+    text: 'Every round’s pictures one under the other at the chat’s width, up to '
+        + 'nine tenths of the screen high. Off, a round of several is a row of '
+        + 'small ones; a round of one picture is always large.' },
   { ids: ['agentknobs'],
     text: 'Ticked, the agent may change it in every chat, and says why; Undo '
         + 'under the change puts it back. Unticked, it can’t touch it. With Model '

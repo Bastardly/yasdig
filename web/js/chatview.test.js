@@ -50,6 +50,13 @@ test("a round's pictures carry the critique that followed it", () => {
   assert.ok(html.includes('data-open-item="a"'));
 });
 
+test('a round of one picture is drawn large, a round of several is a row', () => {
+  const ref = (id) => ({ kind: 'item', id, file: `${id}.png` });
+  const round = (images) => renderChat(chat({ messages: [{ role: 'batch', n: 0, round: 1, summary: '', images }] }));
+  assert.ok(round([ref('a')]).includes('class="chatpics large"'));
+  assert.ok(round([ref('a'), ref('b')]).includes('class="chatpics"'));
+});
+
 test('the reply shows while it is still being written', () => {
   assert.equal(liveReply('{"notes":"thinking'), 'thinking');
   assert.equal(liveReply('{"notes":"x","reply":"Here is \\"one\\"'), 'Here is "one"');

@@ -35,6 +35,7 @@ let wsPanels = null;
 
 const DEFAULT_W = 760;
 const WIDTH_KEY = 'yasdig.chat.width';
+const LARGE_KEY = 'yasdig.chat.large';
 
 const chatId = () => data?.chat.id ?? null;
 const busy = () => ['queued', 'running'].includes(data?.chat.session.state);
@@ -377,6 +378,19 @@ function initGrip() {
   });
 }
 
+// Every round's pictures at the column's width, not only a round of one. A way
+// of looking, so per browser, like the width.
+function initLarge() {
+  const box = $('alarge');
+  try { box.checked = localStorage.getItem(LARGE_KEY) === '1'; } catch { /* off */ }
+  const apply = () => $('chatlog').classList.toggle('large', box.checked);
+  apply();
+  box.addEventListener('change', () => {
+    apply();
+    try { localStorage.setItem(LARGE_KEY, box.checked ? '1' : '0'); } catch { /* fine */ }
+  });
+}
+
 // ---- The log's buttons ------------------------------------------------------------------------
 
 async function onLogClick(e) {
@@ -520,6 +534,7 @@ export function initAgent() {
   wsPanels.init();
   for (const g of grids) g.init();
   initGrip();
+  initLarge();
   $('anew').addEventListener('click', newChat);
   // The Image tab's Info names the chat a picture came from (`render` in image.js).
   document.addEventListener('yasdig:openchat', (e) => {

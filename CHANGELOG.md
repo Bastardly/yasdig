@@ -14,7 +14,8 @@ What changed in each release of yasdig. Each release's executables are on the
   goal, runs a **session**: it writes yes/no checks, draws a round, judges every picture
   against them, adjusts a setting or two and goes again — as many rounds of as many
   pictures as you say. Its pictures land in Current like any other, and a click on one
-  opens it in Refine & adjust right on the Agent tab.
+  opens it in Refine & adjust right on the Agent tab. A single picture shows at the
+  chat's width; *Large pictures* in the Session panel does that for every round.
 - **You decide what it may touch**, in Settings → Agent: a tick per setting — prompt,
   negative prompt, CFG, size and model at first — and per pass on a keeper (Hi-res,
   Refine, Edit). With Model ticked it may use any installed model, and the one you name.
