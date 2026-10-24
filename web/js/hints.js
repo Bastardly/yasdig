@@ -415,6 +415,42 @@ const HELP = [
     text: 'When you press Close server, delete every unstarred clip on the Video '
         + 'tab, enlarged versions and all. Starred clips are kept, and so is what you '
         + 'saved to output. Only Close server does this.' },
+  { ids: ['setclearchats'],
+    text: 'When you press Close server, delete every unstarred chat on the Agent '
+        + 'tab. Starred chats are kept, and so are the pictures its rounds made — '
+        + 'those are in Current on the Image tab. Only Close server does this.' },
+  { ids: ['setagent'],
+    text: 'What a new chat lets its agent change, how far, and how long a session '
+        + 'runs. Each chat keeps its own copy, so changing this leaves existing '
+        + 'chats as they are. Set it on the Agent tab’s Permissions panel, with '
+        + 'Save as default for new chats.' },
+  { ids: ['amodel'],
+    text: 'The language model the agent thinks with. One that sees pictures can '
+        + 'judge a round and describe a picture; a text-only one can only talk. '
+        + 'It loads for each reply and lets go of the GPU after, so it never '
+        + 'shares the card with an image model — a bigger one is slower to load, '
+        + 'not slower to draw with.' },
+  { ids: ['agentknobs'],
+    text: 'Off: the agent can’t touch it. Ask first: it proposes a change and '
+        + 'waits for you. Auto: it changes it and says why. The numbers are the '
+        + 'range it must stay in. A model distilled to run without CFG locks CFG '
+        + 'and the negative prompt, whatever this says.' },
+  { ids: ['agentpasses'],
+    text: 'What the agent may do to a picture it likes: a Hi-res or Refine pass, '
+        + 'or an Edit by instruction on a model that can. The result is a History '
+        + 'step on that picture, so nothing is lost if it goes wrong.' },
+  { ids: ['agentseedlock'],
+    text: 'Picture 1 of every round starts from the same seed, picture 2 from the '
+        + 'next, and so on — so a difference between rounds is the change the '
+        + 'agent made, not luck. Off, every picture is a new composition.' },
+  { ids: ['agentbatch'],
+    text: 'Pictures drawn before the agent looks. More gives it more to choose '
+        + 'from for one load of its model; each one costs a render.' },
+  { ids: ['agentrounds'],
+    text: 'The most rounds a session runs before it stops by itself.' },
+  { ids: ['agentmaxchanges'],
+    text: 'How many settings one reply may change. Small models judge better '
+        + 'when one thing changes at a time.' },
   { ids: ['setembedpng'],
     text: 'Writes the prompt, negative prompt, model, seed, steps, sampler and CFG '
         + 'into each image you save to output, in the format A1111, Forge and Civitai '

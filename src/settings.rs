@@ -116,6 +116,8 @@ pub struct Settings {
     pub clear_outputs_on_close: bool,
     /// Empty `work/videos/`, and the enlarged frames of each clip.
     pub clear_videos_on_close: bool,
+    /// Empty `work/chats/` — never `user/favorite_chats/`.
+    pub clear_chats_on_close: bool,
 
     /// The longest side any enlarge may produce — Upscale, Hi-res, a generate's
     /// output upscale. Page-level: a limit of this machine and this browser, not
@@ -162,6 +164,12 @@ pub struct Settings {
     /// shares pictures and would rather their prompts didn't travel with them.
     /// Page-level.
     pub embed_png_settings: bool,
+
+    /// The `[agent]` table: what a new chat's agent may change and how far
+    /// (`crate::agent::knobs::Permissions`). Each chat takes a copy when it
+    /// starts and keeps its own. Page-level; a table, so declared after every
+    /// plain value, before `[variables]` (see its note).
+    pub agent: crate::agent::knobs::Permissions,
 
     /// The `[variables]` table: `{animal}` in a prompt and the words it can
     /// stand for. See [`crate::variables`].
@@ -318,6 +326,7 @@ impl Default for Settings {
             clear_workitems_on_close: false,
             clear_outputs_on_close: false,
             clear_videos_on_close: false,
+            clear_chats_on_close: false,
             max_image_side: DEFAULT_MAX_IMAGE_SIDE,
             // sd.cpp's own packing until someone needs more slack: the
             // out-of-memory box offers it when a run dies of exactly that.
@@ -331,6 +340,8 @@ impl Default for Settings {
             vae_conv_direct: true,
             video_save: VIDEO_FILE.into(),
             embed_png_settings: true,
+            // Prompt, negative and a bounded CFG on; the rest is asked for.
+            agent: crate::agent::knobs::Permissions::default(),
             // What the default prompt names. A file with no `[variables]`
             // table gets these too, which is what keeps that prompt from being
             // a 400; one the page emptied is written as an empty table and
@@ -391,12 +402,14 @@ impl Settings {
             clear_workitems_on_close: self.clear_workitems_on_close,
             clear_outputs_on_close: self.clear_outputs_on_close,
             clear_videos_on_close: self.clear_videos_on_close,
+            clear_chats_on_close: self.clear_chats_on_close,
             max_image_side: self.max_image_side,
             gpu_reserve_gb: self.gpu_reserve_gb,
             reference_size: self.reference_size,
             vae_conv_direct: self.vae_conv_direct,
             video_save: self.video_save.clone(),
             embed_png_settings: self.embed_png_settings,
+            agent: self.agent.clone(),
             variables: self.variables.clone(),
         }
     }
@@ -508,6 +521,7 @@ impl Settings {
             );
         }
         variables::validate(&self.variables)?;
+        self.agent.validate().context("in [agent]")?;
         self.as_profile("settings").validate()
     }
 
@@ -986,12 +1000,14 @@ const PAGE_ONLY: &[&str] = &[
     "clear_workitems_on_close",
     "clear_outputs_on_close",
     "clear_videos_on_close",
+    "clear_chats_on_close",
     "max_image_side",
     "gpu_reserve_gb",
     "reference_size",
     "vae_conv_direct",
     "video_save",
     "embed_png_settings",
+    "agent",
 ];
 
 /// [`Settings::video_save`]'s values: a video file beside the frames, or the

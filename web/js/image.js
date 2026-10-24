@@ -1155,6 +1155,20 @@ function genPayload() {
   }];
 }
 
+// The Image tab's settings as a `/generate` body: what a new agent chat
+// starts from (`agent.js`). A picked source is left out — a chat's rounds are
+// text to image — with its size and output upscale taken from the boxes.
+export function chatSettings() {
+  const [route, body] = genPayload();
+  if (route === '/generate') return body;
+  const { source, max_side, source_strength, ...rest } = body;
+  return { ...rest, width: numOr('w'), height: numOr('h'), upscale_factor: numOr('upscale'), upscaler: $('upscaler').value };
+}
+
+// A chat's settings back on the Image tab, the person's own press (*Open on
+// Image tab*): the model first, since its `change` refills every box.
+export const useSettings = (s) => applyParams(s);
+
 // The *After each generation* fold, as the run will carry it. The checkpoint
 // selects are read from the Image tab by id: Generate only exists there.
 function afterEach() {

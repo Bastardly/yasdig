@@ -28,7 +28,7 @@
 //!   between the last byte and the rename) is finished without asking the
 //!   server, which would answer a range past the end with a 416.
 
-use crate::catalog::{Catalog, Entry, File, Lora, Upscaler};
+use crate::catalog::{Agent, AgentFile, Catalog, Entry, File, Lora, Upscaler};
 use crate::config::{slash_name, Config};
 use crate::discover::{self, Found};
 use anyhow::{bail, Result};
@@ -63,6 +63,9 @@ enum Want {
     Upscaler { id: String },
     /// A speed LoRA a card fetches: checked to be a LoRA for its family.
     Lora { id: String },
+    /// One of an agent card's files: checked to be a language model or a
+    /// projector, as its slot says.
+    Agent { id: String, index: usize },
 }
 
 fn key(path: &Path) -> String {
@@ -91,6 +94,8 @@ struct Inner {
     upscalers: PathBuf,
     /// Where a [`Lora`]'s `dest` is — `Config::lora_dir`.
     loras: PathBuf,
+    /// Where an [`Agent`]'s files go — `Config::agent_dir`.
+    agents: PathBuf,
     state: Mutex<State>,
     wake: Condvar,
 }
@@ -102,6 +107,7 @@ impl Downloads {
             videos: cfg.video_dir(),
             upscalers: cfg.upscaler_dir(),
             loras: cfg.lora_dir(),
+            agents: cfg.agent_dir(),
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
         }));
@@ -159,6 +165,23 @@ impl Downloads {
                 want: Want::Upscaler { id: u.id.clone() },
             }]);
         }
+        if let Some(a) = c.agent(id) {
+            return Ok(a
+                .file
+                .iter()
+                .enumerate()
+                .map(|(index, f)| {
+                    let dest = self.0.agents.join(&f.dest);
+                    Task {
+                        key: key(&dest),
+                        dest,
+                        url: f.url.clone(),
+                        bytes: f.bytes,
+                        want: Want::Agent { id: a.id.clone(), index },
+                    }
+                })
+                .collect());
+        }
         bail!("no catalog entry named {id:?}")
     }
 
@@ -187,6 +210,9 @@ impl Downloads {
                     upscaler_is(&t.dest, c.upscaler(id).expect("tasks come from the catalog"))
                 }
                 Want::Lora { id } => lora_is(&t.dest, c.lora(id).expect("tasks come from the catalog")),
+                Want::Agent { id, index } => {
+                    agent_file_is(&t.dest, &c.agent(id).expect("tasks come from the catalog").file[*index])
+                }
             };
             if busy || had {
                 continue;
@@ -355,6 +381,12 @@ impl Downloads {
                     bail!("downloaded, but it reads as {arch}, not the {} the catalog lists", u.arch);
                 }
             }
+            Want::Agent { id, index } => {
+                let f = &Catalog::get().agent(id).expect("tasks come from the catalog").file[*index];
+                if !agent_file_is(dest, f) {
+                    bail!("downloaded, but it reads as {} — not {}", agent_file_describe(dest), agent_slot_label(f));
+                }
+            }
             Want::Lora { id } => {
                 let l = Catalog::get().lora(id).expect("tasks come from the catalog");
                 if !lora_is(dest, l) {
@@ -410,6 +442,21 @@ impl Downloads {
                 files: vec![upscaler_state(&self.0.upscalers, u, &st)],
             })
             .collect();
+        let agents = c
+            .agent
+            .iter()
+            .map(|a: &'static Agent| EntryView {
+                id: &a.id,
+                family: "agent",
+                family_label: "Agent",
+                label: &a.label,
+                recommended: Catalog::agent_recommended(a, vram),
+                card_gb: Some(a.card_gb),
+                note: &a.note,
+                bytes: a.bytes(),
+                files: a.file.iter().map(|f| agent_state(&self.0.agents, f, &st)).collect(),
+            })
+            .collect();
         CatalogView {
             curl: curl_available(),
             vram,
@@ -417,9 +464,11 @@ impl Downloads {
             models_dir: self.0.models.display().to_string(),
             upscaler_dir: self.0.upscalers.display().to_string(),
             video_dir: self.0.videos.display().to_string(),
+            agent_dir: self.0.agents.display().to_string(),
             entries,
             videos,
             upscalers,
+            agents,
         }
     }
 }
@@ -434,6 +483,7 @@ pub struct CatalogView {
     models_dir: String,
     upscaler_dir: String,
     video_dir: String,
+    agent_dir: String,
     entries: Vec<EntryView>,
     /// Video models. Their own
     /// list for the reason `upscalers` has one.
@@ -441,6 +491,8 @@ pub struct CatalogView {
     /// A list of their own, so the Help tab's family table — which reads
     /// `entries` — never meets one.
     upscalers: Vec<EntryView>,
+    /// The Agent tab's models, apart for the same reason.
+    agents: Vec<EntryView>,
 }
 
 #[derive(Serialize)]
@@ -574,6 +626,70 @@ fn lora_state(dir: &Path, l: &'static Lora, st: &State) -> FileView {
     } else if dest.exists() {
         v.state = "wrong";
         v.why = Some(format!("{} is there, and reads as {}", l.dest, discover::identify(&dest).describe()));
+    } else if let Some(why) = st.failed.get(&k) {
+        v.state = "failed";
+        v.got = got;
+        v.why = Some(why.clone());
+    } else if got > 0 {
+        v.state = "partial";
+        v.got = got;
+    }
+    v
+}
+
+/// An agent card's file is had when its own `dest` is there, whole, and its
+/// header says it is what the slot holds — the folder is the pairing, so a
+/// same-kind file elsewhere is not this one.
+fn agent_file_is(dest: &Path, f: &AgentFile) -> bool {
+    use crate::agents::AgentFile as A;
+    std::fs::metadata(dest).is_ok_and(|m| m.is_file() && m.len() == f.bytes)
+        && matches!(
+            (crate::agents::identify(dest), f.slot.as_str()),
+            (A::Lm(_), "model") | (A::Projector(_), "mmproj")
+        )
+}
+
+fn agent_slot_label(f: &AgentFile) -> &'static str {
+    if f.slot == "mmproj" { "Vision projector" } else { "Language model" }
+}
+
+fn agent_file_describe(dest: &Path) -> String {
+    use crate::agents::AgentFile as A;
+    match crate::agents::identify(dest) {
+        A::Lm(m) => format!("a {} language model", m.arch.unwrap_or_default()),
+        A::Projector(_) => "a vision projector".to_string(),
+        A::Unknown(why) => why,
+    }
+}
+
+/// [`file_state`] for an agent card's file, under the agents dir.
+fn agent_state(dir: &Path, f: &'static AgentFile, st: &State) -> FileView {
+    let dest = dir.join(&f.dest);
+    let k = key(&dest);
+    let got = std::fs::metadata(part_of(&dest)).map(|m| m.len()).unwrap_or(0);
+    let mut v = FileView {
+        slot: f.slot.clone(),
+        slot_label: agent_slot_label(f).to_string(),
+        dest: f.dest.clone(),
+        bytes: f.bytes,
+        page: f.page(),
+        state: "missing",
+        got: 0,
+        name: None,
+        why: None,
+    };
+    if st.running.as_deref() == Some(&k) {
+        v.state = "downloading";
+        v.got = got;
+    } else if st.queue.iter().any(|t| t.key == k) {
+        v.state = "queued";
+        v.got = got;
+    } else if agent_file_is(&dest, f) {
+        v.state = "have";
+        v.name = Some(f.dest.clone());
+    } else if dest.exists() {
+        v.state = "wrong";
+        v.why = Some(format!("{} is there, and reads as {}", f.dest, agent_file_describe(&dest)));
     } else if let Some(why) = st.failed.get(&k) {
         v.state = "failed";
         v.got = got;
@@ -832,6 +948,7 @@ mod tests {
             videos: models.join("video"),
             upscalers: upscalers.to_path_buf(),
             loras: models.join("loras"),
+            agents: models.join("agents"),
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
         }))

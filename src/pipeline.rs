@@ -74,6 +74,11 @@ pub enum Slot {
     Image,
     /// The image the Outputs tab's viewer has open.
     Output,
+    /// An agent chat's newest picture, and the keeper a pass of the agent's
+    /// runs on. Its own slot, so an agent's round never takes the Image tab's
+    /// picture off the screen — `diffuse` publishes only `Slot::Image` results
+    /// as the latest.
+    Agent,
 }
 
 struct Live {
@@ -1301,6 +1306,14 @@ impl Engine {
         }
     }
 
+    pub fn cfg(&self) -> &Config {
+        &self.cfg
+    }
+
+    pub fn monitor(&self) -> &Monitor {
+        &self.monitor
+    }
+
     /// For the HTTP side: pinning an image a queued Refine will need.
     pub fn retained(&self) -> Arc<Mutex<Retained>> {
         self.retained.clone()
@@ -1478,6 +1491,11 @@ impl Engine {
     }
 
     pub fn run(&mut self, req: &GenRequest, pin: bool) -> Result<GenResult> {
+        self.run_in(req, pin, Slot::Image)
+    }
+
+    /// [`Engine::run`], retained in `slot` — an agent's round is `Slot::Agent`.
+    pub fn run_in(&mut self, req: &GenRequest, pin: bool, slot: Slot) -> Result<GenResult> {
         let mut profile = self.model(&req.template)?;
         // Apply per-request overrides onto the profile.
         if let Some(v) = req.steps {
@@ -1755,7 +1773,7 @@ impl Engine {
         });
         // `pin` is a run holding this image for the hi-res and refine still to
         // come — see [`Live::pins`].
-        lock(&self.retained).store(id, Slot::Image, entry, pin);
+        lock(&self.retained).store(id, slot, entry, pin);
         Ok(result)
     }
 
@@ -3649,6 +3667,12 @@ impl Display {
     /// `.edits/` folder is copied in. A folder that can't be read opens the
     /// original, said in the log: it must never cost the picture.
     pub fn open(&mut self, work_id: &str, shelf: Shelf) -> Result<GenResult> {
+        self.open_in(work_id, shelf, Slot::Image)
+    }
+
+    /// [`Display::open`] into `slot` — the agent opens its keeper into
+    /// `Slot::Agent` to run a pass on it.
+    pub fn open_in(&mut self, work_id: &str, shelf: Shelf, slot: Slot) -> Result<GenResult> {
         let item = self.items.load(shelf, work_id)?;
         // The validated id, never the sidecar's own `id` field: a copied-in
         // sidecar whose field disagrees with its file name would open another
@@ -3661,7 +3685,11 @@ impl Display {
             let (png, _, _) =
                 publish(&self.fsr, &p.raw, &p.display, &p.filters, p.area.as_ref(), &p.brushes, p.restore_source(p.at))?;
             let result = p.result(id, png, Timings { fsr_ms: t.elapsed().as_millis(), ..Default::default() });
-            lock(&self.retained).store(id, Slot::Image, p, false);
+            // The agent works on a live entry where it is: taking it into
+            // `Slot::Agent` would take the person's picture off the Image tab.
+            if slot != Slot::Agent {
+                lock(&self.retained).store(id, slot, p, false);
+            }
             return Ok(result);
         }
 
@@ -3671,7 +3699,7 @@ impl Display {
             match kept {
                 Ok(Some((entry, png, fsr_ms))) => {
                     let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
-                    lock(&self.retained).store(id, Slot::Image, entry, false);
+                    lock(&self.retained).store(id, slot, entry, false);
                     return Ok(result);
                 }
                 Ok(None) => {}
@@ -3722,7 +3750,7 @@ impl Display {
             step: 0,
         };
         let result = entry.result(id, png, Timings { fsr_ms, ..Default::default() });
-        lock(&self.retained).store(id, Slot::Image, entry, false);
+        lock(&self.retained).store(id, slot, entry, false);
         Ok(result)
     }
 

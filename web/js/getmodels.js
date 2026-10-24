@@ -1,6 +1,7 @@
 import { $, esc, getJSON, post } from './dom.js';
 import { loadModels } from './image.js';
 import { loadVideoModels } from './video.js';
+import { loadAgents } from './agent.js';
 
 // The Get models tab: the server's catalog (`src/catalog.toml`), one card per
 // set of files — a family may have two, in different precisions — and what
@@ -82,7 +83,12 @@ function pages(e) {
 
 // Every card, in the order drawn — the one list the poll and the buttons care
 // about.
-const allEntries = () => [...view.entries, ...(view.videos ?? []), ...(view.upscalers ?? [])];
+const allEntries = () =>
+  [...view.entries, ...(view.videos ?? []), ...(view.upscalers ?? []), ...(view.agents ?? [])];
+
+// The categories whose cards have no families to tell apart: one nav button
+// and one anchor, on the first card.
+const SINGLE = { upscaler: 'Upscalers', agent: 'Agent models' };
 
 // A family's first card, once each: the nav buttons, and the anchor
 // `openGetModels` scrolls to.
@@ -98,6 +104,8 @@ const categories = () => [
     where: 'Everything is here. Pick it in the Video tab’s model list.' },
   { id: 'upscaler', title: 'Upscalers', entries: view.upscalers ?? [],
     where: 'Everything is here. Pick it under Output upscale, or in Refine & adjust’s Scale.' },
+  { id: 'agent', title: 'Agent models', entries: view.agents ?? [],
+    where: 'Everything is here. Pick it in the Agent tab’s Model panel.' },
 ].filter((c) => c.entries.length);
 
 function card(e, i, where, first) {
@@ -112,10 +120,11 @@ function card(e, i, where, first) {
     busy ? '<button type="button" class="btn btn-danger" data-act="cancel">Cancel</button>' : '',
     partial ? '<button type="button" class="btn" data-act="clear">Remove partial</button>' : '',
   ].join('');
-  const upscaler = e.family === 'upscaler';
-  // The upscalers share one anchor, on the first of them.
-  // A family with two cards anchors on the first of them, like the upscalers.
-  const anchor = upscaler ? (i === 0 ? 'id="gm-upscaler"' : '') : (first ? `id="gm-${e.family}"` : '');
+  // The upscalers and the agents share one anchor each, on the first card.
+  // A family with two cards anchors on the first of them, the same way.
+  const anchor = SINGLE[e.family]
+    ? (i === 0 ? `id="gm-${e.family}"` : '')
+    : (first ? `id="gm-${e.family}"` : '');
   const badge = e.recommended ? '<span class="gmbadge">Recommended</span>' : '';
   // More than the GPU holds: it still runs, with part of it in system RAM.
   const big = view.vram && e.card_gb && e.card_gb * 2 ** 30 > view.vram
@@ -140,6 +149,7 @@ function draw() {
     : 'curl was not found, so nothing can be downloaded from here. Install curl, or fetch the files '
       + 'by hand (docs/configuration.md, Get a model) into the folders each card names.';
   if (view.videos?.length) $('gmdir').innerHTML += ` Video models go in <code>${esc(view.video_dir)}</code>.`;
+  if (view.agents?.length) $('gmdir').innerHTML += ` Agent models go in <code>${esc(view.agent_dir)}</code>.`;
   // What the recommendations were picked for, when the server could read it.
   if (view.vram) $('gmdir').innerHTML += ` <b>Recommended</b> is picked for this GPU’s ${vramGb(view.vram)}.`;
   // The upscalers are one button: they have no families to tell apart.
@@ -149,8 +159,8 @@ function draw() {
     `<button type="button" class="btn btn-choice" data-family="${e.family}">${esc(e.family_label)}`
     + `${recommended(e.family) ? ' <span class="gmbadge">Recommended</span>' : ''}</button>`;
   $('gmnav').innerHTML = categories().map((c) => `<span class="grouphead">${c.title}</span>`
-    + (c.id === 'upscaler'
-      ? '<button type="button" class="btn btn-choice" data-family="upscaler">Upscalers</button>'
+    + (SINGLE[c.id]
+      ? `<button type="button" class="btn btn-choice" data-family="${c.id}">${SINGLE[c.id]}</button>`
       : firstPerFamily(c.entries).map(navButton).join(''))).join('');
   $('gmlist').innerHTML = categories().map((c) => {
     const firsts = new Set(firstPerFamily(c.entries));
@@ -173,6 +183,7 @@ async function refresh() {
   if (finished !== null && view.finished !== finished) {
     loadModels({ refill: false });
     if (view.videos?.length) loadVideoModels({ refill: false });
+    if (view.agents?.length) loadAgents();
   }
   finished = view.finished;
   draw();

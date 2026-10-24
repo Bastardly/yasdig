@@ -116,6 +116,12 @@
   --thumb-h-pick: 140px; /* the first-frame picker */
   --thumb-h-chosen: 120px; /* the one chosen image, above its buttons */
   --star: 28px;          /* the favourite star's disc on a thumbnail */
+  --chat-w: 760px;       /* the Agent tab's conversation, before it is dragged:
+                            a line of about 90 characters, and a round of four
+                            pictures side by side at a size a face reads at */
+  --chat-min: 480px;
+  --chat-max: 1400px;
+  --chat-pic: 160px;     /* a picture in the conversation, its height */
   --preview-h: 420px;    /* the live preview under the progress line; a cap,
                             so a portrait render can't push the folds away */
   --bar-name: 60px;
@@ -1083,6 +1089,104 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    420px controls card stranded beside empty space. One column, full width.
    The number is a literal because it has to be: custom properties are not
    allowed in a media query, so --col-* can't be used here. */
+/* ============================ The Agent tab ============================ */
+
+/* The conversation: a centred column of the person's width (`--chat-w`, the
+   grip on its right edge), its messages scrolling and the composer pinned
+   under them. */
+.astage { align-items: stretch; padding: var(--sp-3) var(--sp-4); }
+.chatcol {
+  position: relative; display: flex; flex-direction: column; gap: var(--sp-2);
+  width: clamp(var(--chat-min), var(--chat-w), min(var(--chat-max), 100%)); margin: 0 auto; min-height: 0;
+}
+.chathead { display: flex; align-items: baseline; gap: var(--sp-3); }
+.chattitle { flex: 1; min-width: 0; font-size: var(--fs-title); background: transparent; border-color: transparent; }
+.chattitle:hover, .chattitle:focus { border-color: var(--ink-500); }
+.chatlog {
+  flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-1);
+}
+.chatlog:empty::after { content: attr(data-empty); color: var(--text-dim); margin: auto; text-align: center; max-width: 36em; }
+.chatgrip {
+  position: absolute; top: 0; bottom: 0; right: calc(-1 * var(--sp-3)); width: var(--sp-2);
+  cursor: ew-resize; border-radius: var(--r-sm);
+}
+.chatgrip:hover { background: var(--ink-500); }
+
+.chatmsg { display: flex; flex-direction: column; gap: var(--sp-2); max-width: 100%; }
+.chatmsg.user {
+  align-self: flex-end; max-width: 85%; padding: var(--sp-2) var(--sp-3);
+  background: var(--ink-700); border: var(--line); border-radius: var(--r-lg);
+}
+.chatmsg.agent { align-self: flex-start; }
+.chatmsg.live .chattext { color: var(--text-dim); }
+.chattext { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chatnote { margin: 0; align-self: center; font-size: var(--fs-sm); color: var(--text-faint); text-align: center; }
+.chatfoot { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
+.chatnotes { font-size: var(--fs-sm); color: var(--text-dim); }
+.chatnotes > summary { cursor: pointer; color: var(--text-faint); }
+.chatnotes > p { margin: var(--sp-1) 0 0; white-space: pre-wrap; }
+.chatstats { font-family: var(--font-num); font-size: var(--fs-micro); }
+.chatchecklist { margin: 0; padding-left: var(--sp-5); }
+
+/* A round, and any picture in the conversation: a strip at one height, its
+   number, the agent's marks and a Describe that shows on hover. */
+.chatpics { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.chatpic { position: relative; margin: 0; line-height: 0; }
+.chatpicimg { padding: 0; border: 2px solid transparent; border-radius: var(--r-md); background: none; cursor: pointer; }
+.chatpicimg:hover { border-color: var(--state); }
+.chatpic img { height: var(--chat-pic); width: auto; display: block; border-radius: var(--r-sm); }
+.chatpicno, .chatchecks, .chatbadge {
+  position: absolute; line-height: 1; font-size: var(--fs-micro); padding: 2px var(--sp-1);
+  border-radius: var(--r-sm); background: var(--scrim-soft); color: var(--text);
+}
+.chatpicno { top: var(--sp-1); left: var(--sp-1); font-family: var(--font-num); }
+.chatchecks { bottom: var(--sp-1); left: var(--sp-1); font-family: var(--font-num); letter-spacing: 1px; }
+.chatbadge { top: var(--sp-1); right: var(--sp-1); }
+.chatbadge.pass { top: auto; bottom: var(--sp-1); right: var(--sp-1); color: var(--go-hi); }
+.chatbadge.keep { color: var(--accent-hi); }
+.chatpictool { position: absolute; top: calc(var(--sp-1) + 20px); right: var(--sp-1); line-height: 1; opacity: 0; }
+.chatpic:hover .chatpictool, .chatpictool:focus-visible { opacity: 1; }
+@media (hover: none) { .chatpictool { opacity: 1; } }
+
+/* A change, a pass or a prompt the agent offers: a card; one waiting for the
+   person's answer has the state colour's edge. */
+.chatcard {
+  padding: var(--sp-2) var(--sp-3); background: var(--ink-800); border: var(--line); border-radius: var(--r-md);
+  display: flex; flex-direction: column; gap: var(--sp-1);
+}
+.chatcard.pending { border-color: var(--state); }
+.chatcard .btnrow { margin-top: var(--sp-1); }
+.chatcardhead { margin: 0; font-size: var(--fs-sm); color: var(--text-dim); }
+.chatchanges { margin: 0; padding-left: var(--sp-4); }
+.chatprompt { margin: 0; white-space: pre-wrap; font-size: var(--fs-sm); }
+
+/* The composer, under the conversation. */
+.composer { display: flex; flex-direction: column; gap: var(--sp-2); padding-top: var(--sp-2); border-top: var(--line); }
+.composerrow { align-items: center; }
+.composerrow .grow { flex: 1; }
+.chips { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.chips:empty { display: none; }
+.chip { position: relative; line-height: 0; }
+.chip img { height: 56px; width: auto; border-radius: var(--r-sm); }
+.chip .hint { position: absolute; top: 2px; right: 2px; line-height: 1; background: var(--scrim-soft); }
+
+/* A chat's tile: its newest picture, or its title where it has none yet. */
+.chatgrid .chattile > button { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-width: calc(var(--thumb-h) * .75); min-height: var(--thumb-h); background: var(--ink-800); }
+.chatgrid .chattile img { height: calc(var(--thumb-h) - 2 * var(--fs-sm)); }
+.chattiletitle {
+  line-height: var(--lh-body); font-size: var(--fs-sm); color: var(--text-dim); padding: 0 var(--sp-2);
+  max-width: calc(var(--thumb-h) * 1.2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* The Permissions panel: a knob a row. */
+.permrow { padding: var(--sp-2) 0; border-bottom: var(--line); }
+.permrow:last-of-type { border-bottom: 0; }
+.permbounds { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-1); }
+.permbounds input { width: 7em; }
+.permmodels { display: flex; flex-direction: column; margin-top: var(--sp-1); }
+
 @media (max-width: 899px) {
   .col-controls, .col-result, .workitems { flex-basis: 100%; max-width: none; }
 }

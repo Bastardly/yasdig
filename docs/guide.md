@@ -800,6 +800,65 @@ chat, without sound, at most 480 px wide; and **AVI (original)** is the file yas
 soft, and *Half size* helps. The sound goes in as Opus, which some Apple players skip.
 Firefox on Linux may have no H.264 encoder; Chrome has.
 
+## The agent
+
+The **Agent** tab is a chat with a small language model that runs on your own GPU, the
+way the image models do. It needs an agent model (Get models → *Agent models*; the 4B
+fits an 8 GB card) and helps in three ways:
+
+- **Talk about prompts.** Ask for a prompt, a rewrite, ideas. It can change the chat's
+  settings as it answers — each change is a card with its reason and an **Undo**.
+- **Describe a picture.** Attach one (Attach, paste or drop it on the composer) and press
+  *Describe as prompt*, or press *Describe* on any picture in the chat. It writes a prompt
+  for the chat's image model in that model's style — tags for SD 1.x, SD 2.x and SDXL,
+  sentences for the rest — with *Use in this chat* and *Copy to the Image tab*.
+- **Run a session.** Write the goal ("a fox in a red knitted hat in a snowy forest") and
+  press *Run a session*. The agent writes yes/no checks for it, draws a round, answers
+  every check for every picture, changes one or two settings and draws again — until a
+  picture passes, it decides it can't do better, or the rounds run out. The pictures
+  land in Current on the Image tab like any generation; click one in the chat to open it
+  there. Each is marked with its answers (✓✗), the ones the agent kept, and — since a
+  small model is a lenient judge of its own work — the ones every check said yes to.
+
+**A chat has its own copy of the settings.** A new chat takes the Image tab's settings
+as they are when you first write; the agent changes that copy, and never the Image tab
+while you work there. *Settings* shows and edits it, *Copy from Image tab* takes the Image
+tab's again, and *Open on Image tab* puts the chat's there.
+
+**Permissions** says what the agent may do, per setting: *Off*, *Ask first* (it proposes,
+and waits for Approve or Reject) or *Auto* (it changes it and says why), each within a
+range you set. It starts with the prompt, negative prompt and CFG (1 to 8) on Auto and
+the rest off; *Save as default for new chats* keeps your choice. A model distilled to run
+without CFG — Z-Image, Flux, the Klein models, Krea 2, a Turbo LoRA — locks CFG and the
+negative prompt, which would do nothing. The passes it may run on a keeper (Hi-res,
+Refine, an Edit on a model that can) are off until you turn them on; a pass it runs is a
+History step on that picture. With *Same seeds every round* (on by default) picture 1 of
+every round starts from the same seed, so a difference between rounds is the change.
+
+A session is a run of steps on the job queue — a reply, a picture, a pass — so a Refine
+you press on the Image tab runs between them, and **Stop** ends it straight away. The
+agent's model loads for each reply and lets go of the GPU after, so it never shares the
+card with the image model: a bigger agent costs load time, not render time. Chats are
+kept in Current with a star for Favorites, like clips; *Clear agent chats* in Settings
+deletes the unstarred ones when the server closes.
+
+**Skills** are the notes the agent is given with each reply: how yasdig works, and how
+the chat's model wants its prompts written. Add your own as markdown files in
+`user/skills/`:
+
+```text
+---
+id: my-style
+families: [sdxl]          # which models it is for; leave out for all
+modes: [chat, critique]   # chat, plan, critique, describe; leave out for all
+priority: 60              # higher is kept first when there are too many
+---
+Always add "film grain, 35mm" to photographic prompts.
+```
+
+A skill with a built-in one's `id` (`general`, `plan`, `critique`, `describe`, `tags`,
+`sentences`, `qwen-image`, `moss`) replaces it. `doctor` says when one can't be read.
+
 ## Convert
 
 The third tab requantizes a model file you already have, instead of downloading a

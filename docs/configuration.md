@@ -156,6 +156,21 @@ rest and can go anywhere under `models/`:
 | the tokenizer | [`tokenizer.json`](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/tree/main/tokenizer) |
 | the VAE — Flux.2's | the same file as Flux.2 Klein's, above |
 
+**Agent models** (the [Agent tab](guide.md#the-agent)) are a language model and,
+for one that sees pictures, its vision projector (an `mmproj` file), both GGUF, in a
+folder of their own under `models/agents/`. A folder holding one model and one
+projector is one agent — that is how a projector is paired, since their headers can't
+always say which goes with which. Get models → *Agent models* fetches each into its own
+folder. Any llama.cpp instruct model with a chat template works; `doctor` lists what is
+there and what each file is.
+
+| card | about | files |
+|---|---|---|
+| Qwen3.5 4B | 4 GB on the card: for an 8 GB GPU | [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF): `Qwen3.5-4B-Q4_K_M.gguf` and `mmproj-F16.gguf` |
+| Ministral 3 8B | 7 GB | [mistralai/Ministral-3-8B-Instruct-2512-GGUF](https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF): the `Q4_K_M` model and the `BF16-mmproj` |
+| Ministral 3 14B | 11 GB: for 16–24 GB | [mistralai/Ministral-3-14B-Instruct-2512-GGUF](https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512-GGUF): the same two |
+| Gemma 4 26B A4B | 19 GB, quick for its size (4B active) | [unsloth/gemma-4-26B-A4B-it-GGUF](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF): `gemma-4-26B-A4B-it-UD-Q4_K_M.gguf` and `mmproj-F16.gguf` |
+
 If a model runs out of memory, the error says which memory and when, and offers the
 ways out as buttons — chiefly the **Memory** setting in the *Models* fold: *System RAM*
 keeps the weights in RAM and leaves the card for the work, *Stream from SSD* re-reads
@@ -260,6 +275,10 @@ where it says something:
   This one *is* recursive, so `models/loras/sdxl/` works. See [LoRAs](guide.md#loras).
 - `[sd].upscaler_dir` — folder of ESRGAN upscaler models (default `upscalers/` inside
   the models dir). See [Upscalers](guide.md#upscalers).
+- `[sd].agent_dir` — folder of the Agent tab's models (default `agents/` inside the
+  models dir), left out of the checkpoint scan. See [Agent models](#get-a-model).
+- `[llm].binary` — path to the agent's driver, `yasdig-llm`. Leave it out to use the one
+  built into a release executable; a checkout sets it to `llama.cpp/build-yasdig/bin/`.
 - The port and address are not here any more: they are in `startup.toml`, beside this
   file (see [Run](#run)). A `[server]` block left over from before is copied there on
   the first start and ignored after that; `doctor` says so.
@@ -306,7 +325,9 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `clear_workitems_on_close` | when **Close server** is pressed, delete every work item on the Current shelf. Default `false`. Favorites are never touched |
 | `clear_outputs_on_close` | the same for `work/output/` — saved images and uploads. Default `false`. Favorite outputs are never touched |
 | `clear_videos_on_close` | the same for `work/videos/` (each clip with its enlarged versions); starred clips in `user/favorite_clips/` are kept. Default `false` |
+| `clear_chats_on_close` | the same for `work/chats/`, the Agent tab's chats; starred ones in `user/favorite_chats/` are kept, and so are the pictures their rounds made (those are work items). Default `false` |
 | `max_image_side` | the longest side Upscale, Hi-res or a generate's output upscale may produce (default 8192, 1024–32768). Past it, the pass is refused with a message naming this setting and the GPU's own limit, which nothing can raise (16384 on a 7900 XTX). Larger images are slow to show in the page |
+| `[agent]` | what a new agent chat may change and how far — each chat keeps its own copy. `seed_lock` (default `true`: the same seeds every round), `batch` (pictures a round, 1–8, default 4), `rounds` (1–10, default 3), `max_changes` (settings one reply may change, 1–2, default 2), `[agent.actions]` (`hires`, `refine`, `edit` — each `off`, `ask` or `auto`, default `off`) and `[agent.knobs.<name>]` for `prompt`, `negative`, `cfg_scale`, `steps`, `size` and `model`: `perm` (`off`/`ask`/`auto`; prompt, negative and CFG default to `auto`), `min`/`max` (CFG 1–8, steps 4–40, size 512–1536 by default) and, for `model`, `allowed`. Set from the Agent tab's Permissions panel, *Save as default for new chats*. Page-level |
 | `[variables]` | named word lists a prompt draws from — `animal = ["crab", "horse"]` makes `{animal}` in any prompt one of them. Defaults: `animal = ["cat", "fox", "bear"]`, `color = ["red", "blue", "golden"]`; a file with no table gets these, and a table emptied in Settings stays empty. See [Prompt variables](guide.md#prompt-variables) |
 
 All three denoise strengths must be between **0.05 and 0.95** — a

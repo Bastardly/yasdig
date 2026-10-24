@@ -6,7 +6,8 @@
 //! able to keep it from filling the disk.
 //!
 //! **Only what the app itself lists is removed**, through the deletes that
-//! already exist — `Store::delete`, `Store::delete_output`, `VideoStore::delete`.
+//! already exist — `Store::delete`, `Store::delete_output`, `VideoStore::delete`,
+//! `ChatStore::delete`.
 //! Not `remove_dir_all` on a directory: those routines carry the `valid_id`
 //! whitelist and know which files belong to an entry, and a wholesale wipe of a
 //! folder the user can also reach in a file manager would take whatever they
@@ -17,6 +18,7 @@
 //! Refusing to exit over a locked thumbnail would leave the person with a
 //! server they can't stop from the page — the problem this exists to solve.
 
+use crate::agent::chat::ChatStore;
 use crate::config::Config;
 use crate::settings::Settings;
 use crate::videos::VideoStore;
@@ -28,15 +30,21 @@ pub struct Cleared {
     pub workitems: usize,
     pub outputs: usize,
     pub videos: usize,
+    pub chats: usize,
 }
 
 pub fn clear(cfg: &Config) -> Cleared {
     let settings = Settings::load_or_default(&cfg.user_dir());
     let work = cfg.base_dir.join("work");
-    clear_in(&Store::new(&work, &cfg.user_dir()), &VideoStore::new(&work, &cfg.user_dir()), &settings)
+    clear_in(
+        &Store::new(&work, &cfg.user_dir()),
+        &VideoStore::new(&work, &cfg.user_dir()),
+        &ChatStore::new(&work, &cfg.user_dir()),
+        &settings,
+    )
 }
 
-fn clear_in(store: &Store, videos: &VideoStore, s: &Settings) -> Cleared {
+fn clear_in(store: &Store, videos: &VideoStore, chats: &ChatStore, s: &Settings) -> Cleared {
     let mut out = Cleared::default();
     let log = |e: anyhow::Error| eprintln!("[yasdig] clearing on close: {e:#}");
     if s.clear_workitems_on_close {
@@ -91,6 +99,15 @@ fn clear_in(store: &Store, videos: &VideoStore, s: &Settings) -> Cleared {
             }
         }
     }
+    if s.clear_chats_on_close {
+        // `work/chats/` alone: a starred chat is in `user/favorite_chats/`.
+        for c in chats.list(Shelf::Work) {
+            match chats.delete(Shelf::Work, &c.id) {
+                Ok(()) => out.chats += 1,
+                Err(e) => log(e),
+            }
+        }
+    }
     out
 }
 
@@ -121,6 +138,13 @@ mod tests {
         let work = dir.join("work");
         let store = Store::new(&work, &dir.join("user"));
         let videos = VideoStore::new(&work, &dir.join("user"));
+        let chats = ChatStore::new(&work, &dir.join("user"));
+        let chat = |id: &str| {
+            crate::agent::chat::Chat::new(id.into(), serde_json::json!({}), Default::default(), None)
+        };
+        chats.create(&chat("1-0")).unwrap();
+        chats.create(&chat("2-0")).unwrap();
+        chats.favorite("2-0").unwrap();
         let png = dir.join("src.png");
         image::RgbaImage::from_pixel(32, 16, image::Rgba([7, 7, 7, 255]))
             .save(&png)
@@ -135,17 +159,20 @@ mod tests {
         std::fs::create_dir_all(&mine).unwrap();
 
         // Nothing ticked: nothing goes.
-        let none = clear_in(&store, &videos, &Settings::default());
+        let none = clear_in(&store, &videos, &chats, &Settings::default());
         assert_eq!(none.outputs, 0);
         assert_eq!(store.list_outputs(Gallery::Output).len(), 1);
 
         let s = Settings {
             clear_outputs_on_close: true,
             clear_videos_on_close: true,
+            clear_chats_on_close: true,
             ..Settings::default()
         };
-        let got = clear_in(&store, &videos, &s);
+        let got = clear_in(&store, &videos, &chats, &s);
         assert_eq!(got.outputs, 1);
+        assert_eq!(got.chats, 1);
+        assert!(chats.load("2-0").is_ok(), "a starred chat stays");
         assert!(store.list_outputs(Gallery::Output).is_empty());
         assert_eq!(store.list_outputs(Gallery::Favorites).len(), 1);
         assert!(!enlarged.exists());

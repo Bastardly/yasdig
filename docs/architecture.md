@@ -8,6 +8,13 @@ How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the detail
   connection threads enqueue a job and wait for the reply.
 - **Shell-out, not FFI.** The server runs `sd-cli` as a subprocess per request — clean
   isolation, easy debugging, and it keeps everything Python-free.
+- **The agent is a second subprocess, run the same way.** `yasdig-llm` (`llm/`, built
+  against llama.cpp) takes a request file — the conversation, the pictures as paths in
+  `work/current/`, the reply's JSON schema — answers once and exits, in the same sandbox
+  as sd-cli. llama.cpp's own CLIs don't fit: `llama-mtmd-cli` takes no conversation, and
+  `llama-cli` talks to an in-process server over a loopback socket the sandbox refuses.
+  Nothing stays loaded between turns, so the GPU is the image model's whenever the agent
+  isn't writing; a chat's work is one queue entry handed to the worker a step at a time.
 - **sd-cli has no network** (Linux and Windows). It parses downloaded model files in
   C++, so a crafted file exploiting a loader bug is the one way a model could act.
   On Linux a seccomp filter installed between fork and exec (`src/sandbox.rs`)
@@ -28,6 +35,12 @@ How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the detail
   src/foldscale.rs fold a scaled-fp8 GGUF's per-tensor scales into its weights
   src/preflight.rs startup environment checks, shared with `doctor`
   src/sd.rs        sd-cli subprocess wrapper (txt2img + img2img + vid_gen)
+  src/llm.rs       the agent's llama.cpp driver as a subprocess: one turn, framed stdout
+  src/agents.rs    the agent's models: GGUF headers read, model and projector paired by folder
+  src/agent/       the Agent tab: chats (chat.rs), the knob table and permissions (knobs.rs,
+                   toolkit.rs), the reply grammar (schema.rs), what a turn is shown
+                   (context.rs), the bounded workflow (session.rs), skills, routes
+  llm/             yasdig-llm.cpp: one chat turn over llama.cpp's libraries, built by build.rs
   src/sandbox.rs   keeps sd-cli off the network: seccomp (Linux), AppContainer (Windows)
   src/settings.rs  user/settings.toml and user/model-settings.toml
   src/pipeline.rs  orchestrate sd -> fsr -> escalations, with timings + result cache

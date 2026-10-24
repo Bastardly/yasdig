@@ -15,6 +15,7 @@
     <h1 title="Yet Another Stable Diffusion Image Generator">YASDIG</h1>
     <button type="button" class="btn btn-choice tab active" data-tab="image">Image</button>
     <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
+    <button type="button" class="btn btn-choice tab" data-tab="agent">Agent</button>
     <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
     <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
     <button type="button" class="btn btn-choice tab" data-tab="getmodels">Get models</button>
@@ -223,7 +224,7 @@
       </div>
       <div>
         <label for="cfg">CFG scale</label>
-        <input id="cfg" type="number" step="0.1" min="0">
+        <input id="cfg" type="number" step="0.1" min="0" max="30">
       </div>
     </div>
     <!-- How the noise is walked. The list is sd.cpp's whole set, grouped as
@@ -406,7 +407,7 @@
         <!-- Blank = follow the generating CFG. The placeholder shows what that
              resolves to, so an empty field still says what it does. -->
         <label for="hcfg">Hi-res CFG</label>
-        <input id="hcfg" type="number" step="0.1" min="0">
+        <input id="hcfg" type="number" step="0.1" min="0" max="30">
       </div>
     </div>
     <div class="row">
@@ -446,7 +447,7 @@
       </div>
       <div>
         <label for="rcfg">Refine CFG</label>
-        <input id="rcfg" type="number" step="0.1" min="0">
+        <input id="rcfg" type="number" step="0.1" min="0" max="30">
       </div>
     </div>
     <label for="rstrength">Refine strength</label>
@@ -781,6 +782,119 @@
       <canvas id="vlivepreview" class="livepreview" hidden></canvas>
     </details>
     <p class="sub" id="vprog"></p>
+  </div>
+  </div>
+
+  <!-- The Agent tab: a chat with a local vision-language model (`agent.js`).
+       A workspace like Video's: the rail's panels, and on the stage the
+       conversation in a column of the person's width with the composer
+       pinned under it. A chat keeps its own copy of the Image tab's settings;
+       the agent changes that copy, never the Image tab. -->
+  <div class="workspace" id="tab-agent" hidden>
+  <nav class="wsrail" aria-label="Agent">
+    <button type="button" class="btn btn-choice railbtn" data-panel="agent-model">Model</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="agent-settings">Settings</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="agent-perms">Permissions</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="agent-session">Session</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="agent-current">Current</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="agent-favorites">Favorites</button>
+    <div class="railfoot">
+      <div class="runstop">
+        <button id="astop" class="btn btn-danger btn-block" hidden>Stop</button>
+      </div>
+      <!-- An empty stage: the chat on screen stays in Current. -->
+      <button type="button" id="anew" class="btn btn-run btn-block"
+        title="Start a new chat. The one on screen stays in Current.">New chat</button>
+    </div>
+  </nav>
+  <div class="stage astage" id="astage">
+    <div class="chatcol" id="chatcol">
+      <div class="chathead">
+        <input id="atitle" class="chattitle" placeholder="New chat" aria-label="Chat title">
+        <span class="sub" id="astate"></span>
+      </div>
+      <div class="chatlog" id="chatlog" data-empty="Ask the agent for a prompt, attach a picture to describe, or give it a goal and press Run a session."></div>
+      <div class="composer" id="acomposer">
+        <div class="chips" id="achips"></div>
+        <prompt-box>
+          <textarea id="atext" class="short" placeholder="Write to the agent — or a goal: a fox in a red knitted hat, snowy forest"></textarea>
+        </prompt-box>
+        <div class="btnrow composerrow">
+          <button type="button" id="aattach" class="btn" title="Attach a picture (or paste or drop one)">Attach picture…</button>
+          <input type="file" id="afile" accept="image/*" multiple hidden>
+          <button type="button" id="adescribe" class="btn" disabled
+            title="Turn the attached picture into a prompt for the chat's model">Describe as prompt</button>
+          <span class="grow"></span>
+          <button type="button" id="asession" class="btn"
+            title="Treat the text as a goal: the agent writes checks, draws rounds and judges them">Run a session</button>
+          <button type="button" id="asend" class="btn" title="Send (Enter)">Send</button>
+        </div>
+      </div>
+      <div class="chatgrip" id="chatgrip" title="Drag to change the width; double-click resets it"></div>
+    </div>
+  </div>
+  <section class="fpanel" id="panel-agent-model" aria-label="Model" hidden>
+    <header class="fphead"><b>Model</b><button type="button" class="fpclose" aria-label="Close Model">&times;</button></header>
+    <div class="fpbody">
+      <label for="amodel" data-help="amodel">Agent model</label>
+      <select id="amodel"></select>
+      <p class="sub" id="amodelnote"></p>
+    </div>
+  </section>
+  <section class="fpanel" id="panel-agent-settings" aria-label="Settings" hidden>
+    <header class="fphead"><b>Settings</b><button type="button" class="fpclose" aria-label="Close Settings">&times;</button></header>
+    <div class="fpbody" id="asettings"></div>
+    <div class="fpfoot btnrow">
+      <button type="button" id="asettingscopy" class="btn" title="Take the Image tab's settings as they are now">Copy from Image tab</button>
+      <button type="button" id="asettingsuse" class="btn" title="Put these settings on the Image tab">Open on Image tab</button>
+      <button type="button" id="asettingssave" class="btn btn-run">Save</button>
+    </div>
+  </section>
+  <section class="fpanel" id="panel-agent-perms" aria-label="Permissions" hidden>
+    <header class="fphead"><b>Permissions</b><button type="button" class="fpclose" aria-label="Close Permissions">&times;</button></header>
+    <div class="fpbody">
+      <div id="aperms"></div>
+      <p class="sub" id="apermsnote"></p>
+    </div>
+    <div class="fpfoot btnrow">
+      <button type="button" id="apermsdefault" class="btn" title="Start every new chat with these">Save as default for new chats</button>
+      <button type="button" id="apermssave" class="btn btn-run">Save</button>
+    </div>
+  </section>
+  <section class="fpanel" id="panel-agent-session" aria-label="Session" hidden>
+    <header class="fphead"><b>Session</b><button type="button" class="fpclose" aria-label="Close Session">&times;</button></header>
+    <div class="fpbody" id="asessionbody"></div>
+  </section>
+  <section class="fpanel" id="panel-agent-current" aria-label="Current" hidden>
+    <header class="fphead"><b>Current</b><button type="button" class="fpclose" aria-label="Close Current">&times;</button></header>
+    <div class="fpbody">
+      <div class="wihead">
+        <span class="wimodes">
+          <label><input type="radio" name="amode" value="open" checked> Click to open</label>
+          <label><input type="radio" name="amode" value="delete"> Click to delete</label>
+        </span>
+        <button id="adelete" class="btn btn-danger" hidden></button>
+        <button id="adeleteall" class="btn btn-danger" hidden></button>
+      </div>
+      <div id="agrid" class="wigrid chatgrid"></div>
+    </div>
+  </section>
+  <section class="fpanel" id="panel-agent-favorites" aria-label="Favorites" hidden>
+    <header class="fphead"><b>Favorites</b><button type="button" class="fpclose" aria-label="Close Favorites">&times;</button></header>
+    <div class="fpbody">
+      <div class="wihead">
+        <span class="wimodes">
+          <label><input type="radio" name="afmode" value="open" checked> Click to open</label>
+          <label><input type="radio" name="afmode" value="delete"> Click to delete</label>
+        </span>
+        <button id="afdelete" class="btn btn-danger" hidden></button>
+      </div>
+      <div id="afgrid" class="wigrid chatgrid"></div>
+    </div>
+  </section>
+  <div class="statuscard">
+    <div id="aerr" class="err"></div>
+    <p class="sub" id="aprog"></p>
   </div>
   </div>
 

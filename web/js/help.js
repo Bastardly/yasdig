@@ -306,6 +306,51 @@ export const TOPICS = [
       it uses the image itself as reference 1.</p>`,
   },
   {
+    id: 'agent',
+    title: 'The agent',
+    html: `
+      <h2>The agent</h2>
+      <p>The <b>Agent</b> tab is a chat with a small language model that runs on
+      your own GPU, like the image models do. It can write and rewrite prompts,
+      turn a picture into a prompt, and — given a goal — draw rounds of pictures,
+      judge them and try again. It needs an <b>agent model</b>: Get models → Agent
+      models has some, from about 4 GB.</p>
+
+      <h3>What it changes</h3>
+      <p>Each chat starts with a copy of the Image tab’s settings, and the agent
+      changes that copy, never the Image tab while you work there.
+      <i>Open on Image tab</i> puts the chat’s settings on the Image tab when you
+      want them. Every change it makes is a card in the chat with its reason and
+      an <b>Undo</b>.</p>
+      <p>The <b>Permissions</b> panel says what it may change — prompt, negative
+      prompt and CFG at first, within a range — and for each, whether it changes
+      it on its own or asks first. A model distilled to run without CFG
+      (Z-Image, Flux, the Kleins, Krea 2, or a Turbo LoRA) locks CFG and the
+      negative prompt: they would do nothing.</p>
+
+      <h3>A session</h3>
+      <p>Write what the picture should show and press <b>Run a session</b>. The
+      agent turns the goal into yes/no checks (“Is there a red hat?”), draws a
+      round, answers every check for every picture, changes one or two settings
+      and draws again, until a picture passes, it decides it can’t do better, or
+      the rounds run out. With <i>Same seeds every round</i> on, a difference
+      between rounds is the change, not luck. Pictures every check said yes to
+      are marked <b>All checks</b> beside the ones the agent picked: a small
+      model is a lenient judge of its own work, so both are shown.</p>
+      <p>A session is steps on the job queue — a reply, a picture, a pass — so a
+      Refine or Hi-res you press on the Image tab runs between them, and
+      <b>Stop</b> ends it at once. The agent’s model loads for each reply and
+      lets go of the GPU after, so it never shares the card with the image
+      model.</p>
+
+      <h3>Skills</h3>
+      <p>The agent is given short notes with each reply — how yasdig works, how
+      the chat’s model wants its prompts written. Your own go in
+      <code>user/skills/</code> as markdown files with a front matter block
+      (<code>id</code>, <code>families</code>, <code>modes</code>,
+      <code>priority</code>); one with a built-in note’s id replaces it.</p>`,
+  },
+  {
     id: 'redraw',
     title: 'Refine & adjust',
     html: `

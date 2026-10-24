@@ -77,7 +77,7 @@ export const FIELDS = [
   // change every SDXL at once; a single model is Per model's business.
   NOTE('These six only apply to SD 1.x, SD 2.x and SDXL models; every other family brings its own.'),
   { key: 'steps', from: 'steps', kind: 'int', min: 1, max: 100 },
-  { key: 'cfg_scale', from: 'cfg', kind: 'num', min: 0, step: 0.1 },
+  { key: 'cfg_scale', from: 'cfg', kind: 'num', min: 0, max: 30, step: 0.1 },
   { key: 'sampler', from: 'sampler', kind: 'mirror' },
   { key: 'scheduler', from: 'scheduler', kind: 'mirror' },
   { key: 'width', from: 'w', kind: 'int', min: 64, step: 64 },
@@ -132,6 +132,7 @@ export const FIELDS = [
   { key: 'clear_workitems_on_close', page: true, label: 'Clear work items', help: 'setclearwi', kind: 'check' },
   { key: 'clear_outputs_on_close', page: true, label: 'Clear outputs', help: 'setclearout', kind: 'check' },
   { key: 'clear_videos_on_close', page: true, label: 'Clear videos', help: 'setclearvid', kind: 'check' },
+  { key: 'clear_chats_on_close', page: true, label: 'Clear agent chats', help: 'setclearchats', kind: 'check' },
 
   SUB('Advanced'),
   { key: 'hires_flash_attn', label: 'Flash attention', help: 'setflash', kind: 'check' },
@@ -142,7 +143,26 @@ export const FIELDS = [
   SECTION('Video', { rail: 'Video' }),
   { key: 'video_save', page: true, label: 'Save clips as', help: 'setvideosave', kind: 'choice',
     options: [['file', 'A video file (.avi)'], ['frames', 'Frames (PNG folder)']] },
+
+  // What a new chat's agent may change. Edited on the Agent tab's
+  // Permissions panel (*Save as default*); shown here so it is findable.
+  SECTION('Agent', { rail: 'Agent' }),
+  { key: 'agent', page: true, label: 'New chats start with', help: 'setagent', kind: 'agent' },
 ];
+
+// The `[agent]` table in a line: what a new chat's agent may change.
+const PERM_WORD = { auto: 'changes', ask: 'asks first', off: 'off' };
+function agentSummary(a) {
+  if (!a) return '';
+  const knobs = Object.entries(a.knobs ?? {})
+    .filter(([, k]) => k.perm !== 'off')
+    .map(([key, k]) => `${key.replace('_scale', '').replace('_', ' ')} ${PERM_WORD[k.perm]}`
+      + (k.min != null && k.max != null ? ` (${k.min}–${k.max})` : ''));
+  const passes = Object.entries(a.actions ?? {}).filter(([, p]) => p !== 'off').map(([k, p]) => `${k} ${PERM_WORD[p]}`);
+  return [knobs.length ? knobs.join(', ') : 'no settings', passes.length ? passes.join(', ') : 'no passes',
+    `${a.batch} pictures a round, up to ${a.rounds} rounds`, a.seed_lock ? 'seed locked' : 'fresh seeds']
+    .map(esc).join(' · ');
+}
 
 // The label of the control this is the default for, without the (i) `wireHints`
 // puts inside it. Text nodes only, so it reads the same whether this runs before
@@ -221,6 +241,12 @@ function control(f) {
     case 'choice':
       return `<select id="${id}">${f.options.map(([v, label]) =>
         `<option value="${v}">${esc(label)}</option>`).join('')}</select>`;
+    // Read-only here: the table is edited on the Agent tab's Permissions panel,
+    // and carried through this form unchanged (`put` keeps it, `take` hands
+    // it back), so a save from here never resets it.
+    case 'agent':
+      return `<p class="sub" id="${id}"></p>
+        <button type="button" class="btn" data-open-agent>Edit on the Agent tab</button>`;
     default:
       return `<input type="number" id="${id}"${attrs}>`;
   }
@@ -315,6 +341,11 @@ function put(f, v) {
     el.value = (v ?? []).join('\n');
     return;
   }
+  if (f.kind === 'agent') {
+    el.dataset.value = JSON.stringify(v ?? null);
+    el.innerHTML = agentSummary(v);
+    return;
+  }
   // A select silently falls back to its first option when the stored value
   // isn't one of them — so a sampler this
   // build doesn't list, would be displayed as something else and then *saved*
@@ -347,6 +378,10 @@ function take(f) {
   }
   if (f.kind === 'lines') {
     return el.value.split('\n').map((s) => s.trim()).filter(Boolean);
+  }
+  if (f.kind === 'agent') {
+    const v = JSON.parse(el.dataset.value || 'null');
+    return v ?? undefined;
   }
   // The empty option is FSR, which the file spells as no key at all.
   if (f.kind === 'upscaler') return $(fieldId(f)).value || null;
@@ -546,6 +581,13 @@ export function initSettings() {
   // both panes. A row is inserted or detached rather than the list being
   // re-rendered, so every other row keeps exactly what is typed in it.
   $('tab-settings').addEventListener('click', (e) => {
+    // The `[agent]` row's button: its editor is the Agent tab's panel.
+    if (e.target.closest('[data-open-agent]')) {
+      document.querySelector('.tab[data-tab="agent"]')?.click();
+      const perms = $('panel-agent-perms');
+      if (perms) perms.open = true;
+      return;
+    }
     const del = e.target.closest('[data-vardel]');
     const add = e.target.closest('[data-varadd]');
     if (!del && !add) return;

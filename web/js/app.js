@@ -18,6 +18,7 @@ import { initBusy } from './busy.js';
 import { initWorkItems, markGrid } from './workitems.js';
 import { initOutputs, loadOutputs } from './outputs.js';
 import { initVideo, layoutVideoTab } from './video.js';
+import { initAgent, layoutAgentTab } from './agent.js';
 import { initConvert } from './convert.js';
 import { initSettings, layoutSettingsTab } from './settings.js';
 import { initHelp, openHelp } from './help.js';
@@ -55,6 +56,7 @@ function showTab(name) {
   $('tab-image').hidden = name !== 'image';
   $('tab-outputs').hidden = name !== 'outputs';
   $('tab-video').hidden = name !== 'video';
+  $('tab-agent').hidden = name !== 'agent';
   $('tab-convert').hidden = name !== 'convert';
   $('tab-getmodels').hidden = name !== 'getmodels';
   $('tab-help').hidden = name !== 'help';
@@ -62,6 +64,7 @@ function showTab(name) {
   // A hidden workspace has no size: its panels are placed once it shows.
   if (name === 'image') layoutImageTab();
   if (name === 'video') layoutVideoTab();
+  if (name === 'agent') layoutAgentTab();
   if (name === 'settings') layoutSettingsTab();
   // Nothing is playing on a tab nobody is looking at. A 24 fps canvas timer is
   // cheap but it is not free, and it would go on redrawing all night.
@@ -133,6 +136,7 @@ async function closeServer() {
     s.clear_workitems_on_close && 'work items (Current, not Favorites)',
     s.clear_outputs_on_close && 'outputs in work/output/ (not Favorites)',
     s.clear_videos_on_close && 'video clips',
+    s.clear_chats_on_close && 'agent chats (not Favorites)',
   ].filter(Boolean);
   const queued = jobCount();
   const msg = 'Close the yasdig server?\n\n'
@@ -178,6 +182,7 @@ initRedraw();
 initWorkItems();
 initOutputs();
 initVideo();
+initAgent();
 initConvert();
 initGetModels();
 initHelp();

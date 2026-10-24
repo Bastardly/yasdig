@@ -645,7 +645,7 @@ impl VideoStore {
 }
 
 /// `src` into `dest`, folders and all — a clip's versions are folders.
-fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<()> {
+pub(crate) fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dest)?;
     for e in std::fs::read_dir(src)? {
         let e = e?;

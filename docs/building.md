@@ -19,6 +19,13 @@ it (the folder is gitignored):
 git clone --recursive https://github.com/leejet/stable-diffusion.cpp
 ```
 
+For the Agent tab, put llama.cpp beside it at the tag release builds use (also
+gitignored; without it the build works and has no agent):
+
+```sh
+git clone --branch v0.7.0 https://github.com/ggml-org/llama.cpp
+```
+
 After that it is only:
 
 ```sh
@@ -34,6 +41,14 @@ shaders; after that an unchanged sd.cpp costs nothing. A debug build (`cargo bui
 To update sd.cpp, `git -C stable-diffusion.cpp pull && git -C stable-diffusion.cpp
 submodule update --recursive`, then build as usual — the next build notices the new
 commit. `YASDIG_SD_CLI=/path/to/sd-cli` embeds a binary built elsewhere instead.
+
+The agent's driver is our own small program, `llm/yasdig-llm.cpp`, built against
+llama.cpp as a library: `build.rs` configures `llm/` (not llama.cpp's own project) into
+`llama.cpp/build-yasdig/`, so only the driver and what it links are compiled — no server,
+no TLS. A release carries it as it carries sd-cli. `YASDIG_LLM=/path/to/yasdig-llm`
+embeds one built elsewhere. Moving llama.cpp to another commit means checking the
+driver against it: it calls llama.cpp's chat-template and multimodal helpers, whose
+signatures change between releases (CLAUDE.md, *The agent*, has the list).
 
 A checkout runs the sd-cli named by `[sd].binary` in the repo's `models.toml` — the one
 above — and serves the page straight from `web/`, so an edit shows on reload.

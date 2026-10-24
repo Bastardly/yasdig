@@ -20,6 +20,10 @@
 //! the settings it was distilled for ([`Turbo`]) — which `/loras` serves beside
 //! the file once it is here, for the Image tab's *Turbo* switch.
 //!
+//! The agent's models are `[[agent]]` ([`Agent`]): a language model and its
+//! vision projector, both GGUF, under [`crate::config::Config::agent_dir`], one
+//! folder per agent — which is how `agents::scan` pairs them.
+//!
 //! Video models are a table of their own, `[[video]]`, of the same [`Entry`]
 //! shape: a [`VideoFamily`], its [`VideoFamily::slots`] keys, `"high_noise"`
 //! for the A14B's second expert, and every `dest` under the **video dir**. Kept
@@ -48,6 +52,74 @@ pub struct Catalog {
     /// Speed LoRAs: see [`Lora`].
     #[serde(default)]
     pub lora: Vec<Lora>,
+    /// The agent's models: see [`Agent`].
+    #[serde(default)]
+    pub agent: Vec<Agent>,
+}
+
+/// One agent model: a language model (`slot = "model"`) and, for one that
+/// sees, its projector (`slot = "mmproj"`). Every `dest` is under the agents
+/// dir, and an agent's files share a folder — the folder is the pairing.
+#[derive(Debug, Deserialize)]
+pub struct Agent {
+    pub id: String,
+    pub label: String,
+    pub note: String,
+    #[serde(default)]
+    pub recommended: bool,
+    /// Roughly what the model, its projector and an 8k context take on the GPU.
+    pub card_gb: f32,
+    pub recommend_below_gb: Option<f32>,
+    /// The longest side a picture is shrunk to before the agent sees it. More
+    /// is more image tokens: slower reading and a fuller context.
+    #[serde(default = "default_image_side")]
+    pub image_side: u32,
+    /// The context a turn asks for, in tokens.
+    #[serde(default = "default_n_ctx")]
+    pub n_ctx: u32,
+    /// The model card's recommended sampling, where it differs from the file's
+    /// own `general.sampling.*` or the file has none.
+    pub sampling: Option<AgentSampling>,
+    pub file: Vec<AgentFile>,
+}
+
+fn default_image_side() -> u32 {
+    512
+}
+fn default_n_ctx() -> u32 {
+    8192
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct AgentSampling {
+    pub temp: f32,
+    pub top_p: f32,
+    pub top_k: u32,
+    #[serde(default)]
+    pub min_p: f32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AgentFile {
+    /// `model` or `mmproj`.
+    pub slot: String,
+    pub url: String,
+    /// Relative to the agents dir, `/`-separated.
+    pub dest: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+impl AgentFile {
+    pub fn page(&self) -> String {
+        repo_page(&self.url)
+    }
+}
+
+impl Agent {
+    pub fn bytes(&self) -> u64 {
+        self.file.iter().map(|f| f.bytes).sum()
+    }
 }
 
 /// A distilled ("turbo") LoRA: a model's few-step version as an adapter. Not an
@@ -219,6 +291,25 @@ impl Catalog {
         self.lora.iter().find(|l| l.id == id)
     }
 
+    pub fn agent(&self, id: &str) -> Option<&Agent> {
+        self.agent.iter().find(|a| a.id == id)
+    }
+
+    /// The card whose language model is the file at `path` — at its own dest
+    /// under `agents` and its own length, as [`Catalog::distilled`] matches. A
+    /// renamed or hand-dropped file has none and runs on the defaults.
+    pub fn agent_for(&self, agents: &Path, path: &Path) -> Option<&Agent> {
+        let len = std::fs::metadata(path).ok()?.len();
+        self.agent
+            .iter()
+            .find(|a| a.file.iter().any(|f| f.slot == "model" && f.bytes == len && agents.join(&f.dest) == path))
+    }
+
+    /// [`Catalog::recommended`]'s rule for an agent card.
+    pub fn agent_recommended(a: &Agent, vram: Option<u64>) -> bool {
+        fits_recommendation(a.recommended, Some(a.card_gb), a.recommend_below_gb, vram)
+    }
+
     /// The speed LoRAs a card fetches with it.
     pub fn loras_of<'a>(&'a self, e: &'a Entry) -> impl Iterator<Item = &'a Lora> + 'a {
         e.loras.iter().filter_map(|id| self.lora(id))
@@ -228,13 +319,7 @@ impl Catalog {
     /// and fitting it. With the VRAM unknown (no amdgpu sysfs — Windows), the
     /// curated cards for a large GPU, since nothing says otherwise.
     pub fn recommended(e: &Entry, vram: Option<u64>) -> bool {
-        // In GiB, the unit a card is sold by: a "24 GB" card is 24 GiB.
-        let gb = vram.map(|b| b as f32 / (1u64 << 30) as f32);
-        e.recommended
-            && match (gb, e.card_gb, e.recommend_below_gb) {
-                (None, _, below) => below.is_none(),
-                (Some(have), need, below) => need.is_none_or(|n| n <= have) && below.is_none_or(|b| have < b),
-            }
+        fits_recommendation(e.recommended, e.card_gb, e.recommend_below_gb, vram)
     }
 
     /// Whether some recommended card is of this family — what the Image tab's
@@ -263,6 +348,16 @@ impl Catalog {
     pub fn has_several(&self, family: Family) -> bool {
         self.entry.iter().chain(&self.video).filter(|e| e.family == family).count() > 1
     }
+}
+
+fn fits_recommendation(curated: bool, need: Option<f32>, below: Option<f32>, vram: Option<u64>) -> bool {
+    // In GiB, the unit a card is sold by: a "24 GB" card is 24 GiB.
+    let gb = vram.map(|b| b as f32 / (1u64 << 30) as f32);
+    curated
+        && match (gb, need, below) {
+            (None, _, below) => below.is_none(),
+            (Some(have), need, below) => need.is_none_or(|n| n <= have) && below.is_none_or(|b| have < b),
+        }
 }
 
 /// The repository page a file comes from — where its licence is. Derived from
@@ -407,7 +502,44 @@ fn parse(src: &str) -> Result<Catalog> {
         check_shared_dests(table)?;
     }
     check_loras(&c)?;
+    check_agents(&c)?;
     check_upscalers(c)
+}
+
+fn check_agents(c: &Catalog) -> Result<()> {
+    for (i, a) in c.agent.iter().enumerate() {
+        if c.entry(&a.id).is_some() || c.lora(&a.id).is_some() || c.agent[..i].iter().any(|o| o.id == a.id) {
+            bail!("catalog: id {:?} is listed twice", a.id);
+        }
+        if a.file.iter().filter(|f| f.slot == "model").count() != 1
+            || a.file.iter().filter(|f| f.slot == "mmproj").count() > 1
+            || a.file.iter().any(|f| !matches!(f.slot.as_str(), "model" | "mmproj"))
+        {
+            bail!("catalog: agent {} needs one \"model\" file and at most one \"mmproj\"", a.id);
+        }
+        // One folder per agent, of its own: the folder is how the scan pairs
+        // a projector with its model.
+        let folder = |d: &str| Path::new(d).parent().map(Path::to_path_buf);
+        let here = folder(&a.file[0].dest);
+        for f in &a.file {
+            if !safe_dest(&f.dest, "model") || !f.dest.ends_with(".gguf") || folder(&f.dest) != here || here.as_deref() == Some(Path::new("")) {
+                bail!("catalog: agent {}'s dest {:?} must be a .gguf in the agent's own folder", a.id, f.dest);
+            }
+            if !hf_resolve(&f.url) {
+                bail!("catalog: agent {}'s url must be a huggingface.co resolve link: {}", a.id, f.url);
+            }
+            if f.bytes == 0 || f.sha256.len() != 64 {
+                bail!("catalog: agent {}'s {} needs a size and a sha256", a.id, f.dest);
+            }
+        }
+        if c.agent[..i].iter().any(|o| folder(&o.file[0].dest) == here) {
+            bail!("catalog: agents {} and another share a folder", a.id);
+        }
+        if a.image_side < 224 || a.n_ctx < 2048 {
+            bail!("catalog: agent {}'s image_side or n_ctx is implausibly small", a.id);
+        }
+    }
+    Ok(())
 }
 
 fn check_loras(c: &Catalog) -> Result<()> {
@@ -470,7 +602,11 @@ fn check_shared_dests(table: &[Entry]) -> Result<()> {
 
 fn check_upscalers(c: Catalog) -> Result<Catalog> {
     for (i, u) in c.upscaler.iter().enumerate() {
-        if c.entry(&u.id).is_some() || c.lora(&u.id).is_some() || c.upscaler[..i].iter().any(|o| o.id == u.id) {
+        if c.entry(&u.id).is_some()
+            || c.lora(&u.id).is_some()
+            || c.agent(&u.id).is_some()
+            || c.upscaler[..i].iter().any(|o| o.id == u.id)
+        {
             bail!("catalog: id {:?} is listed twice", u.id);
         }
         if !safe_upscaler_dest(&u.dest) {

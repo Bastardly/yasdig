@@ -30,6 +30,16 @@ models_dir = "models"
 # is pinned in config because it's a property of the model, like the lightx2v
 # 4-step pair.)
 # lora_dir = "models/loras"
+# Folder holding the Agent tab's language models and their vision projectors
+# (both .gguf). Defaults to `agents/` inside the models dir; the checkpoint scan
+# leaves it out.
+# agent_dir = "models/agents"
+
+[llm]
+# The agent's llama.cpp driver. This is where `cargo build` builds it from the
+# checkout in llama.cpp/ (see build.rs and llm/); a release executable has its
+# own inside and needs no line.
+binary = "llama.cpp/build-yasdig/bin/yasdig-llm"
 
 # The port and address are in startup.toml (created on first start, gitignored).
 

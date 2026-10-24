@@ -22,7 +22,7 @@ const IDLE_MS = 2500;
 // What the dialog calls each kind of job. The server's names are the keys.
 const KINDS = {
   generate: 'Generate', img2img: 'Image to image', refine: 'Refine', hires: 'Hi-res', redraw: 'Refine area', upscale: 'Upscale', edit: 'Edit', extend: 'Extend',
-  video: 'Video', enlarge: 'Enlarge frames', convert: 'Convert',
+  video: 'Video', enlarge: 'Enlarge frames', convert: 'Convert', agent: 'Agent',
 };
 const isRun = (j) => j.kind === 'generate' || j.kind === 'img2img';
 
@@ -74,8 +74,12 @@ function progressText() {
   const parts = [jobTitle(j)];
   // `steps` is 0 until sd-cli prints its first bar, which is a real state and
   // not worth rendering as '0/0'.
+  // The agent's driver reads its prompt in chunks and writes in tokens
+  // (`sd::Phase::Reading`/`Writing`); its loading is a percentage.
+  const PHASE = { loading: 'Loading weights', reading: 'Reading', writing: 'Writing', sampling: 'Step' };
   if (p.busy && p.steps) {
-    parts.push(`${p.phase === 'loading' ? 'Loading weights' : 'Step'} ${p.step}/${p.steps}`, p.rate);
+    parts.push(p.phase === 'writing' ? `Writing · ${p.step} piece${p.step === 1 ? '' : 's'}`
+      : `${PHASE[p.phase] ?? 'Step'} ${p.step}/${p.steps}`, p.rate);
   }
   return parts.join(' · ');
 }
@@ -263,7 +267,7 @@ export async function pollJobs() {
     const text = progressText();
     // All three tabs' readouts: they report the same worker, and only one of
     // them is ever visible.
-    for (const id of ['prog', 'vprog', 'cprog', 'rdprog']) $(id).textContent = text;
+    for (const id of ['prog', 'vprog', 'cprog', 'rdprog', 'aprog']) $(id).textContent = text;
     drawPreview();
     drawVideoPreview();
     drawButton();

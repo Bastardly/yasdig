@@ -658,3 +658,96 @@ dest = "minimax_h3_dmd_fl2va_8step_turbo_pruned.safetensors"
 bytes = 2285989092
 sha256 = "9104b190815d8f6f49c77e313988a9a0561a59b3ee611231b8cc421ad050bd2c"
 turbo = { steps = 8, cfg_scale = 1.0 }
+
+# The Agent tab's models: a language model and its vision projector, both
+# GGUF, in a folder of their own under the agents dir (the folder is how a
+# projector is paired with its model — `agents::scan`). Every URL, size and
+# sha256 (X-Linked-Etag) checked on 2026-10-24; ungated repos, all Apache-2.0.
+# `sampling` is the model card's own, for files that don't carry it in
+# `general.sampling.*` (Gemma 4's do). `card_gb` is the model, its projector
+# and an 8k context on the GPU.
+[[agent]]
+id = "qwen35-4b"
+label = "Qwen3.5 4B"
+note = "About 4 GB on the card: the one for an 8 GB GPU. Sees pictures; quick to load, so a turn costs little next to a render."
+recommended = true
+recommend_below_gb = 12
+card_gb = 4.5
+sampling = { temp = 0.7, top_p = 0.8, top_k = 20 }
+
+[[agent.file]]
+slot = "model"
+url = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf"
+dest = "qwen3.5-4b/Qwen3.5-4B-Q4_K_M.gguf"
+bytes = 2740937888
+sha256 = "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+
+[[agent.file]]
+slot = "mmproj"
+url = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf"
+dest = "qwen3.5-4b/mmproj-F16.gguf"
+bytes = 672423616
+sha256 = "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864"
+
+[[agent]]
+id = "ministral3-8b"
+label = "Ministral 3 8B"
+note = "About 7 GB on the card. Sees pictures; a step up in judgement from the 4B for an 8–12 GB GPU."
+card_gb = 7
+sampling = { temp = 0.15, top_p = 0.95, top_k = 40 }
+
+[[agent.file]]
+slot = "model"
+url = "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF/resolve/main/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf"
+dest = "ministral3-8b/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf"
+bytes = 5198911904
+sha256 = "33e7a72cf5e6e2cfc2f2847075acc013d68bba023e35310cef86b5cf8fdca761"
+
+[[agent.file]]
+slot = "mmproj"
+url = "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF/resolve/main/Ministral-3-8B-Instruct-2512-BF16-mmproj.gguf"
+dest = "ministral3-8b/Ministral-3-8B-Instruct-2512-BF16-mmproj.gguf"
+bytes = 858283168
+sha256 = "e799380f596d152ff4026a72d409ecc89c96cd437676804bc3f2ab3bd6b486ec"
+
+[[agent]]
+id = "ministral3-14b"
+label = "Ministral 3 14B"
+note = "About 11 GB on the card. Sees pictures; the careful critic for a 16–24 GB GPU."
+recommended = true
+card_gb = 11
+sampling = { temp = 0.15, top_p = 0.95, top_k = 40 }
+
+[[agent.file]]
+slot = "model"
+url = "https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512-GGUF/resolve/main/Ministral-3-14B-Instruct-2512-Q4_K_M.gguf"
+dest = "ministral3-14b/Ministral-3-14B-Instruct-2512-Q4_K_M.gguf"
+bytes = 8239593024
+sha256 = "824e0f3373e69b84f2cae46fdcb9bd1ebc6ab3bfc7acc125d818b7b8178cc613"
+
+[[agent.file]]
+slot = "mmproj"
+url = "https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512-GGUF/resolve/main/Ministral-3-14B-Instruct-2512-BF16-mmproj.gguf"
+dest = "ministral3-14b/Ministral-3-14B-Instruct-2512-BF16-mmproj.gguf"
+bytes = 879258784
+sha256 = "ab7616148b7081030fd38e410c9213ce8346a8b0588291c8ca279058e78cfae7"
+
+[[agent]]
+id = "gemma4-26b-a4b"
+label = "Gemma 4 26B A4B"
+note = "About 19 GB on the card, and quick for its size: a mixture of experts that runs 4B of its 26B per token. Sees pictures; for a 24 GB GPU."
+card_gb = 19
+
+[[agent.file]]
+slot = "model"
+url = "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+dest = "gemma4-26b-a4b/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+bytes = 16947541728
+sha256 = "f2c28b3dc4776931ac6f879e11f203dec637ea0f14267a86ec8f6165f63f293f"
+
+[[agent.file]]
+slot = "mmproj"
+url = "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/mmproj-F16.gguf"
+dest = "gemma4-26b-a4b/mmproj-F16.gguf"
+bytes = 1193058784
+sha256 = "418a6d8723067cd712235facbbc5cba6c8fbbd413fc1292d2aace5a027d5a42f"

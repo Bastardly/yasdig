@@ -124,7 +124,7 @@ pub fn check(cfg: &Config) -> Report {
     } else {
         // Which of the two it is, because "my build isn't being used" and "the
         // bundled one is stale" are both questions this line answers.
-        let whose = match (&cfg.sd.binary, crate::bundle::BUNDLED) {
+        let whose = match (&cfg.sd.binary, crate::bundle::SD.bundled()) {
             (Some(_), _) => "[sd].binary",
             (None, true) => "built in",
             (None, false) => "left in bin/ by an earlier build",
@@ -430,6 +430,43 @@ pub fn check(cfg: &Config) -> Report {
                 l.note.clone()
             },
         ));
+    }
+
+    // 2b') The agent, on the same terms: optional, so never an error. The
+    // driver first — a release built without a llama.cpp clone has none, and
+    // the Agent tab then says so — then what the agents folder holds and what
+    // each file is, so a projector that paired with nothing is findable.
+    let llm = cfg.llm_binary();
+    if llm.is_file() {
+        let whose = match (&cfg.llm.binary, crate::bundle::LLM.bundled()) {
+            (Some(_), _) => "[llm].binary",
+            (None, true) => "built in",
+            (None, false) => "left in bin/ by an earlier build",
+        };
+        info.push(format!("agent driver ({whose}): {}", llm.display()));
+    } else {
+        info.push(format!(
+            "no agent driver at {} — the Agent tab is off (docs/building.md builds one)",
+            llm.display()
+        ));
+    }
+    let agents = crate::agents::scan(&cfg.agent_dir());
+    info.push(format!("{} agent model(s) in {}", agents.models.len(), cfg.agent_dir().display()));
+    for m in &agents.models {
+        info.push(format!(
+            "  · {:<44} {}, {}{}",
+            m.name,
+            human_size(m.bytes),
+            if m.vision() { "sees pictures" } else { "text only" },
+            m.note.as_deref().map(|n| format!(" — {n}")).unwrap_or_default()
+        ));
+    }
+    for (p, why) in &agents.other {
+        info.push(format!("  ○ {:<44} {why}", crate::config::slash_name(&cfg.agent_dir(), p)));
+    }
+    let (_, skill_errors) = crate::agent::skills::load(&crate::agent::user_skills_dir(cfg));
+    for (p, why) in skill_errors {
+        warnings.push(format!("agent skill {} is left out: {why}", p.display()));
     }
 
     // 2c) Upscalers, on the same terms: an empty folder is normal, since FSR

@@ -189,6 +189,17 @@ async function openItem(item) {
 // second evicting the first.
 let opening = false;
 
+// A work item by id, onto the Image tab — an agent chat's picture, clicked.
+// The listing has the settings the controls are set from, so it is read
+// rather than the item opened bare.
+export async function openWorkItem(id) {
+  const all = await getJSON('/workitems');
+  const item = Array.isArray(all) ? all.find((w) => w.id === id) : null;
+  if (!item) throw new Error('that picture is no longer in Current or Favorites');
+  document.querySelector('.tab[data-tab="image"]')?.click();
+  await openItem(item);
+}
+
 // Put an item's stored settings back in the controls. The server independently
 // restores the same profile onto the reopened image, so this is only about what
 // the boxes say — but they have to agree, or the next Generate would silently

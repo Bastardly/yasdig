@@ -37,7 +37,7 @@ const MAX_UPLOAD_SIDE = 4096;
 // rather than on the server for the same practical reason the whole route has a
 // raised body limit — 25 MB of phone photo is not worth uploading to scale it
 // down at the other end.
-async function upload(file) {
+export async function upload(file) {
   if (!file || !file.type.startsWith('image/')) throw new Error('that is not an image');
   const bmp = await createImageBitmap(file);
   const scale = Math.min(1, MAX_UPLOAD_SIDE / Math.max(bmp.width, bmp.height));

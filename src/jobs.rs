@@ -53,6 +53,10 @@ pub enum Kind {
     Video,
     Enlarge,
     Convert,
+    /// One leg of an agent chat (`crate::agent`): a turn, the pictures of a
+    /// round, a pass — a step at a time, giving way between steps as a loop
+    /// does, until the chat has nothing next.
+    Agent,
 }
 
 impl Kind {
@@ -60,6 +64,12 @@ impl Kind {
     /// other kind is one indivisible job that a Stop can only kill.
     pub fn is_run(self) -> bool {
         matches!(self, Kind::Generate | Kind::Img2img)
+    }
+
+    /// Handed out a step at a time — a run's images, an agent's steps — and
+    /// settled with [`Queue::image_done`] or ended with [`Queue::finish`].
+    pub fn is_stepped(self) -> bool {
+        self.is_run() || self == Kind::Agent
     }
 }
 
@@ -282,7 +292,13 @@ impl<T: Clone> Queue<T> {
     ) -> u64 {
         let id = s.next_id;
         s.next_id += 1;
-        let total = if kind.is_run() { total.map(|n| n.max(1)) } else { Some(1) };
+        // An agent leg has no length the queue knows: it ends when the chat
+        // has nothing next, and gives way between steps like a loop.
+        let total = match kind {
+            k if k.is_run() => total.map(|n| n.max(1)),
+            Kind::Agent => None,
+            _ => Some(1),
+        };
         let entry = Entry {
             id,
             kind,
@@ -362,7 +378,7 @@ impl<T: Clone> Queue<T> {
     /// run as `fail_run` would, anything else through its waiting request — so
     /// nothing waits on a job the worker will never finish.
     pub fn abort(&self, id: u64, message: String) {
-        let run = self.lock().entries.iter().any(|e| e.id == id && e.kind.is_run());
+        let run = self.lock().entries.iter().any(|e| e.id == id && e.kind.is_stepped());
         if run {
             self.fail_run(id, message, None);
         } else {
@@ -449,6 +465,13 @@ impl<T: Clone> Queue<T> {
                 e.stopping = true;
                 return Stopped::Stopping;
             }
+            // An agent turn is the length of a reply: killed, not waited out,
+            // and marked so the worker ends the leg rather than going on.
+            if e.kind == Kind::Agent {
+                e.stopping = true;
+                kill();
+                return Stopped::Stopping;
+            }
             return Stopped::Cancel(kill());
         }
         let e = s.entries.remove(i).expect("position came from this deque");
@@ -456,6 +479,18 @@ impl<T: Clone> Queue<T> {
             let _ = reply.send(Err(anyhow!("removed from the job queue")));
         }
         Stopped::Removed(e.work)
+    }
+
+    /// Whether a Stop asked a stepped job to end.
+    pub fn stopping(&self, id: u64) -> bool {
+        self.lock().entries.iter().any(|e| e.id == id && e.stopping)
+    }
+
+    /// Say what an entry is doing now, in the Jobs dialog's words.
+    pub fn relabel(&self, id: u64, label: String) {
+        if let Some(e) = self.lock().entries.iter_mut().find(|e| e.id == id) {
+            e.label = label;
+        }
     }
 
     /// Publish an image result for the page to pick up.
@@ -554,6 +589,33 @@ mod tests {
         assert_eq!(q.next().id, lp);
         assert!(q.image_done(lp));
         assert_eq!(ids(&q), ["loop"]);
+    }
+
+    /// An agent leg is a step at a time: a button press runs between its
+    /// steps, it is never a loop the page's edits replace, and a Stop both
+    /// kills the step in flight and ends the leg.
+    #[test]
+    fn an_agent_leg_gives_way_between_steps_and_stops_at_once() {
+        let q = Queue::new();
+        let a = q.push(Kind::Agent, "chat".into(), Some(1), "agent", None, false);
+        assert_eq!(q.lock().entries[0].total, None, "its length is the chat's to say");
+        assert_eq!(q.next().id, a);
+        q.push(Kind::Refine, "r".into(), None, "press", None, true);
+        assert!(q.image_done(a));
+        assert_eq!(ids(&q), ["press", "agent"]);
+        assert_eq!(q.update_loop(Kind::Generate, "m".into(), "edit"), None, "an agent is not the loop");
+        let t = q.next();
+        q.finish(t.id, Ok(String::new()));
+        assert_eq!(q.next().id, a);
+        let mut killed = false;
+        assert!(matches!(q.stop(a, || { killed = true; true }), Stopped::Stopping));
+        assert!(killed && q.stopping(a));
+        q.relabel(a, "Agent · round 2".into());
+        assert_eq!(q.snapshot().jobs[0].label, "Agent · round 2");
+        // A failure ends it with a notice, as a run's does.
+        q.abort(a, "boom".into());
+        assert_eq!(q.len(), 0);
+        assert_eq!(q.snapshot().notices.len(), 1);
     }
 
     /// One loop at a time, and it takes the page's settings as they change:

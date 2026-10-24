@@ -4,7 +4,10 @@ yasdig is a local web server; the page is one client of these routes, and anythi
 
 ## Command-line tools
 
-Five subcommands, all of which skip the server. `upscale` runs the initial enlarge
+Six subcommands, all of which skip the server. `llm-selftest` runs one agent turn —
+the driver, its sandbox, the GPU and the reply grammar — with an agent model (its name,
+or `-` for the first installed) and, given a picture, asks it to describe it; it prints
+the reply, whether it was the asked-for JSON, and the load, read and write times. `upscale` runs the initial enlarge
 exactly as a generate would, with a model — a name in the upscaler dir or a path — and
 needs no checkpoint (sd-cli only for an ESRGAN), so it is the fast way to try a new
 upscaler file; at a whole-number factor it also prints the consistency check described
@@ -16,6 +19,7 @@ in isolation.
 yasdig doctor [models.toml]      # run the startup checks and report, without starting
 yasdig upscale in.png out.png <model> [factor=2.0] [models.toml]  # the model enlarge alone
 yasdig fold-scales <file.gguf>...  # fold a scaled-fp8 GGUF's scales into its weights
+yasdig llm-selftest [agent|-] [picture.png] [models.toml]  # one agent turn, no server
 yasdig fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]  # no colour knobs: UI only
 yasdig fsr-selftest [out.png]    # synthesize patterns and check the filters
 yasdig sr-selftest               # the upscaler shaders against CPU references, plus speed
@@ -595,6 +599,44 @@ needs a Vulkan device and nothing else.
   `{ "saved": "…" }`.
 - `POST /videos/delete` — `{ "ids": ["…"] }`. Removes each clip's whole directory from
   `work/videos/`; a starred clip is out of its reach.
+
+### The agent
+
+The Agent tab's chats (`work/chats/{id}/`, starred ones in `user/favorite_chats/`). Every
+route but `/agent/send` and `/agent/approve` reads or writes files and answers at once;
+those two queue a *leg* on the job queue (kind `agent`) and answer `{ "job": id }` — the
+reply arrives in the chat, whose `rev` moves on every write.
+
+- `GET /agents` — `{ models: [{name, label, arch, vision, bytes, fits, n_ctx, note}],
+  driver, vram, dir }`: the agent models in the agents dir, paired by folder, and whether
+  this build has the driver.
+- `GET /chats` / `GET /favorite-chats` — `[{id, title, updated_ms, created_ms, favorite,
+  state, thumb}]`, newest change first; Current lists starred ones too.
+- `POST /chats/new` — `{ settings, agent? }`, `settings` a `/generate` body (the Image
+  tab's); `count`, `loop`, `after` and `seed` are dropped. Answers `{ chat, toolkit }`.
+- `GET /chats/{id}` — `{ chat, toolkit }`: the chat as stored, and the knob table
+  resolved for it — each knob's `perm`, bounds, `locked` reason and value, the passes,
+  the models it could pick, `locks`.
+- `GET /chats/{id}/live` — the reply being written while a turn runs: `{ seq, text,
+  phase, step, steps }`, or `{ seq: null }`.
+- `GET /chats/{id}/thumb.png`, `GET /chats/{id}/img/{name}.png` — the chat's own copies
+  of its pictures; names are `[a-z0-9-]+.png`.
+- `POST /chats/settings` — `{ id, rev, settings }`: replace the chat's settings. `409`
+  when `rev` isn't the chat's (the agent changed them meanwhile).
+- `POST /chats/permissions` — `{ id, permissions }`, the `[agent]` table's shape.
+- `POST /chats/agent` — `{ id, agent }`; `POST /chats/rename` — `{ id, title }`.
+- `POST /agent/send` — `{ chat, text, images: [{kind: "item"|"output", id}], mode }`,
+  `mode` `chat` (default), `session` (the text is the goal) or `describe`. At most four
+  pictures, copied into the chat. `409` while the agent is working on the chat.
+- `POST /agent/approve` — `{ chat, changes: [{id, approve}], actions: [{id, approve}] }`:
+  the answers to what an *Ask first* setting or pass proposed. `{ job }` when the session
+  goes on, `{ job: null }` when it doesn't.
+- `POST /agent/undo` — `{ chat, change }`: put an applied change's settings back, if they
+  still hold what it set (else `409`). Recorded as a change of yours.
+- `POST /agent/stop` — `{ chat }`: end the chat's leg, killing a reply or a render in flight.
+- `POST /chats/delete` / `POST /favorite-chats/delete` — `{ ids }`, one shelf each.
+  `/favorite-chats/add` and `/favorite-chats/remove` move chats between the two. A chat
+  the agent is working on is refused (`409`).
 
 The archive listing, the thumbnail and the delete never touch the GPU, so they answer
 immediately even while a render is in flight. `/progress` and `/cancel` do the same for

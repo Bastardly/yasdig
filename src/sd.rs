@@ -24,7 +24,7 @@ pub const CANCELLED: &str = "cancelled by request";
 
 /// ggml-vulkan's line for a loader that found no device
 /// (`ggml_vk_instance_init`), after which sd.cpp runs on the CPU.
-const NO_GPU: &str = "ggml_vulkan: No devices found.";
+pub(crate) const NO_GPU: &str = "ggml_vulkan: No devices found.";
 
 /// The reference images onto a command: one `-r` each, in the order the
 /// prompt names them. Only ever the `refs` a caller hands over — never
@@ -931,7 +931,7 @@ impl<'a> SdRunner<'a> {
 /// the model manager's "cannot make enough memory available", or ggml-vulkan's
 /// own allocation failure. The run then fails with a generic line, so this is
 /// what tells the person the cause.
-fn is_out_of_memory(line: &str) -> bool {
+pub(crate) fn is_out_of_memory(line: &str) -> bool {
     line.contains("cannot make enough memory available")
         || line.contains("ErrorOutOfDeviceMemory")
         || line.contains("failed to allocate")
@@ -944,12 +944,12 @@ fn is_out_of_memory(line: &str) -> bool {
 /// no cancel of ours is Linux's OOM killer, which is how running out of
 /// *system* memory looks — no message, just gone.
 #[cfg(unix)]
-fn killed_by_system(status: &std::process::ExitStatus) -> bool {
+pub(crate) fn killed_by_system(status: &std::process::ExitStatus) -> bool {
     use std::os::unix::process::ExitStatusExt;
     status.signal() == Some(9)
 }
 #[cfg(not(unix))]
-fn killed_by_system(_: &std::process::ExitStatus) -> bool {
+pub(crate) fn killed_by_system(_: &std::process::ExitStatus) -> bool {
     false
 }
 
@@ -1247,7 +1247,7 @@ fn path_str(p: &Path) -> String {
 }
 
 /// The kept tail as one block, for an error message.
-fn joined(lines: &VecDeque<String>) -> String {
+pub(crate) fn joined(lines: &VecDeque<String>) -> String {
     lines
         .iter()
         .map(String::as_str)
@@ -1266,6 +1266,11 @@ fn joined(lines: &VecDeque<String>) -> String {
 pub enum Phase {
     Loading,
     Sampling,
+    /// The agent's driver reading the conversation and its pictures
+    /// ([`crate::llm`]); `step`/`steps` count prompt chunks.
+    Reading,
+    /// The agent writing its reply; `step` counts tokens, `steps` is the cap.
+    Writing,
 }
 
 impl Phase {
@@ -1283,6 +1288,8 @@ impl Phase {
         match self {
             Phase::Loading => "loading",
             Phase::Sampling => "sampling",
+            Phase::Reading => "reading",
+            Phase::Writing => "writing",
         }
     }
 }
@@ -1361,6 +1368,17 @@ struct MonitorInner {
     /// Only a run with a prompt sets it, so an ESRGAN enlarge after a generate
     /// leaves the generate's standing.
     placement: Mutex<Option<String>>,
+    /// The agent's reply so far, while a turn writes it: which chat, a count
+    /// that moves with every piece, and the text. `GET /chats/{id}/live`.
+    live_text: Mutex<Option<LiveText>>,
+}
+
+/// What [`Monitor::live_text`] hands back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveText {
+    pub chat: String,
+    pub seq: u64,
+    pub text: String,
 }
 
 impl Monitor {
@@ -1484,7 +1502,30 @@ impl Monitor {
         }
     }
 
-    fn begin(&self, label: &str, child: Child) {
+    /// The reply the agent is writing for `chat`, or `None` when no turn of
+    /// that chat is in flight.
+    pub fn live_text(&self, chat: &str) -> Option<LiveText> {
+        let held = self.0.live_text.lock().ok()?;
+        held.as_ref().filter(|t| t.chat == chat).cloned()
+    }
+
+    /// Start (`Some`) or end (`None`) a turn's live text.
+    pub(crate) fn set_live_text(&self, chat: Option<&str>) {
+        if let Ok(mut held) = self.0.live_text.lock() {
+            *held = chat.map(|c| LiveText { chat: c.to_string(), seq: 0, text: String::new() });
+        }
+    }
+
+    pub(crate) fn push_live_text(&self, piece: &str) {
+        if let Ok(mut held) = self.0.live_text.lock() {
+            if let Some(t) = held.as_mut() {
+                t.text.push_str(piece);
+                t.seq += 1;
+            }
+        }
+    }
+
+    pub(crate) fn begin(&self, label: &str, child: Child) {
         // Cleared here rather than in `cancel`, so a cancel that lands in the
         // gap between two jobs can't kill the next one before it starts.
         self.0.cancelled.store(false, Ordering::SeqCst);
@@ -1511,22 +1552,28 @@ impl Monitor {
         }
     }
 
-    fn end(&self) -> Option<Child> {
+    pub(crate) fn end(&self) -> Option<Child> {
         if let Ok(mut p) = self.0.progress.lock() {
             *p = None;
         }
         self.0.child.lock().ok()?.take()
     }
 
-    fn was_cancelled(&self) -> bool {
+    pub(crate) fn was_cancelled(&self) -> bool {
         self.0.cancelled.load(Ordering::SeqCst)
     }
 
     fn advance(&self, label: &str, step: u32, steps: u32, rate: &str) {
+        self.advance_in(label, Phase::of_rate(rate), step, steps, rate);
+    }
+
+    /// [`Monitor::advance`] with the phase said rather than read off a rate —
+    /// the agent's driver reports what it is doing in so many words.
+    pub(crate) fn advance_in(&self, label: &str, phase: Phase, step: u32, steps: u32, rate: &str) {
         if let Ok(mut p) = self.0.progress.lock() {
             *p = Some(Progress {
                 label: label.to_string(),
-                phase: Phase::of_rate(rate),
+                phase,
                 step,
                 steps,
                 rate: rate.to_string(),
@@ -1887,7 +1934,7 @@ fn parse_progress(line: &str) -> Option<(u32, u32, &str)> {
 /// Longest run of output kept for an error message. sd.cpp is chatty under
 /// `-v` and a video job runs for minutes, so the tail is bounded — the failure
 /// is always at the end.
-const TAIL_LINES: usize = 40;
+pub(crate) const TAIL_LINES: usize = 40;
 
 /// `--upscale-tile-size` for an ESRGAN pass: the side of the square the model
 /// runs over at a time, which is what bounds its VRAM. sd.cpp's own default,
@@ -1903,7 +1950,7 @@ const UPSCALE_TILE: u32 = 128;
 /// can overwrite it in place, and only the final step of a pass gets a newline.
 /// Read by lines, a 20-step render would deliver its progress in one blob after
 /// the last step — exactly when it stops being progress.
-fn drain(stream: impl Read, mut on_progress: impl FnMut(&str)) -> VecDeque<String> {
+pub(crate) fn drain(stream: impl Read, mut on_progress: impl FnMut(&str)) -> VecDeque<String> {
     let mut reader = BufReader::new(stream);
     let mut tail: VecDeque<String> = VecDeque::with_capacity(TAIL_LINES);
     let mut line = Vec::new();

@@ -3,6 +3,34 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### New
+
+- **The Agent tab: a local assistant that sees your pictures.** A chat with a small
+  language model that runs on your own GPU, like the image models — nothing leaves the
+  machine. It writes and rewrites prompts, describes a picture as a prompt in the style
+  the current model wants (tags for SDXL, sentences for Flux and the rest), and, given a
+  goal, runs a **session**: it writes yes/no checks, draws a round, judges every picture
+  against them, adjusts a setting or two and goes again, for up to the rounds you allow.
+  Its pictures land in Current like any other.
+- **You decide what it may touch.** Each setting is Off, Ask first or Auto, inside a
+  range you set; it starts with the prompt, the negative prompt and CFG. A chat edits
+  its own copy of the Image tab's settings, never the Image tab itself, and every change
+  it makes has its reason and an Undo. Models that run without CFG lock CFG and the
+  negative prompt. Hi-res, Refine and Edit on a keeper are there to switch on.
+- **Agent models in Get models**, from 4 GB (Qwen3.5 4B) to 19 GB (Gemma 4 26B A4B), and
+  any llama.cpp model with its vision projector in a folder under `models/agents/`.
+- **Skills**: short notes the agent gets with each reply — how yasdig works, how each
+  model family wants its prompts. Add your own in `user/skills/`.
+- `yasdig llm-selftest` runs one agent reply without the server, for checking a model.
+
+### Changed
+
+- The executable carries a second program, the agent's driver (built from llama.cpp),
+  in the same network sandbox as sd-cli.
+- CFG scale tops out at 30 everywhere.
+
 ## 0.5.4 — 2026-10-24
 
 ### Fixed

@@ -27,6 +27,10 @@ pub struct Config {
     /// `[sd]` at all, and every field in it has a default.
     #[serde(default)]
     pub sd: SdConfig,
+    /// `[llm]`: the agent's llama.cpp driver. Optional for the same reason as
+    /// `[sd]`.
+    #[serde(default)]
+    pub llm: LlmConfig,
     /// The old `[server]` table. `startup.toml` holds this now; it is read once,
     /// to seed that file on the first start after the move, and `preflight`
     /// says it is ignored after that — the `legacy_defaults` arrangement.
@@ -92,6 +96,22 @@ pub struct SdConfig {
     /// [`SdConfig::models_dir`], for the reason [`SdConfig::lora_dir`] gives.
     #[serde(default)]
     pub upscaler_dir: Option<String>,
+    /// Directory holding the agent's language models and their vision
+    /// projectors. Defaults to `agents/` inside [`SdConfig::models_dir`]. The
+    /// image scan leaves it out: a Qwen agent would otherwise be offered as a
+    /// text encoder wherever its width fits a slot.
+    #[serde(default)]
+    pub agent_dir: Option<String>,
+}
+
+/// `[llm]` in `models.toml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct LlmConfig {
+    /// Path to a built `yasdig-llm` (the agent's one-turn llama.cpp driver,
+    /// `llm/` in the repo). Unset means the copy baked into this executable,
+    /// as for `[sd].binary`.
+    #[serde(default)]
+    pub binary: Option<String>,
 }
 
 impl Default for SdConfig {
@@ -103,6 +123,7 @@ impl Default for SdConfig {
             video_dir: None,
             lora_dir: None,
             upscaler_dir: None,
+            agent_dir: None,
         }
     }
 }
@@ -371,6 +392,9 @@ pub struct LoraRef {
 /// size any family was trained at — a bigger picture comes from the enlarge.
 pub const MAX_BASE_SIDE: u32 = 4096;
 pub const MAX_STEPS: u32 = 100;
+/// The CFG ceiling. Past about 20 every family burns its colours to noise; 30
+/// leaves the experiments room and gives the agent's CFG knob a real top.
+pub const MAX_CFG: f32 = 30.0;
 
 /// Is this a name [`Config::lora_path`] may join onto the LoRA directory?
 ///
@@ -878,8 +902,8 @@ impl Profile {
             ("refine_cfg_scale", self.refine_cfg()),
             ("hires_cfg_scale", self.hires_cfg()),
         ] {
-            if !v.is_finite() || v < 0.0 {
-                bail!("'{}': {field} is {v}, must be 0 or greater", self.name);
+            if !v.is_finite() || !(0.0..=MAX_CFG).contains(&v) {
+                bail!("'{}': {field} is {v}, must be between 0 and {MAX_CFG}", self.name);
             }
         }
         check_sampling(&format!("'{}'", self.name), &self.sampler, &self.scheduler, Some(self.family))?;
@@ -1431,6 +1455,14 @@ impl ImageFamily {
             // guidance of 30 (`flags`), CFG 1.
             ImageFamily::FluxFill => dit(28, 1.0),
         }
+    }
+
+    /// Whether the family is distilled to run without classifier-free
+    /// guidance: its recipe's CFG is 1, where sd.cpp also ignores the negative
+    /// prompt. The agent's CFG and negative knobs are locked on one; the page
+    /// hides the negative box on the same test (`syncNegative`).
+    pub fn cfg_locked(self) -> bool {
+        self.recipe().cfg_scale == Some(1.0)
     }
 
     /// Flags this family always runs with, whatever the settings say.
@@ -2480,11 +2512,15 @@ impl Config {
         // where the built-in is 1.5.
         Settings::ensure(&cfg.user_dir(), cfg.legacy_defaults.as_ref())?;
 
-        // Write the baked-in sd-cli out beside us when it isn't there yet or is
-        // from another build. Only when nothing else was named: a checkout's
-        // `[sd].binary` is the developer's own build and must stay the one run.
+        // Write the baked-in binaries out beside us when they aren't there yet
+        // or are from another build. Only when nothing else was named: a
+        // checkout's `[sd].binary` is the developer's own build and must stay
+        // the one run. Same for `[llm].binary`.
         if cfg.sd.binary.is_none() {
-            crate::bundle::ensure(&cfg.base_dir)?;
+            crate::bundle::SD.ensure(&cfg.base_dir)?;
+        }
+        if cfg.llm.binary.is_none() {
+            crate::bundle::LLM.ensure(&cfg.base_dir)?;
         }
 
         // Catch unusable denoise settings at startup rather than on the first
@@ -2525,7 +2561,7 @@ impl Config {
     }
 
     /// The sd.cpp binary every run shells out to: `[sd].binary` when it is set,
-    /// otherwise the copy baked into this executable ([`crate::bundle::path`]).
+    /// otherwise the copy baked into this executable ([`crate::bundle::SD`]).
     ///
     /// One function rather than a resolve at each of the four call sites, so
     /// "which binary" is a single decision `doctor` and the runner can't
@@ -2533,7 +2569,16 @@ impl Config {
     pub fn sd_binary(&self) -> PathBuf {
         match &self.sd.binary {
             Some(b) => self.resolve(b),
-            None => crate::bundle::path(&self.base_dir),
+            None => crate::bundle::SD.path(&self.base_dir),
+        }
+    }
+
+    /// The agent's driver: `[llm].binary`, else the bundled copy — the same
+    /// single decision as [`Config::sd_binary`].
+    pub fn llm_binary(&self) -> PathBuf {
+        match &self.llm.binary {
+            Some(b) => self.resolve(b),
+            None => crate::bundle::LLM.path(&self.base_dir),
         }
     }
 
@@ -2585,7 +2630,8 @@ impl Config {
     pub fn scan_images(&self) -> Vec<crate::discover::Found> {
         let models = self.models_dir();
         let video = self.video_dir();
-        let mut found = crate::discover::scan_excluding(&models, &[video.clone(), self.lora_dir(), self.upscaler_dir()]);
+        let skip = [video.clone(), self.lora_dir(), self.upscaler_dir(), self.agent_dir()];
+        let mut found = crate::discover::scan_excluding(&models, &skip);
         if video.starts_with(&models) {
             let fits_a_slot =
                 |r: &crate::discover::Role| ImageFamily::ALL.iter().flat_map(|f| f.slots()).any(|s| (s.fits)(r));
@@ -2618,11 +2664,19 @@ impl Config {
         }
     }
 
-    /// The folders sd-cli reaches from inside its sandbox (on Windows the
-    /// container is granted these and nothing else): `work/`, where every run
-    /// reads its inputs and writes its outputs (invariant 8); every model
-    /// folder, writable since Convert writes beside its source; and the
-    /// binary's own folder, to read and run.
+    /// Directory holding the agent's models ([`SdConfig::agent_dir`]).
+    pub fn agent_dir(&self) -> PathBuf {
+        match &self.sd.agent_dir {
+            Some(d) => self.resolve(d),
+            None => self.models_dir().join("agents"),
+        }
+    }
+
+    /// The folders sd-cli and the agent's driver reach from inside their
+    /// sandbox (on Windows the one container is granted these and nothing
+    /// else): `work/`, where every run reads its inputs and writes its outputs
+    /// (invariant 8); every model folder, writable since Convert writes beside
+    /// its source; and each binary's own folder, to read and run.
     pub fn sandbox_roots(&self) -> Vec<crate::sandbox::Root> {
         use crate::sandbox::Root;
         let mut roots: Vec<Root> = [
@@ -2631,12 +2685,15 @@ impl Config {
             self.video_dir(),
             self.lora_dir(),
             self.upscaler_dir(),
+            self.agent_dir(),
         ]
         .into_iter()
         .map(|path| Root { path, write: true })
         .collect();
-        if let Some(dir) = self.sd_binary().parent() {
-            roots.push(Root { path: dir.to_path_buf(), write: false });
+        for bin in [self.sd_binary(), self.llm_binary()] {
+            if let Some(dir) = bin.parent() {
+                roots.push(Root { path: dir.to_path_buf(), write: false });
+            }
         }
         roots
     }

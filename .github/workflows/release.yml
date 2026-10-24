@@ -50,6 +50,11 @@ env:
   # parses sd-cli's progress output and reads its source for several behaviours
   # (see CLAUDE.md), so a newer commit is a change to test, not a free upgrade.
   SD_CPP_REF: b13a48219d5cdf408edcb93da6cd69b612ed03d3
+  # The llama.cpp commit the agent's driver (`llm/yasdig-llm.cpp`) is built
+  # against: tag v0.7.0. The driver calls llama.cpp's own chat-template and
+  # multimodal helpers, whose signatures move between releases, so this is
+  # bumped like SD_CPP_REF — on purpose, with the driver checked against it.
+  LLAMA_CPP_REF: 620d2225cc436ab0b001e3200e590e3b286ef9ab
   VULKAN_VERSION: 1.4.328.1
   # SHA-256 of the two SDK downloads for VULKAN_VERSION, as LunarG publishes
   # them (sdk.lunarg.com/sdk/sha/<version>/<platform>/<file>.json) and checked
@@ -89,6 +94,12 @@ jobs:
           git -C stable-diffusion.cpp checkout "$SD_CPP_REF"
           git -C stable-diffusion.cpp submodule update --init --recursive
 
+      - name: Fetch llama.cpp
+        # For the agent's driver, which build.rs builds from llm/ against it.
+        run: |
+          git clone https://github.com/ggml-org/llama.cpp
+          git -C llama.cpp checkout "$LLAMA_CPP_REF"
+
       # Third-party actions are pinned to a commit, not a movable tag or branch:
       # a moved tag would run someone else's code inside the release build.
       # The comment says what the hash was when pinned; bump both together.
@@ -102,15 +113,18 @@ jobs:
         run: |
           cargo build --release
           echo "SD_CLI=stable-diffusion.cpp/build-yasdig/bin/sd-cli" >> "$GITHUB_ENV"
+          echo "LLM=llama.cpp/build-yasdig/bin/yasdig-llm" >> "$GITHUB_ENV"
 
       - name: Dependencies
         # Anything beyond the Vulkan loader and glibc's own libraries is a
         # library the person running this may not have.
         run: |
-          ldd "$SD_CLI"
-          if ldd "$SD_CLI" | grep -vE 'linux-vdso|ld-linux|lib(c|m|dl|pthread|rt)\.so|libvulkan\.so'; then
-            echo "::error::sd-cli links a library that won't be on every system"; exit 1
-          fi
+          for bin in "$SD_CLI" "$LLM"; do
+            ldd "$bin"
+            if ldd "$bin" | grep -vE 'linux-vdso|ld-linux|lib(c|m|dl|pthread|rt)\.so|libvulkan\.so'; then
+              echo "::error::$bin links a library that won't be on every system"; exit 1
+            fi
+          done
 
       - name: Test
         run: cargo test
@@ -156,6 +170,11 @@ jobs:
           git -C stable-diffusion.cpp checkout $env:SD_CPP_REF
           git -C stable-diffusion.cpp submodule update --init --recursive
 
+      - name: Fetch llama.cpp
+        run: |
+          git clone https://github.com/ggml-org/llama.cpp
+          git -C llama.cpp checkout $env:LLAMA_CPP_REF
+
       # Pinned to a commit, as in the Linux job.
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable, 2026-10-13
 
@@ -167,16 +186,20 @@ jobs:
           cargo build --release
           $exe = Get-ChildItem -Recurse stable-diffusion.cpp\build-yasdig\bin -Filter sd-cli.exe | Select-Object -First 1
           Add-Content $env:GITHUB_ENV "SD_CLI=$($exe.FullName)"
+          $llm = Get-ChildItem -Recurse llama.cpp\build-yasdig\bin -Filter yasdig-llm.exe | Select-Object -First 1
+          Add-Content $env:GITHUB_ENV "LLM=$($llm.FullName)"
 
       - name: Dependencies
         # vulkan-1.dll comes with every GPU driver; KERNEL32 and the rest are
         # Windows itself. A VCRUNTIME/MSVCP or vcomp DLL here means /MT or the
         # OpenMP switch didn't take.
         run: |
-          $deps = dumpbin /dependents $env:SD_CLI | Select-String '\.dll' | ForEach-Object { $_.ToString().Trim() }
-          $deps
-          $bad = $deps | Where-Object { $_ -match '^(vcruntime|msvcp|vcomp|libgomp|libstdc)' }
-          if ($bad) { Write-Error "sd-cli needs a runtime DLL users won't have: $bad"; exit 1 }
+          foreach ($bin in @($env:SD_CLI, $env:LLM)) {
+            $deps = dumpbin /dependents $bin | Select-String '\.dll' | ForEach-Object { $_.ToString().Trim() }
+            $deps
+            $bad = $deps | Where-Object { $_ -match '^(vcruntime|msvcp|vcomp|libgomp|libstdc)' }
+            if ($bad) { Write-Error "$bin needs a runtime DLL users won't have: $bad"; exit 1 }
+          }
 
       - name: Package
         # A zip, not a bare .exe: Edge's SmartScreen warns hard about

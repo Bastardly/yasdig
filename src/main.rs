@@ -91,6 +91,13 @@
 //!   GET  /favorite-clips -> the starred clips alone (user/favorite_clips/)
 //!   POST /favorite-clips/add|remove -> {ids:[..]} star / un-star (a move)
 //!   POST /favorite-clips/delete     -> {ids:[..]}
+//!   GET  /agents      -> the agent models in the agents dir, and the driver
+//!   GET  /chats, /favorite-chats, /chats/{id}, /chats/{id}/live,
+//!        /chats/{id}/thumb.png, /chats/{id}/img/{name}.png
+//!   POST /chats/new|settings|permissions|agent|rename|delete,
+//!        /favorite-chats/add|remove|delete
+//!   POST /agent/send  -> queue a turn ({job}); the reply arrives in the chat
+//!   POST /agent/approve|undo|stop   (all of these: `agent::routes`)
 //!   GET  /outputs/{stem}/thumb.png   generated on first request
 //!   POST /save-output      -> {image_id} keep the image on screen
 //!   POST /outputs/overwrite -> {image_id} save it over the output it was opened from
@@ -108,6 +115,8 @@
 //! two are *about* the render in flight, so going through the queue would make
 //! them arrive only once there was nothing left to report or to stop.
 
+mod agent;
+mod agents;
 mod area;
 mod avi;
 mod brush;
@@ -126,6 +135,7 @@ mod home;
 mod http;
 mod jobs;
 mod layout;
+mod llm;
 mod pipeline;
 mod pngmeta;
 mod redraw;
@@ -271,6 +281,8 @@ enum Work {
     },
     /// Shots added to a clip, or its last one cut off (`Engine::extend_clip`).
     ExtendClip(pipeline::ExtendClipRequest),
+    /// One leg of an agent chat, a step per ticket (`agent::step`).
+    Agent { chat: String },
 }
 
 impl Work {
@@ -285,7 +297,12 @@ impl Work {
             | Work::Edit { id, .. }
             | Work::Extend { id, .. }
             | Work::Upscale { id, .. } => Some(*id),
-            Work::Run(_) | Work::Video(_) | Work::Convert(_) | Work::EnlargeClip { .. } | Work::ExtendClip(_) => None,
+            Work::Run(_)
+            | Work::Video(_)
+            | Work::Convert(_)
+            | Work::EnlargeClip { .. }
+            | Work::ExtendClip(_)
+            | Work::Agent { .. } => None,
         }
     }
 }
@@ -315,7 +332,7 @@ enum Start {
 /// The *After each generation* fold. Hi-res before refine, the order the
 /// buttons are in: hi-res is the pass that enlarges, refine is the finishing
 /// touch you run at whatever size you ended up at.
-#[derive(Clone, Default, serde::Deserialize)]
+#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
 struct AfterEach {
     #[serde(default)]
     hires: Option<AfterPass>,
@@ -325,7 +342,7 @@ struct AfterEach {
     save: bool,
 }
 
-#[derive(Clone, Default, serde::Deserialize)]
+#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
 struct AfterPass {
     /// The checkpoint for this pass; empty or absent is the one that made the
     /// image, as on the buttons.
@@ -393,6 +410,7 @@ fn run(args: &[String]) -> Result<()> {
         Some("doctor") => return run_doctor(&args[2..]),
         Some("upscale") => return run_upscale_cli(&args[2..]),
         Some("fold-scales") => return run_fold_scales(&args[2..]),
+        Some("llm-selftest") => return run_llm_selftest(&args[2..]),
         _ => {}
     }
 
@@ -460,6 +478,9 @@ fn run(args: &[String]) -> Result<()> {
     // it, a Stop reaches the running child through it, and its runs write the
     // live preview `GET /preview/{n}.png` serves.
     let monitor = Monitor::with_preview(pipeline::preview_dir(&cfg.base_dir.join("work")));
+    // Nothing is queued yet, so a chat that says the agent is working on it
+    // was cut off by the last stop.
+    agent::store(&cfg).settle_all();
 
     // The diffusion worker. It initializes wgpu + sd, reports readiness, then
     // takes work from the job queue one image at a time. The display worker is
@@ -479,6 +500,12 @@ fn run(args: &[String]) -> Result<()> {
                 loop {
                     let ticket = worker_queue.next();
                     let id = ticket.id;
+                    // A chat's leg says on the chat that it failed, or the
+                    // chat reads as busy until the next start.
+                    let agent_chat = match &ticket.work {
+                        Work::Agent { chat } => Some(chat.clone()),
+                        _ => None,
+                    };
                     // A panic here used to end the thread with the job still
                     // marked running: its request waited for ever, and so did
                     // everything queued behind it. Caught, it fails that one
@@ -498,6 +525,14 @@ fn run(args: &[String]) -> Result<()> {
                             .unwrap_or_else(|| "unknown cause".into());
                         eprintln!("[yasdig] GPU worker caught a panic in job {id}: {why}");
                         worker_queue.abort(id, format!("the GPU worker failed on this job: {why}"));
+                        if let Some(chat) = agent_chat {
+                            let _ = agent::store(engine.cfg()).update(&chat, |c| {
+                                c.session.state = agent::chat::State::Failed;
+                                c.session.job = None;
+                                c.note(format!("Stopped: the GPU worker failed ({why})."));
+                                Ok(())
+                            });
+                        }
                     }
                 }
             }
@@ -655,6 +690,18 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
                 .and_then(|r| json_body(&r)),
         ),
         Work::ExtendClip(req) => queue.finish(t.id, engine.extend_clip(&req).and_then(|r| json_body(&r))),
+        Work::Agent { chat } => match agent::step(engine, queue, &chat, t.id) {
+            Ok(true) => {
+                queue.image_done(t.id);
+            }
+            Ok(false) => queue.finish(t.id, Ok(String::new())),
+            // Not a notice: the chat already says what failed, and a notice
+            // is the Image tab's red line, about a picture that isn't there.
+            Err(e) => {
+                eprintln!("[yasdig] agent chat {chat}: {e:#}");
+                queue.finish(t.id, Err(e));
+            }
+        },
     }
 }
 
@@ -807,6 +854,11 @@ fn route(
         }
     }
 
+    // The Agent tab's own (`agent::routes`): chats, their pictures, a turn.
+    if let Some(r) = agent::routes::route(conn, &req.method, &req.path, &req.body, cfg, lanes, monitor) {
+        return r;
+    }
+
     match (req.method.as_str(), req.path.as_str()) {
         // Built live so newly-dropped checkpoints appear without a restart.
         ("GET", "/templates") | ("GET", "/models") => {
@@ -915,7 +967,7 @@ fn route(
             Some((_, json)) => conn.respond(200, "application/json", json.as_bytes()),
             None => conn.respond(404, "application/json", error_json("no image yet").as_bytes()),
         },
-        ("POST", "/jobs/stop") => handle_stop_job(conn, lanes, monitor, &req.body),
+        ("POST", "/jobs/stop") => handle_stop_job(conn, cfg, lanes, monitor, &req.body),
         ("POST", "/jobs/skip") => handle_skip_job(conn, lanes, monitor, &req.body),
         ("POST", "/cancel") => conn.respond(
             200,
@@ -1107,8 +1159,8 @@ fn handle_shutdown(
     let cleared = if clear {
         let c = shutdown::clear(cfg);
         println!(
-            "[yasdig] closed from the page (cleared {} work items, {} outputs, {} clips)",
-            c.workitems, c.outputs, c.videos
+            "[yasdig] closed from the page (cleared {} work items, {} outputs, {} clips, {} chats)",
+            c.workitems, c.outputs, c.videos, c.chats
         );
         c
     } else {
@@ -2266,158 +2318,164 @@ fn handle_download_image(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]
     }
 }
 
-fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
-    #[derive(serde::Deserialize)]
-    struct Dto {
-        prompt: String,
-        template: String,
-        #[serde(default)]
-        negative: Option<String>,
-        #[serde(default)]
-        seed: Option<i64>,
-        #[serde(default)]
-        steps: Option<u32>,
-        #[serde(default)]
-        cfg_scale: Option<f32>,
-        #[serde(default)]
-        sampler: Option<String>,
-        #[serde(default)]
-        scheduler: Option<String>,
-        cache_mode: Option<String>,
-        #[serde(default)]
-        memory: Option<String>,
-        #[serde(default)]
-        width: Option<u32>,
-        #[serde(default)]
-        height: Option<u32>,
-        #[serde(default)]
-        upscale_factor: Option<f32>,
-        /// An ESRGAN file under the upscaler dir, or `""` for FSR. Absent keeps
-        /// the default. See [`GenRequest::upscaler`].
-        #[serde(default)]
-        upscaler: Option<String>,
-        #[serde(default)]
-        refine_steps: Option<u32>,
-        #[serde(default)]
-        refine_strength: Option<f32>,
-        #[serde(default)]
-        refine_cfg_scale: Option<f32>,
-        #[serde(default)]
-        hires_steps: Option<u32>,
-        #[serde(default)]
-        hires_strength: Option<f32>,
-        #[serde(default)]
-        hires_cfg_scale: Option<f32>,
-        /// The after-each passes' own prompts; see `EscalateRequest`.
-        #[serde(default)]
-        refine_prompt: Option<String>,
-        #[serde(default)]
-        hires_prompt: Option<String>,
-        /// The two escalation checkpoints, as the *generate* body spells them.
-        /// They name no pass this request runs; they are archived with the work
-        /// item so reopening it restores the pickers. `/refine` and `/hires` take
-        /// theirs as `model` instead, because there it is the pass about to run.
-        #[serde(default)]
-        refine_model: Option<String>,
-        #[serde(default)]
-        hires_model: Option<String>,
-        #[serde(default)]
-        sharpness: Option<f32>,
-        #[serde(default)]
-        clarity: Option<f32>,
-        /// Absent keeps the profile's list, `[]` clears it. The page always
-        /// sends the picker's full contents, so in practice it is always one or
-        /// the other and never a merge.
-        #[serde(default)]
-        loras: Option<Vec<LoraRef>>,
-        /// Reference images (output stems), in the order the prompt names
-        /// them. Always sent for a family that takes them; `[]` is none.
-        #[serde(default)]
-        references: Option<Vec<String>>,
-        /// See `GenRequest::parts`. A `null` inside the map is kept as `None`
-        /// — it means "empty this slot" — so no `double_option` is needed.
-        #[serde(default)]
-        parts: Option<std::collections::BTreeMap<String, Option<String>>>,
-        /// MOSS-Image's layout boxes (`crate::layout`); absent or empty is none.
-        #[serde(default)]
-        layout: Option<layout::Layout>,
-        /// A turbo LoRA's named schedule (`config::SIGMA_PRESETS`).
-        #[serde(default)]
-        sigmas: Option<String>,
-        /// How many images, and whether to keep going until stopped. One
-        /// request is one queued run, whatever its length — see `crate::jobs`.
-        #[serde(default)]
-        count: Option<u32>,
-        #[serde(default, rename = "loop")]
-        looping: bool,
-        /// With `loop`: only update the running loop, never start one. The
-        /// page's live edits send it (`syncLoop`).
-        #[serde(default)]
-        update_only: bool,
-        /// The *After each generation* fold.
-        #[serde(default)]
-        after: AfterEach,
-    }
+/// `/generate`'s body, named because a chat keeps one: the agent's copy of
+/// the Image tab's settings is this, and an agent batch goes through
+/// [`GenerateDto::run_plan`] exactly as the button's run does.
+#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
+struct GenerateDto {
+    prompt: String,
+    template: String,
+    #[serde(default)]
+    negative: Option<String>,
+    #[serde(default)]
+    seed: Option<i64>,
+    #[serde(default)]
+    steps: Option<u32>,
+    #[serde(default)]
+    cfg_scale: Option<f32>,
+    #[serde(default)]
+    sampler: Option<String>,
+    #[serde(default)]
+    scheduler: Option<String>,
+    cache_mode: Option<String>,
+    #[serde(default)]
+    memory: Option<String>,
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
+    #[serde(default)]
+    upscale_factor: Option<f32>,
+    /// An ESRGAN file under the upscaler dir, or `""` for FSR. Absent keeps
+    /// the default. See [`GenRequest::upscaler`].
+    #[serde(default)]
+    upscaler: Option<String>,
+    #[serde(default)]
+    refine_steps: Option<u32>,
+    #[serde(default)]
+    refine_strength: Option<f32>,
+    #[serde(default)]
+    refine_cfg_scale: Option<f32>,
+    #[serde(default)]
+    hires_steps: Option<u32>,
+    #[serde(default)]
+    hires_strength: Option<f32>,
+    #[serde(default)]
+    hires_cfg_scale: Option<f32>,
+    /// The after-each passes' own prompts; see `EscalateRequest`.
+    #[serde(default)]
+    refine_prompt: Option<String>,
+    #[serde(default)]
+    hires_prompt: Option<String>,
+    /// The two escalation checkpoints, as the *generate* body spells them.
+    /// They name no pass this request runs; they are archived with the work
+    /// item so reopening it restores the pickers. `/refine` and `/hires` take
+    /// theirs as `model` instead, because there it is the pass about to run.
+    #[serde(default)]
+    refine_model: Option<String>,
+    #[serde(default)]
+    hires_model: Option<String>,
+    #[serde(default)]
+    sharpness: Option<f32>,
+    #[serde(default)]
+    clarity: Option<f32>,
+    /// Absent keeps the profile's list, `[]` clears it. The page always
+    /// sends the picker's full contents, so in practice it is always one or
+    /// the other and never a merge.
+    #[serde(default)]
+    loras: Option<Vec<LoraRef>>,
+    /// Reference images (output stems), in the order the prompt names
+    /// them. Always sent for a family that takes them; `[]` is none.
+    #[serde(default)]
+    references: Option<Vec<String>>,
+    /// See `GenRequest::parts`. A `null` inside the map is kept as `None`
+    /// — it means "empty this slot" — so no `double_option` is needed.
+    #[serde(default)]
+    parts: Option<std::collections::BTreeMap<String, Option<String>>>,
+    /// MOSS-Image's layout boxes (`crate::layout`); absent or empty is none.
+    #[serde(default)]
+    layout: Option<layout::Layout>,
+    /// A turbo LoRA's named schedule (`config::SIGMA_PRESETS`).
+    #[serde(default)]
+    sigmas: Option<String>,
+    /// How many images, and whether to keep going until stopped. One
+    /// request is one queued run, whatever its length — see `crate::jobs`.
+    #[serde(default)]
+    count: Option<u32>,
+    #[serde(default, rename = "loop")]
+    looping: bool,
+    /// With `loop`: only update the running loop, never start one. The
+    /// page's live edits send it (`syncLoop`).
+    #[serde(default)]
+    update_only: bool,
+    /// The *After each generation* fold.
+    #[serde(default)]
+    after: AfterEach,
+}
 
-    let dto: Dto = match parse_json::<Dto>(conn, body)? {
+fn handle_generate(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    let dto: GenerateDto = match parse_json::<GenerateDto>(conn, body)? {
         Some(d) => d,
         None => return Ok(()),
     };
+    let (label, update_only) = (dto.template.clone(), dto.update_only);
+    let (plan, total) = dto.run_plan();
+    queue_run(conn, lanes, jobs::Kind::Generate, label, total, update_only, plan)
+}
 
-    let mut escalate = run_escalation(
-        dto.refine_steps,
-        dto.refine_strength,
-        dto.refine_cfg_scale,
-        dto.hires_steps,
-        dto.hires_strength,
-        dto.hires_cfg_scale,
-    );
-    // The fold's pass prompts, for the after-each passes. `{variables}` roll
-    // per image, off each image's own seed (`Engine::pass_prompt`).
-    escalate.refine_prompt = dto.refine_prompt.clone();
-    escalate.hires_prompt = dto.hires_prompt.clone();
-    let total = (!dto.looping).then(|| dto.count.unwrap_or(1));
-    let after = dto.after;
+impl GenerateDto {
+    /// The run this body asks for, and how many images (`None` = until
+    /// stopped).
+    fn run_plan(self) -> (RunPlan, Option<u32>) {
+        let dto = self;
+        let mut escalate = run_escalation(
+            dto.refine_steps,
+            dto.refine_strength,
+            dto.refine_cfg_scale,
+            dto.hires_steps,
+            dto.hires_strength,
+            dto.hires_cfg_scale,
+        );
+        // The fold's pass prompts, for the after-each passes. `{variables}` roll
+        // per image, off each image's own seed (`Engine::pass_prompt`).
+        escalate.refine_prompt = dto.refine_prompt.clone();
+        escalate.hires_prompt = dto.hires_prompt.clone();
+        let total = (!dto.looping).then(|| dto.count.unwrap_or(1));
+        let after = dto.after;
 
-    let req = GenRequest {
-        prompt: dto.prompt,
-        template: dto.template,
-        negative: dto.negative,
-        seed: dto.seed.unwrap_or(-1),
-        steps: dto.steps,
-        cfg_scale: dto.cfg_scale,
-        sampler: dto.sampler,
-        scheduler: dto.scheduler,
-        cache_mode: dto.cache_mode,
-        memory: dto.memory,
-        width: dto.width,
-        height: dto.height,
-        upscale_factor: dto.upscale_factor,
-        upscaler: dto.upscaler,
-        refine_steps: dto.refine_steps,
-        refine_strength: dto.refine_strength,
-        refine_cfg_scale: dto.refine_cfg_scale,
-        hires_steps: dto.hires_steps,
-        hires_strength: dto.hires_strength,
-        hires_cfg_scale: dto.hires_cfg_scale,
-        refine_model: dto.refine_model,
-        hires_model: dto.hires_model,
-        sharpness: dto.sharpness,
-        clarity: dto.clarity,
-        loras: dto.loras,
-        references: dto.references,
-        parts: dto.parts,
-        layout: dto.layout,
-        sigmas: dto.sigmas,
-    };
-
-    let label = req.template.clone();
-    let update_only = dto.update_only;
-    queue_run(conn, lanes, jobs::Kind::Generate, label, total, update_only, RunPlan {
-        start: Start::Generate(req),
-        after,
-        escalate,
-    })
+        let req = GenRequest {
+            prompt: dto.prompt,
+            template: dto.template,
+            negative: dto.negative,
+            seed: dto.seed.unwrap_or(-1),
+            steps: dto.steps,
+            cfg_scale: dto.cfg_scale,
+            sampler: dto.sampler,
+            scheduler: dto.scheduler,
+            cache_mode: dto.cache_mode,
+            memory: dto.memory,
+            width: dto.width,
+            height: dto.height,
+            upscale_factor: dto.upscale_factor,
+            upscaler: dto.upscaler,
+            refine_steps: dto.refine_steps,
+            refine_strength: dto.refine_strength,
+            refine_cfg_scale: dto.refine_cfg_scale,
+            hires_steps: dto.hires_steps,
+            hires_strength: dto.hires_strength,
+            hires_cfg_scale: dto.hires_cfg_scale,
+            refine_model: dto.refine_model,
+            hires_model: dto.hires_model,
+            sharpness: dto.sharpness,
+            clarity: dto.clarity,
+            loras: dto.loras,
+            references: dto.references,
+            parts: dto.parts,
+            layout: dto.layout,
+            sigmas: dto.sigmas,
+        };
+        (RunPlan { start: Start::Generate(req), after, escalate }, total)
+    }
 }
 
 /// The escalation knobs a generate body carries, as the after-each passes
@@ -3316,6 +3374,7 @@ fn handle_jobs(conn: &mut http::Connection, queue: &Jobs, monitor: &Monitor) -> 
 /// Stop always did.
 fn handle_stop_job(
     conn: &mut http::Connection,
+    cfg: &Config,
     lanes: &Lanes,
     monitor: &Monitor,
     body: &[u8],
@@ -3332,6 +3391,15 @@ fn handle_stop_job(
             // A queued button press was holding its image.
             if let Some(id) = work.pinned() {
                 lock(&lanes.retained).unpin(id);
+            }
+            // A chat's leg waiting its turn: the chat says it stopped.
+            if let Work::Agent { chat } = &work {
+                let _ = agent::store(cfg).update(chat, |c| {
+                    c.session.state = agent::chat::State::Stopped;
+                    c.session.job = None;
+                    c.note("Stopped from the Jobs list.");
+                    Ok(())
+                });
             }
             "removed"
         }
@@ -3724,6 +3792,15 @@ fn run_fold_scales(args: &[String]) -> Result<()> {
 ///
 /// `model` is a name inside the upscaler dir, as the page's select sends it, or
 /// a path to a file anywhere.
+/// `yasdig llm-selftest [agent|-] [picture.png] [models.toml]`: one agent
+/// turn with no server — see `agent::selftest`.
+fn run_llm_selftest(args: &[String]) -> Result<()> {
+    let config_path = home::config_path(args.get(2).map(String::as_str))?;
+    let cfg = Config::load(&config_path).with_context(|| format!("loading {}", config_path.display()))?;
+    let name = args.first().map(String::as_str).filter(|n| *n != "-");
+    agent::selftest(&cfg, name, args.get(1).map(std::path::Path::new))
+}
+
 fn run_upscale_cli(args: &[String]) -> Result<()> {
     if args.len() < 3 {
         eprintln!(

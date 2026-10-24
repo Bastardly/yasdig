@@ -5,7 +5,8 @@
 with stable-diffusion.cpp (a subprocess, never FFI), then escalate on demand with
 img2img passes and a native FSR post-process in `wgpu`. All sd.cpp work goes through
 one job queue and one diffusion worker; the viewer's re-filters run on a display worker
-sharing the one FSR device behind a lock (*## The job queue*).
+sharing the one FSR device behind a lock (*## The job queue*). The Agent tab runs a
+second subprocess the same way — llama.cpp, through our own driver (*## The agent*).
 
 **`README.md` is short and for users** (why escalation, install, what's supported —
 and video). **`docs/` is the reference**: `configuration.md`
@@ -115,6 +116,12 @@ blocks one.
   endpoint format). **shields.io refuses github.com URLs**, so `pages.yml` copies the
   newest release's `badge.json` into the site on every deploy, and `scan.yml` starts
   a deploy when it is done (`actions: write`).
+
+`build.rs` is a table of two native builds (`BUILDS`): sd.cpp's `sd-cli`, and the
+agent's `yasdig-llm` from our `llm/` against a gitignored `./llama.cpp/` clone (into
+`llama.cpp/build-yasdig/`, `cfg(bundled_llm)`, `YASDIG_LLM`). A missing llama.cpp clone
+is a warning even in release — the build then has no agent. `src/bundle.rs` is the same
+table (`bundle::SD`, `bundle::LLM`). CI pins `LLAMA_CPP_REF` beside `SD_CPP_REF`.
 
 sd.cpp flags in `build.rs` (`GGML_NATIVE=OFF`, `GGML_OPENMP=OFF`, `/MT`) make it
 portable; the workflow fails if sd-cli links anything but the Vulkan loader and libc.
@@ -663,6 +670,76 @@ confirm counts dropped queued jobs. The `clear_*_on_close` fields are page-level
 card omits them (`fields_mark_exactly_the_page_only_keys`). The page then shows a
 "stopped" note (`window.close()` is ignored); Settings' `beforeunload` stands down.
 
+## The agent
+
+The Agent tab (`src/agent/`, `src/llm.rs`, `src/agents.rs`, `llm/yasdig-llm.cpp`,
+`web/js/agent.js`): a chat with a local VLM over a chat-owned copy of the Image tab's
+settings. A turn is one run of our driver on the job queue; nothing stays loaded.
+
+**The driver, not llama.cpp's CLIs** (checked at v0.7.0): `llama-mtmd-cli` is one-shot
+only with both `-p` and `--image` and takes no conversation; `llama-cli` talks to an
+in-process llama-server over loopback TCP, which seccomp and the AppContainer refuse.
+`yasdig-llm` is mtmd-cli's evaluation loop with the history from a **request file**
+(never stdin: the Windows launcher hands the child NUL), `common_chat_session` for the
+template, the JSON-schema grammar and the thinking split.
+
+- **Stdout is framed** (`@yasdig-llm 1`, `P load|read`, `T "<json>"`, `C`, `D`, `E`);
+  any other line is a library log and ignored (`llm::parse_frame`). `PROTOCOL` is checked
+  both ends. Exit 0 without a `D` is a failure; `E context` is the typed
+  `ContextOverflow`, retried once with half the history and smaller pictures.
+- **Bumping llama.cpp**: re-read `tools/mtmd/mtmd-cli.cpp` against the driver;
+  `common_chat_session` (ctor, `apply_sampling`, `finish`), `common_chat_templates_inputs`
+  (`json_schema`, `enable_thinking`), `mtmd_tokenize`, `mtmd_helper_eval_chunk_single`,
+  `llama_process`; the CMake options `llm/CMakeLists.txt` forces (`LLAMA_BUILD_MTMD`,
+  `LLAMA_OPENSSL`, `LLAMA_SUBPROCESS`, `MTMD_VIDEO`) and the targets `llama-common`, `mtmd`.
+  `docs/building.md`'s clone tag and `release.yml` together.
+- **`serde_json`'s `preserve_order` is load-bearing**: llama.cpp's grammar follows the
+  schema's property order, and `notes` (the scratchpad) must come first.
+
+Models (`agents::scan`): GGUF metadata only (`general.architecture` = `clip` is a
+projector; an LM needs a chat template). **Paired by folder** — one LM and one projector
+in a folder are one agent — because `clip.vision.projection_dim` is the LM width for
+Qwen-VL and Gemma but 14336 beside Ministral's 4096; several per folder pair by width
+only when unambiguous. **`agent_dir` is excluded from `scan_images`**, or a Qwen agent is
+offered as a text encoder. Catalog `[[agent]]` cards: each in its own folder
+(`check_agents`), sampling/`image_side`/`n_ctx` matched to the file by dest + length
+(`Catalog::agent_for`). No content goals in notes or docs.
+
+Break silently:
+
+- **A chat's settings are a `/generate` body** (`GenerateDto`, `chat.settings` as JSON);
+  a round goes through `GenerateDto::run_plan` like the button. `clean_settings` strips
+  `count`/`loop`/`after`/`seed` — the round and the seed are the agent's.
+- **`Slot::Agent`**: rounds and passes never take the Image tab's picture. `open_in`
+  into `Slot::Agent` leaves a **live** entry where it is (it may be on the Image tab).
+- **A leg is `Kind::Agent`, `total: None`**, stepped like a loop (`is_stepped`), never
+  the loop (`replace_loop` needs `is_run`). Stop marks `stopping` **and** kills;
+  `agent::step` checks `Queue::stopping`. A panic marks the chat failed in the worker
+  loop; `ChatStore::settle_all` on start turns a busy chat `interrupted`.
+- **Every chat write is `ChatStore::update`** (one lock, `.part` + rename, `rev` moves);
+  the worker re-reads at each step, so the person's edits mid-turn survive. Timestamps
+  are `u64`: serde_json can't read a `u128` inside the internally-tagged `Msg`.
+- **The knob table is the one source** (`knobs::KNOBS`): the panel, the schema and
+  `apply` read it; `agent_knobs_agree_with_fields_and_validate` pins it to `FIELDS` and
+  `Profile::validate` (`MAX_CFG` is in `config.rs`, `settings.js` and the inputs).
+  `apply` never trusts the grammar (no float ranges, no property count): unknown, off or
+  locked keys are dropped with a note, numbers clamped, `max_changes` enforced.
+- **Locks** (`toolkit::locks_for`): a catalog Turbo LoRA among the picks or a
+  `Catalog::distilled` file locks steps and CFG; `ImageFamily::cfg_locked` (recipe CFG 1)
+  locks CFG; a CFG lock locks the negative.
+- **Pictures a turn sees are staged into scratch** at the agent's `image_side` and
+  removed after (invariant 8; `user/` isn't a sandbox root on Windows). A chat keeps its
+  own copies under `img/`, so deleting a work item never breaks it.
+- **Only the newest pictures are images** (`context::messages`); older rounds are their
+  summary line, older turns their `notes`/`reply`. Roles alternate (merged), ending on
+  the user side — Mistral's and Gemma's templates refuse otherwise.
+- **`Settings.agent` is a table declared before `[variables]`**, and `Permissions` puts
+  its plain values before its two tables (`ValueAfterTable`). Page-level, with a
+  read-only `FIELDS` row (`kind: 'agent'`) the form carries through unchanged.
+- **Skills** (`agent::skills`): built-ins compiled in, `user/skills/*.md` re-read per
+  turn, an `id` match replaces; `BUDGET` drops whole skills, lowest priority first.
+- **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.
+
 ## The job queue
 
 `src/jobs.rs` (`Queue<T>`, generic for GPU-free tests), `Work`/`diffuse` in `main.rs`,
@@ -1037,6 +1114,8 @@ only `js/app.js`.
 | `prompt-box.js` / `prompt-weight.js` | the custom element; pure weighting maths |
 | `help.js` | Help tab `TOPICS` |
 | `settings.js` / `modelsettings.js` | Settings form from `FIELDS`; *Per model* card |
+| `agent.js` | Agent tab: chats, the composer, panels, following a turn |
+| `chatview.js` / `agentperms.js` | a chat as HTML, pure; the Permissions panel |
 | `app.js` | `showTab`, boot order |
 
 Break silently:
@@ -1076,7 +1155,7 @@ would break `setBusy`/the poll/`style.css`). `showTab` clears the pane it leaves
   found the file, and its own link downloads.
 - **Licences**: Apache-2.0. `THIRD_PARTY_LICENSES.md` (sd.cpp, ggml and their bundled
   libs verbatim, plus the crate table from `cargo tree -e normal` × `cargo metadata`)
-  is compiled in and served at `GET /licences`. **Regenerate on an sd.cpp bump or a new
+  is compiled in and served at `GET /licences`. **Regenerate on an sd.cpp or llama.cpp bump or a new
   crate.**
 
 ## Settings
