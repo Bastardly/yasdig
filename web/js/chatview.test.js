@@ -61,4 +61,6 @@ test('values and states read as words', () => {
   assert.equal(valueText('size', { width: 1024, height: 768 }), '1024×768');
   assert.equal(valueText('cfg_scale', 5.5), '5.5');
   assert.equal(stateText(chat({ session: { state: 'running', goal: 'g', round: 2, checks: [] } })), 'Working · round 2 of 3');
+  assert.equal(stateText(chat({ session: { state: 'running', goal: 'g', round: 5, first_round: 3, checks: [] } })), 'Working · round 2 of 3',
+    'a session counts its own rounds');
 });

@@ -389,11 +389,12 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         let n = c.next_n();
         c.messages.push(Msg::User { n, ms: super::chat::now_ms(), text: text.clone(), images: refs.clone() });
         if mode == Mode::Plan {
-            // A new session: a new goal, its own checks, fresh seeds.
+            // A new session: a new goal and its own checks. Its rounds count
+            // from here; round numbers go on, so none is reused. The plan
+            // decides whether it judges the round just drawn or draws afresh.
             c.session.goal = text.clone();
             c.session.checks.clear();
-            c.session.round = 0;
-            c.session.base_seed = 0;
+            c.session.first_round = c.session.round;
         }
         c.session.mode = mode;
         c.session.next = Next::Turn;

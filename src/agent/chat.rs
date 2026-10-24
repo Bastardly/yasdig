@@ -164,6 +164,10 @@ pub enum Msg {
         /// instead of being shown the pictures again.
         #[serde(default)]
         summary: String,
+        /// How many pictures the round holds when whole; 0 in chats written
+        /// before a round could be sized, which meant `permissions.batch`.
+        #[serde(default)]
+        size: u32,
         images: Vec<ImageRef>,
     },
     /// A line from yasdig itself: stopped, a failure, a clamp.
@@ -289,12 +293,24 @@ pub struct Session {
     /// Yes/no questions the pictures are judged by, from the plan turn.
     #[serde(default)]
     pub checks: Vec<String>,
-    /// Rounds drawn so far.
+    /// Rounds drawn in this chat so far — chat rounds and session rounds
+    /// alike, so a round's number is never reused.
     #[serde(default)]
     pub round: u32,
-    /// The seed image 1 of every round starts from, with the seed locked.
+    /// The rounds drawn before this session began; `round - first_round` is
+    /// how many of its `rounds` the session has used.
+    #[serde(default)]
+    pub first_round: u32,
+    /// The seed picture 1 of the latest round started from; picture k is
+    /// `base_seed + k`.
     #[serde(default)]
     pub base_seed: i64,
+    /// The next round's size; 0 is a full round (`permissions.batch`).
+    #[serde(default)]
+    pub count: u32,
+    /// The next round draws new seeds rather than the last round's.
+    #[serde(default)]
+    pub fresh: bool,
     /// The job carrying the session now, while queued or running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<u64>,

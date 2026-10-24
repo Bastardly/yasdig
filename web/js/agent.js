@@ -5,7 +5,7 @@ import { onJobs, soonJobs } from './jobs.js';
 import { chatSettings, useSettings } from './image.js';
 import { openWorkItem } from './workitems.js';
 import { upload } from './source-slot.js';
-import { renderChat, stateText } from './chatview.js';
+import { renderChat, sessionRound, stateText } from './chatview.js';
 import { drawPerms, readPerms } from './agentperms.js';
 import { wireHints } from './hints.js';
 import { openGetModels } from './getmodels.js';
@@ -140,7 +140,7 @@ function drawPanels() {
   $('asessionbody').innerHTML = s.goal
     ? `<p><b>Goal</b>: ${esc(s.goal)}</p>
        ${s.checks.length ? `<p class="sub">Checks</p><ol class="chatchecklist">${s.checks.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>` : ''}
-       <p class="sub">Round ${s.round} of ${data.chat.permissions.rounds} · ${esc(stateText(data.chat) || 'idle')}</p>`
+       <p class="sub">Round ${sessionRound(s)} of ${data.chat.permissions.rounds} · ${esc(stateText(data.chat) || 'idle')}</p>`
     : '<p class="sub">No session yet: write a goal in the box and press Run a session. The agent then writes checks, draws a round, judges it, and tries again, up to the rounds in Permissions.</p>';
   if (data.chat.agent && $('amodel').value !== data.chat.agent
       && agentsList.models.some((m) => m.name === data.chat.agent)) {

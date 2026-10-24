@@ -113,8 +113,9 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32) -> Value {
                 "checks".into(),
                 json!({ "type": "array", "items": text(120), "minItems": 1, "maxItems": MAX_CHECKS }),
             );
-            // A plan is followed by the first round, so it writes that round's prompt.
-            with_change(&mut props, t, true);
+            // A plan is followed by the first round, so it writes that round's
+            // prompt — unless a round was just drawn (`batch` > 0), which it judges first.
+            with_change(&mut props, t, batch == 0);
             props.insert("reply".into(), text(REPLY_CHARS));
             object(props)
         }
@@ -164,22 +165,20 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32) -> Value {
             object(props)
         }
         Mode::Chat => {
-            let branch = |action: &str, need_prompt: bool| {
-                let mut p = props.clone();
-                p.insert("action".into(), json!({ "const": action }));
-                with_change(&mut p, t, need_prompt);
-                p.insert("reply".into(), text(REPLY_CHARS));
-                object(p)
-            };
-            if writes_prompt(t) {
-                json!({ "anyOf": [branch("none", false), branch("generate", true)] })
-            } else {
-                let mut p = props;
-                p.insert("action".into(), json!({ "enum": ["none", "generate"] }));
-                with_change(&mut p, t, false);
-                p.insert("reply".into(), text(REPLY_CHARS));
-                object(p)
-            }
+            // Talking, or drawing: a drawing says how many pictures (one asked
+            // for is one drawn) and whether to keep the last round's seeds,
+            // which keeps its compositions while a change is tried.
+            let mut talk = props.clone();
+            talk.insert("action".into(), json!({ "const": "none" }));
+            with_change(&mut talk, t, false);
+            talk.insert("reply".into(), text(REPLY_CHARS));
+            let mut draw = props;
+            draw.insert("action".into(), json!({ "const": "generate" }));
+            draw.insert("count".into(), json!({ "type": "integer", "minimum": 1, "maximum": t.batch.max(1) }));
+            draw.insert("seeds".into(), json!({ "enum": ["new", "same"] }));
+            with_change(&mut draw, t, true);
+            draw.insert("reply".into(), text(REPLY_CHARS));
+            json!({ "anyOf": [object(talk), object(draw)] })
         }
     }
 }
@@ -227,9 +226,11 @@ mod tests {
         let chat = output(Mode::Chat, &t, 4, 2);
         let (talk, draw) = branches(&chat);
         for b in [talk, draw] {
-            assert_eq!(keys(b), ["notes", "action", "change", "reason", "reply"]);
             assert_eq!(b["required"], json!(keys(b)));
         }
+        assert_eq!(keys(talk), ["notes", "action", "change", "reason", "reply"]);
+        assert_eq!(keys(draw), ["notes", "action", "count", "seeds", "change", "reason", "reply"]);
+        assert_eq!(draw["properties"]["count"]["maximum"], json!(t.batch));
         assert_eq!(draw["properties"]["action"]["const"], "generate");
         assert_eq!(draw["properties"]["change"]["required"], json!(["prompt"]));
         assert!(talk["properties"]["change"].get("required").is_none());
@@ -242,15 +243,17 @@ mod tests {
         let s = output(Mode::Plan, &t, 0, 0);
         assert_eq!(keys(&s), ["notes", "checks", "change", "reason", "reply"]);
         assert_eq!(s["properties"]["change"]["required"], json!(["prompt"]));
+        let judging = output(Mode::Plan, &t, 4, 0);
+        assert!(judging["properties"]["change"].get("required").is_none(), "a plan judging a round needn't rewrite the prompt");
     }
 
     #[test]
-    fn without_the_prompt_a_chat_has_one_shape() {
+    fn without_the_prompt_a_drawing_draws_the_current_one() {
         let mut p = Permissions::default();
         p.knobs.get_mut("prompt").unwrap().perm = Perm::Off;
         let s = output(Mode::Chat, &toolkit(&p, &Locks::default()), 4, 2);
-        assert!(s.get("anyOf").is_none());
-        assert_eq!(s["properties"]["action"]["enum"], json!(["none", "generate"]));
+        let (_, draw) = branches(&s);
+        assert!(draw["properties"]["change"].get("required").is_none());
     }
 
     #[test]
@@ -275,7 +278,8 @@ mod tests {
             k.perm = Perm::Off;
         }
         let s = output(Mode::Chat, &toolkit(&p, &Locks::default()), 4, 2);
-        assert!(s["properties"].get("change").is_none());
+        let (talk, draw) = branches(&s);
+        assert!(talk["properties"].get("change").is_none() && draw["properties"].get("change").is_none());
     }
 
     #[test]

@@ -440,12 +440,13 @@ const HELP = [
         + 'or an Edit by instruction on a model that can. The result is a History '
         + 'step on that picture, so nothing is lost if it goes wrong.' },
   { ids: ['agentseedlock'],
-    text: 'Picture 1 of every round starts from the same seed, picture 2 from the '
+    text: 'In a session, picture 1 of every round starts from the same seed, picture 2 from the '
         + 'next, and so on — so a difference between rounds is the change the '
         + 'agent made, not luck. Off, every picture is a new composition.' },
   { ids: ['agentbatch'],
     text: 'Pictures drawn before the agent looks. More gives it more to choose '
-        + 'from for one load of its model; each one costs a render.' },
+        + 'from for one load of its model; each one costs a render. In plain chat '
+        + 'the agent draws one picture unless you ask for more, up to this.' },
   { ids: ['agentrounds'],
     text: 'The most rounds a session runs before it stops by itself.' },
   { ids: ['agentmaxchanges'],

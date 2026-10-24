@@ -832,8 +832,13 @@ the rest off; *Save as default for new chats* keeps your choice. A model distill
 without CFG — Z-Image, Flux, the Klein models, Krea 2, a Turbo LoRA — locks CFG and the
 negative prompt, which would do nothing. The passes it may run on a keeper (Hi-res,
 Refine, an Edit on a model that can) are off until you turn them on; a pass it runs is a
-History step on that picture. With *Same seeds every round* (on by default) picture 1 of
-every round starts from the same seed, so a difference between rounds is the change.
+History step on that picture. With *Same seeds every round* (on by default) a session's
+rounds start from the same seeds, so a difference between rounds is the change.
+
+In plain chat the agent draws one picture, or as many as you ask for (up to *Pictures
+per round*); the agent keeps the last round's seeds when you ask for a change to those
+pictures, and draws new ones when you ask for more. A session started right after a round
+judges that round first instead of drawing it again.
 
 A session is a run of steps on the job queue — a reply, a picture, a pass — so a Refine
 you press on the Image tab runs between them, and **Stop** ends it straight away. The

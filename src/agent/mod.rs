@@ -208,7 +208,7 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
             turn(engine, &store, &mut chat, mode)
         }
         Step::Image { round, k } => {
-            queue.relabel(job, label(&format!("round {round}, picture {}/{}", k + 1, chat.permissions.batch)));
+            queue.relabel(job, label(&format!("round {round}, picture {}/{}", k + 1, session::round_size(&chat))));
             picture(engine, &store, &chat, round, k)
         }
         Step::Escalate(action) => {
@@ -309,7 +309,13 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
     if mode == Mode::Describe && images.is_empty() {
         bail!("there is no picture to describe — attach one first");
     }
-    let schema = schema::output(mode, &tk, images.len() as u32, chat.session.checks.len() as u32);
+    // A plan that will judge the round just drawn sees no pictures yet, but
+    // its schema knows the round is there (no prompt is required of it).
+    let shown = match mode {
+        Mode::Plan => session::judgeable(chat).map_or(0, |(_, size)| size),
+        _ => images.len() as u32,
+    };
+    let schema = schema::output(mode, &tk, shown, chat.session.checks.len() as u32);
     let budget = (tune.n_ctx.saturating_sub(N_PREDICT) as usize).saturating_sub(64);
 
     let runner = LlmRunner::watched(&cfg, engine.monitor());

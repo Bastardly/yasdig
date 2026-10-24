@@ -80,6 +80,14 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
             } else {
                 "\n\nThe prompt is not yours to change; pictures are drawn from the current one."
             });
+            if turn.mode == Mode::Chat {
+                s.push_str(&format!(
+                    "\nTo draw, set `action` to \"generate\" and `count` to how many pictures the person \
+                     asked for (1 to {}; 1 when they didn't say). `seeds` \"same\" keeps the last round's \
+                     compositions, to try a change on the same pictures; \"new\" draws different ones.",
+                    t.batch
+                ));
+            }
         }
         let passes: Vec<_> = t.offered_actions().collect();
         if turn.mode == Mode::Critique && !passes.is_empty() {
@@ -150,13 +158,20 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
     match turn.mode {
         Mode::Plan => {
             let prompt = chat.settings.get("prompt").and_then(|p| p.as_str()).unwrap_or("");
+            let next = match super::session::judgeable(chat) {
+                Some((round, size)) => format!(
+                    "The {size} picture(s) of round {round}, drawn with this prompt, will be judged against your \
+                     checks next. Change the prompt only if those pictures can't meet the goal; a changed prompt \
+                     means a new round instead."
+                ),
+                None => "Change the prompt if it doesn't ask for everything the goal does.".to_string(),
+            };
             push(
                 &mut out,
                 Role::User,
                 vec![Part::Text {
                     text: format!(
-                        "Goal: {}\nThe prompt now: {prompt}\nWrite the checks for this goal, and change the prompt \
-                         if it doesn't ask for everything the goal does.",
+                        "Goal: {}\nThe prompt now: {prompt}\nWrite the checks for this goal. {next}",
                         turn.goal
                     ),
                 }],
@@ -251,7 +266,7 @@ mod tests {
             Msg::Agent { n: 1, ms: 0, mode: Mode::Plan, reply: "On it.".into(), notes: "need hat".into(), checks: vec![],
                          keepers: vec![], passed: vec![], changes: vec![], action: None, prompt: None, negative: None,
                          skills: vec![], stats: Default::default() },
-            Msg::Batch { n: 2, ms: 0, round: 1, settings_rev: 0, summary: "prompt 'a fox', CFG 6".into(), images: vec![img("a"), img("b")] },
+            Msg::Batch { n: 2, ms: 0, round: 1, settings_rev: 0, summary: "prompt 'a fox', CFG 6".into(), size: 2, images: vec![img("a"), img("b")] },
             Msg::Note { n: 3, ms: 0, text: "Stopped.".into() },
             Msg::User { n: 4, ms: 0, text: "try again".into(), images: vec![] },
         ];

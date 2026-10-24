@@ -168,10 +168,16 @@ export function liveReply(text) {
   return '';
 }
 
+// How many of its rounds the session has drawn: round numbers count on
+// through the whole chat, a session from where it began.
+export function sessionRound(s) {
+  return Math.max(0, s.round - (s.first_round ?? 0));
+}
+
 // The header's line: what the agent is doing, or waiting for.
 export function stateText(chat) {
   const s = chat.session;
-  const round = s.goal ? ` · round ${s.round} of ${chat.permissions.rounds}` : '';
+  const round = s.goal ? ` · round ${sessionRound(s)} of ${chat.permissions.rounds}` : '';
   return {
     idle: '', queued: 'Waiting for the GPU', running: `Working${round}`, awaiting: 'Waiting for your answer',
     done: `Done${round}`, stopped: 'Stopped', failed: 'Stopped on an error', interrupted: 'Interrupted',
