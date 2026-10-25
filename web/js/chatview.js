@@ -112,12 +112,18 @@ function agentMessage(chat, m) {
       </div></div>` : '';
   const checks = m.mode === 'plan' && chat.session.checks.length ? `<ol class="chatchecklist">${
     chat.session.checks.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>` : '';
+  // A storyboard is long; the Story panel holds it.
+  const board = m.mode === 'story' && chat.film ? `<div class="chatcard">
+      <p class="chatcardhead">Storyboard${chat.film.title ? `: ${esc(chat.film.title)}` : ''}</p>
+      <p class="sub">${chat.film.cast.length} in the cast · ${chat.film.shots.length} shot${chat.film.shots.length === 1 ? '' : 's'}</p>
+      ${castPics(chat)}
+      <div class="btnrow"><button type="button" class="btn" data-open-story>Open the storyboard</button></div></div>` : '';
   const notes = m.notes ? `<details class="chatnotes"><summary>Notes</summary><p>${esc(m.notes)}</p></details>` : '';
   const stats = m.stats?.n_gen ? `<span class="sub chatstats">${m.stats.n_prompt} read · ${m.stats.n_gen} written · ${
     ((m.stats.load_ms + m.stats.read_ms + m.stats.gen_ms) / 1000).toFixed(1)} s</span>` : '';
   return `<div class="chatmsg agent" data-n="${m.n}">
     ${m.reply ? `<p class="chattext">${replyHtml(m.reply)}</p>` : ''}
-    ${checks}${describe}${changes.map(changeCard).join('')}${action ? actionCard(chat, action) : ''}
+    ${checks}${describe}${board}${changes.map(changeCard).join('')}${action ? actionCard(chat, action) : ''}
     <div class="chatfoot">${notes}${stats}</div></div>`;
 }
 
@@ -190,6 +196,113 @@ export function sessionHtml(chat) {
     <p class="sub">Round ${sessionRound(s)} of ${sessionLimit(s)} · ${esc(stateText(chat) || 'idle')}</p>`;
 }
 
+// ---- The Story panel ------------------------------------------------------------
+//
+// A film's storyboard (`agent::chat::Film`): its look, the cast with their
+// pictures, the shots. Every field is the person's to edit until the film is
+// shot; an edit is posted as it is made (`agent.js`, `/chats/film`), and a
+// picture dropped or a keyframe's shot reworded is drawn again by the agent.
+// `locked` while the agent works on the chat.
+
+const KIND = { character: 'Character', place: 'Place', thing: 'Thing' };
+const PHASE = { board: 'Drawing its pictures', ready: 'Ready to film', shooting: 'Filming', done: 'Filmed' };
+
+const thumb = (chat, ref, alt) => `<img src="${img(chat, ref.kind === 'attach' ? 'att' : 'img', ref.file)}" alt="${esc(alt)}">`;
+
+// Whether member `m` gets a turnaround sheet (`Film::wants_sheet`).
+const wantsSheet = (f, m) => f.sheets && m.kind === 'character';
+
+function memberCard(chat, m, k, lock) {
+  const theirs = m.picture && m.picture.kind !== 'item';
+  const sheet = m.sheet ? `<div class="storysheet" title="${esc(m.name)} from every side">${thumb(chat, m.sheet, `${m.name}, turnaround`)}</div>`
+    : wantsSheet(chat.film, m) ? '<p class="sub">Turnaround drawn next</p>' : '';
+  const pic = m.picture ? thumb(chat, m.picture, m.name)
+    : `<span class="sub">${chat.film.phase === 'board' ? 'Drawn next' : 'No picture'}</span>`;
+  return `<div class="storymember">
+    <div class="storypic" title="${theirs ? 'Your picture' : 'Drawn by the agent'}">${pic}</div>
+    <div class="storyfields">
+      <input type="text" value="${esc(m.name)}" data-film-member="${k}" data-field="name" aria-label="Name"${lock}>
+      <span class="sub">${esc(KIND[m.kind] ?? m.kind)}</span>
+      <textarea rows="2" data-film-member="${k}" data-field="look" aria-label="How ${esc(m.name)} looks"${lock}>${esc(m.look)}</textarea>
+      <div class="btnrow">
+        <button type="button" class="btn" data-film-pick="${k}" title="Use a picture from Outputs"${lock}>Choose…</button>
+        <button type="button" class="btn" data-film-upload="${k}" title="Use a picture from this computer"${lock}>Upload…</button>
+        <button type="button" class="btn" data-film-redraw="${k}" title="Let the agent draw this one from its look"${lock}>${
+          theirs ? 'Draw one' : 'Draw again'}</button>
+      </div>
+    </div>${sheet}</div>`;
+}
+
+function shotRow(chat, s, k, lock) {
+  const how = k === 0 ? '<span class="sub">First shot</span>'
+    : `<select data-film-shot="${k}" data-field="cut" aria-label="How shot ${k + 1} begins"${lock}>
+        <option value="0"${s.cut ? '' : ' selected'}>Continue</option><option value="1"${s.cut ? ' selected' : ''}>Cut</option></select>`;
+  const key = s.keyframe ? `<div class="storykey" title="The picture shot ${k + 1} starts from">${thumb(chat, s.keyframe, `Shot ${k + 1}`)}</div>` : '';
+  return `<li class="storyshot">
+    <div class="storyshothead"><b>${k + 1}</b>${how}</div>
+    <div class="storyshotbody">${key}<div class="storyfields">
+      <textarea rows="2" data-film-shot="${k}" data-field="text" aria-label="Shot ${k + 1}"${lock}>${esc(s.text)}</textarea>
+      <input type="text" value="${esc(s.cast.join(', '))}" data-film-shot="${k}" data-field="cast"
+        placeholder="Who is in it" aria-label="Who is in shot ${k + 1}"${lock}>
+    </div></div></li>`;
+}
+
+// The cast's pictures in a row, named, for the storyboard's card.
+function castPics(chat) {
+  // A character's turnaround says more than its front picture.
+  const drawn = chat.film.cast.filter((m) => m.sheet || m.picture);
+  return drawn.length ? `<div class="chatpics">${drawn.map((m) => `<figure class="chatpic" title="${esc(m.name)}">${
+    thumb(chat, m.sheet ?? m.picture, m.name)}<span class="chatpicno">${esc(m.name)}</span></figure>`).join('')}</div>` : '';
+}
+
+// The Story panel's main action: what the board still lacks, drawn on a
+// press (`/chats/film {draw: true}`), so the looks can be read and changed
+// first. `null` when nothing is missing.
+export function drawLabel(film) {
+  if (!film || !['board', 'ready'].includes(film.phase)) return null;
+  const done = (m) => m.stem && (!wantsSheet(film, m) || m.sheet_stem);
+  if (!film.cast.every(done)) return film.cast.some(done) ? 'Draw the rest of the cast' : 'Draw the cast';
+  const keys = film.shots.some((s, k) => !film.references && (k === 0 || s.cut) && !s.key_stem);
+  return keys ? 'Draw the keyframes' : null;
+}
+
+//   models  the toolkit's runnable models, for the board's image model
+export function storyHtml(chat, { busy = false, off = null, models = [] } = {}) {
+  const f = chat.film;
+  if (!f && off) return `<p class="sub">No film can be made in this chat now: ${esc(off)}.</p>`;
+  if (!f) {
+    return '<p class="sub">No film yet. Tell the agent a story, an idea or who is in it, and ask for a film: it writes a storyboard, draws the cast and the pictures the shots start from, and waits for your go. It films on the Video tab’s model.</p>';
+  }
+  const editable = !busy && ['board', 'ready'].includes(f.phase);
+  const lock = editable ? '' : ' disabled';
+  const secs = f.shots.length;
+  return `<p>${f.title ? `<b>${esc(f.title)}</b> · ` : ''}<span class="sub">${esc(PHASE[f.phase] ?? f.phase)} · ${
+      secs} shot${secs === 1 ? '' : 's'} on ${esc(f.video_model)}</span></p>
+    <label class="grouphead">Every shot</label>
+    <textarea rows="2" data-film-every aria-label="Every shot"${lock}>${esc(f.every)}</textarea>
+    ${pictureModel(f, models, lock, chat.settings?.template)}
+    <label class="grouphead">Cast</label>
+    ${f.cast.length ? `<div class="storycast">${f.cast.map((m, k) => memberCard(chat, m, k, lock)).join('')}</div>`
+      : '<p class="sub">No one the shots must keep the same.</p>'}
+    <label class="grouphead">Shots</label>
+    <ol class="storyshots">${f.shots.map((s, k) => shotRow(chat, s, k, lock)).join('')}</ol>`;
+}
+
+// The model the cast and keyframes are drawn with. One that follows
+// reference pictures gives characters a turnaround sheet.
+function pictureModel(f, models, lock, chatModel) {
+  if (!models.length) return '';
+  // Empty is the chat's own (a board from before boards had a model).
+  const name = f.image_model || chatModel;
+  const opts = models.map((m) => `<option value="${esc(m.name)}"${m.name === name ? ' selected' : ''}>${esc(m.name)} · ${
+    esc(m.label)}${m.references ? ' (turnarounds)' : ''}</option>`);
+  if (name && !models.some((m) => m.name === name)) opts.unshift(`<option selected>${esc(name)} (not installed)</option>`);
+  return `<label class="grouphead" for="astorymodel">Pictures drawn with</label>
+    <select id="astorymodel" data-film-model${lock}>${opts.join('')}</select>
+    <p class="sub">${f.sheets ? 'Characters get a turnaround sheet — front, three-quarter, side, back — and a front picture drawn from it.'
+      : 'This model can’t follow a reference picture, so each character gets one picture. A Klein can draw turnarounds.'}</p>`;
+}
+
 // How many of its rounds the session has drawn: round numbers count on
 // through the whole chat, a session from where it began.
 export function sessionRound(s) {
@@ -204,6 +317,11 @@ export function sessionLimit(s) {
 // The header's line: what the agent is doing, or waiting for.
 export function stateText(chat) {
   const s = chat.session;
+  const f = chat.film;
+  if (s.state === 'running' && f && s.next === 'film') {
+    return f.cast.some((m) => !m.stem) ? 'Drawing the cast' : 'Drawing keyframes';
+  }
+  if (s.state === 'running' && s.next === 'turn' && s.mode === 'story') return 'Writing the storyboard';
   const round = s.goal ? ` · round ${sessionRound(s)} of ${sessionLimit(s)}` : '';
   return {
     idle: '', queued: 'Waiting for the GPU', running: `Working${round}`,

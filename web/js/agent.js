@@ -6,7 +6,7 @@ import { S } from './state.js';
 import { cancelPost, onPassResult, onViewerResult, setLook, setViewerImage, showFullSize } from './viewer.js';
 import { openWorkItem } from './workitems.js';
 import { choosePicture, upload } from './source-slot.js';
-import { renderChat, sessionHtml, stateText } from './chatview.js';
+import { drawLabel, renderChat, sessionHtml, stateText, storyHtml } from './chatview.js';
 import { openGetModels } from './getmodels.js';
 
 // ---- The Agent tab ------------------------------------------------------------
@@ -79,7 +79,7 @@ function syncModelNote() {
 
 async function openChat(id) {
   const mine = ++stageSeq;
-  if (id !== data?.chat.id) sessionPanel(false);
+  if (id !== data?.chat.id) { sessionPanel(false); storyPanel(false); }
   err('');
   try {
     const got = await getJSON(`/chats/${encodeURIComponent(id)}`);
@@ -101,6 +101,9 @@ function show(got, { scroll = true } = {}) {
   const begun = was?.id === got.chat.id && s.goal
     && (s.goal !== was.session.goal || s.first_round !== was.session.first_round);
   if ((begun || was?.id !== got.chat.id) && ['queued', 'running'].includes(s.state)) sessionPanel(true);
+  // A film opens the Story panel when it is written, and with its chat.
+  const film = got.chat.film;
+  if (film && (was?.id !== got.chat.id || !was?.film)) storyPanel(true);
   drawPanels();
   markChats();
 }
@@ -138,12 +141,20 @@ function sessionPanel(on) {
   $('panel-agent-session').open = on;
 }
 
+// The Story panel likewise: it opens with a film, and on the storyboard card's
+// button, and closes when the stage leaves the chat.
+function storyPanel(on) {
+  $('panel-agent-story').open = on;
+}
+
 function drawPanels() {
   if (!data) {
     $('asessionbody').innerHTML = '<p class="sub">No chat yet.</p>';
+    $('astorybody').innerHTML = storyHtml({ film: null });
     return;
   }
   $('asessionbody').innerHTML = sessionHtml(data.chat);
+  drawStory();
   if (data.chat.agent && $('amodel').value !== data.chat.agent
       && agentsList.models.some((m) => m.name === data.chat.agent)) {
     $('amodel').value = data.chat.agent;
@@ -151,12 +162,87 @@ function drawPanels() {
   }
 }
 
+// A redraw while the person is typing in the panel would take the box from
+// under them: an answer that changes nothing they are editing waits for the
+// box to lose focus.
+function drawStory() {
+  const what = busy() ? null : drawLabel(data?.chat.film);
+  $('astorydraw').hidden = !what;
+  if (what) $('astorydraw').textContent = what;
+  const body = $('astorybody');
+  if (body.contains(document.activeElement) && document.activeElement.matches('input, textarea')) {
+    body.dataset.stale = '1';
+    return;
+  }
+  delete body.dataset.stale;
+  body.innerHTML = storyHtml(data?.chat ?? { film: null }, { busy: busy(), off: data?.toolkit.film_off, models: data?.toolkit.models ?? [] });
+}
+
+// One field of the board, as it was edited.
+async function editFilm(fields) {
+  if (!data) return;
+  try {
+    show(await post('/chats/film', { id: chatId(), ...fields }), { scroll: false });
+    soonJobs();
+  } catch (e) {
+    err(String(e.message || e));
+    drawStory();
+  }
+}
+
+let pickFor = null; // the cast member an upload is for
+
+function initStory() {
+  const body = $('astorybody');
+  body.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.matches('[data-film-every]')) editFilm({ every: t.value });
+    else if (t.matches('[data-film-model]')) editFilm({ image_model: t.value });
+    else if (t.dataset.filmMember != null) editFilm({ member: Number(t.dataset.filmMember), [t.dataset.field]: t.value });
+    else if (t.dataset.filmShot != null) {
+      const k = Number(t.dataset.filmShot);
+      const f = t.dataset.field;
+      editFilm({ shot: k, [f]: f === 'cut' ? t.value === '1' : f === 'cast' ? t.value.split(',').map((x) => x.trim()).filter(Boolean) : t.value });
+    }
+  });
+  body.addEventListener('focusout', () => {
+    if (body.dataset.stale) setTimeout(drawStory, 0);
+  });
+  body.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const d = b.dataset;
+    const picture = (k) => (stem) => editFilm({ member: k, picture: { kind: 'output', id: stem } });
+    if (d.filmPick != null) choosePicture(picture(Number(d.filmPick)));
+    else if (d.filmRedraw != null) editFilm({ member: Number(d.filmRedraw), picture: null });
+    else if (d.filmUpload != null) {
+      pickFor = Number(d.filmUpload);
+      $('astoryfile').click();
+    }
+  });
+  $('astorydraw').addEventListener('click', () => editFilm({ draw: true }));
+  $('astoryfile').addEventListener('change', async () => {
+    const f = $('astoryfile').files[0];
+    $('astoryfile').value = '';
+    if (!f || pickFor == null) return;
+    try {
+      await editFilm({ member: pickFor, picture: { kind: 'output', id: await upload(f) } });
+    } catch (ex) {
+      err(String(ex.message || ex));
+    }
+  });
+}
+
 // ---- Sending ------------------------------------------------------------------------
+
+// The Video tab's model, or null before its list has loaded.
+const videoModel = () => $('vmodel').value || null;
 
 async function ensureChat() {
   if (data) return data.chat.id;
   // The Image tab's model, which brings its own saved defaults.
-  const got = await post('/chats/new', { template: $('template').value, agent: $('amodel').value || null });
+  // And the Video tab's, which a film is shot on.
+  const got = await post('/chats/new', { template: $('template').value, agent: $('amodel').value || null, video: videoModel() });
   stageSeq++;
   show(got);
   loadChats();
@@ -171,7 +257,7 @@ async function send() {
   if (!text && !attachments.length) return;
   try {
     const id = await ensureChat();
-    await post('/agent/send', { chat: id, text, images: attachments.map(({ kind, id }) => ({ kind, id })) });
+    await post('/agent/send', { chat: id, text, images: attachments.map(({ kind, id }) => ({ kind, id })), video: videoModel() });
     $('atext').value = '';
     attachments = [];
     drawChips();
@@ -325,6 +411,7 @@ function markChats() {
 function newChat() {
   stageSeq++;
   sessionPanel(false);
+  storyPanel(false);
   data = null;
   attachments = [];
   drawChips();
@@ -415,6 +502,8 @@ async function onLogClick(e) {
   try {
     if (d.undo) {
       show(await post('/agent/undo', { chat: id, change: Number(d.undo) }), { scroll: false });
+    } else if (d.openStory != null) {
+      storyPanel(true);
     } else if (d.openItem) {
       openItem(d.openItem);
     } else if (d.ask) {
@@ -537,6 +626,7 @@ function initViewerPane() {
 
 const PANEL_DEFS = [
   { id: 'agent-session' },
+  { id: 'agent-story', both: true },
   { id: 'agent-current', open: true, corner: 'bottom-right' },
   { id: 'agent-favorites' },
 ];
@@ -547,6 +637,8 @@ export function initAgent() {
   wsPanels = floatPanels({ host: $('tab-agent'), rail: $('tab-agent').querySelector('.wsrail'), defs: PANEL_DEFS });
   wsPanels.init();
   sessionPanel(false);
+  storyPanel(false);
+  initStory();
   for (const g of grids) g.init();
   initGrip();
   initLarge();

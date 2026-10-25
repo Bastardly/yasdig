@@ -14,7 +14,10 @@
 //! unless asked; a session the plan didn't size is [`SESSION_ROUNDS`] of
 //! [`SESSION_BATCH`].
 
-use super::chat::{ActionRec, ActionState, Change, ChangeState, Chat, CheckRow, Mode, Msg, Next, State, Sweep};
+use super::chat::{
+    ActionRec, ActionState, Change, ChangeState, Chat, CheckRow, Film, FilmShot, ImageRef, Member, MemberKind, Mode, Msg, Next, Phase,
+    State, Sweep,
+};
 use super::knobs::{self, Locks, MAX_BATCH, MAX_ROUNDS};
 use super::toolkit::Toolkit;
 use serde::Deserialize;
@@ -27,6 +30,13 @@ pub enum Step {
     /// Picture `k` (0-based) of round `round`.
     Image { round: u32, k: u32 },
     Escalate(u64),
+    /// The film's cast member `k` gets its picture: drawn, or the person's
+    /// saved to Outputs.
+    CastPicture(usize),
+    /// Character `k`'s turnaround sheet is drawn.
+    CastSheet(usize),
+    /// Shot `k`'s keyframe is drawn.
+    Keyframe(usize),
     End,
 }
 
@@ -45,7 +55,81 @@ pub fn next_step(chat: &Chat) -> Step {
             .iter()
             .find(|a| a.state == ActionState::Queued)
             .map_or(Step::End, |a| Step::Escalate(a.id)),
+        Next::Film => chat.film.as_ref().and_then(board_step).unwrap_or(Step::End),
     }
+}
+
+/// The storyboard's next missing picture: the cast first, since a keyframe
+/// is drawn with their pictures.
+///
+/// A character with a sheet: a drawn one's sheet comes first and its front
+/// picture is drawn from it; the person's picture is saved first and the
+/// sheet drawn from it.
+pub fn board_step(film: &Film) -> Option<Step> {
+    for (k, m) in film.cast.iter().enumerate() {
+        let sheet = film.wants_sheet(m) && m.sheet_stem.is_none();
+        match (m.theirs(), m.stem.is_none(), sheet) {
+            (true, true, _) | (false, true, false) => return Some(Step::CastPicture(k)),
+            (_, _, true) => return Some(Step::CastSheet(k)),
+            _ => {}
+        }
+    }
+    (0..film.shots.len()).find(|&k| film.needs_keyframe(k) && film.shots[k].key_stem.is_none()).map(Step::Keyframe)
+}
+
+/// After the board changed: with `draw`, draw what it is missing; without,
+/// leave that to the person (the Story panel's *Draw the cast*), who may
+/// want to read the looks first. With nothing missing it is ready and waits
+/// for the person's go.
+pub fn board_advance(chat: &mut Chat, shot_seconds: f32, draw: bool) {
+    let Some(film) = chat.film.as_mut() else { return };
+    if !matches!(film.phase, Phase::Board | Phase::Ready) {
+        return;
+    }
+    if board_step(film).is_some() {
+        film.phase = Phase::Board;
+        chat.session.next = if draw { Next::Film } else { Next::Nothing };
+        return;
+    }
+    let was = film.phase;
+    film.phase = Phase::Ready;
+    chat.session.next = Next::Nothing;
+    let n = film.shots.len();
+    if was == Phase::Board {
+        let secs = (n as f32 * shot_seconds).round();
+        chat.note(format!(
+            "The storyboard is ready: {n} shot{}, about {secs} s of video. Say go, or press Film.",
+            if n == 1 { "" } else { "s" }
+        ));
+    }
+}
+
+/// A picture of the board landed: member or shot `k`'s, kept in the chat
+/// (`picture`) and saved to Outputs (`stem`).
+pub fn board_picture_done(chat: &mut Chat, step: Step, picture: ImageRef, stem: String, shot_seconds: f32) {
+    let Some(film) = chat.film.as_mut() else { return };
+    match step {
+        Step::CastPicture(k) => {
+            if let Some(m) = film.cast.get_mut(k) {
+                m.picture = Some(picture);
+                m.stem = Some(stem);
+            }
+        }
+        Step::CastSheet(k) => {
+            if let Some(m) = film.cast.get_mut(k) {
+                m.sheet = Some(picture);
+                m.sheet_stem = Some(stem);
+            }
+        }
+        Step::Keyframe(k) => {
+            if let Some(s) = film.shots.get_mut(k) {
+                s.keyframe = Some(picture);
+                s.key_stem = Some(stem);
+            }
+        }
+        _ => return,
+    }
+    board_advance(chat, shot_seconds, true);
 }
 
 /// The round being drawn: its number, how many of its pictures exist, and
@@ -267,6 +351,194 @@ pub struct ReplyJson {
     pub best: Option<u32>,
     #[serde(default)]
     pub negative: Option<String>,
+    /// Story: the film's title, its look, the image model its pictures are
+    /// drawn with, cast and shots.
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub image_model: Option<String>,
+    #[serde(default)]
+    pub every: Option<String>,
+    #[serde(default)]
+    pub cast: Option<Vec<CastJson>>,
+    #[serde(default)]
+    pub shots: Option<Vec<ShotJson>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct CastJson {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub look: String,
+    /// The attached picture it is, from 1; 0 is none (drawn from `prompt`).
+    #[serde(default)]
+    pub picture: u32,
+    #[serde(default)]
+    pub prompt: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ShotJson {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub cast: Vec<String>,
+    #[serde(default)]
+    pub cut: bool,
+}
+
+/// The most cast members a film has: each is a picture drawn before the
+/// board is ready, and a shot shows at most `MAX_REFERENCES` of them.
+pub const MAX_CAST: usize = 6;
+
+/// A storyboard from a Story reply, **written whole**: a small model
+/// rewrites a board more reliably than it patches one. What is kept from
+/// the board before is matched, not trusted to the model: a member keeps its
+/// picture when its name is the same and its look is too — or the picture
+/// is the person's, which the look describes — and a shot keeps its
+/// keyframe when its words, cast and cut are unchanged.
+pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut Vec<String>) {
+    let Some(video) = t.video.clone().filter(|_| t.films()) else {
+        notes.push(format!("No storyboard: {}.", t.film_off.as_deref().unwrap_or("no video model")));
+        return;
+    };
+    let attached: Vec<ImageRef> = chat
+        .messages
+        .iter()
+        .rev()
+        .find_map(|m| match m {
+            Msg::User { images, .. } => Some(images.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let old = chat.film.take();
+    let mut cast: Vec<Member> = Vec::new();
+    for c in r.cast.take().unwrap_or_default() {
+        let name: String = plain(&c.name).split_whitespace().collect::<Vec<_>>().join(" ");
+        if name.is_empty() || cast.iter().any(|m| m.name.eq_ignore_ascii_case(&name)) {
+            continue;
+        }
+        if cast.len() == MAX_CAST {
+            notes.push(format!("A film has at most {MAX_CAST} in its cast, so {name} was left out."));
+            continue;
+        }
+        let look = plain(&c.look);
+        let mut m = Member {
+            name,
+            kind: match c.kind.as_str() {
+                "place" => MemberKind::Place,
+                "thing" => MemberKind::Thing,
+                _ => MemberKind::Character,
+            },
+            look,
+            prompt: plain(&c.prompt),
+            ..Default::default()
+        };
+        let adopted = (c.picture as usize).checked_sub(1).and_then(|i| attached.get(i));
+        if let Some(p) = adopted {
+            // The person's picture: an output already is its own stem.
+            m.stem = (p.kind == "output").then(|| p.id.clone());
+            m.picture = Some(p.clone());
+        } else if let Some(was) = old.as_ref().and_then(|f| f.member(&m.name)) {
+            let theirs = was.picture.as_ref().is_some_and(|p| p.kind != "item");
+            if theirs || was.look == m.look {
+                m.picture = was.picture.clone();
+                m.stem = was.stem.clone();
+                m.sheet = was.sheet.clone();
+                m.sheet_stem = was.sheet_stem.clone();
+            }
+        }
+        cast.push(m);
+    }
+    let mut shots: Vec<FilmShot> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    for s in r.shots.take().unwrap_or_default() {
+        let text = plain(&s.text);
+        if text.is_empty() {
+            continue;
+        }
+        if shots.len() == crate::pipeline::MAX_SHOTS {
+            notes.push(format!("A clip has at most {} shots, so the rest were left out.", crate::pipeline::MAX_SHOTS));
+            break;
+        }
+        let mut names: Vec<String> = Vec::new();
+        for n in &s.cast {
+            match cast.iter().find(|m| m.name.eq_ignore_ascii_case(n.trim())) {
+                Some(m) if !names.contains(&m.name) => names.push(m.name.clone()),
+                Some(_) => {}
+                None if !n.trim().is_empty() && !unknown.iter().any(|u| u.eq_ignore_ascii_case(n.trim())) => {
+                    unknown.push(n.trim().to_string())
+                }
+                None => {}
+            }
+        }
+        names.truncate(crate::config::MAX_REFERENCES);
+        let k = shots.len();
+        let mut shot = FilmShot { text, cast: names, cut: k > 0 && s.cut, ..Default::default() };
+        if let Some(was) = old.as_ref().and_then(|f| f.shots.get(k)) {
+            if was.text == shot.text && was.cast == shot.cast && was.cut == shot.cut {
+                shot.keyframe = was.keyframe.clone();
+                shot.key_stem = was.key_stem.clone();
+            }
+        }
+        shots.push(shot);
+    }
+    if !unknown.is_empty() {
+        notes.push(format!("The shots named {}, who aren't in the cast; left out of them.", unknown.join(", ")));
+    }
+    if shots.is_empty() {
+        notes.push("The storyboard had no shots, so the board is as it was.".into());
+        chat.film = old;
+        return;
+    }
+    let image = pick_image_model(chat, r.image_model.as_deref(), old.as_ref(), t);
+    let sheets = t.models.iter().any(|m| m.name == image && m.references);
+    if !sheets && cast.iter().any(|m| m.kind == MemberKind::Character) {
+        notes.push(format!(
+            "The cast is drawn with {image}, which can't follow a reference picture, so each character gets one \
+             picture rather than a turnaround from every side. A FLUX.2 or FLUX.3 Klein can."
+        ));
+    }
+    let title = r.title.take().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    chat.film = Some(Film {
+        title: title.or_else(|| old.as_ref().map(|f| f.title.clone())).unwrap_or_default(),
+        every: plain(&r.every.take().unwrap_or_default()),
+        cast,
+        shots,
+        video_model: video.name.clone(),
+        references: video.references,
+        image_model: image,
+        sheets,
+        clip: None,
+        phase: Phase::Board,
+        shot: 0,
+    });
+    board_advance(chat, video.shot_seconds(), false);
+    if chat.film.as_ref().is_some_and(|f| f.phase == Phase::Board) {
+        notes.push("The storyboard is written. Read the cast in the Story panel, change what you like, then press Draw the cast.".into());
+    }
+}
+
+/// The image model a board's pictures are drawn with: the agent's pick when
+/// it may pick a model and named an installed one, else the board's before,
+/// else the chat's.
+fn pick_image_model(chat: &Chat, picked: Option<&str>, old: Option<&Film>, t: &Toolkit) -> String {
+    let installed = |n: &str| t.models.iter().any(|m| m.name == n);
+    let may = t.knob("model").is_some_and(|k| k.allowed);
+    picked
+        .filter(|n| may && installed(n))
+        .map(str::to_string)
+        .or_else(|| old.map(|f| f.image_model.clone()).filter(|n| installed(n)))
+        .unwrap_or_else(|| chat.settings.get("template").and_then(|v| v.as_str()).unwrap_or("").to_string())
+}
+
+/// A small model writes Markdown whatever it is told; in a look or a prompt
+/// the stars would be drawn as words.
+fn plain(s: &str) -> String {
+    s.replace("**", "").replace("__", "").trim().to_string()
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -548,11 +820,26 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
                         None => Next::Nothing,
                     }
                 }
+                // The storyboard is a turn of its own (`Mode::Story`), whose
+                // schema is the board: the chat's would be twice as long.
+                Some("film") if t.films() => {
+                    chat.session.mode = Mode::Story;
+                    Next::Turn
+                }
+                Some("film") => {
+                    notes_out.push(format!("No film: {}.", t.film_off.as_deref().unwrap_or("")));
+                    Next::Nothing
+                }
                 // "describe" writes its prompt on the message, below.
                 _ => Next::Nothing,
             };
         }
         Mode::Describe | Mode::Verdict => chat.session.next = Next::Nothing,
+        Mode::Story => {
+            chat.session.next = Next::Nothing;
+            chat.session.mode = Mode::Chat;
+            apply_story(chat, &mut r, t, &mut notes_out);
+        }
     }
 
     chat.messages.push(Msg::Agent {
@@ -709,6 +996,186 @@ mod tests {
         serde_json::from_value(v).unwrap()
     }
 
+    /// A toolkit that can make a film on a Wan 2.2 5B (cuts from keyframes),
+    /// or on H3 (cuts from the cast's pictures).
+    fn film_tk(c: &Chat, h3: bool) -> Toolkit {
+        let mut t = tk(c);
+        t.video = Some(super::super::toolkit::VideoView {
+            name: if h3 { "h3" } else { "wan5b" }.into(),
+            family: if h3 { "minimax_h3" } else { "wan22_ti2v_5b" },
+            label: "a video model",
+            chains: true,
+            references: h3,
+            width: 832,
+            height: 480,
+            frames: 121,
+            fps: 24,
+        });
+        t.film_off = None;
+        t
+    }
+
+    fn story(c: &mut Chat, t: &Toolkit, v: Value) {
+        apply_reply(c, Mode::Story, reply(v), t, &Locks::default(), vec![], Default::default());
+    }
+
+    fn board() -> Value {
+        json!({"notes": "", "title": "Rain", "every": "cinematic, warm light",
+            "cast": [
+                {"name": "Mara", "kind": "character", "look": "a tall woman in a red coat", "picture": 1, "prompt": "Mara standing"},
+                {"name": "Leo", "kind": "character", "look": "a boy in a yellow raincoat", "picture": 0, "prompt": "Leo standing"},
+                {"name": " mara ", "kind": "character", "look": "twice", "picture": 0, "prompt": ""}
+            ],
+            "shots": [
+                {"text": "Mara opens the door.", "cast": ["Mara", "Bob"], "cut": true},
+                {"text": "She steps into the rain.", "cast": ["mara"], "cut": false},
+                {"text": "Leo waits at the bus stop.", "cast": ["Leo"], "cut": true},
+                {"text": "  ", "cast": [], "cut": true}
+            ],
+            "reply": "A short film in three shots."})
+    }
+
+    fn film_chat() -> Chat {
+        let mut c = Chat::new("1-0".into(), json!({"prompt": "x"}), None);
+        let pic = ImageRef { kind: "output".into(), id: "mara-photo".into(), file: "u0-0.png".into(), seed: None };
+        c.messages.push(Msg::User { n: 0, ms: 0, text: "A film. This is Mara.".into(), images: vec![pic] });
+        c
+    }
+
+    #[test]
+    fn a_chat_turn_hands_a_film_to_the_story_turn_only_where_one_can_be_made() {
+        let mut c = film_chat();
+        let t = film_tk(&c, false);
+        apply_reply(&mut c, Mode::Chat, reply(json!({"notes": "", "action": "film", "reply": "On it."})), &t, &Locks::default(), vec![], Default::default());
+        assert_eq!(next_step(&c), Step::Turn(Mode::Story));
+        let mut c = film_chat();
+        let t = tk(&c);
+        apply_reply(&mut c, Mode::Chat, reply(json!({"notes": "", "action": "film", "reply": "On it."})), &t, &Locks::default(), vec![], Default::default());
+        assert_eq!(next_step(&c), Step::End);
+        assert!(matches!(c.messages.last(), Some(Msg::Note { text, .. }) if text.starts_with("No film")));
+    }
+
+    #[test]
+    fn a_story_reply_builds_the_film_from_what_it_can_trust() {
+        let mut c = film_chat();
+        let t = film_tk(&c, false);
+        story(&mut c, &t, board());
+        let f = c.film.as_ref().expect("a film");
+        assert_eq!((f.title.as_str(), f.video_model.as_str(), f.references), ("Rain", "wan5b", false));
+        let names: Vec<&str> = f.cast.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["Mara", "Leo"], "a name once, however it is spelt");
+        assert_eq!(f.cast[0].stem.as_deref(), Some("mara-photo"), "the attached picture is Mara's, an output already");
+        assert!(f.cast[1].picture.is_none());
+        assert_eq!(f.shots.len(), 3, "an empty shot is no shot");
+        assert_eq!(f.shots[0].cast, ["Mara"], "Bob isn't cast");
+        assert!(!f.shots[0].cut, "shot 1 is never a cut");
+        assert_eq!(f.shots[1].cast, ["Mara"], "named as the cast spells it");
+        assert!(c.messages.iter().any(|m| matches!(m, Msg::Note { text, .. } if text.contains("Bob"))));
+        assert_eq!(f.phase, Phase::Board);
+    }
+
+    #[test]
+    fn the_board_draws_the_cast_then_the_keyframes_its_model_needs_then_waits() {
+        let mut c = film_chat();
+        let t = film_tk(&c, false);
+        story(&mut c, &t, board());
+        // Written, and left for the person to read before anything is drawn.
+        assert_eq!(next_step(&c), Step::End);
+        assert!(matches!(c.messages.last(), Some(Msg::Note { text, .. }) if text.contains("Draw the cast")));
+        board_advance(&mut c, 5.0, true);
+        // Mara's picture is the person's; Leo's is drawn.
+        assert_eq!(next_step(&c), Step::CastPicture(1));
+        board_picture_done(&mut c, Step::CastPicture(1), img("leo"), "leo-s0".into(), 5.0);
+        // On Wan, shot 1 and every cut start from a keyframe.
+        assert_eq!(next_step(&c), Step::Keyframe(0));
+        board_picture_done(&mut c, Step::Keyframe(0), img("k0"), "k0-s0".into(), 5.0);
+        assert_eq!(next_step(&c), Step::Keyframe(2), "shot 2 goes on, so it needs none");
+        board_picture_done(&mut c, Step::Keyframe(2), img("k2"), "k2-s0".into(), 5.0);
+        assert_eq!(next_step(&c), Step::End);
+        assert_eq!(c.film.as_ref().unwrap().phase, Phase::Ready);
+        assert!(matches!(c.messages.last(), Some(Msg::Note { text, .. }) if text.contains("3 shots, about 15 s")));
+
+        // On H3 a cut follows the cast's pictures: no keyframes at all.
+        let mut c = film_chat();
+        let t = film_tk(&c, true);
+        story(&mut c, &t, board());
+        board_advance(&mut c, 5.0, true);
+        board_picture_done(&mut c, Step::CastPicture(1), img("leo"), "leo-s0".into(), 5.0);
+        assert_eq!(c.film.as_ref().unwrap().phase, Phase::Ready);
+    }
+
+    #[test]
+    fn on_a_model_that_follows_references_characters_get_a_turnaround_first() {
+        let mut c = film_chat();
+        c.settings = json!({"prompt": "x", "template": "sdxl"});
+        let mut t = film_tk(&c, true);
+        t.models = vec![
+            ModelChoice { name: "sdxl".into(), family: "sdxl", label: "SDXL", references: false, locks: Locks::default() },
+            ModelChoice { name: "klein".into(), family: "flux2-klein-4b", label: "FLUX.2 Klein 4B", references: true, locks: Locks::default() },
+        ];
+        let mut b = board();
+        b["image_model"] = json!("klein");
+        b["cast"][1]["kind"] = json!("place");
+        b["cast"].as_array_mut().unwrap().push(json!({"name": "Ana", "kind": "character", "look": "a girl", "picture": 0, "prompt": "Ana"}));
+        story(&mut c, &t, b.clone());
+        let f = c.film.as_ref().unwrap();
+        assert_eq!((f.image_model.as_str(), f.sheets), ("klein", true));
+        board_advance(&mut c, 5.0, true);
+        // Mara's picture is the person's: kept as it is, her sheet drawn from it.
+        assert_eq!(next_step(&c), Step::CastSheet(0));
+        board_picture_done(&mut c, Step::CastSheet(0), img("t0"), "t0-s0".into(), 5.0);
+        // Leo is a place here: one picture, no sheet.
+        assert_eq!(next_step(&c), Step::CastPicture(1));
+        board_picture_done(&mut c, Step::CastPicture(1), img("leo"), "leo-s0".into(), 5.0);
+        // Ana is drawn: her sheet first, her front picture from it.
+        assert_eq!(next_step(&c), Step::CastSheet(2));
+        board_picture_done(&mut c, Step::CastSheet(2), img("t2"), "t2-s0".into(), 5.0);
+        assert_eq!(next_step(&c), Step::CastPicture(2));
+        board_picture_done(&mut c, Step::CastPicture(2), img("ana"), "ana-s0".into(), 5.0);
+        assert_eq!(c.film.as_ref().unwrap().phase, Phase::Ready, "H3: no keyframes");
+
+        // Without the model knob the chat's model draws them, one picture each, and the chat says why.
+        let mut no = Rules::default();
+        no.knobs.remove("model");
+        let mut c = film_chat();
+        c.settings = json!({"prompt": "x", "template": "sdxl"});
+        let t = Toolkit { knobs: tk_under(&c, &no).knobs, ..t };
+        story(&mut c, &t, b);
+        assert_eq!((c.film.as_ref().unwrap().image_model.as_str(), c.film.as_ref().unwrap().sheets), ("sdxl", false));
+        assert!(c.messages.iter().any(|m| matches!(m, Msg::Note { text, .. } if text.contains("turnaround"))));
+    }
+
+    #[test]
+    fn a_rewritten_board_keeps_the_pictures_that_still_fit() {
+        let mut c = film_chat();
+        let t = film_tk(&c, false);
+        story(&mut c, &t, board());
+        board_advance(&mut c, 5.0, true);
+        board_picture_done(&mut c, Step::CastPicture(1), img("leo"), "leo-s0".into(), 5.0);
+        board_picture_done(&mut c, Step::Keyframe(0), img("k0"), "k0-s0".into(), 5.0);
+        board_picture_done(&mut c, Step::Keyframe(2), img("k2"), "k2-s0".into(), 5.0);
+        c.messages.push(Msg::User { n: 9, ms: 0, text: "Make shot 3 at night, and Mara in blue.".into(), images: vec![] });
+        let mut b = board();
+        b["cast"][0]["look"] = json!("a tall woman in a blue coat");
+        b["cast"][0]["picture"] = json!(0);
+        b["shots"][2]["text"] = json!("Leo waits at the bus stop at night.");
+        story(&mut c, &t, b.clone());
+        let f = c.film.as_ref().unwrap();
+        assert_eq!(f.cast[0].stem.as_deref(), Some("mara-photo"), "the person's picture stays, whatever the look says");
+        assert_eq!(f.cast[1].stem.as_deref(), Some("leo-s0"), "same name, same look");
+        assert_eq!(f.shots[0].key_stem.as_deref(), Some("k0-s0"), "an unchanged shot keeps its keyframe");
+        assert!(f.shots[2].key_stem.is_none(), "a reworded one draws its own");
+        assert_eq!(f.phase, Phase::Board, "back to drawing, when the person says");
+        board_advance(&mut c, 5.0, true);
+        assert_eq!(next_step(&c), Step::Keyframe(2));
+        // A drawn picture whose look changed is drawn again.
+        b["cast"][1]["look"] = json!("a boy in a **green** raincoat");
+        story(&mut c, &t, b);
+        assert_eq!(c.film.as_ref().unwrap().cast[1].look, "a boy in a green raincoat", "no Markdown in a look");
+        board_advance(&mut c, 5.0, true);
+        assert_eq!(next_step(&c), Step::CastPicture(1));
+    }
+
     #[test]
     fn a_session_runs_plan_rounds_and_critiques_then_stops_at_its_limit() {
         let mut c = chat();
@@ -850,8 +1317,8 @@ mod tests {
         c.session.goal.clear();
         c.session.mode = Mode::Chat;
         let mut t = build(&Rules::default(), &c.settings, &Locks::of(true, false, None), vec![
-            ModelChoice { name: "klein".into(), family: "flux2-klein-4b", label: "FLUX.2 Klein 4B", locks: Locks::of(true, false, None) },
-            ModelChoice { name: "moss".into(), family: "moss_image", label: "MOSS-Image", locks: Locks::default() },
+            ModelChoice { name: "klein".into(), family: "flux2-klein-4b", label: "FLUX.2 Klein 4B", references: false, locks: Locks::of(true, false, None) },
+            ModelChoice { name: "moss".into(), family: "moss_image", label: "MOSS-Image", references: false, locks: Locks::default() },
         ], Some(ImageFamily::Sdxl));
         t.locks = Locks::of(true, false, None);
         let ask = |model: &str| reply(json!({"notes": "", "action": "compare", "change": {"model": model}, "reason": "",

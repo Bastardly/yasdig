@@ -11,7 +11,7 @@
 //! messages in a row), so neighbours of one role are merged, and the list
 //! always ends on the person's side for the reply to follow.
 
-use super::chat::{Chat, Mode, Msg};
+use super::chat::{Chat, Film, MemberKind, Mode, Msg};
 use super::schema;
 use super::toolkit::Toolkit;
 use crate::llm::{Message, Part, Role};
@@ -47,6 +47,38 @@ pub struct Turn<'a> {
     pub round: u32,
     /// Messages kept from the end of the history; `usize::MAX` for all.
     pub history: usize,
+    /// The chat's storyboard, when it has one.
+    pub film: Option<&'a Film>,
+}
+
+/// A storyboard as text: what a chat turn is told the film is, and what a
+/// Story turn rewrites.
+pub fn board_text(f: &Film) -> String {
+    let mut s = String::new();
+    if !f.title.is_empty() {
+        s.push_str(&format!("Title: {}\n", f.title));
+    }
+    s.push_str(&format!("Every shot: {}\nCast:", if f.every.is_empty() { "(nothing)" } else { &f.every }));
+    for m in &f.cast {
+        let kind = match m.kind {
+            MemberKind::Character => "character",
+            MemberKind::Place => "place",
+            MemberKind::Thing => "thing",
+        };
+        let picture = match &m.picture {
+            Some(p) if p.kind != "item" => "the person's picture",
+            Some(_) => "a picture drawn",
+            None => "no picture yet",
+        };
+        s.push_str(&format!("\n- {} ({kind}, {picture}): {}", m.name, m.look));
+    }
+    s.push_str("\nShots:");
+    for (k, shot) in f.shots.iter().enumerate() {
+        let how = if k == 0 { "first" } else if shot.cut { "cut" } else { "goes on" };
+        let who = if shot.cast.is_empty() { String::new() } else { format!(" [{}]", shot.cast.join(", ")) };
+        s.push_str(&format!("\n{}. ({how}) {}{who}", k + 1, shot.text));
+    }
+    s
 }
 
 /// The system message: who the agent is, what it may change and how to reply.
@@ -62,6 +94,33 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
             "\n\nThis session is a comparison: yasdig draws one round per value with the same seeds, \
              and you judge. Change nothing; answer what is asked.",
         );
+    } else if turn.mode == Mode::Story {
+        if schema::board_models(t).is_some() {
+            let names: Vec<String> = t
+                .models
+                .iter()
+                .map(|m| format!("{} ({}{})", m.name, m.label, if m.references { ", follows reference pictures" } else { "" }))
+                .collect();
+            s.push_str(&format!(
+                "\n\nThe cast's pictures and the keyframes are drawn with `image_model`, one of: {}. Pick one that \
+                 follows reference pictures when there is one: a character then gets a turnaround sheet (front, \
+                 three-quarter, side, back) and every later picture of them follows it. If the person names a \
+                 model, use it.",
+                names.join(", ")
+            ));
+        }
+        if let Some(v) = &t.video {
+            s.push_str(&format!(
+                "\n\nThe film is shot with {}, a {} video model: {}×{}, each shot at most {:.1} s ({} frames at {} fps).",
+                v.name,
+                v.label,
+                v.width,
+                v.height,
+                v.shot_seconds(),
+                v.frames,
+                v.fps
+            ));
+        }
     } else if turn.mode != Mode::Describe {
         if offered.is_empty() {
             s.push_str("\n\nYou may not change any settings in this chat; advise only.");
@@ -128,6 +187,19 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                      \"make these better\", \"find the best prompt for this picture\" (an attached picture is \
                      what the rounds are judged against). `goal`: one sentence of what the pictures must show.",
                 );
+                if let Some(why) = &t.film_off {
+                    s.push_str(&format!(
+                        "\n- A film can't be made in this chat: {why}. If the person asks for one, say so and what would fix it."
+                    ));
+                } else {
+                    s.push_str(
+                        "\n- \"film\": make a short movie from the person's story, idea or pictures: a storyboard \
+                         of its cast and shots, their pictures drawn, then it waits for the person's go. \"Make a \
+                         film of this story\", \"a short movie about a lighthouse keeper\". With a storyboard \
+                         already, \"film\" rewrites it: \"make shot 2 at night\", \"add a dog\". The \
+                         storyboard is written next, so `reply` only says in a sentence that you are writing it.",
+                    );
+                }
                 if t.offered_knobs().any(|k| super::knobs::COMPARABLE.contains(&k.key)) {
                     s.push_str(
                         "\n- \"compare\": find out which value of one setting works best: the same seeds drawn \
@@ -154,6 +226,9 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
             );
         }
     }
+    if let Some(f) = turn.film.filter(|_| turn.mode == Mode::Chat) {
+        s.push_str(&format!("\n\nThis chat's storyboard:\n{}", board_text(f)));
+    }
     s.push_str(&format!(
         "\n\nReply with one JSON object. Write `notes` first: your own short reasoning (under {} \
          characters), which you will see again next turn. `reply` is what the person reads.",
@@ -168,7 +243,7 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
     let history = &chat.messages;
     // The newest user message is the one this turn answers in chat and
     // describe modes; in plan and critique the last message is written here.
-    let answering = matches!(turn.mode, Mode::Chat | Mode::Describe);
+    let answering = matches!(turn.mode, Mode::Chat | Mode::Describe | Mode::Story);
     let last_user = history.iter().rposition(|m| matches!(m, Msg::User { .. }));
     let keep_from = history.len().saturating_sub(turn.history);
     for (i, m) in history.iter().enumerate().skip(keep_from) {
@@ -306,6 +381,47 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                 }],
             );
         }
+        Mode::Story => {
+            let refs = t.video.as_ref().is_some_and(|v| v.references);
+            let secs = t.video.as_ref().map_or(5.0, |v| v.shot_seconds());
+            let mut text = String::from("Write the storyboard for a short film, as the person asked.");
+            if let Some(f) = turn.film {
+                text.push_str(&format!(
+                    "\nThe storyboard now:\n{}\nWrite it again whole with the person's change. Keep every name, \
+                     look and shot they didn't ask to change, word for word.",
+                    board_text(f)
+                ));
+            }
+            text.push_str(&format!(
+                "\nOne shot is one action, and runs about {:.0} s. When the person says how long the film is, \
+                 that many seconds is that many shots of it (\"10 seconds\" is {} shots). When they say neither, \
+                 4 to 6 shots; at most {}.\n\
+                 `cut` true starts a new scene: {} false goes on from the last frame of the shot before, so the \
+                 same people and place carry on. Shot 1 is never a cut.\n\
+                 `cast`: each person, place or thing that must look the same in more than one shot, with its `look` \
+                 in words and a `prompt` for its picture: that one subject alone, whole, on a plain background, in \
+                 the film's look. A shot's `cast` names who is in it, at most {}.\n\
+                 `every`: the film's look in a few words (style, light, colour), put in front of every shot.\n\
+                 A shot's `text` says what happens, in the present tense, naming who is in it.",
+                secs,
+                (10.0 / secs.max(0.1)).round().max(1.0),
+                crate::pipeline::MAX_SHOTS,
+                if refs {
+                    "it is drawn from the pictures of the cast it names, so name everyone in it."
+                } else {
+                    "it starts from a picture drawn first, with the cast it names."
+                },
+                crate::config::MAX_REFERENCES
+            ));
+            let attached = own.len();
+            if attached > 0 {
+                text.push_str(&format!(
+                    "\nThe person attached {attached} picture(s): a member's `picture` n makes picture n its picture \
+                     (\"this is Mara\"), and its `look` describes it; 0 draws one from its `prompt`."
+                ));
+            }
+            push(&mut out, Role::User, vec![Part::Text { text }]);
+        }
         Mode::Chat | Mode::Describe => {}
     }
     // The reply must follow the person's side.
@@ -388,7 +504,7 @@ mod tests {
     }
 
     fn turn(mode: Mode, images: Vec<PathBuf>) -> Turn<'static> {
-        Turn { mode, images, reference: 0, sweep: false, skills: "SKILLS", checks: &[], goal: "a fox in a red hat", round: 2, history: usize::MAX }
+        Turn { mode, images, reference: 0, sweep: false, skills: "SKILLS", checks: &[], goal: "a fox in a red hat", round: 2, history: usize::MAX, film: None }
     }
 
     #[test]

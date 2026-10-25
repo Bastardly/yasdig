@@ -18,6 +18,16 @@ What changed in each release of yasdig. Each release's executables are on the
 - **A video shot can cut to a picture**: a *Cut* in the Shots panel can *Start from a
   picture* — a keyframe from your outputs — on TI2V-5B, A14B and H3. That is how a Wan
   clip changes scene; H3 cuts can still follow references instead.
+- **A short movie from a story**: ask the agent for a film of a story, an idea, or the
+  people in your pictures ("this is Mara"), and it writes a storyboard — the cast with how
+  each looks, and the shots. The Story panel shows the board: every name, look, picture
+  and shot is yours to change, and *Draw the cast* draws a picture of each in the cast
+  and, on Wan, the pictures its cuts start from, saved to Outputs. The agent picks the
+  model that draws them; on one that follows reference pictures (the Kleins) each
+  character first gets a turnaround sheet — front, three-quarter, side and back in one
+  picture — and every later picture of them follows it. Then it waits for your
+  go. "Make shot 2 at night" rewrites it, keeping the pictures that still fit.
+  Settings → Agent's *Make movies* turns it off.
 - **Comparisons**: ask "which CFG works best?" or "which model draws hands better?" and it
   draws one round per value on the same seeds, judges them, counts per value the
   pictures that passed every check, answers from the counts, and sets the winner with an

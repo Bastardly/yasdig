@@ -165,6 +165,14 @@ pub struct Rules {
     pub knobs: BTreeSet<String>,
     #[serde(default, deserialize_with = "action_set")]
     pub actions: BTreeSet<String>,
+    /// It may make a movie: write a storyboard and draw its pictures. On by
+    /// default, since nothing is filmed until the person says go.
+    #[serde(default = "yes")]
+    pub film: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// The most rounds a session runs and pictures a round draws, whatever the
@@ -202,7 +210,7 @@ fn action_set<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeSet<String>, D::Er
 
 impl Default for Rules {
     fn default() -> Self {
-        Rules { agent: None, knobs: default_knobs(), actions: BTreeSet::new() }
+        Rules { agent: None, knobs: default_knobs(), actions: BTreeSet::new(), film: true }
     }
 }
 

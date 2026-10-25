@@ -606,8 +606,8 @@ needs a Vulkan device and nothing else.
 ### The agent
 
 The Agent tab's chats (`work/chats/{id}/`, starred ones in `user/favorite_chats/`). Every
-route but `/agent/send` reads or writes files and answers at once; that one queues a
-*leg* on the job queue (kind `agent`) and answers `{ "job": id }` — the reply arrives in
+route but `/agent/send` (and a `/chats/film` edit that leaves a picture to draw) reads or
+writes files and answers at once; that one queues a *leg* on the job queue (kind `agent`) and answers `{ "job": id }` — the reply arrives in
 the chat, whose `rev` moves on every write.
 
 - `GET /agents` — `{ models: [{name, label, arch, vision, bytes, fits, n_ctx, note}],
@@ -617,21 +617,33 @@ the chat, whose `rev` moves on every write.
   Agent draws its whitelist from (`[agent]` in `user/settings.toml`).
 - `GET /chats` / `GET /favorite-chats` — `[{id, title, updated_ms, created_ms, favorite,
   state, thumb}]`, newest change first; Current lists starred ones too.
-- `POST /chats/new` — `{ template, agent? }`: a chat on that model, whose rounds start
-  from its saved defaults (and its catalog Turbo LoRA when installed). `agent` absent is
-  Settings' default. Answers `{ chat, toolkit }`.
+- `POST /chats/new` — `{ template, agent?, video? }`: a chat on that model, whose rounds
+  start from its saved defaults (and its catalog Turbo LoRA when installed). `agent`
+  absent is Settings' default; `video` is the Video tab's model, which a film is shot on.
+  Answers `{ chat, toolkit }`.
 - `GET /chats/{id}` — `{ chat, toolkit }`: the chat as stored, and the knob table
   resolved for it under Settings → Agent — each knob's `allowed`, limits, `locked` reason
-  and value, the passes, the models it could pick, `locks`.
+  and value, the passes, the models it could pick, `locks`, the film's `video` model
+  `{name, family, label, chains, references, width, height, frames, fps}` and
+  `film_off`, why no film can be made in it (`null` when one can).
 - `GET /chats/{id}/live` — the reply being written while a turn runs: `{ seq, text,
   phase, step, steps }`, or `{ seq: null }`.
 - `GET /chats/{id}/thumb.png`, `GET /chats/{id}/img/{name}.png` — the chat's own copies
   of its pictures; names are `[a-z0-9-]+.png`.
 - `POST /chats/agent` — `{ id, agent }`; `POST /chats/rename` — `{ id, title }`.
-- `POST /agent/send` — `{ chat, text, images: [{kind: "item"|"output", id}] }`: a chat
-  turn, whose reply may talk, draw, describe an attached picture as a prompt, or start a
-  session (a plan turn follows in the same job). At most four pictures, copied into the
+- `POST /agent/send` — `{ chat, text, images: [{kind: "item"|"output", id}], video? }`: a
+  chat turn, whose reply may talk, draw, describe an attached picture as a prompt, start a
+  session (a plan turn follows in the same job), or write a film's storyboard (a story
+  turn follows in the same job; its pictures wait for `/chats/film {draw: true}`). `video` is the Video tab's model now. At most four pictures, copied into the
   chat. `409` while the agent is working on the chat.
+- `POST /chats/film` — `{ id, every?, member?, name?, look?, picture?, shot?, text?,
+  cast?, cut?, draw?, image_model? }`: an edit of the storyboard before it is filmed — the look every shot
+  shares, cast member `member`'s name, look or picture (`{kind: "output", id}`, or `null`
+  to have it drawn again), shot `shot`'s words, cast (names) or cut. A reworded shot's
+  keyframe is dropped; `image_model` is the installed model the pictures still missing are
+  drawn with (one that takes references gives characters a turnaround sheet). `draw: true` (the Story panel's *Draw the cast*) queues a leg that
+  draws whatever the board is missing. `409` while the
+  agent is working on the chat, or once the film is being shot.
 - `POST /agent/undo` — `{ chat, change }`: put an applied change's settings back, if they
   still hold what it set (else `409`). Recorded as a change of yours.
 - `POST /agent/stop` — `{ chat }`: end the chat's leg, killing a reply or a render in flight.

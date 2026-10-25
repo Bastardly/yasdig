@@ -70,9 +70,53 @@ pub struct Toolkit {
     pub family_label: Option<&'static str>,
     /// What the chat's model rules out, with the reasons.
     pub locks: Locks,
+    /// The video model a film is shot on: the Video tab's when the person
+    /// last wrote.
+    pub video: Option<VideoView>,
+    /// Why this chat can't make a film, or `None` when it can.
+    pub film_off: Option<String>,
     /// The whitelist it was built under, for `knobs::apply`.
     #[serde(skip)]
     pub rules: Rules,
+}
+
+/// A video model as a film needs it described: what its shots can do, and
+/// the size and length the Video tab gives each one.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct VideoView {
+    pub name: String,
+    pub family: &'static str,
+    pub label: &'static str,
+    /// It goes on from one shot's last frame to the next: a film of several.
+    pub chains: bool,
+    /// Its cuts follow the cast's pictures (H3) rather than a keyframe.
+    pub references: bool,
+    pub width: u32,
+    pub height: u32,
+    /// The most a shot may run: the model's own length, what fits this card.
+    pub frames: u32,
+    pub fps: u32,
+}
+
+impl VideoView {
+    pub fn of(m: &crate::config::VideoModel) -> VideoView {
+        VideoView {
+            name: m.name.clone(),
+            family: m.family.as_str(),
+            label: m.family.label(),
+            chains: m.family.chains(),
+            references: m.family.takes_references(),
+            width: m.width,
+            height: m.height,
+            frames: m.frames,
+            fps: m.effective_fps(),
+        }
+    }
+
+    /// A shot's length in seconds, at most.
+    pub fn shot_seconds(&self) -> f32 {
+        self.frames as f32 / self.fps.max(1) as f32
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,6 +124,8 @@ pub struct ModelChoice {
     pub name: String,
     pub family: &'static str,
     pub label: &'static str,
+    /// It follows reference pictures (`-r`).
+    pub references: bool,
     /// What a chat switched to it is locked to: a comparison that switches
     /// model checks its values against these, not the old model's.
     #[serde(skip)]
@@ -106,6 +152,11 @@ impl Toolkit {
     pub fn locks_of(&self, model: &str) -> Option<&Locks> {
         self.models.iter().find(|m| m.name == model).map(|m| &m.locks)
     }
+
+    /// Whether the agent may write a storyboard in this chat.
+    pub fn films(&self) -> bool {
+        self.film_off.is_none()
+    }
 }
 
 /// The models a chat could run: installed, whole, and not fill-only.
@@ -119,6 +170,7 @@ pub fn runnable(cfg: &Config, registry: &std::collections::BTreeMap<String, Prof
             name: name.clone(),
             family: p.family.as_str(),
             label: p.family.label(),
+            references: p.family.takes_references(),
             locks: locks_for(cfg, Some(p), &serde_json::json!({})),
         })
         .collect()
@@ -164,7 +216,38 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     let template = chat.settings.get("template").and_then(|t| t.as_str()).unwrap_or("");
     let profile = registry.get(template);
     let locks = locks_for(cfg, profile, &chat.settings);
-    build(&rules, &chat.settings, &locks, runnable(cfg, &registry), profile.map(|p| p.family))
+    let models = runnable(cfg, &registry);
+    let image = models.iter().any(|m| m.name == template);
+    let video = chat
+        .video
+        .as_deref()
+        .and_then(|name| cfg.video_models().into_iter().find(|m| m.name == name && m.exists))
+        .map(|m| VideoView::of(&m));
+    let mut t = build(&rules, &chat.settings, &locks, models, profile.map(|p| p.family));
+    t.film_off = film_off(&rules, image, chat.video.as_deref(), video.as_ref());
+    t.video = video;
+    t
+}
+
+/// Why a chat can't make a film: it needs the agent allowed to, an image
+/// model for the cast and keyframes, and a video model that goes on from
+/// one shot to the next.
+pub fn film_off(rules: &Rules, image: bool, picked: Option<&str>, video: Option<&VideoView>) -> Option<String> {
+    if !rules.film {
+        return Some("making movies is off in Settings → Agent".into());
+    }
+    if !image {
+        return Some("the chat's image model isn't installed, and the cast's pictures are drawn with it".into());
+    }
+    let Some(v) = video else {
+        return Some(match picked {
+            Some(name) => format!("the video model '{name}' isn't installed whole"),
+            None => "no video model is picked on the Video tab".into(),
+        });
+    };
+    (!v.chains).then(|| {
+        format!("{} can't go on from one shot to the next, so it can't make a film; Wan 2.2 or MiniMax H3 can", v.label)
+    })
 }
 
 /// [`resolve`] past the reads, for tests.
@@ -221,6 +304,8 @@ pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelCh
         family: family.map(ImageFamily::as_str),
         family_label: family.map(ImageFamily::label),
         locks: locks.clone(),
+        video: None,
+        film_off: Some("no video model".into()),
         rules: rules.clone(),
     }
 }
@@ -230,7 +315,7 @@ mod tests {
     use super::*;
 
     fn choice(name: &str, f: ImageFamily) -> ModelChoice {
-        ModelChoice { name: name.into(), family: f.as_str(), label: f.label(), locks: Locks::default() }
+        ModelChoice { name: name.into(), family: f.as_str(), label: f.label(), references: f.takes_references(), locks: Locks::default() }
     }
 
     #[test]
@@ -264,6 +349,22 @@ mod tests {
             assert!(offered.contains(&k), "{k} stays the agent's beside a Turbo LoRA");
         }
         assert!(t.locks.turbo.as_deref().is_some_and(|s| s.contains("8 steps")));
+    }
+
+    #[test]
+    fn a_film_needs_the_rule_an_image_model_and_a_video_model_that_chains() {
+        let wan = VideoView {
+            name: "wan".into(), family: "wan22_ti2v_5b", label: "Wan 2.2 TI2V 5B", chains: true, references: false,
+            width: 1280, height: 704, frames: 121, fps: 24,
+        };
+        let rules = Rules::default();
+        assert_eq!(film_off(&rules, true, Some("wan"), Some(&wan)), None);
+        assert!(film_off(&rules, true, None, None).unwrap().contains("Video tab"));
+        assert!(film_off(&rules, false, Some("wan"), Some(&wan)).unwrap().contains("image model"));
+        let vace = VideoView { chains: false, label: "Wan 2.1 VACE", ..wan.clone() };
+        assert!(film_off(&rules, true, Some("wan"), Some(&vace)).unwrap().contains("can't go on"));
+        let off = Rules { film: false, ..Rules::default() };
+        assert!(film_off(&off, true, Some("wan"), Some(&wan)).unwrap().contains("Settings"));
     }
 
     #[test]

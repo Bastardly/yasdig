@@ -4,8 +4,8 @@ import { wireHints } from './hints.js';
 // ---- Settings → Agent: what the agent may do ------------------------------------
 //
 // The `[agent]` table (`agent::knobs::Rules`): one whitelist for every chat — a
-// checkbox per setting it may change and per pass it may run — and the agent a
-// new chat starts with. The rows come from `GET /agents` (the server's knob
+// checkbox per setting it may change and per pass it may run, and whether it
+// may make movies — and the agent a new chat starts with. The rows come from `GET /agents` (the server's knob
 // table), so the page invents none of them; until that answers, the stored
 // value is carried through unchanged, as `kind: 'vars'` carries its rows.
 //
@@ -29,7 +29,7 @@ export function drawRules(el, rules) {
     el.innerHTML = '<p class="sub">What the agent may change couldn’t be read; it is kept as it is.</p>';
     return;
   }
-  const r = rules ?? { knobs: [], actions: [] };
+  const r = rules ?? { knobs: [], actions: [], film: true };
   const box = (attr, key, label, help, on) => `<div class="checks"><label data-help="${esc(help)}">`
     + `<input type="checkbox" ${attr}="${esc(key)}"${on ? ' checked' : ''}> ${esc(label)}</label></div>`;
   const knobs = table.knobs.map((k) => box('data-rule-knob', k.key, k.label, k.help, r.knobs?.includes(k.key))).join('');
@@ -41,6 +41,8 @@ export function drawRules(el, rules) {
     .concat(known ? [] : [`<option value="${esc(r.agent)}">${esc(r.agent)} (not installed)</option>`]);
   el.innerHTML = `<label class="grouphead" data-help="agentknobs">Settings it may change</label>${knobs}
     <label class="grouphead" data-help="agentpasses">Passes it may run on a keeper</label>${passes}
+    <div class="checks"><label data-help="agentfilm"><input type="checkbox" id="set-agent-film"${
+      r.film !== false ? ' checked' : ''}> Make movies</label></div>
     <label for="set-agent-default" data-help="setagent">Agent for new chats</label>
     <select id="set-agent-default">${options.join('')}</select>
     <p class="sub">It decides how many pictures and rounds from what you write, up to ${
@@ -58,5 +60,6 @@ export function readRules(el) {
   if (agent) out.agent = agent;
   out.knobs = ticked('data-rule-knob');
   out.actions = ticked('data-rule-action');
+  out.film = $('set-agent-film').checked;
   return out;
 }

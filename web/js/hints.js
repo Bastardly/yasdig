@@ -443,6 +443,11 @@ const HELP = [
     text: 'What the agent may do to a picture it likes: a Hi-res or Refine pass, '
         + 'or an Edit by instruction on a model that can. The result is a History '
         + 'step on that picture, so nothing is lost if it goes wrong.' },
+  { ids: ['agentfilm'],
+    text: 'Ticked, the agent may make a short movie when you ask for one: it '
+        + 'writes a storyboard, draws the cast and the pictures shots start from '
+        + '(saved to Outputs), then waits for your go before filming on the Video '
+        + 'tab’s model.' },
   { ids: ['setembedpng'],
     text: 'Writes the prompt, negative prompt, model, seed, steps, sampler and CFG '
         + 'into each image you save to output, in the format A1111, Forge and Civitai '

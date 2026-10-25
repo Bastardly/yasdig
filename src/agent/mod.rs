@@ -30,8 +30,11 @@ use session::Step;
 use std::path::PathBuf;
 
 /// Tokens a reply may run to. A critique's notes, a row of answers per
-/// picture and a reply come to about 600; the rest is room.
-const N_PREDICT: u32 = 1024;
+/// picture and a reply come to about 600; the rest is room. A storyboard is
+/// a cast's looks and prompts and up to twenty shots: several times that.
+fn n_predict(mode: Mode) -> u32 {
+    if mode == Mode::Story { 3072 } else { 1024 }
+}
 
 pub fn store(cfg: &Config) -> ChatStore {
     ChatStore::new(&cfg.base_dir.join("work"), &cfg.user_dir())
@@ -191,7 +194,8 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
         let title = if chat.title.is_empty() { "Agent".to_string() } else { format!("Agent · {}", chat.title) };
         format!("{title} · {what}")
     };
-    let result = match session::next_step(&chat) {
+    let step_now = session::next_step(&chat);
+    let result = match step_now {
         Step::End => {
             store.update(id, |c| {
                 c.session.state = session::finished(c);
@@ -208,6 +212,7 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
                 Mode::Critique => "looking at the round",
                 Mode::Describe => "describing",
                 Mode::Verdict => "writing the answer",
+                Mode::Story => "writing the storyboard",
             }));
             turn(engine, &store, &mut chat, mode)
         }
@@ -218,6 +223,10 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
         Step::Escalate(action) => {
             queue.relabel(job, label("finishing a keeper"));
             escalate(engine, &store, &chat, action)
+        }
+        Step::CastPicture(_) | Step::CastSheet(_) | Step::Keyframe(_) => {
+            queue.relabel(job, label(&board_label(&chat, step_now)));
+            board_picture(engine, &store, &chat, step_now)
         }
     };
     match result {
@@ -278,7 +287,10 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
     let tune = tuning(&cfg, &model);
     let tk = toolkit::resolve(&cfg, chat);
     let (all_skills, _) = skills::load(&user_skills_dir(&cfg));
-    let (skill_text, used, _dropped) = skills::select(&all_skills, tk.family, mode);
+    // A storyboard is written for the video model as much as the image one.
+    let video_family = tk.video.as_ref().map(|v| v.family).filter(|_| mode == Mode::Story);
+    let families: Vec<&str> = tk.family.into_iter().chain(video_family).collect();
+    let (skill_text, used, _dropped) = skills::select(&all_skills, &families, mode);
 
     // What it looks at: a session's reference first (the plan and every
     // critique judge against it), then the round to judge, or what the
@@ -297,7 +309,7 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
                 _ => None,
             })
             .unwrap_or_default(),
-        Mode::Chat | Mode::Describe => chat
+        Mode::Chat | Mode::Describe | Mode::Story => chat
             .messages
             .iter()
             .rev()
@@ -327,7 +339,8 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
         _ => own.len() as u32,
     };
     let schema = schema::output(mode, &tk, shown, chat.session.checks.len() as u32, sweep.is_some());
-    let budget = (tune.n_ctx.saturating_sub(N_PREDICT) as usize).saturating_sub(64);
+    let n_predict = n_predict(mode);
+    let budget = (tune.n_ctx.saturating_sub(n_predict) as usize).saturating_sub(64);
 
     let runner = LlmRunner::watched(&cfg, engine.monitor());
     let mut side = tune.image_side;
@@ -344,6 +357,7 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
             goal: &chat.session.goal,
             round: chat.session.round,
             history: history_cap,
+            film: chat.film.as_ref(),
         };
         let keep = context::fit_history(chat, &tk, &base, side, budget).min(history_cap);
         let turn = context::Turn { history: keep, ..base.clone() };
@@ -352,7 +366,7 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
             model: model.lm.clone(),
             mmproj: model.mmproj.clone(),
             n_ctx: tune.n_ctx,
-            n_predict: N_PREDICT,
+            n_predict,
             thinking: false,
             sampling: Sampling { seed: (rand_seed() & 0xffff_ffff) as u32, ..tune.sampling },
             json_schema: Some(schema.clone()),
@@ -370,7 +384,7 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
         }
     };
     if reply.stats.stop == "length" {
-        bail!("the agent's reply ran past {N_PREDICT} tokens and was cut off");
+        bail!("the agent's reply ran past {n_predict} tokens and was cut off");
     }
     let parsed = session::parse_reply(&reply.content)?;
     let stats = reply.stats.clone();
@@ -389,6 +403,10 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
 fn picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, round: u32, k: u32) -> Result<()> {
     let mut settings = chat.settings.clone();
     with_turbo(engine.cfg(), &mut settings);
+    // A chat whose prompt the agent may not write draws the model's empty one.
+    if let Some(o) = settings.as_object_mut() {
+        o.entry("prompt").or_insert("".into());
+    }
     let mut dto: crate::GenerateDto =
         serde_json::from_value(settings).context("the chat's settings aren't a generate request")?;
     dto.seed = Some(session::seed_for(chat, k));
@@ -419,6 +437,239 @@ fn picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, round: u32
         session::image_done(c, ImageRef { kind: "item".into(), id: work_id.clone(), file: file.clone(), seed: Some(r.seed) });
         Ok(())
     })
+}
+
+/// The queue's line for a picture of the board.
+fn board_label(chat: &chat::Chat, step: Step) -> String {
+    let Some(f) = &chat.film else { return "the storyboard".into() };
+    match step {
+        Step::CastPicture(k) => format!("cast {}/{}: {}", k + 1, f.cast.len(), f.cast.get(k).map_or("", |m| m.name.as_str())),
+        Step::CastSheet(k) => format!("turnaround {}/{}: {}", k + 1, f.cast.len(), f.cast.get(k).map_or("", |m| m.name.as_str())),
+        Step::Keyframe(k) => format!("keyframe of shot {}", k + 1),
+        _ => "the storyboard".into(),
+    }
+}
+
+/// The film's video model as the board describes it: its size and length.
+fn film_video(cfg: &Config, film: &chat::Film) -> Option<toolkit::VideoView> {
+    cfg.video_models().into_iter().find(|m| m.name == film.video_model).map(|m| toolkit::VideoView::of(&m))
+}
+
+/// How long one of the film's shots runs, at most, in seconds.
+pub fn shot_seconds(cfg: &Config, film: &chat::Film) -> f32 {
+    film_video(cfg, film).map_or(0.0, |v| v.shot_seconds())
+}
+
+/// A cast member's picture or a shot's keyframe: the person's own saved to
+/// Outputs, or one drawn and saved there — a video shot's references and
+/// first frames are output stems.
+fn board_picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, step: Step) -> Result<()> {
+    let cfg = engine.cfg().clone();
+    let film = chat.film.as_ref().ok_or_else(|| anyhow!("the chat has no storyboard"))?;
+    let video = film_video(&cfg, film);
+    let secs = video.as_ref().map_or(0.0, toolkit::VideoView::shot_seconds);
+    let settings = board_settings(chat, film);
+    let ms = chat::now_ms();
+    let (picture, stem) = match step {
+        Step::CastPicture(k) => {
+            let m = film.cast.get(k).ok_or_else(|| anyhow!("that cast member is gone"))?;
+            match (&m.picture, &m.sheet_stem) {
+                (Some(p), _) => (p.clone(), picture_output(&cfg, store, &chat.id, p)?),
+                // Drawn from its own sheet, so the two are one person.
+                (None, Some(sheet)) => {
+                    let pic = Pic {
+                        prompt: with_look(&format!("{FRONT} {}", m.look), &film.every),
+                        size: None,
+                        refs: vec![sheet.clone()],
+                        file: format!("c{ms}-{k}.png"),
+                        reason: format!("cast: {}", m.name),
+                    };
+                    draw(engine, store, chat, &settings, &pic)?
+                }
+                (None, None) => {
+                    let words = if m.prompt.is_empty() { &m.look } else { &m.prompt };
+                    let pic = Pic {
+                        prompt: with_look(words, &film.every),
+                        size: None,
+                        refs: Vec::new(),
+                        file: format!("c{ms}-{k}.png"),
+                        reason: format!("cast: {}", m.name),
+                    };
+                    draw(engine, store, chat, &settings, &pic)?
+                }
+            }
+        }
+        Step::CastSheet(k) => {
+            let m = film.cast.get(k).ok_or_else(|| anyhow!("that cast member is gone"))?;
+            // The person's picture is who the sheet shows; else the look is.
+            let refs: Vec<String> = m.stem.clone().filter(|_| m.theirs()).into_iter().collect();
+            let who = if refs.is_empty() { m.look.clone() } else { format!("The person in the reference picture. {}", m.look) };
+            let pic = Pic {
+                prompt: with_look(&format!("{SHEET} {who}"), &film.every),
+                size: board_size(&cfg, &settings, 2.0),
+                refs,
+                file: format!("t{ms}-{k}.png"),
+                reason: format!("turnaround: {}", m.name),
+            };
+            draw(engine, store, chat, &settings, &pic)?
+        }
+        Step::Keyframe(k) => {
+            let shot = film.shots.get(k).ok_or_else(|| anyhow!("that shot is gone"))?;
+            let v = video.as_ref().ok_or_else(|| anyhow!("the film's video model '{}' isn't installed", film.video_model))?;
+            // The cast's pictures as references where the image model takes
+            // them — a character's sheet, which shows every side — and their
+            // looks in words either way.
+            let refs: Vec<String> = if film.sheets {
+                shot.cast
+                    .iter()
+                    .filter_map(|n| {
+                        let m = film.member(n)?;
+                        m.sheet_stem.clone().or_else(|| m.stem.clone())
+                    })
+                    .take(crate::config::MAX_REFERENCES)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mut prompt = with_look(&shot.text, &film.every);
+            for n in &shot.cast {
+                if let Some(m) = film.member(n).filter(|m| !m.look.is_empty()) {
+                    prompt.push_str(&format!(" {}: {}", m.name, m.look));
+                }
+            }
+            let pic = Pic {
+                prompt,
+                size: board_size(&cfg, &settings, v.width as f64 / v.height.max(1) as f64),
+                refs,
+                file: format!("k{ms}-{k}.png"),
+                reason: format!("keyframe of shot {}", k + 1),
+            };
+            draw(engine, store, chat, &settings, &pic)?
+        }
+        _ => bail!("not a picture of the storyboard"),
+    };
+    store.update(&chat.id, |c| {
+        session::board_picture_done(c, step, picture.clone(), stem.clone(), secs);
+        Ok(())
+    })
+}
+
+/// A character's turnaround: the angles the person asked for, one figure
+/// each, so every later picture has a side to follow.
+const SHEET: &str = "Character turnaround sheet: the same person shown four times side by side on one plain light grey \
+                     background, full body and standing — front view, three-quarter view, side view in profile, back \
+                     view. The same face, hair and clothes in every view, even light, no text.";
+
+/// A front picture drawn from that sheet.
+const FRONT: &str = "The person in the reference picture, alone, seen from the front, full body and standing, on a plain \
+                     light grey background.";
+
+/// A prompt with the film's look after it.
+fn with_look(text: &str, every: &str) -> String {
+    match (text.trim(), every.trim()) {
+        (t, "") => t.to_string(),
+        ("", e) => e.to_string(),
+        (t, e) => format!("{}. {e}", t.trim_end_matches('.')),
+    }
+}
+
+/// The settings a board's pictures are drawn on: the chat's, on the board's
+/// image model when it has its own (the switch drops the other model's
+/// steps, size and LoRAs, as a chat's model change does).
+fn board_settings(chat: &chat::Chat, film: &chat::Film) -> serde_json::Value {
+    let mut settings = chat.settings.clone();
+    if !film.image_model.is_empty() {
+        if let Some(k) = knobs::knob("model") {
+            knobs::write(&mut settings, k, &serde_json::Value::String(film.image_model.clone()));
+        }
+    }
+    settings
+}
+
+/// A picture's size at `aspect` (width over height): the image model's own
+/// pixel count, so it draws at the size it knows. A clip fits a keyframe
+/// to its own size.
+fn board_size(cfg: &Config, settings: &serde_json::Value, aspect: f64) -> Option<(u32, u32)> {
+    let template = settings.get("template").and_then(|t| t.as_str()).unwrap_or("");
+    let p = cfg.registry().get(template).cloned()?;
+    let get = |k: &str, d: u32| settings.get(k).and_then(|v| v.as_u64()).map_or(d, |v| v as u32);
+    let area = (get("width", p.width) as f64) * (get("height", p.height) as f64);
+    let snap = |x: f64| ((x / 64.0).round() as u32).max(4) * 64;
+    let w = snap((area * aspect).sqrt());
+    Some((w, snap(area / w as f64)))
+}
+
+/// One of the board's pictures: what it is drawn from, and where it is kept.
+struct Pic {
+    prompt: String,
+    size: Option<(u32, u32)>,
+    /// Output stems.
+    refs: Vec<String>,
+    /// Its name under the chat's `img/`.
+    file: String,
+    /// What the work item's Info says it was for.
+    reason: String,
+}
+
+/// One picture on `settings`, kept in the chat and saved to Outputs.
+/// Returns it and its stem.
+fn draw(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, settings: &serde_json::Value, pic: &Pic) -> Result<(ImageRef, String)> {
+    let mut settings = settings.clone();
+    with_turbo(engine.cfg(), &mut settings);
+    // A new chat's settings are its model alone, with no prompt yet.
+    if let Some(o) = settings.as_object_mut() {
+        o.insert("prompt".into(), pic.prompt.clone().into());
+    }
+    let mut dto: crate::GenerateDto =
+        serde_json::from_value(settings).context("the chat's settings aren't a generate request")?;
+    dto.seed = Some((rand_seed() & 0x7fff_ffff) as i64);
+    dto.count = Some(1);
+    dto.looping = false;
+    dto.update_only = false;
+    dto.after = Default::default();
+    if let Some((w, h)) = pic.size {
+        dto.width = Some(w);
+        dto.height = Some(h);
+    }
+    if !pic.refs.is_empty() {
+        dto.references = Some(pic.refs.clone());
+    }
+    let (plan, _) = dto.run_plan();
+    let crate::Start::Generate(req) = plan.start else {
+        bail!("a storyboard picture is a generate");
+    };
+    let r = engine.run_in(&req, false, Slot::Agent)?;
+    let work_id = r.work_id.clone().ok_or_else(|| anyhow!("the picture wasn't archived"))?;
+    let items = crate::workitems::Store::new(&engine.cfg().base_dir.join("work"), &engine.cfg().user_dir());
+    let trace = crate::workitems::AgentTrace { chat: chat.id.clone(), title: chat.title.clone(), round: 0, reason: pic.reason.clone() };
+    if let Err(e) = items.set_agent(&work_id, trace) {
+        eprintln!("[yasdig] agent: could not mark work item {work_id} as the agent's: {e:#}");
+    }
+    keep_picture(store, &chat.id, &pic.file, &r.png)?;
+    let picture = ImageRef { kind: "item".into(), id: work_id.clone(), file: pic.file.clone(), seed: Some(r.seed) };
+    let stem = picture_output(engine.cfg(), store, &chat.id, &picture)?;
+    Ok((picture, stem))
+}
+
+/// A chat's picture as an output, saved there if it isn't one: its stem.
+fn picture_output(cfg: &Config, store: &ChatStore, chat_id: &str, p: &ImageRef) -> Result<String> {
+    let items = crate::workitems::Store::new(&cfg.base_dir.join("work"), &cfg.user_dir());
+    match p.kind.as_str() {
+        "output" => Ok(p.id.clone()),
+        "item" => {
+            let shelf = if items.image_path(Shelf::Work, &p.id).is_file() { Shelf::Work } else { Shelf::Favorites };
+            let item = items.load(shelf, &p.id).with_context(|| format!("work item {} is gone", p.id))?;
+            let embed = crate::settings::Settings::load_or_default(&cfg.user_dir()).embed_png_settings;
+            let path = items.save_output(&items.image_path(shelf, &p.id), &item, embed)?;
+            Ok(path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string())
+        }
+        _ => {
+            // An upload from before uploads were outputs: the chat's copy.
+            let bytes = picture_bytes(cfg, store, chat_id, p)?;
+            let img = image::load_from_memory(&bytes).context("reading a picture")?;
+            items.import(&bytes, img.width(), img.height())
+        }
+    }
 }
 
 /// A chat that names no LoRAs draws with its model's catalog Turbo LoRA when

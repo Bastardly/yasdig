@@ -2,7 +2,7 @@
 // (`chatview.js`). Not in `web::WEB_FILES`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderChat, liveReply, replyHtml, sessionHtml, valueText, stateText } from './chatview.js';
+import { drawLabel, renderChat, liveReply, replyHtml, sessionHtml, valueText, stateText, storyHtml } from './chatview.js';
 
 const chat = (over = {}) => ({
   id: '1-0',
@@ -109,4 +109,62 @@ test('the Session panel names what a comparison draws and the picture to match',
 test('bold is drawn, and only after escaping', () => {
   assert.equal(replyHtml('CFG **3, 5, 7** on <b>x</b>'), 'CFG <b>3, 5, 7</b> on &lt;b&gt;x&lt;/b&gt;');
   assert.equal(replyHtml('**<img>**'), '<b>&lt;img&gt;</b>');
+});
+
+const film = (over = {}) => ({
+  title: 'Rain <b>', every: 'cinematic', video_model: 'wan5b', references: false, phase: 'ready', shot: 0,
+  cast: [
+    { name: 'Mara', kind: 'character', look: 'a red coat', picture: { kind: 'output', id: 'm', file: 'u0-0.png' }, stem: 'm' },
+    { name: 'Leo"', kind: 'character', look: 'a raincoat', picture: { kind: 'item', id: '7', file: 'c1-1.png' }, stem: '7-s0' },
+  ],
+  shots: [
+    { text: 'Mara opens the door.', cast: ['Mara'], cut: false, keyframe: { kind: 'item', id: '8', file: 'k1-0.png' }, seed: 0, takes: 0 },
+    { text: 'Leo waits.', cast: ['Leo"'], cut: true, seed: 0, takes: 0 },
+  ],
+  ...over,
+});
+
+test('the storyboard is escaped, says how each shot begins, and locks while the agent works', () => {
+  const html = storyHtml(chat({ film: film() }));
+  assert.ok(html.includes('Rain &lt;b&gt;') && html.includes('value="Leo&quot;"'));
+  assert.ok(html.includes('First shot'), 'shot 1 has no continue or cut');
+  assert.ok(/<option value="1" selected>Cut<\/option>/.test(html));
+  assert.ok(html.includes('/chats/1-0/img/k1-0.png'), 'the keyframe beside its shot');
+  assert.ok(html.includes('Draw one') && html.includes('Draw again'), 'the person’s picture is drawn only if asked');
+  assert.ok(!html.includes(' disabled'));
+  assert.ok(storyHtml(chat({ film: film() }), { busy: true }).includes(' disabled'));
+  assert.ok(storyHtml(chat({ film: film({ phase: 'shooting' }) })).includes(' disabled'), 'not once it is being filmed');
+  assert.ok(storyHtml(chat()).includes('No film yet'));
+});
+
+test('a storyboard reply is a card that opens the panel, and the header says what is drawn', () => {
+  const c = chat({ film: film(), messages: [{ role: 'agent', n: 0, mode: 'story', reply: 'Two shots.' }] });
+  assert.ok(renderChat(c).includes('data-open-story'));
+  const drawing = film({ phase: 'board', cast: [{ ...film().cast[0], stem: null, picture: null }] });
+  assert.equal(stateText(chat({ film: drawing, session: { state: 'running', next: 'film', goal: '', checks: [], round: 0 } })), 'Drawing the cast');
+  assert.equal(stateText(chat({ film: film(), session: { state: 'running', next: 'film', goal: '', checks: [], round: 0 } })), 'Drawing keyframes');
+});
+
+test('the panel offers to draw only what the board lacks, and the card shows the cast', () => {
+  const whole = film({ shots: film().shots.map((x) => ({ ...x, key_stem: 'k' })) });
+  assert.equal(drawLabel(whole), null, 'everything is there');
+  const bare = (m) => ({ ...m, stem: null, picture: null });
+  assert.equal(drawLabel(film({ phase: 'board', cast: film().cast.map(bare) })), 'Draw the cast');
+  assert.equal(drawLabel(film({ phase: 'board', cast: [film().cast[0], bare(film().cast[1])] })), 'Draw the rest of the cast');
+  assert.equal(drawLabel(film({ phase: 'board' })), 'Draw the keyframes', 'shot 2 is a cut on a model without references');
+  assert.equal(drawLabel(film({ phase: 'board', references: true })), null, 'H3 cuts need none');
+  assert.equal(drawLabel(film({ phase: 'shooting', cast: film().cast.map(bare) })), null);
+  const c = chat({ film: film(), messages: [{ role: 'agent', n: 0, mode: 'story', reply: '' }] });
+  assert.ok(renderChat(c).includes('/chats/1-0/img/c1-1.png'));
+});
+
+test('on a model that follows references a character is whole only with its turnaround', () => {
+  const sheets = film({ sheets: true, shots: film().shots.map((x) => ({ ...x, key_stem: 'k' })) });
+  assert.equal(drawLabel(sheets), 'Draw the cast', 'no sheets yet');
+  const withSheets = { ...sheets, cast: sheets.cast.map((m) => ({ ...m, sheet: { kind: 'item', id: 's', file: `t-${m.stem}.png` }, sheet_stem: 's' })) };
+  assert.equal(drawLabel(withSheets), null);
+  const html = storyHtml(chat({ film: withSheets }), { models: [{ name: 'klein', label: 'FLUX.2 Klein 4B', references: true }] });
+  assert.ok(html.includes('t-m.png') && html.includes('(turnarounds)') && html.includes('turnaround sheet'));
+  assert.ok(renderChat(chat({ film: withSheets, messages: [{ role: 'agent', n: 0, mode: 'story', reply: '' }] })).includes('t-m.png'),
+    'the card shows the turnaround');
 });

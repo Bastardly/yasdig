@@ -132,6 +132,40 @@ fn describe_fields(props: &mut Map<String, Value>, t: &Toolkit) {
     }
 }
 
+/// A storyboard, written whole: a title, the look every shot shares, the
+/// cast and the shots. `attached` is how many pictures the person's message
+/// showed, which a member's `picture` may name (0 is none).
+///
+/// With the model knob allowed and a choice to make, `image_model` picks the
+/// model the cast and keyframes are drawn with.
+fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
+    let mut member = Map::new();
+    member.insert("name".into(), text(40));
+    member.insert("kind".into(), json!({ "enum": ["character", "place", "thing"] }));
+    member.insert("look".into(), text(300));
+    member.insert("picture".into(), int(0, attached));
+    member.insert("prompt".into(), text(600));
+    let mut shot = Map::new();
+    shot.insert("text".into(), text(500));
+    shot.insert("cast".into(), json!({ "type": "array", "items": text(40), "maxItems": crate::config::MAX_REFERENCES }));
+    shot.insert("cut".into(), json!({ "type": "boolean" }));
+    props.insert("title".into(), text(80));
+    props.insert("every".into(), text(300));
+    if let Some(models) = board_models(t) {
+        props.insert("image_model".into(), json!({ "enum": models }));
+    }
+    props.insert("cast".into(), json!({ "type": "array", "items": object(member), "maxItems": super::session::MAX_CAST }));
+    props.insert(
+        "shots".into(),
+        json!({ "type": "array", "items": object(shot), "minItems": 1, "maxItems": crate::pipeline::MAX_SHOTS }),
+    );
+}
+
+/// The models a storyboard may draw its pictures with, when it has a choice.
+pub fn board_models(t: &Toolkit) -> Option<Vec<String>> {
+    (t.knob("model").is_some_and(|k| k.allowed) && t.models.len() > 1).then(|| t.model_names())
+}
+
 /// The reply's schema for one turn. `batch` is how many pictures the turn
 /// shows (a critique's round, a chat's attachments) — for a verdict, how many
 /// values were compared — and `checks` how many questions each is judged by.
@@ -158,6 +192,11 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32, sweep: bool) -> 
         }
         Mode::Describe => {
             describe_fields(&mut props, t);
+            object(props)
+        }
+        Mode::Story => {
+            story_fields(&mut props, batch, t);
+            props.insert("reply".into(), text(REPLY_CHARS));
             object(props)
         }
         Mode::Plan => {
@@ -249,6 +288,13 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32, sweep: bool) -> 
             // values against the model it runs on. "Compare CFG on MOSS" from a
             // chat on a CFG-1 model otherwise had nothing to vary but the model.
             let vary: Vec<&str> = t.knobs.iter().filter(|k| k.allowed).map(|k| k.key).filter(|k| COMPARABLE.contains(k)).collect();
+            // A movie: the storyboard is the next turn's (`Mode::Story`).
+            if t.films() {
+                let mut film = props.clone();
+                film.insert("action".into(), json!({ "const": "film" }));
+                film.insert("reply".into(), text(REPLY_CHARS));
+                branches.push(object(film));
+            }
             if !vary.is_empty() {
                 let mut compare = props;
                 compare.insert("action".into(), json!({ "const": "compare" }));
@@ -277,8 +323,8 @@ mod tests {
 
     fn models() -> Vec<ModelChoice> {
         vec![
-            ModelChoice { name: "sdxl".into(), family: "sdxl", label: "SDXL", locks: Default::default() },
-            ModelChoice { name: "klein".into(), family: "flux2-klein-4b", label: "FLUX.2 Klein 4B", locks: Default::default() },
+            ModelChoice { name: "sdxl".into(), family: "sdxl", label: "SDXL", references: false, locks: Default::default() },
+            ModelChoice { name: "klein".into(), family: "flux2-klein-4b", label: "FLUX.2 Klein 4B", references: false, locks: Default::default() },
         ]
     }
 
@@ -403,6 +449,28 @@ mod tests {
         // The default whitelist: prompt, negative, CFG, size, model — size isn't comparable.
         assert_eq!(compare["properties"]["vary"]["enum"], json!(["prompt", "negative", "cfg_scale", "model"]));
         assert_eq!(compare["properties"]["values"]["maxItems"], json!(MAX_ROUNDS));
+    }
+
+    #[test]
+    fn a_film_is_offered_only_where_one_can_be_made_and_its_board_is_written_in_order() {
+        let mut t = toolkit(&Rules::default(), &Locks::default());
+        assert!(!actions(&output(Mode::Chat, &t, 0, 0, false)).contains(&"film".to_string()), "no video model");
+        t.film_off = None;
+        assert_eq!(actions(&output(Mode::Chat, &t, 0, 0, false)), ["talk", "draw", "improve", "film", "compare"]);
+        let s = output(Mode::Story, &t, 2, 0, false);
+        assert_eq!(keys(&s), ["notes", "title", "every", "image_model", "cast", "shots", "reply"]);
+        assert_eq!(s["properties"]["image_model"]["enum"], json!(["sdxl", "klein"]));
+        let mut fixed = Rules::default();
+        fixed.knobs.remove("model");
+        let mut t2 = toolkit(&fixed, &Locks::default());
+        t2.film_off = None;
+        assert!(output(Mode::Story, &t2, 0, 0, false)["properties"].get("image_model").is_none(), "the chat's model draws them");
+        let member = &s["properties"]["cast"]["items"];
+        assert_eq!(keys(member), ["name", "kind", "look", "picture", "prompt"]);
+        assert_eq!(member["required"], json!(keys(member)));
+        assert_eq!(member["properties"]["picture"]["maximum"], json!(2), "one of the pictures attached, or none");
+        assert_eq!(keys(&s["properties"]["shots"]["items"]), ["text", "cast", "cut"]);
+        assert_eq!(s["properties"]["shots"]["maxItems"], json!(crate::pipeline::MAX_SHOTS));
     }
 
     #[test]

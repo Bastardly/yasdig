@@ -779,6 +779,27 @@ Break silently:
   dirty check never settles.
 - **Skills** (`agent::skills`): built-ins compiled in, `user/skills/*.md` re-read per
   turn, an `id` match replaces; `BUDGET` drops whole skills, lowest priority first.
+- **A film** (`Chat.film: Film`, `session::apply_story`): a chat turn's `film` action
+  hands over to a `Mode::Story` turn (its own schema, `n_predict` 3072), whose board is
+  **rewritten whole**, never patched; what survives is matched by the server — a member
+  keeps its picture by name and an unchanged look (or when it is the person's), a shot
+  its keyframe when its words, cast and cut are unchanged. **Nothing is drawn until the
+  person presses *Draw the cast*** (`/chats/film {draw}`, `board_advance(…, draw)`), so
+  the looks can be read first. **Board pictures run on `Film.image_model`**
+  (`board_settings`: the chat's settings switched as a model change switches them; the
+  agent's `image_model` pick, else the chat's). On one that `takes_references`
+  (`Film.sheets`) a character gets a **turnaround sheet** (`CastSheet`, 2:1): a drawn
+  one's sheet first and its front picture drawn from it, the person's picture first
+  and the sheet from it — so both are one person. Keyframes reference sheets; video
+  references stay the single front picture (`stem`). `Next::Film` then draws what is missing (`board_step`: the cast first, since keyframes use their pictures; a
+  keyframe for shot 1 and every cut unless `Film.references`, H3's), and
+  `board_advance` sets `Phase::Ready` and ends the leg. **Every board picture is also an
+  output** (`stem`, `key_stem`): a shot's references and first frames are output stems.
+  The video model is `Chat.video`, the Video tab's as the person last sent; `film_off`
+  says why none can be made (`Rules.film`, no image model, no video model, one that
+  doesn't `chains()`). A new chat's settings have no `prompt` key, which `GenerateDto`
+  requires: a board picture inserts its own, a round an empty one. A film's turns get the video family's skills too
+  (`skills::select` takes both families' names, which never collide).
 - **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.
 
 ## The job queue

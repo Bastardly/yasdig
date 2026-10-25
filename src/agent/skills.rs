@@ -20,7 +20,7 @@
 //! doesn't fit is left out whole, lowest priority first, never cut mid-way.
 
 use super::chat::Mode;
-use crate::config::ImageFamily;
+use crate::config::{ImageFamily, VideoFamily};
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
@@ -37,6 +37,7 @@ const BUILTIN: &[(&str, &str)] = &[
     ("sentences.md", include_str!("skills/sentences.md")),
     ("qwen-image.md", include_str!("skills/qwen-image.md")),
     ("moss.md", include_str!("skills/moss.md")),
+    ("film.md", include_str!("skills/film.md")),
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,8 +51,8 @@ pub struct Skill {
 }
 
 impl Skill {
-    fn applies(&self, family: Option<&str>, mode: Mode) -> bool {
-        (self.families.is_empty() || family.is_some_and(|f| self.families.iter().any(|x| x == f)))
+    fn applies(&self, families: &[&str], mode: Mode) -> bool {
+        (self.families.is_empty() || families.iter().any(|f| self.families.iter().any(|x| x == f)))
             && (self.modes.is_empty() || self.modes.contains(&mode))
     }
 }
@@ -89,7 +90,7 @@ pub fn parse(src: &str, builtin: bool) -> Result<Skill> {
             "families" => {
                 skill.families = list(v);
                 for f in &skill.families {
-                    if !ImageFamily::ALL.iter().any(|x| x.as_str() == f) {
+                    if !ImageFamily::ALL.iter().any(|x| x.as_str() == f) && !VideoFamily::ALL.iter().any(|x| x.as_str() == f) {
                         bail!("'{f}' is not a model family (one of: {})", families());
                     }
                 }
@@ -103,7 +104,8 @@ pub fn parse(src: &str, builtin: bool) -> Result<Skill> {
                         "critique" => Ok(Mode::Critique),
                         "describe" => Ok(Mode::Describe),
                         "verdict" => Ok(Mode::Verdict),
-                        other => bail!("'{other}' is not a mode (chat, plan, critique, verdict)"),
+                        "story" => Ok(Mode::Story),
+                        other => bail!("'{other}' is not a mode (chat, plan, critique, verdict, story)"),
                     })
                     .collect::<Result<_>>()?
             }
@@ -122,7 +124,7 @@ pub fn parse(src: &str, builtin: bool) -> Result<Skill> {
 }
 
 fn families() -> String {
-    ImageFamily::ALL.iter().map(|f| f.as_str()).collect::<Vec<_>>().join(", ")
+    ImageFamily::ALL.iter().map(|f| f.as_str()).chain(VideoFamily::ALL.iter().map(|f| f.as_str())).collect::<Vec<_>>().join(", ")
 }
 
 /// Every skill: the built-ins, with the person's own over them by `id`, and
@@ -150,8 +152,10 @@ pub fn load(user_skills: &Path) -> (Vec<Skill>, Vec<(PathBuf, String)>) {
 
 /// The skills for one turn, as one text, with the ids used and those left
 /// out for the budget.
-pub fn select(skills: &[Skill], family: Option<&str>, mode: Mode) -> (String, Vec<String>, Vec<String>) {
-    let mut picked: Vec<&Skill> = skills.iter().filter(|s| s.applies(family, mode)).collect();
+/// The skills for a turn on these model families — the image model's, and
+/// on a film the video model's too (the two enums' names don't collide).
+pub fn select(skills: &[Skill], families: &[&str], mode: Mode) -> (String, Vec<String>, Vec<String>) {
+    let mut picked: Vec<&Skill> = skills.iter().filter(|s| s.applies(families, mode)).collect();
     picked.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.id.cmp(&b.id)));
     let (mut text, mut used, mut dropped) = (String::new(), Vec::new(), Vec::new());
     for s in picked {
@@ -182,7 +186,7 @@ mod tests {
         // describe a picture (a chat turn's).
         let (all, _) = load(Path::new("/nonexistent"));
         for f in ImageFamily::ALL.iter().filter(|f| f.runnable() && !f.fill_only()) {
-            let (_, used, _) = select(&all, Some(f.as_str()), Mode::Chat);
+            let (_, used, _) = select(&all, &[f.as_str()], Mode::Chat);
             assert!(used.len() >= 3, "{} gets only {used:?}", f.label());
         }
     }
@@ -195,7 +199,7 @@ mod tests {
         std::fs::write(d.join("tags.md"), "---\nid: tags\nfamilies: [sdxl]\n---\nMy own tags advice.").unwrap();
         std::fs::write(d.join("bad.md"), "no front matter").unwrap();
         let (all, errors) = load(&d);
-        let (text, used, _) = select(&all, Some("sdxl"), Mode::Chat);
+        let (text, used, _) = select(&all, &["sdxl"], Mode::Chat);
         assert!(text.contains("My own tags advice.") && used.contains(&"tags".to_string()));
         assert!(!text.contains("comma-separated"));
         assert_eq!(errors.len(), 1);
@@ -204,7 +208,7 @@ mod tests {
     #[test]
     fn the_budget_drops_whole_skills_lowest_first() {
         let big = |id: &str, p: i32| Skill { id: id.into(), families: vec![], modes: vec![], priority: p, body: "x".repeat(4000), builtin: true };
-        let (text, used, dropped) = select(&[big("low", 1), big("high", 9)], None, Mode::Chat);
+        let (text, used, dropped) = select(&[big("low", 1), big("high", 9)], &[], Mode::Chat);
         assert_eq!(used, ["high"]);
         assert_eq!(dropped, ["low"]);
         assert_eq!(text.len(), 4000);
@@ -215,5 +219,18 @@ mod tests {
         assert!(parse("---\nid: x\nfamilies: [sdxxl]\n---\nhi", false).unwrap_err().to_string().contains("sdxxl"));
         assert!(parse("---\nid: x\nmodes: [paint]\n---\nhi", false).is_err());
         assert!(parse("---\nid: x\n---\n", false).is_err());
+    }
+
+    /// A film's turns are given the video model's skills beside the image
+    /// model's: the two families' names never collide.
+    #[test]
+    fn a_skill_may_name_a_video_family_and_a_story_turn_reads_it() {
+        let s = parse("---\nid: h3x\nfamilies: [minimax_h3]\nmodes: [story]\n---\nSay what is heard.", false).unwrap();
+        assert!(s.applies(&["sdxl", "minimax_h3"], Mode::Story));
+        assert!(!s.applies(&["sdxl"], Mode::Story));
+        assert!(!s.applies(&["minimax_h3"], Mode::Chat));
+        for v in VideoFamily::ALL {
+            assert!(!ImageFamily::ALL.iter().any(|f| f.as_str() == v.as_str()), "{} is both", v.as_str());
+        }
     }
 }

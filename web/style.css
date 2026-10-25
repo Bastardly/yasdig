@@ -122,6 +122,7 @@
   --chat-min: 480px;
   --chat-max: 1400px;
   --chat-pic: 160px;     /* a picture in the conversation, its height */
+  --story-pic: 144px;    /* a cast picture or a keyframe in the Story panel, its width */
   --chat-pic-large: 90vh; /* a large one's cap, so a portrait still fits on screen */
   --preview-h: 420px;    /* the live preview under the progress line; a cap,
                             so a portrait render can't push the folds away */
@@ -1183,6 +1184,25 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chatcardhead { margin: 0; font-size: var(--fs-sm); color: var(--text-dim); }
 .chatchanges { margin: 0; padding-left: var(--sp-4); }
 .chatprompt { margin: 0; white-space: pre-wrap; font-size: var(--fs-sm); }
+
+/* The Story panel: the cast as cards of picture and fields, the shots as a
+   numbered list with the keyframe a shot starts from beside its words. */
+/* Wide from the start and wider or taller by its corner (`both`); the cast
+   fills as many columns as the width holds. */
+#panel-agent-story { --fpanel-w: min(680px, 90vw); }
+.storycast { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: var(--sp-3); }
+.storymember, .storyshotbody { display: flex; gap: var(--sp-2); align-items: flex-start; }
+.storypic, .storykey { flex: 0 0 auto; width: var(--story-pic); line-height: 0; }
+.storypic img, .storykey img { width: 100%; height: auto; border-radius: var(--r-sm); }
+.storypic .sub { line-height: normal; }
+/* A turnaround: four figures side by side, so the card's whole width. */
+.storymember { flex-wrap: wrap; }
+.storysheet { flex: 1 0 100%; line-height: 0; }
+.storysheet img { width: 100%; height: auto; border-radius: var(--r-sm); }
+.storyfields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.storyshots { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--sp-2); }
+.storyshothead { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-1); }
+.storyshothead select { width: auto; }
 
 /* The composer, under the conversation. */
 .composer { display: flex; flex-direction: column; gap: var(--sp-2); padding-top: var(--sp-2); border-top: var(--line); }

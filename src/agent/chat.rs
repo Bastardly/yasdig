@@ -58,6 +58,13 @@ pub struct Chat {
     pub actions: Vec<ActionRec>,
     #[serde(default)]
     pub session: Session,
+    /// The Video tab's model when the person last wrote: what a film is
+    /// shot on. `None` in a chat begun before films, or with no video model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<String>,
+    /// The movie this chat is making, once the agent has written a storyboard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub film: Option<Film>,
     /// Where it was read from; never stored.
     #[serde(skip)]
     pub favorite: bool,
@@ -86,6 +93,145 @@ pub enum Mode {
     /// The end of a comparison: which value answered the question, from the
     /// server's count of the checks.
     Verdict,
+    /// A storyboard written, or rewritten whole: the film's cast and shots.
+    Story,
+}
+
+/// A movie the chat makes (`session::apply_story`): who and what is in it,
+/// and its shots. **Every picture it uses is also an output** (`stem`,
+/// `key_stem`), because a video shot's references and first frames are
+/// output stems — so the clip, reopened in the Video tab, has them too.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Film {
+    #[serde(default)]
+    pub title: String,
+    /// What goes in front of every shot's text: the look (the Shots panel's
+    /// *Every shot*).
+    #[serde(default)]
+    pub every: String,
+    #[serde(default)]
+    pub cast: Vec<Member>,
+    #[serde(default)]
+    pub shots: Vec<FilmShot>,
+    /// The video model it is shot on, as the board was written.
+    #[serde(default)]
+    pub video_model: String,
+    /// Whether that model's cuts follow the cast's pictures (H3's
+    /// references) rather than start from a keyframe drawn first (Wan).
+    #[serde(default)]
+    pub references: bool,
+    /// The image model the board's pictures are drawn with; empty is the
+    /// chat's.
+    #[serde(default)]
+    pub image_model: String,
+    /// That model follows reference pictures, so characters get a
+    /// turnaround sheet and a front picture drawn from it.
+    #[serde(default)]
+    pub sheets: bool,
+    /// The clip, once shooting has begun.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip: Option<String>,
+    #[serde(default)]
+    pub phase: Phase,
+    /// The shot being filmed, from 0.
+    #[serde(default)]
+    pub shot: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Phase {
+    /// Its pictures are being drawn.
+    #[default]
+    Board,
+    /// Every picture is there; waiting for the person's go.
+    Ready,
+    Shooting,
+    Done,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemberKind {
+    #[default]
+    Character,
+    Place,
+    Thing,
+}
+
+/// Someone or something that must look the same in every shot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Member {
+    pub name: String,
+    #[serde(default)]
+    pub kind: MemberKind,
+    /// How it looks, in words: what a shot without its picture is told.
+    #[serde(default)]
+    pub look: String,
+    /// What its picture is drawn from: a sheet on a plain background.
+    #[serde(default)]
+    pub prompt: String,
+    /// Its picture: drawn (`item`), or the person's (`output`, `attach`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<ImageRef>,
+    /// The picture as an output, once saved there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stem: Option<String>,
+    /// A character's turnaround sheet — front, three-quarter, side and back
+    /// in one picture — when the board's image model follows references:
+    /// what its front picture is drawn from, and what keyframes follow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<ImageRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet_stem: Option<String>,
+}
+
+impl Member {
+    /// Its picture is the person's, not drawn by the agent.
+    pub fn theirs(&self) -> bool {
+        self.picture.as_ref().is_some_and(|p| p.kind != "item")
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct FilmShot {
+    pub text: String,
+    /// The members in it, by name.
+    #[serde(default)]
+    pub cast: Vec<String>,
+    /// A new scene rather than going on from the shot before. Never shot 1.
+    #[serde(default)]
+    pub cut: bool,
+    /// The picture it starts from, on a model whose cuts need one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyframe: Option<ImageRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_stem: Option<String>,
+    /// 0 until it is filmed.
+    #[serde(default)]
+    pub seed: i64,
+    /// Times it was filmed.
+    #[serde(default)]
+    pub takes: u32,
+}
+
+impl Film {
+    /// Whether shot `k` starts from a keyframe drawn first: shot 1 and every
+    /// cut, on a model without references.
+    pub fn needs_keyframe(&self, k: usize) -> bool {
+        !self.references && self.shots.get(k).is_some_and(|s| k == 0 || s.cut)
+    }
+
+    /// Whether member `m` gets a turnaround sheet: a character, on a model
+    /// that can draw its front picture from it.
+    pub fn wants_sheet(&self, m: &Member) -> bool {
+        self.sheets && m.kind == MemberKind::Character
+    }
+
+    /// The member named `name`, matched as a person would.
+    pub fn member(&self, name: &str) -> Option<&Member> {
+        self.cast.iter().find(|m| m.name.eq_ignore_ascii_case(name.trim()))
+    }
 }
 
 /// A comparison: one round per value of one knob, the same seeds throughout,
@@ -291,6 +437,8 @@ pub enum Next {
     Critique,
     /// Run the queued pass.
     Escalate,
+    /// Draw the film's next missing picture: a cast member's, then a keyframe.
+    Film,
     Nothing,
 }
 
@@ -371,6 +519,8 @@ impl Chat {
             changes: Vec::new(),
             actions: Vec::new(),
             session: Session::default(),
+            video: None,
+            film: None,
             favorite: false,
         }
     }
