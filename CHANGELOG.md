@@ -40,6 +40,12 @@ What changed in each release of yasdig. Each release's executables are on the
   in the same network sandbox as sd-cli.
 - CFG scale tops out at 30 everywhere.
 
+### Fixed
+
+- The Wan 2.2 TI2V-5B GGUF from Get models read as "could not be read": one of its
+  tensors has five dimensions, which the header reader refused. It now folds them as
+  sd.cpp does.
+
 ## 0.5.4 — 2026-10-24
 
 ### Fixed

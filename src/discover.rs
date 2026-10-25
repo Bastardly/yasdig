@@ -588,12 +588,21 @@ fn read_gguf(f: &mut std::fs::File) -> Result<Tensors> {
     for _ in 0..tensor_count {
         let name = read_gguf_string(&mut r)?;
         let n_dims = read_u32(&mut r)?;
-        if n_dims > 4 {
-            bail!("tensor '{name}' claims {n_dims} dimensions; GGUF allows at most 4");
+        // ggml holds four, but city96-style writers (QuantStack's Wan 2.2 5B
+        // GGUF: `patch_embedding.weight` [2, 2, 1, 48, 3072]) store a conv3d
+        // weight's five. sd.cpp folds the extra ones into the fourth
+        // (`gguf_reader_ext.h`), so the shape read here is the one it loads.
+        if n_dims > 8 {
+            bail!("tensor '{name}' claims {n_dims} dimensions");
         }
         let mut shape = Vec::with_capacity(n_dims as usize);
         for _ in 0..n_dims {
             shape.push(read_u64(&mut r)?);
+        }
+        if shape.len() > 4 {
+            let rest: u64 = shape[3..].iter().product();
+            shape.truncate(4);
+            shape[3] = rest;
         }
         let ty = read_u32(&mut r)?;
         let _offset = read_u64(&mut r)?;
@@ -2168,6 +2177,32 @@ mod tests {
             );
         }
         assert!(matches!(classify(&unet(512)), Role::Unknown(_)));
+    }
+
+    /// A five-dimensional tensor (QuantStack's Wan 2.2 5B patch embedding)
+    /// reads with its extra dimensions folded into the fourth, as sd.cpp
+    /// loads it — it used to fail the whole file.
+    #[test]
+    fn a_gguf_tensor_past_four_dimensions_is_folded() {
+        let mut b = Vec::new();
+        b.extend_from_slice(b"GGUF");
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(&1u64.to_le_bytes()); // tensors
+        b.extend_from_slice(&0u64.to_le_bytes()); // metadata keys
+        let name = b"patch_embedding.weight";
+        b.extend_from_slice(&(name.len() as u64).to_le_bytes());
+        b.extend_from_slice(name);
+        b.extend_from_slice(&5u32.to_le_bytes());
+        for d in [2u64, 2, 1, 48, 3072] {
+            b.extend_from_slice(&d.to_le_bytes());
+        }
+        b.extend_from_slice(&0u32.to_le_bytes()); // f32
+        b.extend_from_slice(&0u64.to_le_bytes()); // offset
+        let path = std::env::temp_dir().join(format!("yasdig-5d-{}.gguf", std::process::id()));
+        std::fs::write(&path, &b).unwrap();
+        let got = read_gguf(&mut std::fs::File::open(&path).unwrap());
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(got.unwrap().tensors[0].shape, [2, 2, 1, 48 * 3072]);
     }
 
     /// `inner_dim` rather than a guess at which end of the shape to read: the
