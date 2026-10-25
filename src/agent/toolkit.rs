@@ -75,6 +75,15 @@ pub struct Toolkit {
     pub video: Option<VideoView>,
     /// Why this chat can't make a film, or `None` when it can.
     pub film_off: Option<String>,
+    /// Every installed video model a film can be shot on: what the Story
+    /// panel's *Filmed with* picks from.
+    pub videos: Vec<VideoView>,
+    /// The chat's storyboard is ready to film (or its filming was stopped
+    /// and can go on): a chat turn may say go.
+    pub board_ready: bool,
+    /// The agent model sees pictures. Set by a turn, which knows the model.
+    #[serde(skip)]
+    pub vision: bool,
     /// The whitelist it was built under, for `knobs::apply`.
     #[serde(skip)]
     pub rules: Rules,
@@ -218,14 +227,13 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     let locks = locks_for(cfg, profile, &chat.settings);
     let models = runnable(cfg, &registry);
     let image = models.iter().any(|m| m.name == template);
-    let video = chat
-        .video
-        .as_deref()
-        .and_then(|name| cfg.video_models().into_iter().find(|m| m.name == name && m.exists))
-        .map(|m| VideoView::of(&m));
+    let installed: Vec<VideoView> = cfg.video_models().iter().filter(|m| m.exists).map(VideoView::of).collect();
+    let video = chat.video.as_deref().and_then(|name| installed.iter().find(|v| v.name == name)).cloned();
     let mut t = build(&rules, &chat.settings, &locks, models, profile.map(|p| p.family));
     t.film_off = film_off(&rules, image, chat.video.as_deref(), video.as_ref());
+    t.board_ready = chat.film.as_ref().is_some_and(super::session::can_go);
     t.video = video;
+    t.videos = installed.into_iter().filter(|v| v.chains).collect();
     t
 }
 
@@ -306,6 +314,9 @@ pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelCh
         locks: locks.clone(),
         video: None,
         film_off: Some("no video model".into()),
+        videos: Vec::new(),
+        board_ready: false,
+        vision: false,
         rules: rules.clone(),
     }
 }

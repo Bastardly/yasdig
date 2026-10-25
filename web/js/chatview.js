@@ -143,6 +143,12 @@ export function renderMessage(chat, m, i) {
         <p class="chatcardhead">Round ${m.round}<span class="sub"> · ${esc(m.summary)}</span></p>
         <div class="chatpics${m.images.length === 1 ? ' large' : ''}">${batchPictures(chat, m, judged)}</div>${empty}</div>`;
     }
+    case 'clip':
+      return `<div class="chatmsg agent" data-n="${m.n}"><div class="chatcard">
+        <p class="chatcardhead">The film${m.title ? `: ${esc(m.title)}` : ''}</p>
+        <img class="chatclip" src="/videos/${encodeURIComponent(m.id)}/thumb.png" alt="">
+        <div class="btnrow"><button type="button" class="btn" data-open-clip="${esc(m.id)}">Open in the Video tab</button></div>
+      </div></div>`;
     case 'note':
       return `<p class="chatnote${m.text.includes('\n') ? ' table' : ''}" data-n="${m.n}">${esc(m.text)}</p>`;
     default:
@@ -233,13 +239,22 @@ function memberCard(chat, m, k, lock) {
     </div>${sheet}</div>`;
 }
 
+// Where a shot is in the filming: its takes and the last one's checks.
+function shotState(f, s, k) {
+  if (!['shooting', 'done'].includes(f.phase)) return '';
+  const marks = s.checks?.length ? ` <span class="chatchecks inline" title="The agent's checks">${
+    s.checks.map((c) => (c ? '✓' : '✗')).join('')}</span>` : '';
+  if (s.takes) return `<span class="sub">${s.takes === 1 ? 'Filmed' : `Filmed, ${s.takes} takes`}</span>${marks}`;
+  return f.phase === 'shooting' && k === f.shot ? '<span class="sub">Next</span>' : '';
+}
+
 function shotRow(chat, s, k, lock) {
   const how = k === 0 ? '<span class="sub">First shot</span>'
     : `<select data-film-shot="${k}" data-field="cut" aria-label="How shot ${k + 1} begins"${lock}>
         <option value="0"${s.cut ? '' : ' selected'}>Continue</option><option value="1"${s.cut ? ' selected' : ''}>Cut</option></select>`;
   const key = s.keyframe ? `<div class="storykey" title="The picture shot ${k + 1} starts from">${thumb(chat, s.keyframe, `Shot ${k + 1}`)}</div>` : '';
   return `<li class="storyshot">
-    <div class="storyshothead"><b>${k + 1}</b>${how}</div>
+    <div class="storyshothead"><b>${k + 1}</b>${how}${shotState(chat.film, s, k)}</div>
     <div class="storyshotbody">${key}<div class="storyfields">
       <textarea rows="2" data-film-shot="${k}" data-field="text" aria-label="Shot ${k + 1}"${lock}>${esc(s.text)}</textarea>
       <input type="text" value="${esc(s.cast.join(', '))}" data-film-shot="${k}" data-field="cast"
@@ -258,6 +273,16 @@ function castPics(chat) {
 // The Story panel's main action: what the board still lacks, drawn on a
 // press (`/chats/film {draw: true}`), so the looks can be read and changed
 // first. `null` when nothing is missing.
+// The panel's main action, `{ label, body }` for `/chats/film`, or null:
+// draw what is missing, then film it, or go on filming after a stop.
+export function mainAction(film) {
+  const draw = drawLabel(film);
+  if (draw) return { label: draw, body: { draw: true } };
+  if (film?.phase === 'ready') return { label: 'Film', body: { go: true } };
+  if (film?.phase === 'shooting' && film.shot < film.shots.length) return { label: 'Go on filming', body: { go: true } };
+  return null;
+}
+
 export function drawLabel(film) {
   if (!film || !['board', 'ready'].includes(film.phase)) return null;
   const done = (m) => m.stem && (!wantsSheet(film, m) || m.sheet_stem);
@@ -267,7 +292,8 @@ export function drawLabel(film) {
 }
 
 //   models  the toolkit's runnable models, for the board's image model
-export function storyHtml(chat, { busy = false, off = null, models = [] } = {}) {
+//   videos  the installed video models that film shot after shot
+export function storyHtml(chat, { busy = false, off = null, models = [], videos = [] } = {}) {
   const f = chat.film;
   if (!f && off) return `<p class="sub">No film can be made in this chat now: ${esc(off)}.</p>`;
   if (!f) {
@@ -280,12 +306,26 @@ export function storyHtml(chat, { busy = false, off = null, models = [] } = {}) 
       secs} shot${secs === 1 ? '' : 's'} on ${esc(f.video_model)}</span></p>
     <label class="grouphead">Every shot</label>
     <textarea rows="2" data-film-every aria-label="Every shot"${lock}>${esc(f.every)}</textarea>
+    ${filmModel(f, videos, lock)}
     ${pictureModel(f, models, lock, chat.settings?.template)}
     <label class="grouphead">Cast</label>
     ${f.cast.length ? `<div class="storycast">${f.cast.map((m, k) => memberCard(chat, m, k, lock)).join('')}</div>`
       : '<p class="sub">No one the shots must keep the same.</p>'}
     <label class="grouphead">Shots</label>
     <ol class="storyshots">${f.shots.map((s, k) => shotRow(chat, s, k, lock)).join('')}</ol>`;
+}
+
+// The video model the shots are filmed on: the Video tab's when the board
+// was written, changeable until filming starts. H3's cuts follow the cast's
+// pictures; Wan's start from keyframes, so a switch to Wan may add some.
+function filmModel(f, videos, lock) {
+  if (!videos.length) return '';
+  const opts = videos.map((v) => `<option value="${esc(v.name)}"${v.name === f.video_model ? ' selected' : ''}>${
+    esc(v.name)} · ${esc(v.label)}</option>`);
+  if (!videos.some((v) => v.name === f.video_model)) opts.unshift(`<option selected>${esc(f.video_model)} (not installed)</option>`);
+  return `<label class="grouphead" for="astoryvideo">Filmed with</label>
+    <select id="astoryvideo" data-film-video${lock}>${opts.join('')}</select>
+    <p class="sub">${f.references ? 'A cut follows the cast’s pictures.' : 'Shot 1 and every cut start from a keyframe drawn with the cast.'}</p>`;
 }
 
 // The model the cast and keyframes are drawn with. One that follows
@@ -322,6 +362,8 @@ export function stateText(chat) {
     return f.cast.some((m) => !m.stem) ? 'Drawing the cast' : 'Drawing keyframes';
   }
   if (s.state === 'running' && s.next === 'turn' && s.mode === 'story') return 'Writing the storyboard';
+  if (s.state === 'running' && f && s.next === 'shoot') return `Filming shot ${f.shot + 1} of ${f.shots.length}`;
+  if (s.state === 'running' && f && s.next === 'take') return `Watching shot ${f.shot + 1}`;
   const round = s.goal ? ` · round ${sessionRound(s)} of ${sessionLimit(s)}` : '';
   return {
     idle: '', queued: 'Waiting for the GPU', running: `Working${round}`,

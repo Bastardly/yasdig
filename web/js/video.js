@@ -876,7 +876,7 @@ function clipGrid({ list, del, grid, mode, delBtn, all, empty }) {
     if (c) clickClip(c);
   }
 
-  return { init: () => marks.init(), load, mark };
+  return { init: () => marks.init(), load, mark, find: (id) => items.find((c) => c.id === id) };
 }
 
 const grids = [
@@ -1023,7 +1023,12 @@ function syncRailDots() {
 }
 
 // The tab was shown: its panels can be placed now that it has a size.
-export const layoutVideoTab = () => wsPanels?.layout();
+// Shown: the panels are placed, and the grids re-read, since clips are made
+// off this tab too (the agent films into Current).
+export function layoutVideoTab() {
+  wsPanels?.layout();
+  loadClips();
+}
 
 export function initVideo() {
   // The Image tab's sampler list, groups and all: one list in the markup, and
@@ -1036,6 +1041,15 @@ export function initVideo() {
   for (const ev of ['input', 'change']) $('tab-video').addEventListener(ev, syncVideoSummaries);
   $('vgo').addEventListener('click', startClip);
   $('vnew').addEventListener('click', newClip);
+  // A clip the Agent tab made, opened from its chat: the grids learn of it
+  // first, since it landed while this tab wasn't looking.
+  document.addEventListener('yasdig:openclip', async (e) => {
+    document.querySelector('.tab[data-tab="video"]')?.click();
+    await loadClips();
+    const c = grids.map((g) => g.find(e.detail)).find(Boolean);
+    if (c) clickClip(c);
+    else $('verr').textContent = 'That clip is gone: it was deleted.';
+  });
   $('vsavemodel').addEventListener('click', () => saveVideoDefaults(false));
   $('vshotadd').addEventListener('click', addShot);
   $('vshots').addEventListener('click', (e) => {

@@ -6,7 +6,7 @@ import { S } from './state.js';
 import { cancelPost, onPassResult, onViewerResult, setLook, setViewerImage, showFullSize } from './viewer.js';
 import { openWorkItem } from './workitems.js';
 import { choosePicture, upload } from './source-slot.js';
-import { drawLabel, renderChat, sessionHtml, stateText, storyHtml } from './chatview.js';
+import { mainAction, renderChat, sessionHtml, stateText, storyHtml } from './chatview.js';
 import { openGetModels } from './getmodels.js';
 
 // ---- The Agent tab ------------------------------------------------------------
@@ -166,16 +166,16 @@ function drawPanels() {
 // under them: an answer that changes nothing they are editing waits for the
 // box to lose focus.
 function drawStory() {
-  const what = busy() ? null : drawLabel(data?.chat.film);
+  const what = busy() ? null : mainAction(data?.chat.film);
   $('astorydraw').hidden = !what;
-  if (what) $('astorydraw').textContent = what;
+  if (what) $('astorydraw').textContent = what.label;
   const body = $('astorybody');
   if (body.contains(document.activeElement) && document.activeElement.matches('input, textarea')) {
     body.dataset.stale = '1';
     return;
   }
   delete body.dataset.stale;
-  body.innerHTML = storyHtml(data?.chat ?? { film: null }, { busy: busy(), off: data?.toolkit.film_off, models: data?.toolkit.models ?? [] });
+  body.innerHTML = storyHtml(data?.chat ?? { film: null }, { busy: busy(), off: data?.toolkit.film_off, models: data?.toolkit.models ?? [], videos: data?.toolkit.videos ?? [] });
 }
 
 // One field of the board, as it was edited.
@@ -198,6 +198,7 @@ function initStory() {
     const t = e.target;
     if (t.matches('[data-film-every]')) editFilm({ every: t.value });
     else if (t.matches('[data-film-model]')) editFilm({ image_model: t.value });
+    else if (t.matches('[data-film-video]')) editFilm({ video_model: t.value });
     else if (t.dataset.filmMember != null) editFilm({ member: Number(t.dataset.filmMember), [t.dataset.field]: t.value });
     else if (t.dataset.filmShot != null) {
       const k = Number(t.dataset.filmShot);
@@ -220,7 +221,10 @@ function initStory() {
       $('astoryfile').click();
     }
   });
-  $('astorydraw').addEventListener('click', () => editFilm({ draw: true }));
+  $('astorydraw').addEventListener('click', () => {
+    const what = mainAction(data?.chat.film);
+    if (what) editFilm(what.body);
+  });
   $('astoryfile').addEventListener('change', async () => {
     const f = $('astoryfile').files[0];
     $('astoryfile').value = '';
@@ -502,6 +506,9 @@ async function onLogClick(e) {
   try {
     if (d.undo) {
       show(await post('/agent/undo', { chat: id, change: Number(d.undo) }), { scroll: false });
+    } else if (d.openClip) {
+      // The Video tab opens it (`video.js`), as the Image tab's Info opens a chat.
+      document.dispatchEvent(new CustomEvent('yasdig:openclip', { detail: d.openClip }));
     } else if (d.openStory != null) {
       storyPanel(true);
     } else if (d.openItem) {

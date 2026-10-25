@@ -1183,6 +1183,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chatcard .btnrow { margin-top: var(--sp-1); }
 .chatcardhead { margin: 0; font-size: var(--fs-sm); color: var(--text-dim); }
 .chatchanges { margin: 0; padding-left: var(--sp-4); }
+/* A film's clip card: its first frame, as the Video tab's tile has it. */
+.chatclip { max-width: 100%; height: var(--chat-pic); width: auto; object-fit: contain; border-radius: var(--r-sm); align-self: flex-start; }
+.chatchecks.inline { position: static; }
 .chatprompt { margin: 0; white-space: pre-wrap; font-size: var(--fs-sm); }
 
 /* The Story panel: the cast as cards of picture and fields, the shots as a

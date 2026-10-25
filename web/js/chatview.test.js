@@ -2,7 +2,7 @@
 // (`chatview.js`). Not in `web::WEB_FILES`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { drawLabel, renderChat, liveReply, replyHtml, sessionHtml, valueText, stateText, storyHtml } from './chatview.js';
+import { drawLabel, mainAction, renderChat, liveReply, replyHtml, sessionHtml, valueText, stateText, storyHtml } from './chatview.js';
 
 const chat = (over = {}) => ({
   id: '1-0',
@@ -137,6 +137,14 @@ test('the storyboard is escaped, says how each shot begins, and locks while the 
   assert.ok(storyHtml(chat()).includes('No film yet'));
 });
 
+test('the film’s video model is picked on the board, and one gone is still named', () => {
+  const videos = [{ name: 'wan5b', label: 'Wan 2.2 TI2V 5B' }, { name: 'h3', label: 'H3' }];
+  const html = storyHtml(chat({ film: film() }), { videos });
+  assert.ok(html.includes('<option value="wan5b" selected>') && html.includes('<option value="h3">'), html);
+  assert.ok(storyHtml(chat({ film: film({ video_model: 'gone' }) }), { videos }).includes('gone (not installed)'));
+  assert.ok(!storyHtml(chat({ film: film() })).includes('Filmed with'), 'nothing to pick from');
+});
+
 test('a storyboard reply is a card that opens the panel, and the header says what is drawn', () => {
   const c = chat({ film: film(), messages: [{ role: 'agent', n: 0, mode: 'story', reply: 'Two shots.' }] });
   assert.ok(renderChat(c).includes('data-open-story'));
@@ -167,4 +175,18 @@ test('on a model that follows references a character is whole only with its turn
   assert.ok(html.includes('t-m.png') && html.includes('(turnarounds)') && html.includes('turnaround sheet'));
   assert.ok(renderChat(chat({ film: withSheets, messages: [{ role: 'agent', n: 0, mode: 'story', reply: '' }] })).includes('t-m.png'),
     'the card shows the turnaround');
+});
+
+test('the main action draws, then films, then goes on after a stop; a shot shows its takes', () => {
+  const whole = film({ shots: film().shots.map((x) => ({ ...x, key_stem: 'k' })) });
+  assert.equal(mainAction(film({ phase: 'board' })).label, 'Draw the keyframes');
+  assert.deepEqual(mainAction(whole), { label: 'Film', body: { go: true } });
+  const shooting = { ...whole, phase: 'shooting', shot: 1, shots: whole.shots.map((x, k) => (k === 0 ? { ...x, takes: 2, checks: [true, false] } : x)) };
+  assert.equal(mainAction(shooting).label, 'Go on filming');
+  assert.equal(mainAction({ ...shooting, phase: 'done' }), null);
+  const html = storyHtml(chat({ film: shooting }));
+  assert.ok(html.includes('Filmed, 2 takes') && html.includes('✓✗') && html.includes('Next'));
+  assert.equal(stateText(chat({ film: shooting, session: { state: 'running', next: 'shoot', goal: '', checks: [], round: 0 } })), 'Filming shot 2 of 2');
+  const card = renderChat(chat({ messages: [{ role: 'clip', n: 0, id: 'c<1', title: 'Rain' }] }));
+  assert.ok(card.includes('data-open-clip="c&lt;1"') && card.includes('/videos/c%3C1/thumb.png'));
 });

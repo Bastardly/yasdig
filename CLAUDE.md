@@ -783,7 +783,7 @@ Break silently:
   hands over to a `Mode::Story` turn (its own schema, `n_predict` 3072), whose board is
   **rewritten whole**, never patched; what survives is matched by the server — a member
   keeps its picture by name and an unchanged look (or when it is the person's), a shot
-  its keyframe when its words, cast and cut are unchanged. **Nothing is drawn until the
+  its keyframe when its words, cast and cut are unchanged. **A continue that names someone not in the shot before is made a cut** (`recut_board`, after the board turn and every panel edit, with a note): a continue carries only the last frame, so a return would be drawn from words. **Nothing is drawn until the
   person presses *Draw the cast*** (`/chats/film {draw}`, `board_advance(…, draw)`), so
   the looks can be read first. **Board pictures run on `Film.image_model`**
   (`board_settings`: the chat's settings switched as a model change switches them; the
@@ -800,6 +800,17 @@ Break silently:
   doesn't `chains()`). A new chat's settings have no `prompt` key, which `GenerateDto`
   requires: a board picture inserts its own, a round an empty one. A film's turns get the video family's skills too
   (`skills::select` takes both families' names, which never collide).
+- **Shooting a film** (`session::go`, `Next::Shoot`/`Next::Take`): **the movie is an
+  ordinary clip** — shot 1 is `Engine::video` (a retake of it a new clip, the old one
+  deleted), every later shot and every retake `extend_clip {keep: k}` — so the Video
+  tab's Redo, Enlarge and Save work on it. The Video tab's model with its saved
+  defaults plus its catalog Turbo LoRA (`with_video_turbo`); the agent never picks
+  size, steps or length. **A take's checks are the server's** (`take_checks`), never
+  the model's; it sees `take_cast`'s pictures, the frame before (a continue) and the
+  shot's first, middle and last (`take_frames`, staged like pictures). One retake
+  (`takes` < 2), then on. `Film.watch` is the agent model's vision at go: without it
+  nothing is checked, and the chat says so. A take's reply is recorded before the film
+  moves on (`film_on`), so the clip card follows it.
 - **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.
 
 ## The job queue

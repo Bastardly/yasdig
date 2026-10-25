@@ -637,12 +637,14 @@ the chat, whose `rev` moves on every write.
   turn follows in the same job; its pictures wait for `/chats/film {draw: true}`). `video` is the Video tab's model now. At most four pictures, copied into the
   chat. `409` while the agent is working on the chat.
 - `POST /chats/film` — `{ id, every?, member?, name?, look?, picture?, shot?, text?,
-  cast?, cut?, draw?, image_model? }`: an edit of the storyboard before it is filmed — the look every shot
+  cast?, cut?, draw?, image_model?, video_model?, go? }`: an edit of the storyboard before it is filmed — the look every shot
   shares, cast member `member`'s name, look or picture (`{kind: "output", id}`, or `null`
   to have it drawn again), shot `shot`'s words, cast (names) or cut. A reworded shot's
   keyframe is dropped; `image_model` is the installed model the pictures still missing are
-  drawn with (one that takes references gives characters a turnaround sheet). `draw: true` (the Story panel's *Draw the cast*) queues a leg that
-  draws whatever the board is missing. `409` while the
+  drawn with (one that takes references gives characters a turnaround sheet). `video_model` is the installed video model it is shot on (the Video tab's when the board was written); on one whose cuts start from keyframes, the switch may leave keyframes to draw. `draw: true` (the Story panel's *Draw the cast*) queues a leg that
+  draws whatever the board is missing; `go: true` (*Film*) one that films it — shot 1 a new
+  clip in the Video tab's Current, each later shot an extend of it, each looked at by the
+  agent when it can see and filmed once more if a check fails — or goes on after a stop. `409` while the
   agent is working on the chat, or once the film is being shot.
 - `POST /agent/undo` — `{ chat, change }`: put an applied change's settings back, if they
   still hold what it set (else `409`). Recorded as a change of yours.

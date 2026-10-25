@@ -194,6 +194,15 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32, sweep: bool) -> 
             describe_fields(&mut props, t);
             object(props)
         }
+        Mode::Take => {
+            let n = checks.max(1);
+            props.insert("answers".into(), json!({ "type": "array", "items": { "type": "boolean" }, "minItems": n, "maxItems": n }));
+            // The shot's words for a retake, when a check failed because of
+            // them; "" keeps them.
+            props.insert("better_text".into(), text(500));
+            props.insert("reply".into(), text(REPLY_CHARS));
+            object(props)
+        }
         Mode::Story => {
             story_fields(&mut props, batch, t);
             props.insert("reply".into(), text(REPLY_CHARS));
@@ -294,6 +303,13 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32, sweep: bool) -> 
                 film.insert("action".into(), json!({ "const": "film" }));
                 film.insert("reply".into(), text(REPLY_CHARS));
                 branches.push(object(film));
+            }
+            // Filming the storyboard, when it is ready.
+            if t.board_ready {
+                let mut go = props.clone();
+                go.insert("action".into(), json!({ "const": "go" }));
+                go.insert("reply".into(), text(REPLY_CHARS));
+                branches.push(object(go));
             }
             if !vary.is_empty() {
                 let mut compare = props;
@@ -457,6 +473,11 @@ mod tests {
         assert!(!actions(&output(Mode::Chat, &t, 0, 0, false)).contains(&"film".to_string()), "no video model");
         t.film_off = None;
         assert_eq!(actions(&output(Mode::Chat, &t, 0, 0, false)), ["talk", "draw", "improve", "film", "compare"]);
+        t.board_ready = true;
+        assert_eq!(actions(&output(Mode::Chat, &t, 0, 0, false)), ["talk", "draw", "improve", "film", "go", "compare"]);
+        let take = output(Mode::Take, &t, 6, 3, false);
+        assert_eq!(keys(&take), ["notes", "answers", "better_text", "reply"]);
+        assert_eq!(take["properties"]["answers"]["minItems"], json!(3));
         let s = output(Mode::Story, &t, 2, 0, false);
         assert_eq!(keys(&s), ["notes", "title", "every", "image_model", "cast", "shots", "reply"]);
         assert_eq!(s["properties"]["image_model"]["enum"], json!(["sdxl", "klein"]));

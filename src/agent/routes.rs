@@ -305,6 +305,12 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         /// The image model the board's pictures are drawn with.
         #[serde(default)]
         image_model: Option<String>,
+        /// The video model it is shot on.
+        #[serde(default)]
+        video_model: Option<String>,
+        /// Film it (*Film*), or go on filming after a stop.
+        #[serde(default)]
+        go: bool,
     }
     let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
     let store = super::store(cfg);
@@ -327,11 +333,27 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         }
         _ => None,
     };
-    let shot_seconds = store.load(&dto.id).ok().and_then(|c| c.film).map_or(0.0, |f| super::shot_seconds(cfg, &f));
+    // At the model it is about to be shot on, when that changes.
+    let shot_seconds = store.load(&dto.id).ok().and_then(|c| c.film).map_or(0.0, |mut f| {
+        if let Some(v) = &dto.video_model {
+            f.video_model = v.clone();
+        }
+        super::shot_seconds(cfg, &f)
+    });
     let models = toolkit::runnable(cfg, &cfg.registry());
+    // Each shot is looked at when the chat's agent can see.
+    let watch = dto.go
+        && store.load(&dto.id).ok().and_then(|c| super::agent_for(cfg, c.agent.as_deref()).ok()).is_some_and(|m| m.vision());
     let r = store.update(&dto.id, |c| {
         if c.session.busy() {
             anyhow::bail!("the agent is working on this chat — wait, or stop it first");
+        }
+        if dto.go {
+            session::go(c, watch).map_err(|e| anyhow::anyhow!(e))?;
+            c.session.state = State::Queued;
+            c.session.job = None;
+            c.session.error = None;
+            return Ok(Some(c.clone()));
         }
         let f = c.film.as_mut().ok_or_else(|| anyhow::anyhow!("this chat has no storyboard"))?;
         if !matches!(f.phase, Phase::Board | Phase::Ready) {
@@ -340,6 +362,20 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         if let Some(e) = &dto.every {
             f.every = e.trim().to_string();
         }
+        // Its cuts follow the cast on H3 and start from keyframes on Wan, so
+        // the switch may leave keyframes to draw (or ones no longer needed,
+        // which stay).
+        if let Some(name) = &dto.video_model {
+            let v = toolkit::resolve(cfg, &Chat { video: Some(name.clone()), ..c.clone() })
+                .video
+                .filter(|v| v.chains)
+                .ok_or_else(|| anyhow::anyhow!("'{name}' isn't an installed video model that can film shot after shot"))?;
+            let f = c.film.as_mut().expect("checked above");
+            f.video_model = v.name.clone();
+            f.references = v.references;
+            c.video = Some(v.name);
+        }
+        let f = c.film.as_mut().expect("checked above");
         // A new model draws what is missing from here on; what is drawn stays.
         if let Some(name) = &dto.image_model {
             let m = models.iter().find(|m| &m.name == name).ok_or_else(|| anyhow::anyhow!("'{name}' isn't an installed model"))?;
@@ -419,6 +455,9 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
                 s.keyframe = None;
                 s.key_stem = None;
             }
+        }
+        if let Some(n) = session::recut_board(c.film.as_mut().expect("checked above")) {
+            c.note(n);
         }
         session::board_advance(c, shot_seconds, dto.draw);
         let draws = c.session.next == Next::Film;

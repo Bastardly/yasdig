@@ -94,7 +94,7 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
             "\n\nThis session is a comparison: yasdig draws one round per value with the same seeds, \
              and you judge. Change nothing; answer what is asked.",
         );
-    } else if turn.mode == Mode::Story {
+    } else if matches!(turn.mode, Mode::Story | Mode::Take) {
         if schema::board_models(t).is_some() {
             let names: Vec<String> = t
                 .models
@@ -285,6 +285,10 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
             Msg::Note { text, .. } => {
                 push(&mut out, Role::User, vec![Part::Text { text: format!("[yasdig] {text}") }]);
             }
+            Msg::Clip { id, .. } => {
+                let text = format!("[yasdig] The film is done: clip {id}, in the Video tab's Current.");
+                push(&mut out, Role::User, vec![Part::Text { text }]);
+            }
         }
     }
     let (refs, own) = turn.images.split_at(turn.reference.min(turn.images.len()));
@@ -421,6 +425,40 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                 ));
             }
             push(&mut out, Role::User, vec![Part::Text { text }]);
+        }
+        Mode::Take => {
+            let Some(f) = turn.film else { return out };
+            let k = f.shot;
+            let Some(shot) = f.shots.get(k) else { return out };
+            let mut parts = vec![Part::Text {
+                text: format!("Shot {} of {}, take {}: \"{}\"", k + 1, f.shots.len(), shot.takes.max(1), shot.text),
+            }];
+            let cast = super::session::take_cast(f, k);
+            for (m, p) in cast.iter().zip(refs) {
+                parts.push(Part::Text { text: format!("{}, as they should look:", m.name) });
+                parts.push(Part::Image { path: p.clone() });
+            }
+            let mut frames = own.iter();
+            if k > 0 && !shot.cut {
+                if let Some(p) = frames.next() {
+                    parts.push(Part::Text { text: "The last frame of the shot before:".into() });
+                    parts.push(Part::Image { path: p.clone() });
+                }
+            }
+            for (label, p) in ["The new shot's first frame:", "Its middle frame:", "Its last frame:"].iter().zip(frames) {
+                parts.push(Part::Text { text: label.to_string() });
+                parts.push(Part::Image { path: p.clone() });
+            }
+            let checks: Vec<String> = turn.checks.iter().enumerate().map(|(i, c)| format!("{}. {c}", i + 1)).collect();
+            parts.push(Part::Text {
+                text: format!(
+                    "Answer each check, in order, true or false:\n{}\nIf one fails because of how the shot is \
+                     worded, write `better_text`: the shot's words rewritten so a retake gets it right, about the \
+                     same thing. Else \"\".",
+                    checks.join("\n")
+                ),
+            });
+            push(&mut out, Role::User, parts);
         }
         Mode::Chat | Mode::Describe => {}
     }

@@ -95,6 +95,8 @@ pub enum Mode {
     Verdict,
     /// A storyboard written, or rewritten whole: the film's cast and shots.
     Story,
+    /// A look at a shot just filmed: the server's checks answered.
+    Take,
 }
 
 /// A movie the chat makes (`session::apply_story`): who and what is in it,
@@ -136,6 +138,9 @@ pub struct Film {
     /// The shot being filmed, from 0.
     #[serde(default)]
     pub shot: usize,
+    /// Each shot is looked at after it is filmed: the agent model sees.
+    #[serde(default)]
+    pub watch: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,6 +218,9 @@ pub struct FilmShot {
     /// Times it was filmed.
     #[serde(default)]
     pub takes: u32,
+    /// The last take's answers to its checks (`session::take_checks`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<bool>,
 }
 
 impl Film {
@@ -330,6 +338,15 @@ pub enum Msg {
         size: u32,
         images: Vec<ImageRef>,
     },
+    /// A film, done: the clip in the Video tab.
+    Clip {
+        n: u32,
+        #[serde(default)]
+        ms: u64,
+        id: String,
+        #[serde(default)]
+        title: String,
+    },
     /// A line from yasdig itself: stopped, a failure, a clamp.
     Note {
         n: u32,
@@ -342,7 +359,7 @@ pub enum Msg {
 impl Msg {
     pub fn n(&self) -> u32 {
         match self {
-            Msg::User { n, .. } | Msg::Agent { n, .. } | Msg::Batch { n, .. } | Msg::Note { n, .. } => *n,
+            Msg::User { n, .. } | Msg::Agent { n, .. } | Msg::Batch { n, .. } | Msg::Clip { n, .. } | Msg::Note { n, .. } => *n,
         }
     }
 }
@@ -439,6 +456,10 @@ pub enum Next {
     Escalate,
     /// Draw the film's next missing picture: a cast member's, then a keyframe.
     Film,
+    /// Film the film's current shot.
+    Shoot,
+    /// Look at the shot just filmed.
+    Take,
     Nothing,
 }
 

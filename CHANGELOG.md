@@ -26,7 +26,10 @@ What changed in each release of yasdig. Each release's executables are on the
   model that draws them; on one that follows reference pictures (the Kleins) each
   character first gets a turnaround sheet — front, three-quarter, side and back in one
   picture — and every later picture of them follows it. Then it waits for your
-  go. "Make shot 2 at night" rewrites it, keeping the pictures that still fit.
+  go: *Film* shoots it shot by shot on the Video tab's model (or the one picked in the panel's *Filmed with*), looks at each shot (is it
+  what the shot says, do the people look like their pictures, does it follow on) and
+  films a failing one once more. The film is an ordinary clip in the Video tab, where
+  *Redo from shot k* works on it. "Make shot 2 at night" rewrites it, keeping the pictures that still fit. A shot that goes on from the one before can only keep who that shot showed, so one that brings someone in — or back — is made a cut, which starts from their picture.
   Settings → Agent's *Make movies* turns it off.
 - **Comparisons**: ask "which CFG works best?" or "which model draws hands better?" and it
   draws one round per value on the same seeds, judges them, counts per value the
