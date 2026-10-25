@@ -816,7 +816,8 @@
           <textarea id="atext" class="short" placeholder="Write to the agent: a fox in a red knitted hat, snowy forest — keep trying until the hat is red"></textarea>
         </prompt-box>
         <div class="btnrow composerrow">
-          <button type="button" id="aattach" class="btn" title="Attach a picture (or paste or drop one)">Attach picture…</button>
+          <button type="button" id="apick" class="btn" title="Attach a picture from Outputs or Favorites">Choose…</button>
+          <button type="button" id="aupload" class="btn" title="Attach a picture from your computer (or paste or drop one)">Upload…</button>
           <input type="file" id="afile" accept="image/*" multiple hidden>
           <select id="amodel" class="composeragent" aria-label="Agent"
             title="The agent this chat talks to. Settings → Agent sets the one new chats start with, and what it may change."></select>
@@ -1654,7 +1655,7 @@
 </dialog>
 <dialog id="picker">
   <div class="wihead">
-    <b>Pick a first frame</b>
+    <b>Pick a picture</b>
     <!-- Either gallery: a favourite is a stem like any other, and the server
          looks in both (`Store::find_output`). -->
     <span class="wishelf">

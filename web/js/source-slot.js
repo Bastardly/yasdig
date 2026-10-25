@@ -105,6 +105,14 @@ function wirePicker() {
   }
 }
 
+// The picker for anyone else who wants a stem: the Agent tab's composer.
+export function choosePicture(onPick) {
+  wirePicker();
+  pickFor = onPick;
+  $('picker').showModal();
+  drawPicker();
+}
+
 // `tab` is the tab's container id, for the paste guard; `none` is what the name
 // line says with nothing picked; `err` is where a failed upload is reported;
 // `onChange(stem | null)` runs after every change, including a clear.

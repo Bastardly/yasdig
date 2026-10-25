@@ -5,7 +5,7 @@ import { onJobs, passRunning, soonJobs } from './jobs.js';
 import { S } from './state.js';
 import { cancelPost, onPassResult, onViewerResult, setLook, setViewerImage, showFullSize } from './viewer.js';
 import { openWorkItem } from './workitems.js';
-import { upload } from './source-slot.js';
+import { choosePicture, upload } from './source-slot.js';
 import { renderChat, sessionHtml, stateText } from './chatview.js';
 import { openGetModels } from './getmodels.js';
 
@@ -202,12 +202,19 @@ function drawChips() {
   syncButtons();
 }
 
+// An output by its stem, chosen or just uploaded; the server finds it in
+// either gallery.
+function attachOutput(stem) {
+  if (attachments.some((a) => a.kind === 'output' && a.id === stem)) return;
+  attachments.push({ kind: 'output', id: stem });
+  if (attachments.length > 4) attachments = attachments.slice(-4);
+  drawChips();
+}
+
 async function attachFile(file) {
   err('');
   try {
-    attachments.push({ kind: 'output', id: await upload(file) });
-    if (attachments.length > 4) attachments = attachments.slice(-4);
-    drawChips();
+    attachOutput(await upload(file));
   } catch (e) {
     err(String(e.message || e));
   }
@@ -565,7 +572,8 @@ export function initAgent() {
       if (!busy()) send();
     }
   });
-  $('aattach').addEventListener('click', () => $('afile').click());
+  $('apick').addEventListener('click', () => choosePicture(attachOutput));
+  $('aupload').addEventListener('click', () => $('afile').click());
   $('afile').addEventListener('change', async () => {
     for (const f of $('afile').files) await attachFile(f);
     $('afile').value = '';

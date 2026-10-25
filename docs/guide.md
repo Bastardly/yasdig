@@ -812,7 +812,7 @@ comparison.
   settings as it answers — each change is a card with its reason and an **Undo**.
 - **Draw.** "Draw a fox in a red hat", "three of those": it writes the prompt and draws
   as many as you said (one when you didn't).
-- **Describe a picture.** Attach one (Attach, paste or drop it on the composer, or press
+- **Describe a picture.** Attach one (*Choose…* from Outputs or Favorites, *Upload…*, paste or drop it on the composer, or press
   *Ask* on any picture in the chat) and ask for it as a prompt. It writes one for the
   chat's image model in that model's style — tags for SD 1.x, SD 2.x and SDXL, sentences
   for the rest — with *Copy to the Image tab*. *Ask* attaches a picture for any question
