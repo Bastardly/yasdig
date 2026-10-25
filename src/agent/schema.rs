@@ -22,13 +22,14 @@
 //! the agent just wrote; repeating the current prompt is no change.
 
 use super::chat::Mode;
-use super::knobs::{MAX_BATCH, MAX_ROUNDS};
+use super::knobs::{COMPARABLE, MAX_BATCH, MAX_ROUNDS};
 use super::toolkit::{KnobView, Toolkit};
 use serde_json::{json, Map, Value};
 
 pub const NOTES_CHARS: u32 = 600;
 pub const REPLY_CHARS: u32 = 800;
 pub const MAX_CHECKS: u32 = 6;
+pub const GOAL_CHARS: u32 = 300;
 
 fn text(max: u32) -> Value {
     json!({ "type": "string", "maxLength": max })
@@ -65,7 +66,11 @@ pub fn writes_prompt(t: &Toolkit) -> bool {
 /// `need_prompt` (and the prompt offered) the prompt must be in it.
 fn change(t: &Toolkit, need_prompt: bool) -> Option<Value> {
     let mut props = Map::new();
-    for k in t.offered_knobs() {
+    // A knob locked on this model is offered while the model may change:
+    // another model may take it, and `knobs::apply` checks it against the
+    // model the change ends on.
+    let switch = t.knob("model").is_some_and(|m| m.offered());
+    for k in t.knobs.iter().filter(|k| k.offered() || (switch && k.allowed)) {
         props.insert(k.key.to_string(), knob_schema(k, t));
     }
     if props.is_empty() {
@@ -93,25 +98,70 @@ fn with_change(props: &mut Map<String, Value>, t: &Toolkit, need_prompt: bool) {
     }
 }
 
-/// The reply's schema for one turn. `batch` is how many pictures a critique
-/// shows, `checks` how many questions each is judged by.
-pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32) -> Value {
+/// A plan's yes/no questions.
+fn checks_list() -> Value {
+    json!({ "type": "array", "items": text(120), "minItems": 1, "maxItems": MAX_CHECKS })
+}
+
+/// A critique's answers: a row per picture, an answer per check, and the
+/// keepers.
+fn critique_answers(props: &mut Map<String, Value>, batch: u32, checks: u32) {
+    let b = batch.max(1);
+    let n = checks.max(1);
+    props.insert(
+        "checks".into(),
+        json!({
+            "type": "array",
+            "items": { "type": "array", "items": { "type": "boolean" }, "minItems": n, "maxItems": n },
+            "minItems": b,
+            "maxItems": b
+        }),
+    );
+    props.insert(
+        "keepers".into(),
+        json!({ "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": b }, "maxItems": b }),
+    );
+}
+
+/// A picture as a prompt: the prompt, and a negative only where the model
+/// reads one.
+fn describe_fields(props: &mut Map<String, Value>, t: &Toolkit) {
+    props.insert("prompt".into(), text(1500));
+    if t.knob("negative").is_some_and(|k| k.locked.is_none()) {
+        props.insert("negative".into(), text(500));
+    }
+}
+
+/// The reply's schema for one turn. `batch` is how many pictures the turn
+/// shows (a critique's round, a chat's attachments) — for a verdict, how many
+/// values were compared — and `checks` how many questions each is judged by.
+/// `sweep`: the session is a comparison, whose rounds the server runs, so its
+/// plan and critiques only judge.
+pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32, sweep: bool) -> Value {
     let mut props = Map::new();
     props.insert("notes".into(), text(NOTES_CHARS));
     match mode {
+        Mode::Plan if sweep => {
+            props.insert("checks".into(), checks_list());
+            props.insert("reply".into(), text(REPLY_CHARS));
+            object(props)
+        }
+        Mode::Critique if sweep => {
+            critique_answers(&mut props, batch, checks);
+            props.insert("reply".into(), text(REPLY_CHARS));
+            object(props)
+        }
+        Mode::Verdict => {
+            props.insert("best".into(), int(1, batch.max(1)));
+            props.insert("reply".into(), text(REPLY_CHARS));
+            object(props)
+        }
         Mode::Describe => {
-            props.insert("prompt".into(), text(1500));
-            // Only where the model reads one.
-            if t.knob("negative").is_some_and(|k| k.locked.is_none()) {
-                props.insert("negative".into(), text(500));
-            }
+            describe_fields(&mut props, t);
             object(props)
         }
         Mode::Plan => {
-            props.insert(
-                "checks".into(),
-                json!({ "type": "array", "items": text(120), "minItems": 1, "maxItems": MAX_CHECKS }),
-            );
+            props.insert("checks".into(), checks_list());
             // How long the session runs, read off the goal's words.
             props.insert("rounds".into(), int(1, MAX_ROUNDS));
             props.insert("count".into(), int(1, MAX_BATCH));
@@ -123,20 +173,7 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32) -> Value {
         }
         Mode::Critique => {
             let b = batch.max(1);
-            let n = checks.max(1);
-            props.insert(
-                "checks".into(),
-                json!({
-                    "type": "array",
-                    "items": { "type": "array", "items": { "type": "boolean" }, "minItems": n, "maxItems": n },
-                    "minItems": b,
-                    "maxItems": b
-                }),
-            );
-            props.insert(
-                "keepers".into(),
-                json!({ "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": b }, "maxItems": b }),
-            );
+            critique_answers(&mut props, batch, checks);
             let passes: Vec<&str> = t.offered_actions().map(|a| a.key).collect();
             let mut actions = vec!["generate", "done"];
             let escalate = (!passes.is_empty()).then(|| {
@@ -173,17 +210,60 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32) -> Value {
             // Talking, or drawing: a drawing says how many pictures (one asked
             // for is one drawn) and whether to keep the last round's seeds,
             // which keeps its compositions while a change is tried.
+            //
+            // The actions are named for what the person asked, since a small
+            // model picks among the words: "session" told it nothing.
             let mut talk = props.clone();
-            talk.insert("action".into(), json!({ "const": "none" }));
+            talk.insert("action".into(), json!({ "const": "talk" }));
             with_change(&mut talk, t, false);
             talk.insert("reply".into(), text(REPLY_CHARS));
-            let mut draw = props;
-            draw.insert("action".into(), json!({ "const": "generate" }));
+            let mut draw = props.clone();
+            draw.insert("action".into(), json!({ "const": "draw" }));
             draw.insert("count".into(), int(1, MAX_BATCH));
             draw.insert("seeds".into(), json!({ "enum": ["new", "same"] }));
             with_change(&mut draw, t, true);
             draw.insert("reply".into(), text(REPLY_CHARS));
-            json!({ "anyOf": [object(talk), object(draw)] })
+            let mut branches = vec![object(talk), object(draw)];
+            // A picture written as a prompt, when the turn shows one.
+            if batch > 0 {
+                let mut describe = props.clone();
+                describe.insert("action".into(), json!({ "const": "describe" }));
+                describe_fields(&mut describe, t);
+                describe.insert("reply".into(), text(REPLY_CHARS));
+                branches.push(object(describe));
+            }
+            // A session: the goal in the agent's own words, since the person's
+            // ("make it better") is often not one. The plan turn after it
+            // writes the checks and sizes the rounds.
+            let mut improve = props.clone();
+            improve.insert("action".into(), json!({ "const": "improve" }));
+            improve.insert("goal".into(), text(GOAL_CHARS));
+            improve.insert("reply".into(), text(REPLY_CHARS));
+            branches.push(object(improve));
+            // A comparison: one knob, the values to try, pictures per value.
+            // The values are strings, since the grammar can't type each item
+            // by the knob; the server reads them (`knobs::parse_value`).
+            //
+            // A knob locked on this model is still offered: the comparison
+            // may switch model first (its `change`), and the server checks the
+            // values against the model it runs on. "Compare CFG on MOSS" from a
+            // chat on a CFG-1 model otherwise had nothing to vary but the model.
+            let vary: Vec<&str> = t.knobs.iter().filter(|k| k.allowed).map(|k| k.key).filter(|k| COMPARABLE.contains(k)).collect();
+            if !vary.is_empty() {
+                let mut compare = props;
+                compare.insert("action".into(), json!({ "const": "compare" }));
+                with_change(&mut compare, t, false);
+                compare.insert("goal".into(), text(GOAL_CHARS));
+                compare.insert("vary".into(), json!({ "enum": vary }));
+                compare.insert(
+                    "values".into(),
+                    json!({ "type": "array", "items": text(1000), "minItems": 2, "maxItems": MAX_ROUNDS }),
+                );
+                compare.insert("count".into(), int(1, MAX_BATCH));
+                compare.insert("reply".into(), text(REPLY_CHARS));
+                branches.push(object(compare));
+            }
+            json!({ "anyOf": branches })
         }
     }
 }
@@ -197,8 +277,8 @@ mod tests {
 
     fn models() -> Vec<ModelChoice> {
         vec![
-            ModelChoice { name: "sdxl".into(), family: "sdxl", label: "SDXL" },
-            ModelChoice { name: "klein".into(), family: "flux2-klein-4b", label: "FLUX.2 Klein 4B" },
+            ModelChoice { name: "sdxl".into(), family: "sdxl", label: "SDXL", locks: Default::default() },
+            ModelChoice { name: "klein".into(), family: "flux2-klein-4b", label: "FLUX.2 Klein 4B", locks: Default::default() },
         ]
     }
 
@@ -216,17 +296,23 @@ mod tests {
     }
 
     #[test]
-    fn only_what_is_allowed_and_unlocked_is_a_property() {
+    fn only_what_is_allowed_and_unlocked_or_another_model_takes_is_a_property() {
         let t = toolkit(&Rules::default(), &Locks::default());
-        let s = output(Mode::Chat, &t, 4, 2);
+        let s = output(Mode::Chat, &t, 4, 2, false);
         let (talk, _) = branches(&s);
         assert_eq!(keys(talk)[0], "notes", "the scratchpad comes first");
         assert_eq!(keys(&talk["properties"]["change"]), ["prompt", "negative", "cfg_scale", "size", "model"]);
         assert_eq!(talk["properties"]["change"]["properties"]["model"]["enum"], json!(["sdxl", "klein"]), "every runnable model");
+        // Locked here, but a switch of model in the same change may take it.
         let locked = toolkit(&Rules::default(), &Locks::of(true, false, None));
-        let s = output(Mode::Chat, &locked, 4, 2);
+        let s = output(Mode::Chat, &locked, 4, 2, false);
         let (talk, _) = branches(&s);
-        assert_eq!(keys(&talk["properties"]["change"]), ["prompt", "size", "model"]);
+        assert_eq!(keys(&talk["properties"]["change"]), ["prompt", "negative", "cfg_scale", "size", "model"]);
+        let mut fixed = Rules::default();
+        fixed.knobs.remove("model");
+        let s = output(Mode::Chat, &toolkit(&fixed, &Locks::of(true, false, None)), 4, 2, false);
+        let (talk, _) = branches(&s);
+        assert_eq!(keys(&talk["properties"]["change"]), ["prompt", "size"]);
     }
 
     /// llama.cpp writes required properties first, so every one is required
@@ -235,7 +321,7 @@ mod tests {
     #[test]
     fn every_reply_is_written_in_order_and_a_drawing_writes_its_prompt() {
         let t = toolkit(&Rules::default(), &Locks::default());
-        let chat = output(Mode::Chat, &t, 4, 2);
+        let chat = output(Mode::Chat, &t, 4, 2, false);
         let (talk, draw) = branches(&chat);
         for b in [talk, draw] {
             assert_eq!(b["required"], json!(keys(b)));
@@ -243,20 +329,20 @@ mod tests {
         assert_eq!(keys(talk), ["notes", "action", "change", "reason", "reply"]);
         assert_eq!(keys(draw), ["notes", "action", "count", "seeds", "change", "reason", "reply"]);
         assert_eq!(draw["properties"]["count"]["maximum"], json!(MAX_BATCH));
-        assert_eq!(draw["properties"]["action"]["const"], "generate");
+        assert_eq!(draw["properties"]["action"]["const"], "draw");
         assert_eq!(draw["properties"]["change"]["required"], json!(["prompt"]));
         assert!(talk["properties"]["change"].get("required").is_none());
 
         let mut r = Rules::default();
         r.actions.insert("hires".into());
-        let s = output(Mode::Critique, &toolkit(&r, &Locks::default()), 4, 3);
+        let s = output(Mode::Critique, &toolkit(&r, &Locks::default()), 4, 3, false);
         assert_eq!(keys(&s), ["notes", "checks", "keepers", "action", "count", "seeds", "escalate", "change", "reason", "reply"]);
         assert_eq!(s["required"], json!(keys(&s)));
-        let s = output(Mode::Plan, &t, 0, 0);
+        let s = output(Mode::Plan, &t, 0, 0, false);
         assert_eq!(keys(&s), ["notes", "checks", "rounds", "count", "change", "reason", "reply"]);
         assert_eq!(s["properties"]["rounds"]["maximum"], json!(MAX_ROUNDS));
         assert_eq!(s["properties"]["change"]["required"], json!(["prompt"]));
-        let judging = output(Mode::Plan, &t, 4, 0);
+        let judging = output(Mode::Plan, &t, 4, 0, false);
         assert!(judging["properties"]["change"].get("required").is_none(), "a plan judging a round needn't rewrite the prompt");
     }
 
@@ -264,7 +350,7 @@ mod tests {
     fn without_the_prompt_a_drawing_draws_the_current_one() {
         let mut r = Rules::default();
         r.knobs.remove("prompt");
-        let s = output(Mode::Chat, &toolkit(&r, &Locks::default()), 4, 2);
+        let s = output(Mode::Chat, &toolkit(&r, &Locks::default()), 4, 2, false);
         let (_, draw) = branches(&s);
         assert!(draw["properties"]["change"].get("required").is_none());
     }
@@ -272,21 +358,21 @@ mod tests {
     #[test]
     fn a_critique_answers_every_check_for_every_picture() {
         let mut r = Rules::default();
-        let s = output(Mode::Critique, &toolkit(&r, &Locks::default()), 4, 3);
+        let s = output(Mode::Critique, &toolkit(&r, &Locks::default()), 4, 3, false);
         let checks = &s["properties"]["checks"];
         assert_eq!((checks["minItems"].clone(), checks["maxItems"].clone()), (json!(4), json!(4)));
         assert_eq!(checks["items"]["minItems"], json!(3));
         assert_eq!(s["properties"]["action"]["enum"], json!(["generate", "done"]), "no pass is on");
         assert!(s["properties"].get("escalate").is_none());
         r.actions.insert("hires".into());
-        let s = output(Mode::Critique, &toolkit(&r, &Locks::default()), 4, 3);
+        let s = output(Mode::Critique, &toolkit(&r, &Locks::default()), 4, 3, false);
         assert_eq!(s["properties"]["escalate"]["anyOf"][0]["properties"]["pass"]["enum"], json!(["hires"]));
     }
 
     #[test]
     fn nothing_to_change_means_no_change_field() {
         let r = Rules { knobs: Default::default(), ..Rules::default() };
-        let s = output(Mode::Chat, &toolkit(&r, &Locks::default()), 4, 2);
+        let s = output(Mode::Chat, &toolkit(&r, &Locks::default()), 4, 2, false);
         let (talk, draw) = branches(&s);
         assert!(talk["properties"].get("change").is_none() && draw["properties"].get("change").is_none());
     }
@@ -294,8 +380,48 @@ mod tests {
     #[test]
     fn a_describe_offers_a_negative_only_where_the_model_reads_one() {
         let t = toolkit(&Rules::default(), &Locks::of(true, false, None));
-        assert!(output(Mode::Describe, &t, 0, 0)["properties"].get("negative").is_none());
+        assert!(output(Mode::Describe, &t, 0, 0, false)["properties"].get("negative").is_none());
         let t = toolkit(&Rules::default(), &Locks::default());
-        assert!(output(Mode::Describe, &t, 0, 0)["properties"].get("negative").is_some());
+        assert!(output(Mode::Describe, &t, 0, 0, false)["properties"].get("negative").is_some());
+    }
+
+    /// The `action` each of a chat reply's branches is.
+    fn actions(s: &Value) -> Vec<String> {
+        s["anyOf"].as_array().unwrap().iter().map(|b| b["properties"]["action"]["const"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn a_chat_reply_may_describe_only_what_it_sees_and_may_always_improve_or_compare() {
+        let t = toolkit(&Rules::default(), &Locks::default());
+        assert_eq!(actions(&output(Mode::Chat, &t, 0, 0, false)), ["talk", "draw", "improve", "compare"]);
+        let seeing = output(Mode::Chat, &t, 1, 0, false);
+        assert_eq!(actions(&seeing), ["talk", "draw", "describe", "improve", "compare"]);
+        assert_eq!(keys(&seeing["anyOf"][2]), ["notes", "action", "prompt", "negative", "reply"]);
+        assert_eq!(keys(&seeing["anyOf"][3]), ["notes", "action", "goal", "reply"]);
+        let compare = &seeing["anyOf"][4];
+        assert_eq!(keys(compare), ["notes", "action", "change", "reason", "goal", "vary", "values", "count", "reply"]);
+        // The default whitelist: prompt, negative, CFG, size, model — size isn't comparable.
+        assert_eq!(compare["properties"]["vary"]["enum"], json!(["prompt", "negative", "cfg_scale", "model"]));
+        assert_eq!(compare["properties"]["values"]["maxItems"], json!(MAX_ROUNDS));
+    }
+
+    #[test]
+    fn nothing_comparable_offered_means_no_comparison() {
+        let r = Rules { knobs: ["size".to_string()].into_iter().collect(), ..Default::default() };
+        let t = toolkit(&r, &Locks::default());
+        assert_eq!(actions(&output(Mode::Chat, &t, 0, 0, false)), ["talk", "draw", "improve"]);
+    }
+
+    #[test]
+    fn a_comparisons_turns_only_judge_and_its_verdict_picks_one_value() {
+        let mut r = Rules::default();
+        r.actions.insert("hires".into());
+        let t = toolkit(&r, &Locks::default());
+        assert_eq!(keys(&output(Mode::Plan, &t, 0, 0, true)), ["notes", "checks", "reply"]);
+        let c = output(Mode::Critique, &t, 2, 3, true);
+        assert_eq!(keys(&c), ["notes", "checks", "keepers", "reply"], "the server runs the rounds");
+        let v = output(Mode::Verdict, &t, 4, 0, true);
+        assert_eq!(keys(&v), ["notes", "best", "reply"]);
+        assert_eq!(v["properties"]["best"]["maximum"], json!(4));
     }
 }

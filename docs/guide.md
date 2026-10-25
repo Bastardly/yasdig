@@ -804,23 +804,43 @@ Firefox on Linux may have no H.264 encoder; Chrome has.
 
 The **Agent** tab is a chat with a small language model that runs on your own GPU, the
 way the image models do. It needs an agent model (Get models → *Agent models*; the 4B
-fits an 8 GB card) and helps in three ways:
+fits an 8 GB card). There is one *Send*: say what you want, and the agent decides
+whether that is an answer, a picture, a description, a session that improves or a
+comparison.
 
 - **Talk about prompts.** Ask for a prompt, a rewrite, ideas. It can change the chat's
   settings as it answers — each change is a card with its reason and an **Undo**.
-- **Describe a picture.** Attach one (Attach, paste or drop it on the composer) and press
-  *Describe as prompt*, or press *Describe* on any picture in the chat. It writes a prompt
-  for the chat's image model in that model's style — tags for SD 1.x, SD 2.x and SDXL,
-  sentences for the rest — with *Copy to the Image tab*.
-- **Run a session.** Write the goal ("a fox in a red knitted hat in a snowy forest") and
-  press *Run a session*. The agent writes yes/no checks for it, draws a round, answers
-  every check for every picture, changes one or two settings and draws again — until a
-  picture passes, it decides it can't do better, or the rounds run out. The pictures
+- **Draw.** "Draw a fox in a red hat", "three of those": it writes the prompt and draws
+  as many as you said (one when you didn't).
+- **Describe a picture.** Attach one (Attach, paste or drop it on the composer, or press
+  *Ask* on any picture in the chat) and ask for it as a prompt. It writes one for the
+  chat's image model in that model's style — tags for SD 1.x, SD 2.x and SDXL, sentences
+  for the rest — with *Copy to the Image tab*. *Ask* attaches a picture for any question
+  about it.
+- **Improve.** Ask it to get something right ("keep trying until the hat is red"),
+  improve the round on screen ("make these better" — it judges that round first and keeps
+  its seeds), or match a picture: attach one and say "find the best prompt for this".
+  This runs a *session*: the agent writes yes/no checks, draws a round, answers every check
+  for every picture, changes one or two settings and draws again — until a picture
+  passes, it decides it can't do better, or the rounds run out. A picture attached to the
+  message that starts it is the **picture to match**: the checks are written from it, and
+  every round is judged beside it.
+- **Compare.** Ask it to find something out ("what's the best CFG for this?", "which
+  model draws hands better?"). The agent picks the setting and the values to try (CFG,
+  steps, the prompt, the negative prompt or the model, whichever it may change); yasdig
+  then draws one round per value on the **same seeds**, so the value is the only
+  difference, and the agent answers every check for every picture without changing
+  anything. After the last round a note gives the counts — per value, how many pictures
+  passed every check, and each check's tally — and the agent answers from them. The value
+  it picks is set as a change you can **Undo**; with no answer the setting goes back to
+  what it was. A value it may not use (an unticked setting, a locked CFG) is left out with a
+  note, and a comparison needs two values.
+- **Either way**, the pictures
   land in Current on the Image tab like any generation. Each is marked with its answers
   (✓✗), the ones the agent kept, and — since a small model is a lenient judge of its
-  own work — the ones every check said yes to. The *Session* panel (goal, checks, round)
-  opens when a session starts, or when you come back to a chat whose session is still
-  going, and closes when you open another chat or a new one.
+  own work — the ones every check said yes to. The *Session* panel (goal, what a comparison
+  tries, the picture to match, checks, round) opens when one starts, or when you come back
+  to a chat whose session is still going, and closes when you open another chat or a new one.
   Opened on the Image tab, a picture the agent drew says so in *Info*, with its round and
   the agent's reason; the chat's name there takes you back to the chat.
 
@@ -835,8 +855,10 @@ may change and per pass it may run on a keeper. It starts with the prompt, negat
 prompt, CFG, size and model ticked, and steps and the passes not. With *Model* ticked it
 may switch to any installed model, and uses the one you name ("draw it with Flux");
 switching brings that model's own steps, CFG and size. Values stay inside yasdig's own
-limits. A model distilled to run without CFG — Z-Image, Flux, the Klein models, Krea 2,
-a Turbo LoRA — locks CFG and the negative prompt, which would do nothing. A pass it runs
+limits. A model distilled to run without CFG — Z-Image, Flux, the Klein models, Krea 2 —
+locks CFG and the negative prompt, which would do nothing — on that model: with *Model* ticked the
+agent can switch to one that takes CFG in the same breath ("compare CFG on SDXL"). A Turbo LoRA locks nothing: as
+on the Image tab it sets steps and CFG, and the agent keeps them unless you ask. A pass it runs
 (Hi-res, Refine, an Edit on a model that can) is a History step on that picture. The
 agent a new chat talks to is set there too; the picker beside the message box switches
 it for one chat.
@@ -854,7 +876,8 @@ In plain chat the agent draws one picture, or as many as you ask for (up to 8); 
 the last round's seeds when you ask for a change to those pictures, and draws new ones
 when you ask for more. A session started right after a round judges that round first
 instead of drawing it again. A session runs as many rounds of as many pictures as you say
-("two rounds of three"); when you don't say, three rounds of four, and never more than
+("two rounds of three"); when you don't say, three rounds of four (a comparison: one
+round per value, two pictures each), and never more than
 six rounds of eight. Between rounds it keeps the seeds unless it chooses new ones, so a
 difference between rounds is the change.
 

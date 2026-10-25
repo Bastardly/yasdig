@@ -13,9 +13,9 @@
 
   <div class="tabs">
     <h1 title="Yet Another Stable Diffusion Image Generator">YASDIG</h1>
+    <button type="button" class="btn btn-choice tab" data-tab="agent">Agent</button>
     <button type="button" class="btn btn-choice tab active" data-tab="image">Image</button>
     <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
-    <button type="button" class="btn btn-choice tab" data-tab="agent">Agent</button>
     <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
     <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
     <button type="button" class="btn btn-choice tab" data-tab="getmodels">Get models</button>
@@ -809,22 +809,18 @@
         <input id="atitle" class="chattitle" placeholder="New chat" aria-label="Chat title">
         <span class="sub" id="astate"></span>
       </div>
-      <div class="chatlog" id="chatlog" data-empty="Ask the agent for a prompt, attach a picture to describe, or give it a goal and press Run a session."></div>
+      <div class="chatlog" id="chatlog" data-empty="Ask for a prompt or a picture, attach a picture and ask about it, or say what you want got right or found out — the agent decides how."></div>
       <div class="composer" id="acomposer">
         <div class="chips" id="achips"></div>
         <prompt-box>
-          <textarea id="atext" class="short" placeholder="Write to the agent — or a goal: a fox in a red knitted hat, snowy forest"></textarea>
+          <textarea id="atext" class="short" placeholder="Write to the agent: a fox in a red knitted hat, snowy forest — keep trying until the hat is red"></textarea>
         </prompt-box>
         <div class="btnrow composerrow">
           <button type="button" id="aattach" class="btn" title="Attach a picture (or paste or drop one)">Attach picture…</button>
           <input type="file" id="afile" accept="image/*" multiple hidden>
-          <button type="button" id="adescribe" class="btn" disabled
-            title="Turn the attached picture into a prompt for the chat's model">Describe as prompt</button>
           <select id="amodel" class="composeragent" aria-label="Agent"
             title="The agent this chat talks to. Settings → Agent sets the one new chats start with, and what it may change."></select>
           <span class="grow"></span>
-          <button type="button" id="asession" class="btn"
-            title="Treat the text as a goal: the agent writes checks, draws rounds and judges them">Run a session</button>
           <button type="button" id="asend" class="btn" title="Send (Enter)">Send</button>
         </div>
         <p class="sub" id="amodelnote"></p>

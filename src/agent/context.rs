@@ -34,8 +34,12 @@ pub fn image_tokens(side: u32) -> usize {
 /// What the turn is about, past the conversation itself.
 pub struct Turn<'a> {
     pub mode: Mode,
-    /// The pictures shown as images, already staged into scratch, in order.
+    /// The pictures shown as images, already staged into scratch, in order:
+    /// the session's reference first (`reference` of them), then the turn's own.
     pub images: Vec<PathBuf>,
+    pub reference: usize,
+    /// The session is a comparison the server runs: its turns only judge.
+    pub sweep: bool,
     pub skills: &'a str,
     /// The checks a critique answers.
     pub checks: &'a [String],
@@ -53,7 +57,12 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
         s.push_str(&format!("\n\nThe image model is a {label} model."));
     }
     let offered: Vec<_> = t.offered_knobs().collect();
-    if turn.mode != Mode::Describe {
+    if turn.sweep && matches!(turn.mode, Mode::Plan | Mode::Critique | Mode::Verdict) {
+        s.push_str(
+            "\n\nThis session is a comparison: yasdig draws one round per value with the same seeds, \
+             and you judge. Change nothing; answer what is asked.",
+        );
+    } else if turn.mode != Mode::Describe {
         if offered.is_empty() {
             s.push_str("\n\nYou may not change any settings in this chat; advise only.");
         } else {
@@ -62,7 +71,12 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                 let range = match (k.kind, k.min, k.max) {
                     ("int" | "float" | "size", Some(a), Some(b)) => format!(" Range {a}–{b}."),
                     ("model", ..) => {
-                        let names: Vec<String> = t.models.iter().map(|m| format!("{} ({})", m.name, m.label)).collect();
+                        // Which take no CFG, so a request for CFG picks one that does.
+                        let names: Vec<String> = t
+                            .models
+                            .iter()
+                            .map(|m| format!("{} ({}{})", m.name, m.label, if m.locks.cfg_scale.is_some() { ", no CFG" } else { "" }))
+                            .collect();
                         format!(" One of: {}. If the person names a model, use it.", names.join(", "))
                     }
                     _ => String::new(),
@@ -70,8 +84,18 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                 s.push_str(&format!("\n- {}: {} Now: {}.{range}", k.key, k.about, k.value));
             }
         }
+        let switch = t.knob("model").is_some_and(|m| m.offered());
         for k in t.knobs.iter().filter(|k| k.locked.is_some() && k.allowed) {
-            s.push_str(&format!("\n- {} is fixed: {}.", k.label, k.locked.as_deref().unwrap_or("")));
+            s.push_str(&format!("\n- {} is fixed on this model: {}.", k.label, k.locked.as_deref().unwrap_or("")));
+            if switch {
+                s.push_str(" Another model may take it: set `model` in the same change, or compare on it.");
+            }
+        }
+        if let Some(turbo) = &t.locks.turbo {
+            s.push_str(&format!(
+                "\n- The speed LoRA {turbo} is picked. Keep steps and CFG there unless the person asks; \
+                 both can still be changed."
+            ));
         }
         if matches!(turn.mode, Mode::Chat | Mode::Plan) {
             s.push_str(if schema::writes_prompt(t) {
@@ -82,11 +106,37 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
             });
             if turn.mode == Mode::Chat {
                 s.push_str(&format!(
-                    "\nTo draw, set `action` to \"generate\" and `count` to how many pictures the person \
-                     asked for (1 to {}; 1 when they didn't say). `seeds` \"same\" keeps the last round's \
-                     compositions, to try a change on the same pictures; \"new\" draws different ones.",
+                    "\n\nWhat you do this turn is your `action`, chosen from what the person asked. Start \
+                     `notes` by naming it: talk, a drawing, a description, an improvement or a comparison.\n\
+                     - \"talk\": answer, and change settings if asked. \"Give me a prompt for a castle\", \
+                     \"what does CFG do?\"\n\
+                     - \"draw\": draw once. `count` is how many pictures the person asked for (1 to {}; 1 \
+                     when they didn't say). `seeds` \"same\" keeps the last round's compositions, to try a \
+                     change on the same pictures; \"new\" draws different ones. \"Draw a fox\", \"three more\", \
+                     \"now with a blue sky\".",
                     super::knobs::MAX_BATCH
                 ));
+                if turn.images.len() > turn.reference {
+                    s.push_str(
+                        "\n- \"describe\": write the attached picture as a prompt for this model, in `prompt`. \
+                         \"Turn this into a prompt\", \"what would draw this?\"",
+                    );
+                }
+                s.push_str(
+                    "\n- \"improve\": a session that draws rounds, judges each against yes/no checks and changes \
+                     the prompt or settings until the pictures are right. \"Keep trying until the hat is red\", \
+                     \"make these better\", \"find the best prompt for this picture\" (an attached picture is \
+                     what the rounds are judged against). `goal`: one sentence of what the pictures must show.",
+                );
+                if t.offered_knobs().any(|k| super::knobs::COMPARABLE.contains(&k.key)) {
+                    s.push_str(
+                        "\n- \"compare\": find out which value of one setting works best: the same seeds drawn \
+                         once per value, every picture judged, then the answer. \"What is the best CFG?\" → \
+                         `vary` cfg_scale, `values` [\"3\", \"5\", \"7\", \"9\"]; \"which model draws hands \
+                         better?\" → `vary` model, a value per model; two wordings → `vary` prompt. `count` is \
+                         pictures per value, 2 when the person didn't say. `goal`: the question, in one sentence.",
+                    );
+                }
             }
         }
         let passes: Vec<_> = t.offered_actions().collect();
@@ -162,7 +212,32 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
             }
         }
     }
+    let (refs, own) = turn.images.split_at(turn.reference.min(turn.images.len()));
+    let reference_parts = |label: &str| -> Vec<Part> {
+        let mut parts = Vec::new();
+        if !refs.is_empty() {
+            parts.push(Part::Text { text: label.to_string() });
+            parts.extend(refs.iter().map(|p| Part::Image { path: p.clone() }));
+        }
+        parts
+    };
+    let sweep = chat.session.sweep.as_ref().filter(|_| turn.sweep);
     match turn.mode {
+        Mode::Plan if sweep.is_some() => {
+            let sw = sweep.expect("matched");
+            let label = super::knobs::knob(&sw.knob).map_or(sw.knob.as_str(), |k| k.label);
+            let values: Vec<String> = sw.values.iter().map(|v| super::knobs::value_label(&sw.knob, v)).collect();
+            let mut parts = reference_parts("The picture to match:");
+            parts.push(Part::Text {
+                text: format!(
+                    "Question: {}\nThis is a comparison of {label}: {}, the same seeds each time. Write the checks: \
+                     what to look for in every picture to tell the values apart for this question.",
+                    turn.goal,
+                    values.join("; ")
+                ),
+            });
+            push(&mut out, Role::User, parts);
+        }
         Mode::Plan => {
             let prompt = chat.settings.get("prompt").and_then(|p| p.as_str()).unwrap_or("");
             let next = match super::session::judgeable(chat) {
@@ -173,10 +248,10 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                 ),
                 None => "Change the prompt if it doesn't ask for everything the goal does.".to_string(),
             };
-            push(
-                &mut out,
-                Role::User,
-                vec![Part::Text {
+            let mut parts = reference_parts(
+                "The picture to match: the checks are what it shows, and the prompt should draw something like it.",
+            );
+            parts.push(Part::Text {
                     text: format!(
                         "Goal: {}\nThe prompt now: {prompt}\nWrite the checks for this goal. {next}\nSet `rounds` and \
                          `count` (pictures per round) from the person's words: \"try 2 rounds of 2\" is 2 and 2. \
@@ -185,21 +260,29 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                         super::knobs::MAX_ROUNDS,
                         super::knobs::MAX_BATCH
                     ),
-                }],
-            );
+            });
+            push(&mut out, Role::User, parts);
         }
         Mode::Critique => {
-            let mut parts = vec![Part::Text {
+            let mut parts = reference_parts("Reference, the picture to match:");
+            // In a comparison, which value this round drew.
+            let value = sweep
+                .and_then(|sw| {
+                    let at = (super::session::session_rounds(chat) as usize).checked_sub(1)?;
+                    Some(format!(" It drew {}.", super::knobs::value_label(&sw.knob, sw.values.get(at)?)))
+                })
+                .unwrap_or_default();
+            parts.push(Part::Text {
                 text: format!(
-                    "Round {} (the session's {} of {}): the {} picture(s) just drawn, in order. Goal: {}",
+                    "Round {} (the session's {} of {}): the {} picture(s) just drawn, in order.{value} Goal: {}",
                     turn.round,
                     super::session::session_rounds(chat),
                     super::session::session_limit(chat),
-                    turn.images.len(),
+                    own.len(),
                     turn.goal
                 ),
-            }];
-            for (k, p) in turn.images.iter().enumerate() {
+            });
+            for (k, p) in own.iter().enumerate() {
                 parts.push(Part::Text { text: format!("Picture {}:", k + 1) });
                 parts.push(Part::Image { path: p.clone() });
             }
@@ -208,6 +291,20 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                 text: format!("Answer each check for each picture, in order:\n{}", checks.join("\n")),
             });
             push(&mut out, Role::User, parts);
+        }
+        Mode::Verdict => {
+            let n = sweep.map_or(0, |s| s.values.len());
+            push(
+                &mut out,
+                Role::User,
+                vec![Part::Text {
+                    text: format!(
+                        "{}\n\nQuestion: {}\nWhich value answers it best? `best` is its number (1 to {n}).",
+                        super::session::sweep_table(chat),
+                        turn.goal
+                    ),
+                }],
+            );
         }
         Mode::Chat | Mode::Describe => {}
     }
@@ -291,7 +388,7 @@ mod tests {
     }
 
     fn turn(mode: Mode, images: Vec<PathBuf>) -> Turn<'static> {
-        Turn { mode, images, skills: "SKILLS", checks: &[], goal: "a fox in a red hat", round: 2, history: usize::MAX }
+        Turn { mode, images, reference: 0, sweep: false, skills: "SKILLS", checks: &[], goal: "a fox in a red hat", round: 2, history: usize::MAX }
     }
 
     #[test]
@@ -332,5 +429,31 @@ mod tests {
         let s = system(&toolkit(), &turn(Mode::Chat, vec![]));
         assert!(s.contains("- prompt:") && s.contains("- cfg_scale:") && s.contains("Range 0–"));
         assert!(!s.contains("- steps:"), "steps is off by default");
+    }
+
+    #[test]
+    fn a_chat_turn_is_told_how_to_improve_and_compare_with_examples() {
+        let blind = system(&toolkit(), &turn(Mode::Chat, vec![]));
+        assert!(blind.contains("\"improve\"") && blind.contains("\"compare\"") && !blind.contains("\"describe\""));
+        assert!(blind.contains("What is the best CFG?") && blind.contains("Start `notes` by naming it"));
+        let seeing = system(&toolkit(), &turn(Mode::Chat, vec!["/w/a.png".into()]));
+        assert!(seeing.contains("\"describe\""));
+    }
+
+    #[test]
+    fn a_critique_sees_the_reference_before_the_round() {
+        let checks = ["Is there a hat?".to_string()];
+        let t = Turn {
+            checks: &checks,
+            reference: 1,
+            ..turn(Mode::Critique, vec!["/w/ref.png".into(), "/w/a.png".into(), "/w/b.png".into()])
+        };
+        let m = messages(&chat(), &toolkit(), &t);
+        let last = &m.last().unwrap().content;
+        let first_image = last.iter().position(|p| matches!(p, Part::Image { path } if path.ends_with("ref.png"))).unwrap();
+        let labelled = last[..first_image].iter().any(|p| matches!(p, Part::Text { text } if text.starts_with("Reference")));
+        assert!(labelled, "the reference comes first, named");
+        let text: String = last.iter().filter_map(|p| match p { Part::Text { text } => Some(text.as_str()), _ => None }).collect();
+        assert!(text.contains("the 2 picture(s) just drawn") && text.contains("Picture 2:") && !text.contains("Picture 3:"));
     }
 }

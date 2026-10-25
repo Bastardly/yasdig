@@ -80,8 +80,24 @@ pub enum Mode {
     Plan,
     /// A look at a batch: checks answered per picture, keepers, what next.
     Critique,
-    /// A picture described as a prompt.
+    /// A picture described as a prompt. Never started now (describing is a
+    /// chat action); kept so older chats read.
     Describe,
+    /// The end of a comparison: which value answered the question, from the
+    /// server's count of the checks.
+    Verdict,
+}
+
+/// A comparison: one round per value of one knob, the same seeds throughout,
+/// so the difference between rounds is the value (`session::start_sweep`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Sweep {
+    /// The knob's key (`knobs::KNOBS`).
+    pub knob: String,
+    /// Checked and brought inside its bounds when the comparison began.
+    pub values: Vec<Value>,
+    /// What the knob held before, put back when the verdict picks nothing.
+    pub before: Value,
 }
 
 /// A picture a message shows.
@@ -317,6 +333,13 @@ pub struct Session {
     /// The next round draws new seeds rather than the last round's.
     #[serde(default)]
     pub fresh: bool,
+    /// A comparison, when this session is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweep: Option<Sweep>,
+    /// The pictures the person attached when the session began: what the
+    /// plan and every critique judge against.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference: Vec<ImageRef>,
     /// The job carrying the session now, while queued or running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<u64>,

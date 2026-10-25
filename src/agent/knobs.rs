@@ -241,19 +241,19 @@ pub struct Locks {
     pub cfg_scale: Option<String>,
     pub steps: Option<String>,
     pub negative: Option<String>,
+    /// A speed LoRA among the chat's picks and what it was tuned for. Advice,
+    /// never a lock: the Image tab's Turbo only sets steps and CFG, and either
+    /// can still be changed there (MOSS-Image's DMD LoRA takes a real CFG).
+    pub turbo: Option<String>,
 }
 
 impl Locks {
     /// `family_cfg_locked`: `ImageFamily::cfg_locked`. `distilled`: a catalog
     /// file distilled to fixed settings (`Catalog::distilled`). `turbo`: a
-    /// speed LoRA among the chat's picks, by its label.
+    /// speed LoRA among the chat's picks, described.
     pub fn of(family_cfg_locked: bool, distilled: bool, turbo: Option<&str>) -> Locks {
-        let mut l = Locks::default();
-        if let Some(name) = turbo {
-            let why = format!("{name} is picked: it was distilled to its own steps and CFG");
-            l.steps = Some(why.clone());
-            l.cfg_scale = Some(why);
-        } else if distilled {
+        let mut l = Locks { turbo: turbo.map(str::to_string), ..Locks::default() };
+        if distilled {
             let why = "this model file is distilled to its own steps and CFG".to_string();
             l.steps = Some(why.clone());
             l.cfg_scale = Some(why);
@@ -305,26 +305,30 @@ pub struct Applied {
 /// Never trusts the grammar: an unknown, disallowed or locked key is dropped
 /// with a note; a number is clamped to yasdig's limits; text is cut to its
 /// length.
-pub fn apply(settings: &mut Value, change: &Map<String, Value>, rules: &Rules, locks: &Locks, models: &[String]) -> Applied {
+///
+/// The model goes first: a switch clears steps, CFG and size, and the rest
+/// are checked against the locks `locks_of` gives the new model — "SDXL at
+/// CFG 7" from a chat on a model without CFG is one change.
+pub fn apply(
+    settings: &mut Value,
+    change: &Map<String, Value>,
+    rules: &Rules,
+    locks: &Locks,
+    models: &[String],
+    locks_of: &dyn Fn(&str) -> Option<Locks>,
+) -> Applied {
     let mut out = Applied::default();
-    for (key, v) in change {
-        let Some(k) = knob(key) else {
-            out.notes.push(format!("'{key}' isn't a setting the agent has, so it was left alone"));
-            continue;
-        };
-        if !rules.allows(k) {
-            out.notes.push(format!("{} isn't the agent's to change, so it was left alone", k.label));
-            continue;
+    let mut locks = locks.clone();
+    let order = change.iter().filter(|(k, _)| *k == "model").chain(change.iter().filter(|(k, _)| *k != "model"));
+    for (key, v) in order {
+        let Some(new) = check(key, v, rules, &locks, models, &mut out.notes) else { continue };
+        if key == "model" {
+            if let Some(l) = new.as_str().and_then(locks_of) {
+                locks = l;
+            }
         }
-        if let Some(why) = locks.get(key) {
-            out.notes.push(format!("{} is locked: {why}", k.label));
-            continue;
-        }
+        let k = knob(key).expect("check knows the knob");
         let before = value_of(settings, k);
-        let new = match coerce(k, v, models, &mut out.notes) {
-            Some(v) => v,
-            None => continue,
-        };
         if new == before {
             continue;
         }
@@ -333,6 +337,55 @@ pub fn apply(settings: &mut Value, change: &Map<String, Value>, rules: &Rules, l
         out.set.insert(key.clone(), new);
     }
     out
+}
+
+/// One value for knob `key` as [`apply`] would write it: on the whitelist,
+/// unlocked, inside its bounds — or `None`, with a note saying why not.
+pub fn check(key: &str, v: &Value, rules: &Rules, locks: &Locks, models: &[String], notes: &mut Vec<String>) -> Option<Value> {
+    let Some(k) = knob(key) else {
+        notes.push(format!("'{key}' isn't a setting the agent has, so it was left alone"));
+        return None;
+    };
+    if !rules.allows(k) {
+        notes.push(format!("{} isn't the agent's to change, so it was left alone", k.label));
+        return None;
+    }
+    if let Some(why) = locks.get(key) {
+        notes.push(format!("{} is locked: {why}", k.label));
+        return None;
+    }
+    coerce(k, v, models, notes)
+}
+
+/// The knobs a comparison may vary: one value per round says something on
+/// its own. Size is left out — a different shape is a different composition
+/// from the same seed.
+pub const COMPARABLE: [&str; 5] = ["cfg_scale", "steps", "prompt", "negative", "model"];
+
+/// A comparison's value as text for a number knob's box: what a reply wrote
+/// as a string read as the number it says.
+pub fn parse_value(key: &str, v: &Value) -> Value {
+    match (knob(key).map(|k| k.kind), v.as_str()) {
+        (Some(Kind::Int { .. } | Kind::Float { .. }), Some(s)) => {
+            s.trim().parse::<f64>().ok().and_then(serde_json::Number::from_f64).map_or(Value::Null, Value::Number)
+        }
+        _ => v.clone(),
+    }
+}
+
+/// One value of a knob in a line a person reads: "CFG 5", "Model klein",
+/// "Prompt “a fox in a…”".
+pub fn value_label(key: &str, v: &Value) -> String {
+    let label = knob(key).map_or(key, |k| k.label);
+    match v {
+        Value::String(s) if s.chars().count() > 48 => format!("{label} “{}…”", s.chars().take(48).collect::<String>()),
+        Value::String(s) if matches!(knob(key).map(|k| k.kind), Some(Kind::Text { .. })) => format!("{label} “{s}”"),
+        Value::String(s) => format!("{label} {s}"),
+        Value::Null => format!("{label} (unset)"),
+        // 4.0 reads as 4: the person typed 4.
+        Value::Number(n) if n.as_f64().is_some_and(|x| x.fract() == 0.0 && x.abs() < 1e9) => format!("{label} {}", n.as_f64().unwrap() as i64),
+        other => format!("{label} {other}"),
+    }
 }
 
 /// One value, checked and brought inside its bounds, or `None` (with a note)
@@ -433,7 +486,7 @@ mod tests {
     #[test]
     fn a_reply_changes_only_what_is_allowed_inside_yasdigs_limits() {
         let mut s = settings();
-        let a = apply(&mut s, &change(json!({"cfg_scale": 99.0, "steps": 50})), &Rules::default(), &Locks::default(), &[]);
+        let a = apply(&mut s, &change(json!({"cfg_scale": 99.0, "steps": 50})), &Rules::default(), &Locks::default(), &[], &|_| None);
         assert_eq!(s["cfg_scale"], json!(MAX_CFG as f64), "clamped to what Profile::validate takes");
         assert_eq!(s["steps"], json!(30), "steps is off by default");
         assert_eq!(a.before["cfg_scale"], json!(6.0));
@@ -441,14 +494,29 @@ mod tests {
         // Taken off the list, CFG is left alone too.
         let mut r = Rules::default();
         r.knobs.remove("cfg_scale");
-        assert!(apply(&mut s, &change(json!({"cfg_scale": 3.0})), &r, &Locks::default(), &[]).set.is_empty());
+        assert!(apply(&mut s, &change(json!({"cfg_scale": 3.0})), &r, &Locks::default(), &[], &|_| None).set.is_empty());
+    }
+
+    #[test]
+    fn a_switch_of_model_comes_first_and_its_locks_decide_the_rest() {
+        let mut s = settings();
+        s["template"] = json!("flux");
+        let models = ["flux".to_string(), "sdxl".to_string()];
+        let no_cfg = Locks::of(true, false, None);
+        let locks_of = |m: &str| Some(if m == "sdxl" { Locks::default() } else { Locks::of(true, false, None) });
+        // CFG named before the model, as a reply may: still checked on SDXL.
+        let a = apply(&mut s, &change(json!({"cfg_scale": 7.0, "model": "sdxl"})), &Rules::default(), &no_cfg, &models, &locks_of);
+        assert_eq!((s["template"].clone(), s["cfg_scale"].clone()), (json!("sdxl"), json!(7.0)), "{:?}", a.notes);
+        // Onto a model without CFG, it stays locked.
+        let a = apply(&mut s, &change(json!({"model": "flux", "cfg_scale": 5.0})), &Rules::default(), &Locks::default(), &models, &locks_of);
+        assert!(s.get("cfg_scale").is_none() && a.notes.iter().any(|n| n.contains("locked")), "{s} {:?}", a.notes);
     }
 
     #[test]
     fn a_locked_knob_is_never_written() {
         let mut s = settings();
         let locks = Locks::of(true, false, None);
-        let a = apply(&mut s, &change(json!({"cfg_scale": 3.0, "negative": "blur"})), &Rules::default(), &locks, &[]);
+        let a = apply(&mut s, &change(json!({"cfg_scale": 3.0, "negative": "blur"})), &Rules::default(), &locks, &[], &|_| None);
         assert_eq!(s["cfg_scale"], json!(6.0));
         assert!(s.get("negative").is_none());
         assert!(a.set.is_empty());
@@ -459,12 +527,12 @@ mod tests {
         let mut s = json!({"prompt": "x", "negative": "blur", "template": "sdxl", "steps": 30, "cfg_scale": 5.0,
                            "loras": [{"name": "a.safetensors", "strength": 1.0}], "width": 1024, "height": 1024});
         let models = vec!["sdxl".to_string(), "klein".to_string()];
-        apply(&mut s, &change(json!({"size": {"width": 1000, "height": 700}})), &Rules::default(), &Locks::default(), &models);
+        apply(&mut s, &change(json!({"size": {"width": 1000, "height": 700}})), &Rules::default(), &Locks::default(), &models, &|_| None);
         assert_eq!((s["width"].clone(), s["height"].clone()), (json!(1024), json!(704)));
-        apply(&mut s, &change(json!({"model": "klein"})), &Rules::default(), &Locks::default(), &models);
+        apply(&mut s, &change(json!({"model": "klein"})), &Rules::default(), &Locks::default(), &models, &|_| None);
         assert_eq!(s, json!({"prompt": "x", "negative": "blur", "template": "klein"}), "the new model brings its own");
         // Not installed: left alone.
-        let a = apply(&mut s, &change(json!({"model": "flux"})), &Rules::default(), &Locks::default(), &models);
+        let a = apply(&mut s, &change(json!({"model": "flux"})), &Rules::default(), &Locks::default(), &models, &|_| None);
         assert!(a.set.is_empty() && !a.notes.is_empty());
     }
 

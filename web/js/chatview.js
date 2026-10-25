@@ -27,6 +27,12 @@ export function valueText(key, v) {
   return String(v);
 }
 
+// What the model wrote, escaped, with its **bold** drawn: small models write
+// Markdown whatever they are told, and the stars read as noise.
+export function replyHtml(text) {
+  return esc(text).replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+}
+
 const img = (chat, folder, file) => `/chats/${encodeURIComponent(chat.id)}/${folder}/${encodeURIComponent(file)}`;
 
 function picture(chat, ref, { n, badges = '', tools = true } = {}) {
@@ -34,14 +40,15 @@ function picture(chat, ref, { n, badges = '', tools = true } = {}) {
   const label = n ? `<span class="chatpicno">${n}</span>` : '';
   // A work item opens in Refine & adjust; an output or an upload only shows.
   const open = ref.kind === 'item' ? ` data-open-item="${esc(ref.id)}"` : '';
-  const describe = tools
-    ? `<button type="button" class="hint chatpictool" data-describe="${esc(ref.kind)}:${esc(ref.id)}"
-        title="Describe this picture as a prompt">Describe</button>` : '';
+  // Ask attaches it to the next message, to ask anything about it.
+  const ask = tools && (ref.kind === 'item' || ref.kind === 'output')
+    ? `<button type="button" class="hint chatpictool" data-ask="${esc(ref.kind)}:${esc(ref.id)}"
+        title="Attach this picture to your next message, to ask about it">Ask</button>` : '';
   return `<figure class="chatpic">
     <button type="button" class="chatpicimg"${open} title="${ref.kind === 'item' ? 'Open in Refine &amp; adjust' : ''}${
       ref.seed != null ? `${ref.kind === 'item' ? ' · ' : ''}seed ${ref.seed}` : ''}">
       <img src="${img(chat, folder, ref.file)}" alt="" loading="lazy"></button>
-    ${label}${badges}${describe}</figure>`;
+    ${label}${badges}${ask}</figure>`;
 }
 
 function changeCard(c) {
@@ -109,7 +116,7 @@ function agentMessage(chat, m) {
   const stats = m.stats?.n_gen ? `<span class="sub chatstats">${m.stats.n_prompt} read · ${m.stats.n_gen} written · ${
     ((m.stats.load_ms + m.stats.read_ms + m.stats.gen_ms) / 1000).toFixed(1)} s</span>` : '';
   return `<div class="chatmsg agent" data-n="${m.n}">
-    ${m.reply ? `<p class="chattext">${esc(m.reply)}</p>` : ''}
+    ${m.reply ? `<p class="chattext">${replyHtml(m.reply)}</p>` : ''}
     ${checks}${describe}${changes.map(changeCard).join('')}${action ? actionCard(chat, action) : ''}
     <div class="chatfoot">${notes}${stats}</div></div>`;
 }
@@ -131,7 +138,7 @@ export function renderMessage(chat, m, i) {
         <div class="chatpics${m.images.length === 1 ? ' large' : ''}">${batchPictures(chat, m, judged)}</div>${empty}</div>`;
     }
     case 'note':
-      return `<p class="chatnote" data-n="${m.n}">${esc(m.text)}</p>`;
+      return `<p class="chatnote${m.text.includes('\n') ? ' table' : ''}" data-n="${m.n}">${esc(m.text)}</p>`;
     default:
       return '';
   }
@@ -140,7 +147,7 @@ export function renderMessage(chat, m, i) {
 export function renderChat(chat, live = null) {
   const msgs = chat.messages.map((m, i) => renderMessage(chat, m, i)).join('');
   const writing = live?.text != null
-    ? `<div class="chatmsg agent live"><p class="chattext">${esc(liveReply(live.text)) || '…'}</p></div>` : '';
+    ? `<div class="chatmsg agent live"><p class="chattext">${replyHtml(liveReply(live.text)) || '…'}</p></div>` : '';
   return msgs + writing;
 }
 
@@ -163,6 +170,24 @@ export function liveReply(text) {
     return out;
   }
   return '';
+}
+
+// The Session panel: the goal, what a comparison draws, the picture to
+// match, the checks and where it is.
+export function sessionHtml(chat) {
+  const s = chat.session;
+  if (!s.goal) {
+    return '<p class="sub">No session yet. Ask the agent to get something right or improve a round, and it runs one: it writes checks, draws a round, judges it and tries again, as many rounds as you ask for (three when you don’t say). Ask it to find something out (“which CFG works best?”) and it compares: one round per value on the same seeds, then counts which passed.</p>';
+  }
+  const sw = s.sweep;
+  const sweep = sw ? `<p><b>Comparing ${esc(KNOB_LABEL[sw.knob] ?? sw.knob)}</b>: ${
+    sw.values.map((v) => esc(valueText(sw.knob, v))).join(' · ')}</p>` : '';
+  const refs = (s.reference ?? []).map((r) => `<img class="chatref" src="${
+    img(chat, r.kind === 'attach' ? 'att' : 'img', r.file)}" alt="The picture to match" title="The picture to match">`).join('');
+  return `<p><b>Goal</b>: ${esc(s.goal)}</p>${sweep}
+    ${refs ? `<p class="sub">To match</p><div class="chatrefs">${refs}</div>` : ''}
+    ${s.checks.length ? `<p class="sub">Checks</p><ol class="chatchecklist">${s.checks.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>` : ''}
+    <p class="sub">Round ${sessionRound(s)} of ${sessionLimit(s)} · ${esc(stateText(chat) || 'idle')}</p>`;
 }
 
 // How many of its rounds the session has drawn: round numbers count on

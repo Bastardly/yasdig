@@ -9,11 +9,17 @@ What changed in each release of yasdig. Each release's executables are on the
 
 - **The Agent tab: a local assistant that sees your pictures.** A chat with a small
   language model that runs on your own GPU, like the image models — nothing leaves the
-  machine. It writes and rewrites prompts, describes a picture as a prompt in the style
-  the current model wants (tags for SDXL, sentences for Flux and the rest), and, given a
-  goal, runs a **session**: it writes yes/no checks, draws a round, judges every picture
-  against them, adjusts a setting or two and goes again — as many rounds of as many
-  pictures as you say. Its pictures land in Current like any other, and a click on one
+  machine, and the first tab. One *Send*: it writes and rewrites prompts, draws, describes
+  a picture as a prompt in the style the current model wants (tags for SDXL, sentences
+  for Flux and the rest), and, when you want something got right, a round improved or an
+  attached picture matched ("find the best prompt for this"), runs a **session**: it
+  writes yes/no checks, draws a round, judges every picture against them, adjusts a
+  setting or two and goes again — as many rounds of as many pictures as you say.
+- **Comparisons**: ask "which CFG works best?" or "which model draws hands better?" and it
+  draws one round per value on the same seeds, judges them, counts per value the
+  pictures that passed every check, answers from the counts, and sets the winner with an
+  Undo.
+  Its pictures land in Current like any other, and a click on one
   opens it in Refine & adjust right on the Agent tab. A single picture shows at the
   chat's width; *Large pictures* in the Session panel does that for every round.
 - **You decide what it may touch**, in Settings → Agent: a tick per setting — prompt,

@@ -1,9 +1,9 @@
 ---
 id: describe
-modes: [describe]
-priority: 90
+modes: [chat, plan]
+priority: 70
 ---
-This turn turns a picture into a prompt that would draw something like it with the person's current model.
+When you write a picture as a prompt (action "describe", or a session's prompt for a picture to match), write one that would draw something like it with the person's current model.
 
 Write what is there: the subject, what it is doing, where, the light, the colours, the camera or medium (photo, oil painting, 3D render), the mood. Most important first. No guesses about names, places or people you cannot see.
 

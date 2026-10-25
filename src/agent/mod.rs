@@ -204,8 +204,10 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
             queue.relabel(job, label(match mode {
                 Mode::Chat => "reply",
                 Mode::Plan => "planning",
+                Mode::Critique if chat.session.sweep.is_some() => "comparing",
                 Mode::Critique => "looking at the round",
                 Mode::Describe => "describing",
+                Mode::Verdict => "writing the answer",
             }));
             turn(engine, &store, &mut chat, mode)
         }
@@ -278,8 +280,14 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
     let (all_skills, _) = skills::load(&user_skills_dir(&cfg));
     let (skill_text, used, _dropped) = skills::select(&all_skills, tk.family, mode);
 
-    // What it looks at: the round to judge, or what the newest message attached.
-    let images: Vec<ImageRef> = match mode {
+    // What it looks at: a session's reference first (the plan and every
+    // critique judge against it), then the round to judge, or what the
+    // newest message attached.
+    let reference: Vec<ImageRef> = match mode {
+        Mode::Plan | Mode::Critique => chat.session.reference.clone(),
+        _ => Vec::new(),
+    };
+    let own: Vec<ImageRef> = match mode {
         Mode::Critique => chat
             .messages
             .iter()
@@ -298,8 +306,9 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
                 _ => None,
             })
             .unwrap_or_default(),
-        Mode::Plan => Vec::new(),
+        Mode::Plan | Mode::Verdict => Vec::new(),
     };
+    let images: Vec<ImageRef> = reference.iter().cloned().chain(own.iter().cloned()).collect();
     if !images.is_empty() && !model.vision() {
         bail!(
             "{} has no vision projector, so it can't see pictures — pick one that can beside the message box",
@@ -311,11 +320,13 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
     }
     // A plan that will judge the round just drawn sees no pictures yet, but
     // its schema knows the round is there (no prompt is required of it).
+    let sweep = chat.session.sweep.as_ref().filter(|_| matches!(mode, Mode::Plan | Mode::Critique | Mode::Verdict));
     let shown = match mode {
         Mode::Plan => session::judgeable(chat).map_or(0, |(_, size)| size),
-        _ => images.len() as u32,
+        Mode::Verdict => sweep.map_or(0, |s| s.values.len() as u32),
+        _ => own.len() as u32,
     };
-    let schema = schema::output(mode, &tk, shown, chat.session.checks.len() as u32);
+    let schema = schema::output(mode, &tk, shown, chat.session.checks.len() as u32, sweep.is_some());
     let budget = (tune.n_ctx.saturating_sub(N_PREDICT) as usize).saturating_sub(64);
 
     let runner = LlmRunner::watched(&cfg, engine.monitor());
@@ -326,6 +337,8 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
         let base = context::Turn {
             mode,
             images: staged.0.clone(),
+            reference: reference.len(),
+            sweep: sweep.is_some(),
             skills: &skill_text,
             checks: &chat.session.checks,
             goal: &chat.session.goal,
@@ -410,10 +423,12 @@ fn picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, round: u32
 
 /// A chat that names no LoRAs draws with its model's catalog Turbo LoRA when
 /// it is installed, at the steps, CFG and schedule it was distilled to — as
-/// the Image tab does with Turbo on, its default. `toolkit::locks_for` locks
-/// steps and CFG to match, so the agent never fights it. A chat begun on
-/// the Image tab's whole body (before chats started from the model alone)
-/// carries its own `loras` and is left as it is.
+/// the Image tab does with Turbo on, its default. Like that switch it only
+/// sets them: steps or CFG the agent has set are kept (`toolkit::locks_for`
+/// tells it what the LoRA was tuned for, and locks nothing), and a fixed
+/// schedule goes only with the LoRA's own steps. A chat begun on the Image
+/// tab's whole body (before chats started from the model alone) carries its
+/// own `loras` and is left as it is.
 fn with_turbo(cfg: &Config, settings: &mut serde_json::Value) {
     let Some(obj) = settings.as_object_mut() else { return };
     if obj.contains_key("loras") {
@@ -423,9 +438,10 @@ fn with_turbo(cfg: &Config, settings: &mut serde_json::Value) {
     let Some(family) = cfg.registry().get(template).map(|p| p.family) else { return };
     let Some(l) = toolkit::turbo_lora(cfg, family) else { return };
     obj.insert("loras".into(), serde_json::json!([{ "name": l.dest, "strength": 1.0 }]));
-    obj.insert("steps".into(), l.turbo.steps.into());
-    obj.insert("cfg_scale".into(), serde_json::json!(l.turbo.cfg_scale));
-    if let Some(s) = &l.turbo.sigmas {
+    let own_steps = !obj.contains_key("steps");
+    obj.entry("steps").or_insert(l.turbo.steps.into());
+    obj.entry("cfg_scale").or_insert(serde_json::json!(l.turbo.cfg_scale));
+    if let (Some(s), true) = (&l.turbo.sigmas, own_steps) {
         obj.insert("sigmas".into(), s.clone().into());
     }
 }
@@ -565,8 +581,6 @@ pub fn user_skills_dir(cfg: &Config) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// A new chat holds only its model, so a round is the model's saved
     /// defaults (`Engine::run`'s registry profile) plus what the agent set.
     #[test]

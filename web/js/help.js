@@ -326,23 +326,37 @@ export const TOPICS = [
       per setting (prompt, negative prompt, CFG, size and model at first) and per
       pass it may run on a keeper. With Model ticked it may switch to any
       installed model, and uses the one you name (“make it with Flux”). A model
-      distilled to run without CFG (Z-Image, Flux, the Kleins, Krea 2, or a Turbo
-      LoRA) locks CFG and the negative prompt: they would do nothing. The agent
+      distilled to run without CFG (Z-Image, Flux, the Kleins, Krea 2) locks CFG
+      and the negative prompt: they would do nothing. A Turbo LoRA only sets steps
+      and CFG, as the Image tab’s Turbo does; the agent keeps them unless you ask. The agent
       a new chat talks to is set there too; the picker beside the message box
       switches it for one chat.</p>
       <p>Click one of its pictures to open it in Refine &amp; adjust, right there:
       ←/→ step through the chat’s pictures, and <i>Open on Image tab</i> takes
       one there with its settings. Its passes run on the model that drew it.</p>
 
-      <h3>A session</h3>
-      <p>Write what the picture should show and press <b>Run a session</b>. The
-      agent turns the goal into yes/no checks (“Is there a red hat?”), draws a
-      round, answers every check for every picture, changes one or two settings
-      and draws again, until a picture passes, it decides it can’t do better, or
-      the rounds run out. How many pictures and rounds is yours to say (“two
-      rounds of three”); unsaid, it draws three rounds of four, and never more than
-      six rounds of eight. It keeps the seeds between rounds unless it says
-      otherwise, so a difference between rounds is the change, not luck. Pictures every check said yes to
+      <h3>Improve and compare</h3>
+      <p>There is one <b>Send</b>: the agent decides whether you asked for an
+      answer, a picture, a picture described as a prompt, an improvement or a
+      comparison.</p>
+      <p><b>Improve</b> runs a session when you want something got right (“keep
+      trying until the hat is red”), the round on screen improved (“make these
+      better”), or a picture matched — attach it and say “find the best prompt
+      for this”: the checks are written from it and every round is judged beside
+      it. The agent turns the goal into yes/no checks (“Is there a red hat?”),
+      draws a round, answers every check for every picture, changes one or two
+      settings and draws again, until a picture passes, it decides it can’t do
+      better, or the rounds run out. How many pictures and rounds is yours to say
+      (“two rounds of three”); unsaid, it draws three rounds of four, and never
+      more than six rounds of eight. It keeps the seeds between rounds unless it
+      says otherwise, so a difference between rounds is the change, not luck.</p>
+      <p><b>Compare</b> answers a question by drawing (“what’s the best CFG for
+      this?”, “which model draws hands better?”): one round per value on the same
+      seeds, so the value is the only difference, and the agent judges without
+      changing anything. A note then counts, per value, the pictures that passed
+      every check; the agent answers from it, and the value it picks is set as a
+      change you can Undo. It compares only a setting it may change.</p>
+      <p>Pictures every check said yes to
       are marked <b>All checks</b> beside the ones the agent picked: a small
       model is a lenient judge of its own work, so both are shown.</p>
       <p>A session is steps on the job queue — a reply, a picture, a pass — so a

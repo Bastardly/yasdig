@@ -1128,13 +1128,17 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chatmsg.agent { align-self: flex-start; }
 .chatmsg.live .chattext { color: var(--text-dim); }
 .chattext { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.chatnote { margin: 0; align-self: center; font-size: var(--fs-sm); color: var(--text-faint); text-align: center; }
+.chatnote { margin: 0; align-self: center; font-size: var(--fs-sm); color: var(--text-faint); text-align: center; white-space: pre-line; }
+/* A comparison's results keep their columns' lines. */
+.chatnote.table { align-self: stretch; text-align: left; }
 .chatfoot { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
 .chatnotes { font-size: var(--fs-sm); color: var(--text-dim); }
 .chatnotes > summary { cursor: pointer; color: var(--text-faint); }
 .chatnotes > p { margin: var(--sp-1) 0 0; white-space: pre-wrap; }
 .chatstats { font-family: var(--font-num); font-size: var(--fs-micro); }
 .chatchecklist { margin: 0; padding-left: var(--sp-5); }
+.chatrefs { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.chatref { height: var(--chat-pic); width: auto; max-width: 100%; object-fit: contain; border-radius: var(--r-sm); }
 
 /* A round, and any picture in the conversation: a strip at one height, its
    number, the agent's marks and a Describe that shows on hover. */

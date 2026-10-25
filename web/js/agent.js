@@ -6,7 +6,7 @@ import { S } from './state.js';
 import { cancelPost, onPassResult, onViewerResult, setLook, setViewerImage, showFullSize } from './viewer.js';
 import { openWorkItem } from './workitems.js';
 import { upload } from './source-slot.js';
-import { renderChat, sessionLimit, sessionRound, stateText } from './chatview.js';
+import { renderChat, sessionHtml, stateText } from './chatview.js';
 import { openGetModels } from './getmodels.js';
 
 // ---- The Agent tab ------------------------------------------------------------
@@ -73,7 +73,6 @@ function syncModelNote() {
     if (m.note) lines.push(esc(m.note));
   }
   $('amodelnote').innerHTML = lines.join(' ');
-  $('adescribe').disabled = !m?.vision || !attachments.length;
 }
 
 // ---- The chat on the stage ------------------------------------------------------
@@ -96,8 +95,12 @@ function show(got, { scroll = true } = {}) {
   data = got;
   liveSeq = null;
   draw(scroll || was?.id !== got.chat.id || was?.messages.length !== got.chat.messages.length);
-  // Coming to a chat whose session is still going opens its panel again.
-  if (was?.id !== got.chat.id && ['queued', 'running'].includes(got.chat.session.state)) sessionPanel(true);
+  // A session the agent just started, or one still going in a chat come back
+  // to, opens the panel. A new session is a new goal or a new first round.
+  const s = got.chat.session;
+  const begun = was?.id === got.chat.id && s.goal
+    && (s.goal !== was.session.goal || s.first_round !== was.session.first_round);
+  if ((begun || was?.id !== got.chat.id) && ['queued', 'running'].includes(s.state)) sessionPanel(true);
   drawPanels();
   markChats();
 }
@@ -123,16 +126,14 @@ function syncButtons() {
   const b = busy();
   $('astop').hidden = !b;
   $('asend').disabled = b;
-  $('asession').disabled = b;
-  $('adescribe').disabled = b || !attachments.length
-    || !agentsList.models.find((m) => m.name === $('amodel').value)?.vision;
 }
 
 // ---- Panels -----------------------------------------------------------------------
 
-// The Session panel has no rail button: it opens when a session starts, or
-// on coming to a chat whose session is still going, and closes when the stage
-// moves to another chat or a new one, so what it shows is always that chat's. Its × closes it as any panel's does.
+// The Session panel has no rail button: it opens when the agent starts a
+// session, or on coming to a chat whose session is still going, and closes
+// when the stage moves to another chat or a new one, so what it shows is
+// always that chat's. Its × closes it as any panel's does.
 function sessionPanel(on) {
   $('panel-agent-session').open = on;
 }
@@ -142,12 +143,7 @@ function drawPanels() {
     $('asessionbody').innerHTML = '<p class="sub">No chat yet.</p>';
     return;
   }
-  const s = data.chat.session;
-  $('asessionbody').innerHTML = s.goal
-    ? `<p><b>Goal</b>: ${esc(s.goal)}</p>
-       ${s.checks.length ? `<p class="sub">Checks</p><ol class="chatchecklist">${s.checks.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>` : ''}
-       <p class="sub">Round ${sessionRound(s)} of ${sessionLimit(s)} · ${esc(stateText(data.chat) || 'idle')}</p>`
-    : '<p class="sub">No session yet: write a goal in the box and press Run a session. The agent then writes checks, draws a round, judges it, and tries again, as many rounds as you ask for (three when you don’t say).</p>';
+  $('asessionbody').innerHTML = sessionHtml(data.chat);
   if (data.chat.agent && $('amodel').value !== data.chat.agent
       && agentsList.models.some((m) => m.name === data.chat.agent)) {
     $('amodel').value = data.chat.agent;
@@ -167,32 +163,21 @@ async function ensureChat() {
   return got.chat.id;
 }
 
-async function send(mode) {
+// Every message is a chat turn: the agent decides whether it talks, draws,
+// describes an attached picture or starts a session.
+async function send() {
   err('');
   const text = $('atext').value.trim();
   if (!text && !attachments.length) return;
   try {
     const id = await ensureChat();
-    await post('/agent/send', { chat: id, text, images: attachments.map(({ kind, id }) => ({ kind, id })), mode });
+    await post('/agent/send', { chat: id, text, images: attachments.map(({ kind, id }) => ({ kind, id })) });
     $('atext').value = '';
     attachments = [];
     drawChips();
     soonJobs();
     await openChat(id);
-    if (mode === 'session') sessionPanel(true);
     loadChats();
-  } catch (e) {
-    err(String(e.message || e));
-  }
-}
-
-// A picture already in the chat, described as a prompt.
-async function describe(kind, id) {
-  if (!data || busy()) return;
-  try {
-    await post('/agent/send', { chat: chatId(), text: '', images: [{ kind, id }], mode: 'describe' });
-    soonJobs();
-    openChat(chatId());
   } catch (e) {
     err(String(e.message || e));
   }
@@ -200,9 +185,19 @@ async function describe(kind, id) {
 
 // ---- Attachments ------------------------------------------------------------------------
 
+// A picture already in the chat, attached to the next message so the person
+// can ask about it. Its chip shows the chat's own copy (`src`).
+function ask(kind, id, src) {
+  if (attachments.some((a) => a.kind === kind && a.id === id)) return;
+  attachments.push({ kind, id, src });
+  if (attachments.length > 4) attachments = attachments.slice(-4);
+  drawChips();
+  $('atext').focus();
+}
+
 function drawChips() {
   $('achips').innerHTML = attachments.map((a, i) => `<span class="chip">
-    <img src="/outputs/${encodeURIComponent(a.id)}/thumb.png" alt="">
+    <img src="${a.src ? esc(a.src) : `/outputs/${encodeURIComponent(a.id)}/thumb.png`}" alt="">
     <button type="button" class="hint" data-unattach="${i}" aria-label="Remove">&times;</button></span>`).join('');
   syncButtons();
 }
@@ -415,9 +410,9 @@ async function onLogClick(e) {
       show(await post('/agent/undo', { chat: id, change: Number(d.undo) }), { scroll: false });
     } else if (d.openItem) {
       openItem(d.openItem);
-    } else if (d.describe) {
-      const [kind, pid] = d.describe.split(':');
-      describe(kind, pid);
+    } else if (d.ask) {
+      const [kind, pid] = d.ask.split(':');
+      ask(kind, pid, t.closest('.chatpic')?.querySelector('img')?.getAttribute('src'));
     } else if (d.copyPrompt) {
       const m = data.chat.messages.find((x) => x.n === Number(d.copyPrompt));
       if (!m?.prompt) return;
@@ -554,9 +549,7 @@ export function initAgent() {
     document.querySelector('.tab[data-tab="agent"]')?.click();
     openChat(e.detail);
   });
-  $('asend').addEventListener('click', () => send('chat'));
-  $('asession').addEventListener('click', () => send('session'));
-  $('adescribe').addEventListener('click', () => send('describe'));
+  $('asend').addEventListener('click', send);
   $('astop').addEventListener('click', async () => {
     if (!data) return;
     try {
@@ -569,7 +562,7 @@ export function initAgent() {
     // Enter sends, as a chat does; Shift+Enter is a new line.
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      if (!busy()) send('chat');
+      if (!busy()) send();
     }
   });
   $('aattach').addEventListener('click', () => $('afile').click());

@@ -717,6 +717,23 @@ Break silently:
   loads them): a whitelist of keys, no ask-first, no bounds but `hard_bounds`. A chat
   carries none. An old `chat.json`'s `pending`/`awaiting` read as `rejected`/`idle` (serde
   aliases); an old `[agent]` of tables reads as the defaults (`key_list`).
+- **One Send; the agent picks the action.** `/agent/send` is always a chat turn, whose
+  schema branches are named for the request — `talk`, `draw`, `describe` (only when the
+  turn shows pictures), `improve` (a `goal`) and `compare` (`vary`, `values`, `count`;
+  absent when no `knobs::COMPARABLE` key is offered). `apply_reply` still reads the old
+  `none`/`generate`/`session`. An improve calls `session::begin` (goal, checks, rounds and
+  sweep cleared, `first_round`, `reference` = the newest user message's pictures,
+  `mode = Plan`) and `Next::Turn`. `Mode::Describe` is never started; kept so old chats read.
+- **A comparison is the server's, not the model's** (`Session.sweep: Sweep {knob, values,
+  before}`): `sweep_from` checks every value through `knobs::check` (whitelist, locks,
+  `hard_bounds`; strings parsed per knob — the grammar can't type array items) and needs
+  two; `rounds` = values. `start_round` writes `values[k]` (`knobs::write`) and leads the
+  round's summary with it; seeds are kept. In a sweep the plan turn writes checks only,
+  a critique answers checks/keepers only, and after the last one `sweep_table` is posted
+  as a note and `Mode::Verdict` (`best`) runs: `before` is written back, then `best` lands
+  as an ordinary undoable change — so Undo returns to before the comparison.
+- **`Session.reference` is staged first** in plan and critique turns (`Turn.reference`
+  counts them), so "Picture 1" stays the round's first picture.
 - **The agent sizes its work**: chat `count` (1 unless said), a plan's `rounds`/`count`
   (`Session.rounds`/`per_round`, 0 = `SESSION_ROUNDS`/`SESSION_BATCH`), a critique's
   `count`/`seeds`; `knobs::MAX_BATCH`/`MAX_ROUNDS` are the only caps.
@@ -740,9 +757,16 @@ Break silently:
   `Profile::validate` (`MAX_CFG` is in `config.rs`, `settings.js` and the inputs).
   `apply` never trusts the grammar (no float ranges, no property count): unknown, off or
   locked keys are dropped with a note, numbers clamped to `hard_bounds`.
-- **Locks** (`toolkit::locks_for`): a catalog Turbo LoRA among the picks or a
-  `Catalog::distilled` file locks steps and CFG; `ImageFamily::cfg_locked` (recipe CFG 1)
-  locks CFG; a CFG lock locks the negative.
+- **Locks** (`toolkit::locks_for`): a `Catalog::distilled` file locks steps and CFG;
+  `ImageFamily::cfg_locked` (recipe CFG 1) locks CFG; a CFG lock locks the negative. **A
+  Turbo LoRA locks nothing** (`Locks.turbo` is advice: what it was tuned for), as the
+  Image tab's Turbo only sets steps/CFG — MOSS's DMD LoRA takes a real CFG. `with_turbo`
+  fills steps/CFG only where the chat has none, and its sigmas only with its own steps.
+  **Locks are the model's, not the chat's**: with Model allowed, a locked knob is still
+  in the `change` schema and `compare`'s `vary`; `knobs::apply` writes `model` first and
+  checks the rest against `locks_of` the new one (`ModelChoice.locks`, from `runnable`),
+  and a comparison that switched checks its values the same way. Without it, "best CFG?"
+  on Flux had only the model to vary and wrote `name:3` as model values.
 - **Pictures a turn sees are staged into scratch** at the agent's `image_side` and
   removed after (invariant 8; `user/` isn't a sandbox root on Windows). A chat keeps its
   own copies under `img/`, so deleting a work item never breaks it.

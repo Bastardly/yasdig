@@ -289,26 +289,14 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         text: String,
         #[serde(default)]
         images: Vec<Pic>,
-        /// `chat`, `session` (the text is the goal) or `describe`.
-        #[serde(default)]
-        mode: Option<String>,
     }
+    // Every message is a chat turn: the agent decides whether it talks,
+    // draws, describes a picture or starts a session (`session::apply_reply`).
+    // An older page's `mode` is an unknown field, ignored.
     let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
-    let mode = match dto.mode.as_deref().unwrap_or("chat") {
-        "chat" => Mode::Chat,
-        "session" => Mode::Plan,
-        "describe" => Mode::Describe,
-        other => return err(conn, 400, &format!("'{other}' is not a way to send (chat, session, describe)")),
-    };
     let text = dto.text.trim().to_string();
     if text.is_empty() && dto.images.is_empty() {
         return err(conn, 400, "write something, or attach a picture");
-    }
-    if mode == Mode::Plan && text.is_empty() {
-        return err(conn, 400, "a session needs a goal: say what the picture should show");
-    }
-    if mode == Mode::Describe && dto.images.is_empty() {
-        return err(conn, 400, "attach the picture to describe");
     }
     if dto.images.len() > 4 {
         return err(conn, 400, "at most four pictures in one message");
@@ -340,15 +328,7 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         c.name_from(&text);
         let n = c.next_n();
         c.messages.push(Msg::User { n, ms: super::chat::now_ms(), text: text.clone(), images: refs.clone() });
-        if mode == Mode::Plan {
-            // A new session: a new goal and its own checks. Its rounds count
-            // from here; round numbers go on, so none is reused. The plan
-            // decides whether it judges the round just drawn or draws afresh.
-            c.session.goal = text.clone();
-            c.session.checks.clear();
-            c.session.first_round = c.session.round;
-        }
-        c.session.mode = mode;
+        c.session.mode = Mode::Chat;
         c.session.next = Next::Turn;
         c.session.state = State::Queued;
         c.session.job = None;

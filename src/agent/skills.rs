@@ -10,7 +10,7 @@
 //! ---
 //! id: sentences
 //! families: [flux, z_image]      # ImageFamily::as_str names; none = all
-//! modes: [chat, critique]        # chat, plan, critique, describe; none = all
+//! modes: [chat, critique]        # chat, plan, critique, verdict; none = all
 //! priority: 50                   # higher is kept first under the budget
 //! ---
 //! ```
@@ -32,6 +32,7 @@ const BUILTIN: &[(&str, &str)] = &[
     ("plan.md", include_str!("skills/plan.md")),
     ("critique.md", include_str!("skills/critique.md")),
     ("describe.md", include_str!("skills/describe.md")),
+    ("verdict.md", include_str!("skills/verdict.md")),
     ("tags.md", include_str!("skills/tags.md")),
     ("sentences.md", include_str!("skills/sentences.md")),
     ("qwen-image.md", include_str!("skills/qwen-image.md")),
@@ -101,7 +102,8 @@ pub fn parse(src: &str, builtin: bool) -> Result<Skill> {
                         "plan" => Ok(Mode::Plan),
                         "critique" => Ok(Mode::Critique),
                         "describe" => Ok(Mode::Describe),
-                        other => bail!("'{other}' is not a mode (chat, plan, critique, describe)"),
+                        "verdict" => Ok(Mode::Verdict),
+                        other => bail!("'{other}' is not a mode (chat, plan, critique, verdict)"),
                     })
                     .collect::<Result<_>>()?
             }
@@ -176,10 +178,11 @@ mod tests {
             let s = parse(src, true).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(s.body.len() < BUDGET / 3, "{name} is too long for the budget to hold others beside it");
         }
-        // Every family that generates has its prompt style.
+        // Every family that generates has its prompt style, beside how to
+        // describe a picture (a chat turn's).
         let (all, _) = load(Path::new("/nonexistent"));
         for f in ImageFamily::ALL.iter().filter(|f| f.runnable() && !f.fill_only()) {
-            let (_, used, _) = select(&all, Some(f.as_str()), Mode::Describe);
+            let (_, used, _) = select(&all, Some(f.as_str()), Mode::Chat);
             assert!(used.len() >= 3, "{} gets only {used:?}", f.label());
         }
     }

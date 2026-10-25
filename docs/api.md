@@ -627,9 +627,10 @@ the chat, whose `rev` moves on every write.
 - `GET /chats/{id}/thumb.png`, `GET /chats/{id}/img/{name}.png` — the chat's own copies
   of its pictures; names are `[a-z0-9-]+.png`.
 - `POST /chats/agent` — `{ id, agent }`; `POST /chats/rename` — `{ id, title }`.
-- `POST /agent/send` — `{ chat, text, images: [{kind: "item"|"output", id}], mode }`,
-  `mode` `chat` (default), `session` (the text is the goal) or `describe`. At most four
-  pictures, copied into the chat. `409` while the agent is working on the chat.
+- `POST /agent/send` — `{ chat, text, images: [{kind: "item"|"output", id}] }`: a chat
+  turn, whose reply may talk, draw, describe an attached picture as a prompt, or start a
+  session (a plan turn follows in the same job). At most four pictures, copied into the
+  chat. `409` while the agent is working on the chat.
 - `POST /agent/undo` — `{ chat, change }`: put an applied change's settings back, if they
   still hold what it set (else `409`). Recorded as a change of yours.
 - `POST /agent/stop` — `{ chat }`: end the chat's leg, killing a reply or a render in flight.
