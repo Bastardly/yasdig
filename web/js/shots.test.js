@@ -70,3 +70,14 @@ test('blank rows are not shots', () => {
   assert.deepEqual(s.pending, []);
   assert.equal(s.action, 'none');
 });
+
+test('a cut from a picture is done only with that picture', () => {
+  const c = { segments: [seg('a hall', 0), { ...seg('the hall at night', 1), cut: true, keyframe: 'k1' }] };
+  const r = rows('a hall', 'the hall at night');
+  Object.assign(r[1], { cut: true, key: 'k1' });
+  assert.equal(shotState(r, c, true).done, 2);
+  r[1].key = 'k2';
+  const s = shotState(r, c, true);
+  assert.equal(s.done, 1);
+  assert.equal(s.action, 'redo');
+});

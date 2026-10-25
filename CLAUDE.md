@@ -1649,11 +1649,16 @@ from `family` goes on `VideoModelDto`.
     `-i` is a first frame there; VACE reads it as a reference, T2V ignores it).
     Failure or Stop at shot k>1 keeps 1..k-1 with `VideoResult.note` (`cut_short`). A
     multi-shot clip drops sd-cli's `clip.avi` (it is shot 1 alone).
-  - **Cuts and references are H3's alone** (`VideoFamily::takes_references`,
+  - **References are H3's alone** (`VideoFamily::takes_references`,
     `references` on `/video-models`): sd.cpp refuses H3's Ref2VA beside a keyframe, so
     a shot with references has no `-i` (`VideoIo.refs` → one `-r` each, staged into
     scratch by `stage_shot_refs`, removed after). Shot 1 takes them only with no
     first frame. The page's ⓘ for it is the shared `vshotcut`.
+  - **A cut from a picture** (`ShotSpec.keyframe`/`Segment.keyframe`, an output
+    stem; the row's `data-key`) is any `chains()` family's: `render_shot`'s `-i` is
+    the keyframe instead of the last frame. Never on shot 1 (that is `source`), a
+    continue, or beside references. **A cut on Wan needs one** — its only way to
+    change scene; an H3 cut may have neither (fresh from words).
   - **Extend, Redo and the × are one request** (`Engine::extend_clip`,
     `ExtendClipRequest`, `POST /videos/extend {id, keep, shots, every?, negative?}`,
     `Work::ExtendClip` on the queue): keep the first `keep` segments (≥ 1; shot 1 is

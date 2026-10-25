@@ -1583,6 +1583,8 @@ struct ShotDto {
     cut: bool,
     #[serde(default)]
     references: Vec<String>,
+    #[serde(default)]
+    keyframe: Option<String>,
 }
 
 impl ShotDto {
@@ -1593,6 +1595,7 @@ impl ShotDto {
             frames: self.frames,
             cut: self.cut,
             references: self.references,
+            keyframe: self.keyframe,
         }
     }
 }

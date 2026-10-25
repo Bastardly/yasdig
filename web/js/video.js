@@ -9,7 +9,7 @@ import { gridMarks, star, wireStars } from './gridmark.js';
 import { shotState, rowMatches } from './shots.js';
 import { editRefs } from './refs.js';
 import { wireHints } from './hints.js';
-import { sourceSlot } from './source-slot.js';
+import { sourceSlot, choosePicture } from './source-slot.js';
 import { partRows } from './parts.js';
 import { loraPicker, turboMemory } from './loras.js';
 import { loadModelSettings } from './modelsettings.js';
@@ -104,11 +104,12 @@ function setVTurbo(on) {
 // ---- Shots -------------------------------------------------------------------
 //
 // A clip is its shots, first to last: one sd-cli run each (`Engine::video`),
-// each but the first going on from the last one's final frame — or, on H3, a
-// cut that starts fresh and may follow reference pictures. Each row is
+// each but the first going on from the last one's final frame — or a cut,
+// which starts from a picture (`data-key`, any family that takes a first
+// frame) or, on H3, fresh and maybe following reference pictures. Each row is
 // conditioned on its own words with *Every shot* in front, never another
 // row's, or a line spoken in shot 1 is spoken again in every shot. A row
-// holds its own state in the DOM: the boxes, and `data-cut`/`data-refs`. The
+// holds its own state in the DOM: the boxes, and `data-cut`/`data-refs`/`data-key`. The
 // marks are `syncShots`'s, against the clip on the stage (`shots.js`).
 
 const rowEls = () => [...$('vshots').querySelectorAll('.shotrow')];
@@ -122,6 +123,7 @@ function readRow(el) {
     frames: Number.isFinite(frames) ? frames : null,
     cut: el.dataset.cut === '1',
     refs: JSON.parse(el.dataset.refs || '[]'),
+    key: el.dataset.key || null,
     folded: el.classList.contains('folded'),
   };
 }
@@ -140,11 +142,13 @@ function liveRows() {
 // A drawn clip's shots as rows: the seeds they were drawn with, so Generate
 // makes them again unless a seed is reset.
 const rowsOf = (c) => (c.segments ?? []).map((s) => ({
-  text: s.text, seed: s.seed, frames: s.frames, cut: !!s.cut, refs: s.references ?? [],
+  text: s.text, seed: s.seed, frames: s.frames, cut: !!s.cut, refs: s.references ?? [], key: s.keyframe ?? null,
 }));
 
 // The wire's shape for a row; a blank Frames box is the model's.
-const shotWire = (r) => ({ prompt: r.text, seed: r.seed, frames: r.frames, cut: r.cut, references: r.refs });
+const shotWire = (r) => ({
+  prompt: r.text, seed: r.seed, frames: r.frames, cut: r.cut, references: r.refs, keyframe: r.cut ? r.key : null,
+});
 
 // Whether a clip's own family can go on from its last frame — by the clip's
 // family, since the model it was made with may be listed under another name
@@ -161,7 +165,7 @@ function drawShots(rows) {
   $('vshots').innerHTML = rows.map((r, k) => {
     const folded = r.folded ?? was[k] ?? false;
     return `
-    <div class="shotrow${folded ? ' folded' : ''}" data-cut="${r.cut ? 1 : 0}" data-refs="${esc(JSON.stringify(r.refs ?? []))}">
+    <div class="shotrow${folded ? ' folded' : ''}" data-cut="${r.cut ? 1 : 0}" data-refs="${esc(JSON.stringify(r.refs ?? []))}" data-key="${esc(r.key ?? '')}">
       <div class="shothead">
         <button type="button" class="shotfold" aria-expanded="${!folded}" title="Fold or unfold this shot">
           <b>Shot ${k + 1}</b></button>
@@ -187,7 +191,12 @@ function drawShots(rows) {
         <label data-help="vprompt">Prompt</label>
         <prompt-box><textarea class="short" aria-label="Shot ${k + 1} prompt"
           placeholder="${k ? 'what happens next: an action, a line spoken' : 'the crab lifts a claw, slow camera push in'}">${esc(r.text ?? '')}</textarea></prompt-box>
-        <button type="button" class="btn shotrefs" hidden>References…</button>
+        <div class="btnrow shotfrom">
+          <button type="button" class="btn shotkey" hidden title="The picture this cut starts from">Start from a picture…</button>
+          <img class="shotkeythumb" alt="" hidden>
+          <button type="button" class="btn shotkeyclear" hidden>Clear</button>
+          <button type="button" class="btn shotrefs" hidden>References…</button>
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -292,6 +301,7 @@ function syncShots() {
   const lastDone = st.dropLast >= 0 ? live[st.dropLast]?.i : -1;
   const els = rowEls();
   const refsOk = !!m?.references;
+  const keyOk = !!m?.chains;
   // A change to this clip is in flight: nothing more on it until it lands.
   const busy = !!clip && busyClips.has(clip.id);
   els.forEach((el, i) => {
@@ -300,14 +310,23 @@ function syncShots() {
     el.querySelector('.shotsum').textContent = el.querySelector('textarea').value.trim();
     const cut = el.dataset.cut === '1' && i > 0;
     const start = el.querySelector('.shotstart');
-    start.hidden = i === 0 || !refsOk;
+    start.hidden = i === 0 || !keyOk;
     for (const b of start.querySelectorAll('[data-start]')) b.classList.toggle('active', (b.dataset.start === '1') === cut);
     // References on a cut, or on shot 1 without a first frame: H3 can't
     // follow them and go on from a frame at once.
     const refs = el.querySelector('.shotrefs');
     const n = JSON.parse(el.dataset.refs || '[]').length;
-    refs.hidden = !refsOk || (i === 0 ? !!vSource.get() : !cut);
+    const key = el.dataset.key || '';
+    refs.hidden = !refsOk || (i === 0 ? !!vSource.get() : !cut || !!key);
     refs.textContent = n ? `References (${n})` : 'References…';
+    // A cut may start from a picture instead — on Wan the only way to cut.
+    const keyBtn = el.querySelector('.shotkey');
+    keyBtn.hidden = !cut || !keyOk || n > 0;
+    keyBtn.textContent = key ? 'Another picture…' : 'Start from a picture…';
+    const thumb = el.querySelector('.shotkeythumb');
+    thumb.hidden = keyBtn.hidden || !key;
+    if (key) thumb.src = `/outputs/${encodeURIComponent(key)}/thumb.png`;
+    el.querySelector('.shotkeyclear').hidden = thumb.hidden;
     // A done shot stays: the shots after it start from its frames. Only the
     // clip's last one can be cut off, and the cut leaves its text in the row.
     const x = el.querySelector('.shotx');
@@ -1042,8 +1061,19 @@ export function initVideo() {
       row.querySelector('.shotseed').value = randomSeed();
     } else if (e.target.closest('[data-start]')) {
       row.dataset.cut = e.target.closest('[data-start]').dataset.start;
-      // A shot that goes on from a frame can't follow references.
-      if (row.dataset.cut === '0') row.dataset.refs = '[]';
+      // A shot that goes on from a frame can't follow references, or start
+      // from a picture of its own.
+      if (row.dataset.cut === '0') { row.dataset.refs = '[]'; row.dataset.key = ''; }
+    } else if (e.target.closest('.shotkey')) {
+      choosePicture((stem) => {
+        row.dataset.key = stem;
+        syncShots();
+        syncVideoSummaries();
+        keepDraft();
+      });
+      return;
+    } else if (e.target.closest('.shotkeyclear')) {
+      row.dataset.key = '';
     } else if (e.target.closest('.shotrefs')) {
       editRefs(JSON.parse(row.dataset.refs || '[]'), (stems) => {
         row.dataset.refs = JSON.stringify(stems);

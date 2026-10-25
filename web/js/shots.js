@@ -2,11 +2,11 @@
 //
 // The Shots panel's rows against the clip on the stage. Row 1 is shot 1; a
 // row is *done* when the clip has that shot with that text, seed, length, and
-// cut and references — computed every redraw, never stored, so changing any
+// cut, references and starting picture — computed every redraw, never stored, so changing any
 // of them on a done row is what makes it, and every row after it, pending.
 // Pure, for `shots.test.js`.
 //
-//   rows    [{text, seed, frames, cut, refs}], as the panel holds them: seed
+//   rows    [{text, seed, frames, cut, refs, key}], as the panel holds them: seed
 //           -1 for random (which never matches a drawn shot), frames on the
 //           family's grid
 //   clip    the clip on the stage, or null; `segments[k]` is shot k as drawn
@@ -31,7 +31,9 @@ export function rowMatches(row, seg, k) {
     && Number(row.frames) === Number(seg.frames)
     // Shot 1 starts fresh whatever its row says.
     && (k === 0 || !!row.cut === !!seg.cut)
-    && same(row.refs ?? [], seg.references ?? []);
+    && same(row.refs ?? [], seg.references ?? [])
+    // A continue's picture is the last frame, whatever the row holds.
+    && (k === 0 || !row.cut || (row.key || null) === (seg.keyframe ?? null));
 }
 
 export function shotState(rows, clip, chains) {

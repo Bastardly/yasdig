@@ -768,13 +768,16 @@ press **Generate clip** — the same seeds, drawn properly. Shot 1 is the clip i
 changing it means a new clip. A clip's enlarged versions are removed when it changes,
 since they no longer cover it.
 
-**Continue or cut (MiniMax H3).** One frame is all that carries across a seam, so a face
-that leaves the picture and comes back is drawn anew and may not match. With H3, a shot
-can be a **Cut** instead of *Continue*: it starts fresh, a new camera shot, and may follow
-up to four **reference pictures** (a face, a costume, a place) from your outputs or an
-upload — say in its prompt who is who. A cut doesn't join the frame before it, and that
-is the price: sd.cpp can't give H3 references and a starting frame at once. Shot 1 can
-take references too when no first frame is picked. Other models have no references.
+**Continue or cut.** One frame is all that carries across a seam, so a face that
+leaves the picture and comes back is drawn anew and may not match. A shot can be a
+**Cut** instead of *Continue*: it starts fresh, a new camera shot, and doesn't join the
+frame before. A cut can **start from a picture** (*Start from a picture…*, from your
+outputs): a keyframe you drew on the Image tab, which is how a TI2V-5B or A14B clip
+changes scene. With MiniMax H3 a cut may instead follow up to four **reference
+pictures** (a face, a costume, a place) from your outputs or an upload — say in its
+prompt who is who. Not both on one shot: sd.cpp can't give H3 references and a
+starting frame at once. Shot 1 can take references too when no first frame is picked.
+Other models have no references.
 
 **Current and Favorites.** Every clip is kept in `work/videos/` and listed on the
 **Current** panel, the Image tab's way: click once to show it, again to open the clip

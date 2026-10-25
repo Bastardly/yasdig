@@ -534,11 +534,12 @@ needs a Vulkan device and nothing else.
   One sd-cli run per shot, each with its own `seed` (-1 or absent picks one) and
   `frames` (absent is the model's; rounded to the family's grid). Each shot after the
   first is rendered from the previous one's last frame (only on families that chain:
-  TI2V-5B, A14B, H3), up to 20 in all — or, with `cut: true`, starts fresh, and may
-  then follow up to four `references` (`work/output/` stems). Cuts and references are
-  MiniMax H3's alone (`references: true` on `/video-models`), and never beside a first
+  TI2V-5B, A14B, H3), up to 20 in all — or, with `cut: true`, starts fresh: from a
+  `keyframe` (a `work/output/` stem; any family that chains, and on Wan a cut needs one),
+  or, on MiniMax H3, from its words and up to four `references` (`work/output/` stems;
+  `references: true` on `/video-models`). Never both, and references never beside a first
   frame: sd.cpp refuses H3's references beside a keyframe, so shot 1 takes them only with
-  no `source`. Every shot is conditioned on `"{every}. {its own text}"` — never on
+  no `source`. Shot 1's starting picture is `source`, never a `keyframe`. Every shot is conditioned on `"{every}. {its own text}"` — never on
   another shot's text — and `every`'s variables roll once, off shot 1's seed. An empty
   shot is refused by its number.
   `parts` picks the model's separate files, by name under the models dir as `/video-models`
@@ -554,9 +555,9 @@ needs a Vulkan device and nothing else.
     "gen_ms": 214000, "note": null }
   ```
   `clip.segments` is one record per shot, `{text, conditioned, seed, start, frames,
-  cut?, references?}` (typed text, what sd-cli was told, its seed, its first frame in the
+  cut?, references?, keyframe?}` (typed text, what sd-cli was told, its seed, its first frame in the
   clip, how many frames sd-cli made — a continuing shot adds one fewer, its first being
-  the seam — and whether it was a cut with references); `clip.prompt`/`clip.seed` are
+  the seam — and whether it was a cut, with references or from a picture); `clip.prompt`/`clip.seed` are
   shot 1's; `clip.every` the typed
   *Every shot*. `note` says why a long clip has fewer shots than asked for (a Stop, or a
   shot that failed after others), and which LoRA sd.cpp left out (as `timings.lora_note`). Nothing is written to `work/output/` — that is

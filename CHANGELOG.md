@@ -15,6 +15,9 @@ What changed in each release of yasdig. Each release's executables are on the
   attached picture matched ("find the best prompt for this"), runs a **session**: it
   writes yes/no checks, draws a round, judges every picture against them, adjusts a
   setting or two and goes again — as many rounds of as many pictures as you say.
+- **A video shot can cut to a picture**: a *Cut* in the Shots panel can *Start from a
+  picture* — a keyframe from your outputs — on TI2V-5B, A14B and H3. That is how a Wan
+  clip changes scene; H3 cuts can still follow references instead.
 - **Comparisons**: ask "which CFG works best?" or "which model draws hands better?" and it
   draws one round per value on the same seeds, judges them, counts per value the
   pictures that passed every check, answers from the counts, and sets the winner with an

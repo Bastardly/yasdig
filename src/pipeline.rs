@@ -532,6 +532,9 @@ pub struct ShotSpec {
     pub cut: bool,
     /// `work/output/` stems. Only on a cut, or on shot 1 with no first frame.
     pub references: Vec<String>,
+    /// A `work/output/` stem the cut starts from. Only on a cut after shot 1
+    /// (shot 1's is the clip's `source`), never beside references.
+    pub keyframe: Option<String>,
 }
 
 /// *Extend clip*, *Redo from shot k* and the × on the last shot, as one
@@ -2302,7 +2305,13 @@ impl Engine {
         let mut ms = m.clone();
         ms.frames = seg.frames;
         let refs = self.stage_shot_refs(id, k, m, seg)?;
-        let init = (!seg.cut).then_some(last.as_path());
+        // A cut from a picture starts there, as shot 1 does from the clip's
+        // first frame; any other cut from nothing.
+        let key = match &seg.keyframe {
+            Some(stem) if seg.cut => Some(self.output_source(stem)?),
+            _ => None,
+        };
+        let init = if seg.cut { key.as_deref() } else { Some(last.as_path()) };
         let ran = self.sd().video(
             &ms,
             &seg.conditioned,
@@ -4478,18 +4487,46 @@ fn plan_shots(
         }
         // Shot 1 starts fresh whatever its row says.
         let cut = k > 0 && shot.cut;
-        if (cut || !shot.references.is_empty()) && !m.family.takes_references() {
+        let keyframe = shot.keyframe.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        // A cut included: past shot 1 such a model has no shot to draw at all.
+        if k > 0 && !m.family.chains() {
             bail!(
-                "shot {}: a cut with references needs MiniMax H3; a {} model goes on from the last frame, so \
-                 set the shot back to Continue",
+                "a {} model can't go on from a clip's last frame (its -i is not a first frame), so it \
+                 makes one clip at a time — remove the shots, or pick a TI2V-5B, A14B or H3 model",
+                m.family.label()
+            );
+        }
+        if let Some(stem) = keyframe {
+            if k == 0 {
+                bail!("shot 1 starts from the clip's first frame: pick it as the first frame instead");
+            }
+            if !cut {
+                bail!("shot {}: a shot that starts from a picture is a cut — set it to Cut", k + 1);
+            }
+            if !shot.references.is_empty() {
+                bail!(
+                    "shot {}: a cut starts from a picture or follows references, not both — sd.cpp can't give \
+                     MiniMax H3 references and a starting frame at once",
+                    k + 1
+                );
+            }
+            if !workitems::valid_id(stem) {
+                bail!("'{stem}' is not an output image");
+            }
+        }
+        if !shot.references.is_empty() && !m.family.takes_references() {
+            bail!(
+                "shot {}: references need MiniMax H3; a {} model follows a picture only as a cut's start",
                 k + 1,
                 m.family.label()
             );
         }
-        if k > 0 && !cut && !m.family.chains() {
+        // A cut on a family without references has nothing to start from but
+        // a picture.
+        if cut && keyframe.is_none() && !m.family.takes_references() {
             bail!(
-                "a {} model can't go on from a clip's last frame (its -i is not a first frame), so it \
-                 makes one clip at a time — remove the shots, or pick a TI2V-5B, A14B or H3 model",
+                "shot {}: a cut on a {} model starts from a picture — pick one, or set the shot back to Continue",
+                k + 1,
                 m.family.label()
             );
         }
@@ -4514,6 +4551,7 @@ fn plan_shots(
             frames: m.family.align_frames(shot.frames.unwrap_or(m.frames)),
             cut,
             references: shot.references.clone(),
+            keyframe: keyframe.map(str::to_string),
         });
     }
     Ok(out)
@@ -4652,7 +4690,9 @@ mod tests {
         };
         let wan = video("wan22_ti2v_5b");
         let e = plan_shots(&vars, &wan, &[cut(shot("x", 1, None))], "", 1, false).unwrap_err();
-        assert!(e.to_string().contains("needs MiniMax H3"), "{e}");
+        assert!(e.to_string().contains("starts from a picture"), "{e}");
+        let e = plan_shots(&vars, &wan, &[refs(cut(shot("x", 1, None)))], "", 1, false).unwrap_err();
+        assert!(e.to_string().contains("need MiniMax H3"), "{e}");
 
         let h3 = video("minimax_h3");
         let segs = plan_shots(&vars, &h3, &[refs(cut(shot("the dwarf returns", 1, None)))], "", 1, false).unwrap();
@@ -4664,6 +4704,39 @@ mod tests {
         assert!(e.to_string().contains("first frame"), "{e}");
         let first = plan_shots(&vars, &h3, &[cut(shot("x", 1, None))], "", 0, false).unwrap();
         assert!(!first[0].cut);
+    }
+
+    /// A cut may start from a picture on any family that takes a first
+    /// frame — how a Wan clip changes scene — but never beside references,
+    /// never on shot 1 (that is the clip's first frame) and never on a
+    /// continue.
+    #[test]
+    fn a_cut_can_start_from_a_picture() {
+        let vars = Default::default();
+        let key = |mut s: ShotSpec, cut: bool| {
+            s.keyframe = Some("100-7-s0".into());
+            s.cut = cut;
+            s
+        };
+        let wan = video("wan22_ti2v_5b");
+        let segs = plan_shots(&vars, &wan, &[key(shot("the hall at night", 1, None), true)], "", 1, false).unwrap();
+        assert!(segs[0].cut);
+        assert_eq!(segs[0].keyframe.as_deref(), Some("100-7-s0"));
+        let e = plan_shots(&vars, &wan, &[key(shot("x", 1, None), false)], "", 1, false).unwrap_err();
+        assert!(e.to_string().contains("is a cut"), "{e}");
+        let e = plan_shots(&vars, &wan, &[key(shot("x", 1, None), true)], "", 0, false).unwrap_err();
+        assert!(e.to_string().contains("shot 1"), "{e}");
+
+        let h3 = video("minimax_h3");
+        assert!(plan_shots(&vars, &h3, &[key(shot("x", 1, None), true)], "", 1, false).is_ok());
+        let mut both = key(shot("x", 1, None), true);
+        both.references = vec!["100-8-s0".into()];
+        let e = plan_shots(&vars, &h3, &[both], "", 1, false).unwrap_err();
+        assert!(e.to_string().contains("not both"), "{e}");
+
+        let mut bad = key(shot("x", 1, None), true);
+        bad.keyframe = Some("../x".into());
+        assert!(plan_shots(&vars, &wan, &[bad], "", 1, false).is_err());
     }
 
     /// The sides are drawn left and right first, so a later strip spans their

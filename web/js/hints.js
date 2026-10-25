@@ -193,10 +193,11 @@ const HELP = [
     text: 'How the shot begins. Continue draws on from the last shot’s final '
         + 'frame: seamless, but one frame is all that carries over, so a face that '
         + 'leaves and comes back is drawn anew and may not match. Cut starts a new '
-        + 'camera shot from nothing but its words and, if you pick them, reference '
-        + 'pictures — the dwarf’s face, his coat — which H3 keeps; it does not join '
-        + 'the frame before. Only MiniMax H3 takes references, and never beside a '
-        + 'starting frame, which is why a shot with them is a cut.' },
+        + 'camera shot and does not join the frame before. It can start from a '
+        + 'picture you pick — a keyframe, the way Wan changes scene — or, on MiniMax '
+        + 'H3, from its words and reference pictures (the dwarf’s face, his coat), '
+        + 'which H3 keeps. Never both: sd.cpp can’t give H3 references and a '
+        + 'starting frame at once.' },
   { ids: ['cbformat'],
     text: 'What to save the version on screen as, made here in the browser, so '
         + 'only what this browser can encode is offered. MP4 plays everywhere — '

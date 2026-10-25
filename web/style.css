@@ -433,7 +433,10 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .shotstart { display: flex; align-items: center; gap: var(--sp-1); }
 .shotstart label { margin: 0; }
 .shotstart .btn-choice { padding: var(--sp-1) var(--sp-3); }
-.shotrefs { margin-top: var(--sp-2); }
+.shotfrom { margin-top: var(--sp-2); align-items: center; }
+.shotfrom:not(:has(> :not([hidden]))) { display: none; }
+/* The picture a cut starts from, small beside its buttons. */
+.shotkeythumb { height: calc(var(--thumb-h-chosen) / 2); border-radius: var(--r-sm); }
 /* A shot the clip on the stage already has (`shots.js`): ticked in the
    departure green, which here means "drawn". */
 .shotrow.done .shothead b { color: var(--go); }

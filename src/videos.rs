@@ -123,8 +123,9 @@ pub struct Clip {
 /// its seed and length, how it began, and the frame it begins at in the
 /// clip's one frame sequence.
 ///
-/// The page's row for a shot holds `text`, `seed`, `frames`, `cut` and
-/// `references`; a row that still matches all five is a shot that is done.
+/// The page's row for a shot holds `text`, `seed`, `frames`, `cut`,
+/// `references` and `keyframe`; a row that still matches all six is a shot
+/// that is done.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Segment {
     /// As typed, `{variables}` and all.
@@ -146,6 +147,11 @@ pub struct Segment {
     /// `work/output/` stems, as for a still's references.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<String>,
+    /// A cut that starts from a picture: a `work/output/` stem, sd-cli's `-i`
+    /// for this shot instead of the clip's last frame. How a Wan clip changes
+    /// scene, since it has no references.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyframe: Option<String>,
 }
 
 /// What a shot is conditioned on: the *Every shot* text in front of its own.
@@ -171,6 +177,7 @@ impl Clip {
             frames: self.video.aligned().2,
             cut: false,
             references: Vec::new(),
+            keyframe: None,
         }
     }
 
@@ -205,6 +212,7 @@ impl Clip {
                     frames,
                     cut: false,
                     references: Vec::new(),
+                    keyframe: None,
                 });
             }
             self.segments = segs;
@@ -221,6 +229,7 @@ impl Clip {
                     frames,
                     cut: false,
                     references: Vec::new(),
+                    keyframe: None,
                 })
                 .collect();
             self.prompt = shots[0].clone();
