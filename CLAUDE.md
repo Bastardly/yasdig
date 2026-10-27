@@ -813,6 +813,21 @@ Break silently:
   doesn't `chains()`). A new chat's settings have no `prompt` key, which `GenerateDto`
   requires: a board picture inserts its own, a round an empty one. A film's turns get the video family's skills too
   (`skills::select` takes both families' names, which never collide).
+- **An H3 shot is sent as MiniMax's prompt guide lays it out** (`agent::h3prompt`,
+  from `shot_spec`; the guide is `skills/h3-prompt-writing/references/{base,ref}-en.txt`
+  in github.com/MiniMax-AI/MiniMax-H3): `integrated_multimodal_description` /
+  `overall_soundscape` / `non_diegetic_music` (`N/A` when empty), the I2VA
+  first-frame line first on a continue, Ref2VA's six sections with each pictured
+  member a `<Subject N>` in the order its `-r` is sent (sd.cpp presents them as
+  `<Picture N>`). The board holds plain fields — `FilmShot.lines` (`Line {who,
+  words, language, voiceover}`), `sound`, `music`, asked for only when the video
+  model `takes_references` — and the server writes the markup: speaker IDs by first
+  line in the film, `<d>[Lang] …</d>`, `clean_lines` strips markup a model wrote.
+  **Silence is written too** (`with_lines`): the last on-screen speaker closes their
+  lips, the shot's cast with no line stay silent, "Nothing more is said"; no lines
+  is "No one speaks" — time left unaccounted for, H3 fills with invented speech.
+  `every` goes inside, so `shoot` sends none of its own. H3's encoder takes the
+  prompt whole (`prompt_attn_range {0,0}`), so `(S1)` and `[Shot 1]` survive.
 - **Shooting a film** (`session::go`, `Next::Shoot`/`Next::Take`): **the movie is an
   ordinary clip** — shot 1 is `Engine::video` (a retake of it a new clip, the old one
   deleted), every later shot and every retake `extend_clip {keep: k}` — so the Video

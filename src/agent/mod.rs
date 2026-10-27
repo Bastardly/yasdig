@@ -11,6 +11,7 @@
 
 pub mod chat;
 pub mod context;
+pub mod h3prompt;
 pub mod knobs;
 pub mod routes;
 pub mod schema;
@@ -524,7 +525,8 @@ fn shoot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: usize) ->
     let f = chat.film.as_ref().ok_or_else(|| anyhow!("the chat has no storyboard"))?;
     let seed = (rand_seed() & 0x7fff_ffff) as i64;
     let spec = session::shot_spec(f, k, seed);
-    let every = (!f.every.is_empty()).then(|| f.every.clone());
+    // H3's shot carries the look inside its prompt (`h3prompt`).
+    let every = (!f.every.is_empty() && !f.references).then(|| f.every.clone());
     let r = match (k, &f.clip) {
         (0, old) => {
             let mut req = crate::pipeline::VideoRequest { model: f.video_model.clone(), shots: vec![spec], every, ..Default::default() };

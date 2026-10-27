@@ -292,8 +292,42 @@ function shotRow(chat, s, k, lock) {
     <div class="storyshotbody">${key}<div class="storyfields">
       <textarea rows="2" data-film-shot="${k}" data-field="text" aria-label="Shot ${k + 1}"${lock}>${esc(s.text)}</textarea>
       <input type="text" value="${esc(s.cast.join(', '))}" data-film-shot="${k}" data-field="cast"
-        placeholder="Who is in it" aria-label="Who is in shot ${k + 1}"${lock}>
+        placeholder="Who is in it" aria-label="Who is in shot ${k + 1}"${lock}>${chat.film.references ? soundFields(s, k, lock) : ''}
     </div></div></li>`;
+}
+
+// H3 films sound: what is said, what is heard, and the score — written into
+// its prompt by the server (`h3prompt.rs`).
+function soundFields(s, k, lock) {
+  return `
+      <textarea rows="2" data-film-shot="${k}" data-field="lines" aria-label="Spoken in shot ${k + 1}"
+        placeholder="Spoken, one line each — Mara: Who's there?  Leo (voiceover): I never left."${lock}>${esc(linesText(s.lines))}</textarea>
+      <input type="text" value="${esc(s.sound ?? '')}" data-film-shot="${k}" data-field="sound"
+        placeholder="Sound: rain on the roof, footsteps — empty is silence" aria-label="Sound in shot ${k + 1}"${lock}>
+      <input type="text" value="${esc(s.music ?? '')}" data-film-shot="${k}" data-field="music"
+        placeholder="Music only the audience hears — empty is none" aria-label="Music in shot ${k + 1}"${lock}>`;
+}
+
+// A shot's lines as the panel edits them, one each: `Who: words`, with
+// `(voiceover)` and a language other than English in brackets after the name.
+export function linesText(lines = []) {
+  return lines.map((l) => {
+    const tags = [l.voiceover ? 'voiceover' : '', l.language && l.language !== 'English' ? l.language : ''].filter(Boolean);
+    return `${l.who}${tags.length ? ` (${tags.join(', ')})` : ''}: ${l.words}`;
+  }).join('\n');
+}
+
+// The panel's text back into lines. A line with no `Who:` keeps an empty
+// speaker, which the server refuses with the reason.
+export function parseLines(text) {
+  return text.split('\n').map((row) => row.trim()).filter(Boolean).map((row) => {
+    const m = /^([^:()]+?)\s*(?:\(([^)]*)\))?\s*:\s*(.*)$/.exec(row);
+    if (!m) return { who: '', words: row, language: '', voiceover: false };
+    const tags = (m[2] ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+    const voiceover = tags.some((t) => t.toLowerCase() === 'voiceover');
+    const language = tags.find((t) => t.toLowerCase() !== 'voiceover') ?? '';
+    return { who: m[1].trim(), words: m[3].trim(), language, voiceover };
+  });
 }
 
 // The cast's pictures in a row, named, for the storyboard's card.

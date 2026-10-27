@@ -637,12 +637,14 @@ the chat, whose `rev` moves on every write.
   turn follows in the same job; its pictures wait for `/chats/film {draw: true}`). `video` is the Video tab's model now. At most four pictures, copied into the
   chat. `409` while the agent is working on the chat.
 - `POST /chats/film` — `{ id, every?, member?, name?, look?, picture?, shot?, text?,
-  cast?, cut?, draw?, image_model?, video_model?, go? }`: an edit of the storyboard before it is filmed — the look every shot
+  cast?, cut?, lines?, sound?, music?, redraw_keyframe?, no_keyframe?, draw?, image_model?, video_model?, go? }`: an edit of the storyboard before it is filmed — the look every shot
   shares, cast member `member`'s name, look or picture (`{kind: "output", id}`, or `null`
   to have it drawn again), shot `shot`'s words, cast (names) or cut. A reworded shot's
   keyframe is dropped, as is one sent with `redraw_keyframe: true` (a click on it in the
   Story panel); `no_keyframe: true` starts shot `shot` from its words with none drawn
-  (`false` draws one again); `image_model` is the installed model the pictures still missing are
+  (`false` draws one again); on H3, `lines` (`[{who, words, language?, voiceover?}]`, `who` a
+  cast name or `narrator`), `sound` and `music` are what shot `shot` says, sounds like and
+  is scored with (empty sound is silence, empty music none); `image_model` is the installed model the pictures still missing are
   drawn with (one that takes references gives characters a turnaround sheet). `video_model` is the installed video model it is shot on (the Video tab's when the board was written); on one whose cuts start from keyframes, the switch may leave keyframes to draw. `draw: true` (the Story panel's *Draw the cast*, then *Draw the first frames*) queues
   a leg that draws what the cast is missing or, with the cast whole, the first frames
   missing or drawn with a cast picture since changed; `go: true` (*Film*) one that films it — shot 1 a new

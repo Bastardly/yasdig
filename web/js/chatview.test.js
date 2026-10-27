@@ -2,7 +2,7 @@
 // (`chatview.js`). Not in `web::WEB_FILES`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { drawLabel, mainAction, renderChat, liveReply, replyHtml, sessionHtml, valueText, stateText, storyHtml } from './chatview.js';
+import { drawLabel, linesText, mainAction, parseLines, renderChat, liveReply, replyHtml, sessionHtml, valueText, stateText, storyHtml } from './chatview.js';
 
 const chat = (over = {}) => ({
   id: '1-0',
@@ -208,4 +208,18 @@ test('the main action draws, then films, then goes on after a stop; a shot shows
   assert.equal(stateText(chat({ film: shooting, session: { state: 'running', next: 'shoot', goal: '', checks: [], round: 0 } })), 'Filming shot 2 of 2');
   const card = renderChat(chat({ messages: [{ role: 'clip', n: 0, id: 'c<1', title: 'Rain' }] }));
   assert.ok(card.includes('data-open-clip="c&lt;1"') && card.includes('/videos/c%3C1/thumb.png'));
+});
+
+test('an H3 shot edits what is said, heard and scored; the lines read back as they were', () => {
+  const lines = [
+    { who: 'Mara', words: 'Who\'s there?', language: '', voiceover: false },
+    { who: 'Leo', words: 'Hej.', language: 'Danish', voiceover: true },
+  ];
+  assert.equal(linesText(lines), "Mara: Who's there?\nLeo (voiceover, Danish): Hej.");
+  assert.deepEqual(parseLines(linesText(lines) + '\n\n  '), lines);
+  assert.deepEqual(parseLines('Just words'), [{ who: '', words: 'Just words', language: '', voiceover: false }], 'the server says why');
+  const h3 = film({ references: true, shots: [{ ...film().shots[0], lines, sound: 'Rain', music: '' }] });
+  const html = storyHtml(chat({ film: h3 }));
+  assert.ok(html.includes('data-field="lines"') && html.includes('value="Rain"') && html.includes('data-field="music"'));
+  assert.ok(!storyHtml(chat({ film: film() })).includes('data-field="sound"'), 'Wan films no sound');
 });

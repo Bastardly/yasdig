@@ -149,6 +149,18 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
     shot.insert("text".into(), text(500));
     shot.insert("cast".into(), json!({ "type": "array", "items": text(40), "maxItems": crate::config::MAX_REFERENCES }));
     shot.insert("cut".into(), json!({ "type": "boolean" }));
+    // H3 films sound; its prompt says what is spoken, heard and scored
+    // (`h3prompt`), so the board asks for each.
+    if t.video.as_ref().is_some_and(|v| v.references) {
+        let mut line = Map::new();
+        line.insert("who".into(), text(40));
+        line.insert("words".into(), text(300));
+        line.insert("language".into(), text(20));
+        line.insert("voiceover".into(), json!({ "type": "boolean" }));
+        shot.insert("lines".into(), json!({ "type": "array", "items": object(line), "maxItems": 4 }));
+        shot.insert("sound".into(), text(300));
+        shot.insert("music".into(), text(200));
+    }
     props.insert("title".into(), text(80));
     props.insert("every".into(), text(300));
     if let Some(models) = board_models(t) {
@@ -491,6 +503,22 @@ mod tests {
         assert_eq!(member["required"], json!(keys(member)));
         assert_eq!(member["properties"]["picture"]["maximum"], json!(2), "one of the pictures attached, or none");
         assert_eq!(keys(&s["properties"]["shots"]["items"]), ["text", "cast", "cut"]);
+        // On H3 a shot says what is spoken, heard and scored.
+        let mut h3 = t.clone();
+        h3.video = Some(crate::agent::toolkit::VideoView {
+            name: "h3".into(),
+            family: "minimax_h3",
+            label: "MiniMax H3",
+            chains: true,
+            references: true,
+            width: 1280,
+            height: 704,
+            frames: 121,
+            fps: 24,
+        });
+        let shot = &output(Mode::Story, &h3, 2, 0, false)["properties"]["shots"]["items"];
+        assert_eq!(keys(shot), ["text", "cast", "cut", "lines", "sound", "music"]);
+        assert_eq!(keys(&shot["properties"]["lines"]["items"]), ["who", "words", "language", "voiceover"]);
         assert_eq!(s["properties"]["shots"]["maxItems"], json!(crate::pipeline::MAX_SHOTS));
     }
 

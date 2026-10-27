@@ -38,6 +38,7 @@ const BUILTIN: &[(&str, &str)] = &[
     ("qwen-image.md", include_str!("skills/qwen-image.md")),
     ("moss.md", include_str!("skills/moss.md")),
     ("film.md", include_str!("skills/film.md")),
+    ("h3.md", include_str!("skills/h3.md")),
 ];
 
 #[derive(Debug, Clone, PartialEq)]

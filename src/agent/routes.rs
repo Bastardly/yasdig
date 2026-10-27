@@ -303,6 +303,13 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         /// Shot `shot` starts from its words (`true`), or a first frame again.
         #[serde(default)]
         no_keyframe: Option<bool>,
+        /// H3's: shot `shot`'s spoken lines, its sound and its score.
+        #[serde(default)]
+        lines: Option<Vec<super::chat::Line>>,
+        #[serde(default)]
+        sound: Option<String>,
+        #[serde(default)]
+        music: Option<String>,
         #[serde(default)]
         every: Option<String>,
         /// Draw what the board is missing (*Draw the cast*).
@@ -402,6 +409,9 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
             cut: dto.cut,
             redraw_keyframe: dto.redraw_keyframe,
             no_keyframe: dto.no_keyframe,
+            lines: dto.lines.clone(),
+            sound: dto.sound.clone(),
+            music: dto.music.clone(),
         };
         session::edit_board(c, &edit).map_err(|e| anyhow::anyhow!(e))?;
         if dto.draw {

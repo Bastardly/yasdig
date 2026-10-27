@@ -211,6 +211,19 @@ impl Member {
     }
 }
 
+/// A line spoken in a shot: by a member (by name) or the narrator.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Line {
+    pub who: String,
+    pub words: String,
+    /// The words' language, as H3's `<d>[English] …</d>` names it; empty is English.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub language: String,
+    /// Heard over the shot, the speaker's lips closed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub voiceover: bool,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FilmShot {
     pub text: String,
@@ -233,6 +246,14 @@ pub struct FilmShot {
     /// removed it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_key: bool,
+    /// On H3, which films sound: what is said, what is heard, and the
+    /// score (`h3prompt`). Empty sound is silence, empty music none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<Line>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sound: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub music: String,
     /// 0 until it is filmed.
     #[serde(default)]
     pub seed: i64,

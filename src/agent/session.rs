@@ -136,7 +136,8 @@ pub fn go(chat: &mut Chat, watch: bool, retakes: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// What shot `k` of the film is sent to the video model as: its words, a
+/// What shot `k` of the film is sent to the video model as — on H3 the
+/// prompt its guide lays out (`h3prompt`), else its words — with a
 /// seed of its own, the model's length. A cut — and shot 1 — starts from its
 /// keyframe on a model without references (shot 1's is the clip's source,
 /// not on the spec), and from the pictures of the cast it names on one with
@@ -144,13 +145,21 @@ pub fn go(chat: &mut Chat, watch: bool, retakes: u32) -> Result<(), String> {
 pub fn shot_spec(f: &Film, k: usize, seed: i64) -> crate::pipeline::ShotSpec {
     let s = &f.shots[k];
     let fresh = k == 0 || s.cut;
-    let references = if fresh && f.references {
-        s.cast.iter().filter_map(|n| f.member(n)?.stem.clone()).take(crate::config::MAX_REFERENCES).collect()
+    let pictured: Vec<&Member> = if fresh && f.references {
+        s.cast.iter().filter_map(|n| f.member(n).filter(|m| m.stem.is_some())).take(crate::config::MAX_REFERENCES).collect()
     } else {
         Vec::new()
     };
+    let references = pictured.iter().filter_map(|m| m.stem.clone()).collect();
+    // H3's whole prompt, `every` inside it (`shoot` sends none of its own).
+    let text = if f.references {
+        let names: Vec<String> = pictured.iter().map(|m| m.name.clone()).collect();
+        super::h3prompt::compose(f, k, &names, !fresh)
+    } else {
+        s.text.clone()
+    };
     crate::pipeline::ShotSpec {
-        text: s.text.clone(),
+        text,
         seed,
         frames: None,
         cut: k > 0 && s.cut,
@@ -249,6 +258,10 @@ pub struct BoardEdit {
     pub redraw_keyframe: bool,
     /// Shot `shot` starts from its words (`true`) or a first frame again.
     pub no_keyframe: Option<bool>,
+    /// H3's: what shot `shot` says, sounds like and is scored with.
+    pub lines: Option<Vec<super::chat::Line>>,
+    pub sound: Option<String>,
+    pub music: Option<String>,
 }
 
 /// Apply a [`BoardEdit`] to a board still being written or ready, then make
@@ -326,6 +339,22 @@ pub fn edit_board(c: &mut Chat, e: &BoardEdit) -> Result<(), String> {
         }
         if let Some(cut) = e.cut {
             s.cut = cut && k > 0;
+        }
+        if let Some(lines) = &e.lines {
+            if lines.iter().any(|l| l.who.trim().is_empty() && !l.words.trim().is_empty()) {
+                return Err("each line starts with who says it: \"Mara: Who's there?\"".into());
+            }
+            let (lines, unknown) = super::h3prompt::clean_lines(&names, lines);
+            if !unknown.is_empty() {
+                return Err(format!("{} isn't in the cast — a line is said by one of them, or the narrator", unknown.join(", ")));
+            }
+            s.lines = lines;
+        }
+        if let Some(t) = &e.sound {
+            s.sound = t.trim().to_string();
+        }
+        if let Some(t) = &e.music {
+            s.music = t.trim().to_string();
         }
         if let Some(off) = e.no_keyframe {
             s.no_key = off;
@@ -682,6 +711,13 @@ pub struct ShotJson {
     pub cast: Vec<String>,
     #[serde(default)]
     pub cut: bool,
+    /// H3's: what is said, heard and scored.
+    #[serde(default)]
+    pub lines: Vec<super::chat::Line>,
+    #[serde(default)]
+    pub sound: String,
+    #[serde(default)]
+    pub music: String,
 }
 
 /// The most cast members a film has: each is a picture drawn before the
@@ -812,7 +848,22 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
         }
         names.truncate(crate::config::MAX_REFERENCES);
         let k = shots.len();
-        let mut shot = FilmShot { text, cast: names, cut: k > 0 && s.cut, ..Default::default() };
+        let names_all: Vec<String> = cast.iter().map(|m| m.name.clone()).collect();
+        let (lines, who) = super::h3prompt::clean_lines(&names_all, &s.lines);
+        for w in who {
+            if !unknown.iter().any(|u| u.eq_ignore_ascii_case(&w)) {
+                unknown.push(w);
+            }
+        }
+        let mut shot = FilmShot {
+            text,
+            cast: names,
+            cut: k > 0 && s.cut,
+            lines,
+            sound: plain(&s.sound),
+            music: plain(&s.music),
+            ..Default::default()
+        };
         if let Some(n) = recut(&shots, &mut shot, k) {
             recuts.push(n);
         }
@@ -827,7 +878,7 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
         shots.push(shot);
     }
     if !unknown.is_empty() {
-        notes.push(format!("The shots named {}, who aren't in the cast; left out of them.", unknown.join(", ")));
+        notes.push(format!("The shots named {}, who aren't in the cast; left out of them and their lines.", unknown.join(", ")));
     }
     if let Some(n) = recut_note(&recuts) {
         notes.push(n);
@@ -1388,7 +1439,7 @@ pub fn undo(chat: &mut Chat, id: u64) -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::chat::ImageRef;
+    use super::super::chat::{ImageRef, Line};
     use super::super::knobs::Rules;
     use super::super::toolkit::{build, ModelChoice};
     use super::*;
@@ -1704,6 +1755,50 @@ mod tests {
         assert_eq!(shot_spec(f, 0, 7).references, ["mara-photo"], "shot 1 follows its cast");
         let s2 = shot_spec(f, 2, 7);
         assert!(s2.cut && s2.keyframe.is_none() && s2.references == ["p1-s0"]);
+    }
+
+    #[test]
+    fn an_h3_shot_is_sent_as_its_guide_lays_it_out_and_a_wan_one_as_its_words() {
+        let c = ready(false);
+        assert_eq!(shot_spec(c.film.as_ref().unwrap(), 1, 7).text, "She steps into the rain.", "Wan: the words, `every` sent apart");
+
+        let mut c = film_chat();
+        let t = film_tk(&c, true);
+        let mut b = board();
+        b["shots"][0]["lines"] = json!([
+            {"who": "MARA", "words": "<d>[English] Who's there?</d>", "language": "", "voiceover": false},
+            {"who": "Bob", "words": "Me.", "language": "", "voiceover": false}
+        ]);
+        b["shots"][0]["sound"] = json!("Rain on the porch.");
+        b["shots"][0]["music"] = json!("");
+        b["shots"][1]["lines"] = json!([{"who": "Mara", "words": "Cold.", "language": "", "voiceover": true}]);
+        story(&mut c, &t, b.clone());
+        let f = c.film.as_ref().unwrap();
+        assert_eq!(f.shots[0].lines.len(), 1, "Bob isn't in the cast");
+        assert_eq!((f.shots[0].lines[0].who.as_str(), f.shots[0].lines[0].words.as_str()), ("Mara", "Who's there?"));
+        assert_eq!(f.shots[0].sound, "Rain on the porch.");
+        // Shot 1 follows Mara's picture: Ref2VA's sections, Mara as <Subject 1>.
+        let s0 = shot_spec(f, 0, 7);
+        assert!(s0.text.starts_with("subject_definitions:
+<Subject 1> is Mara in <Picture 1>"), "{}", s0.text);
+        assert!(s0.text.contains("<Subject 1> (S1) says: <d>[English] Who's there?</d>"), "{}", s0.text);
+        assert!(s0.text.ends_with("overall_soundscape:
+Rain on the porch.
+
+non_diegetic_music:
+N/A"), "{}", s0.text);
+        // Shot 2 goes on from shot 1's last frame: the first-frame line first.
+        let s1 = shot_spec(f, 1, 7);
+        assert!(s1.text.starts_with("For the target video, at 0.00 seconds"), "{}", s1.text);
+        assert!(s1.text.contains("[Shot 1] cinematic, warm light. She steps into the rain. Mara (S1) says in an off-screen voiceover"));
+
+        // A board rewritten keeps what it says, and the panel can change it.
+        story(&mut c, &t, b);
+        edit_board(&mut c, &BoardEdit { shot: Some(0), music: Some("Slow piano.".into()), ..Default::default() }).unwrap();
+        assert!(shot_spec(c.film.as_ref().unwrap(), 0, 7).text.ends_with("non_diegetic_music:
+Slow piano."));
+        let bad = BoardEdit { shot: Some(0), lines: Some(vec![Line { who: "Bob".into(), words: "Hi".into(), ..Default::default() }]), ..Default::default() };
+        assert!(edit_board(&mut c, &bad).is_err());
     }
 
     #[test]

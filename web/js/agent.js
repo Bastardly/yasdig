@@ -6,7 +6,7 @@ import { S } from './state.js';
 import { cancelPost, onPassResult, onViewerResult, setLook, setViewerImage, showFullSize } from './viewer.js';
 import { openWorkItem } from './workitems.js';
 import { choosePicture, upload } from './source-slot.js';
-import { mainAction, renderChat, sessionHtml, stateText, storyHtml } from './chatview.js';
+import { mainAction, parseLines, renderChat, sessionHtml, stateText, storyHtml } from './chatview.js';
 import { openGetModels } from './getmodels.js';
 
 // ---- The Agent tab ------------------------------------------------------------
@@ -206,7 +206,8 @@ function initStory() {
     else if (t.dataset.filmShot != null) {
       const k = Number(t.dataset.filmShot);
       const f = t.dataset.field;
-      editFilm({ shot: k, [f]: f === 'cut' ? t.value === '1' : f === 'cast' ? t.value.split(',').map((x) => x.trim()).filter(Boolean) : t.value });
+      editFilm({ shot: k, [f]: f === 'cut' ? t.value === '1' : f === 'cast' ? t.value.split(',').map((x) => x.trim()).filter(Boolean)
+        : f === 'lines' ? parseLines(t.value) : t.value });
     }
   });
   body.addEventListener('focusout', () => {

@@ -32,6 +32,13 @@ What changed in each release of yasdig. Each release's executables are on the
   what the shot says, do the people look like their pictures, does it follow on) and
   films a failing one again — once, or as often as Settings → Agent says. The film is an ordinary clip in the Video tab, where
   *Redo from shot k* works on it. "Make shot 2 at night" rewrites it, keeping the pictures that still fit. A shot that goes on from the one before can only keep who that shot showed, so one that brings someone in — or back — is made a cut, which starts from their picture.
+  On MiniMax H3, which films sound, each shot also says what is spoken (who says
+  which line, or a voiceover with closed lips), what is heard and whether a score
+  plays — none unless you ask — and yasdig writes them into the prompt layout
+  MiniMax's own guide sets out, so H3 no longer invents a narrator or music. The
+  prompt also says who stays silent: after the last line the speaker closes their
+  lips and nothing more is said, and a shot with no lines says no one speaks, since
+  H3 filled the unspoken end of a shot with a sentence of its own.
   Settings → Agent's *Make movies* turns it off.
 - **Comparisons**: ask "which CFG works best?" or "which model draws hands better?" and it
   draws one round per value on the same seeds, judges them, counts per value the
