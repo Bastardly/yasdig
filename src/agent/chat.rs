@@ -141,6 +141,11 @@ pub struct Film {
     /// Each shot is looked at after it is filmed: the agent model sees.
     #[serde(default)]
     pub watch: bool,
+    /// The press being drawn may draw keyframes too: *Draw the first
+    /// frames*. *Draw the cast* stops at the cast, so a member can be redrawn
+    /// without drawing every frame they are in each time.
+    #[serde(default)]
+    pub frames: bool,
     /// How many times a shot failing a check is filmed again: Settings →
     /// Agent's as it was at go.
     #[serde(default = "one_retake")]
@@ -220,6 +225,14 @@ pub struct FilmShot {
     pub keyframe: Option<ImageRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_stem: Option<String>,
+    /// The cast pictures the keyframe was drawn with ([`Film::cast_marks`]):
+    /// one changed since makes it stale. `None` on a board from before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_cast: Option<Vec<String>>,
+    /// The shot starts from its words, no first frame drawn: the person
+    /// removed it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_key: bool,
     /// 0 until it is filmed.
     #[serde(default)]
     pub seed: i64,
@@ -235,7 +248,29 @@ impl Film {
     /// Whether shot `k` starts from a keyframe drawn first: shot 1 and every
     /// cut, on a model without references.
     pub fn needs_keyframe(&self, k: usize) -> bool {
-        !self.references && self.shots.get(k).is_some_and(|s| k == 0 || s.cut)
+        !self.references && self.shots.get(k).is_some_and(|s| !s.no_key && (k == 0 || s.cut))
+    }
+
+    /// The pictures shot `k`'s keyframe is drawn with, one mark per member
+    /// in it: their front picture and turnaround.
+    pub fn cast_marks(&self, k: usize) -> Vec<String> {
+        self.shots.get(k).map_or(Vec::new(), |s| {
+            s.cast
+                .iter()
+                .map(|n| self.member(n).map_or(String::new(), |m| {
+                    format!("{}|{}", m.stem.as_deref().unwrap_or(""), m.sheet_stem.as_deref().unwrap_or(""))
+                }))
+                .collect()
+        })
+    }
+
+    /// Shot `k` has no keyframe it can start from: none drawn, or one drawn
+    /// with a cast picture that has changed since.
+    pub fn keyframe_missing(&self, k: usize) -> bool {
+        self.needs_keyframe(k)
+            && self.shots.get(k).is_some_and(|s| {
+                s.key_stem.is_none() || s.key_cast.as_ref().is_some_and(|c| *c != self.cast_marks(k))
+            })
     }
 
     /// Whether member `m` gets a turnaround sheet: a character, on a model

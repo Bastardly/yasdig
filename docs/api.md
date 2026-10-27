@@ -535,7 +535,7 @@ needs a Vulkan device and nothing else.
   `frames` (absent is the model's; rounded to the family's grid). Each shot after the
   first is rendered from the previous one's last frame (only on families that chain:
   TI2V-5B, A14B, H3), up to 20 in all — or, with `cut: true`, starts fresh: from a
-  `keyframe` (a `work/output/` stem; any family that chains, and on Wan a cut needs one),
+  `keyframe` (a `work/output/` stem; any family that chains; a cut without one starts from its words),
   or, on MiniMax H3, from its words and up to four `references` (`work/output/` stems;
   `references: true` on `/video-models`). Never both, and references never beside a first
   frame: sd.cpp refuses H3's references beside a keyframe, so shot 1 takes them only with
@@ -640,9 +640,12 @@ the chat, whose `rev` moves on every write.
   cast?, cut?, draw?, image_model?, video_model?, go? }`: an edit of the storyboard before it is filmed — the look every shot
   shares, cast member `member`'s name, look or picture (`{kind: "output", id}`, or `null`
   to have it drawn again), shot `shot`'s words, cast (names) or cut. A reworded shot's
-  keyframe is dropped; `image_model` is the installed model the pictures still missing are
-  drawn with (one that takes references gives characters a turnaround sheet). `video_model` is the installed video model it is shot on (the Video tab's when the board was written); on one whose cuts start from keyframes, the switch may leave keyframes to draw. `draw: true` (the Story panel's *Draw the cast*) queues a leg that
-  draws whatever the board is missing; `go: true` (*Film*) one that films it — shot 1 a new
+  keyframe is dropped, as is one sent with `redraw_keyframe: true` (a click on it in the
+  Story panel); `no_keyframe: true` starts shot `shot` from its words with none drawn
+  (`false` draws one again); `image_model` is the installed model the pictures still missing are
+  drawn with (one that takes references gives characters a turnaround sheet). `video_model` is the installed video model it is shot on (the Video tab's when the board was written); on one whose cuts start from keyframes, the switch may leave keyframes to draw. `draw: true` (the Story panel's *Draw the cast*, then *Draw the first frames*) queues
+  a leg that draws what the cast is missing or, with the cast whole, the first frames
+  missing or drawn with a cast picture since changed; `go: true` (*Film*) one that films it — shot 1 a new
   clip in the Video tab's Current, each later shot an extend of it, each looked at by the
   agent when it can see and filmed once more if a check fails — or goes on after a stop. `409` while the
   agent is working on the chat, or once the film is being shot.

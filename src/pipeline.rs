@@ -4521,15 +4521,8 @@ fn plan_shots(
                 m.family.label()
             );
         }
-        // A cut on a family without references has nothing to start from but
-        // a picture.
-        if cut && keyframe.is_none() && !m.family.takes_references() {
-            bail!(
-                "shot {}: a cut on a {} model starts from a picture — pick one, or set the shot back to Continue",
-                k + 1,
-                m.family.label()
-            );
-        }
+        // A cut with neither a picture nor references starts fresh from its
+        // words, as shot 1 does with no first frame.
         if !shot.references.is_empty() && k > 0 && !cut {
             bail!("shot {}: references need a cut — H3 can't follow them and go on from the last frame", k + 1);
         }
@@ -4678,7 +4671,7 @@ mod tests {
     /// A cut with references is H3's alone, never beside a first frame, and
     /// shot 1 is fresh whatever its row says.
     #[test]
-    fn a_cut_shot_off_h3_is_refused() {
+    fn a_cut_off_h3_starts_from_a_picture_or_its_words() {
         let vars = Default::default();
         let refs = |mut s: ShotSpec| {
             s.references = vec!["100-7-s0".into()];
@@ -4689,8 +4682,8 @@ mod tests {
             s
         };
         let wan = video("wan22_ti2v_5b");
-        let e = plan_shots(&vars, &wan, &[cut(shot("x", 1, None))], "", 1, false).unwrap_err();
-        assert!(e.to_string().contains("starts from a picture"), "{e}");
+        let segs = plan_shots(&vars, &wan, &[cut(shot("x", 1, None))], "", 1, false).unwrap();
+        assert!(segs[0].cut && segs[0].keyframe.is_none(), "a cut from its words, as shot 1 without a first frame");
         let e = plan_shots(&vars, &wan, &[refs(cut(shot("x", 1, None)))], "", 1, false).unwrap_err();
         assert!(e.to_string().contains("need MiniMax H3"), "{e}");
 

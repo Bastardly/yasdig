@@ -106,7 +106,7 @@ function setVTurbo(on) {
 // A clip is its shots, first to last: one sd-cli run each (`Engine::video`),
 // each but the first going on from the last one's final frame — or a cut,
 // which starts from a picture (`data-key`, any family that takes a first
-// frame) or, on H3, fresh and maybe following reference pictures. Each row is
+// frame) or fresh from its words — on H3 maybe following reference pictures. Each row is
 // conditioned on its own words with *Every shot* in front, never another
 // row's, or a line spoken in shot 1 is spoken again in every shot. A row
 // holds its own state in the DOM: the boxes, and `data-cut`/`data-refs`/`data-key`. The

@@ -220,6 +220,13 @@ function initStory() {
     if (d.filmPick != null) choosePicture(picture(Number(d.filmPick)));
     // Drawn on the same press, as a person pressing it means.
     else if (d.filmRedraw != null) editFilm({ member: Number(d.filmRedraw), picture: null, draw: true });
+    else if (d.filmKey != null) {
+      const k = Number(d.filmKey);
+      if (confirm(`Draw shot ${k + 1}'s first frame again? The one there now is replaced.`)) {
+        editFilm({ shot: k, redraw_keyframe: true, draw: true });
+      }
+    } else if (d.filmNokey != null) editFilm({ shot: Number(d.filmNokey), no_keyframe: true });
+    else if (d.filmAddkey != null) editFilm({ shot: Number(d.filmAddkey), no_keyframe: false, draw: true });
     else if (d.filmUpload != null) {
       pickFor = Number(d.filmUpload);
       $('astoryfile').click();

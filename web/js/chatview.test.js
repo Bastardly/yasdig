@@ -150,7 +150,7 @@ test('a storyboard reply is a card that opens the panel, and the header says wha
   assert.ok(renderChat(c).includes('data-open-story'));
   const drawing = film({ phase: 'board', cast: [{ ...film().cast[0], stem: null, picture: null }] });
   assert.equal(stateText(chat({ film: drawing, session: { state: 'running', next: 'film', goal: '', checks: [], round: 0 } })), 'Drawing the cast');
-  assert.equal(stateText(chat({ film: film(), session: { state: 'running', next: 'film', goal: '', checks: [], round: 0 } })), 'Drawing keyframes');
+  assert.equal(stateText(chat({ film: film(), session: { state: 'running', next: 'film', goal: '', checks: [], round: 0 } })), 'Drawing the first frames');
 });
 
 test('the panel offers to draw only what the board lacks, and the card shows the cast', () => {
@@ -159,11 +159,30 @@ test('the panel offers to draw only what the board lacks, and the card shows the
   const bare = (m) => ({ ...m, stem: null, picture: null });
   assert.equal(drawLabel(film({ phase: 'board', cast: film().cast.map(bare) })), 'Draw the cast');
   assert.equal(drawLabel(film({ phase: 'board', cast: [film().cast[0], bare(film().cast[1])] })), 'Draw the rest of the cast');
-  assert.equal(drawLabel(film({ phase: 'board' })), 'Draw the keyframes', 'shot 2 is a cut on a model without references');
+  assert.equal(drawLabel(film({ phase: 'board' })), 'Draw the first frames', 'shot 2 is a cut on a model without references');
   assert.equal(drawLabel(film({ phase: 'board', references: true })), null, 'H3 cuts need none');
   assert.equal(drawLabel(film({ phase: 'shooting', cast: film().cast.map(bare) })), null);
   const c = chat({ film: film(), messages: [{ role: 'agent', n: 0, mode: 'story', reply: '' }] });
   assert.ok(renderChat(c).includes('/chats/1-0/img/c1-1.png'));
+});
+
+test('a first frame drawn with a cast picture since redrawn is drawn again', () => {
+  const marks = (f, s) => s.cast.map((n) => `${f.cast.find((m) => m.name === n).stem}|`);
+  const f0 = film({ phase: 'ready' });
+  const drawn = { ...f0, shots: f0.shots.map((x) => ({ ...x, key_stem: 'k', key_cast: marks(f0, x) })) };
+  assert.equal(drawLabel(drawn), null);
+  assert.equal(drawLabel({ ...drawn, shots: drawn.shots.map(({ key_cast, ...x }) => x) }), null, 'an old board is not stale');
+  const redrawn = { ...drawn, cast: drawn.cast.map((m) => ({ ...m, stem: `${m.stem}-2` })) };
+  assert.equal(drawLabel(redrawn), 'Draw the first frames');
+  assert.ok(storyHtml(chat({ film: redrawn })).includes('Its cast changed'));
+  assert.ok(storyHtml(chat({ film: drawn })).includes('data-film-key="0"'), 'a first frame is clicked to draw it again');
+  assert.ok(!storyHtml(chat({ film: drawn }), { busy: true }).includes('data-film-key'), 'not while the agent works');
+  const pic = { kind: 'item', id: '9', file: 'k1-1.png' };
+  const html = storyHtml(chat({ film: { ...drawn, shots: drawn.shots.map((x) => ({ ...x, keyframe: x.keyframe ?? pic })) } }));
+  assert.ok(html.includes('data-film-nokey="0"') && html.includes('data-film-nokey="1"'), 'every first frame can go');
+  const words = { ...drawn, shots: drawn.shots.map((x, k) => (k ? x : { ...x, no_key: true, key_stem: null, keyframe: null })) };
+  assert.equal(drawLabel(words), null, 'shot 1 from its words needs nothing drawn');
+  assert.ok(storyHtml(chat({ film: words })).includes('data-film-addkey'));
 });
 
 test('on a model that follows references a character is whole only with its turnaround', () => {
@@ -179,7 +198,7 @@ test('on a model that follows references a character is whole only with its turn
 
 test('the main action draws, then films, then goes on after a stop; a shot shows its takes', () => {
   const whole = film({ shots: film().shots.map((x) => ({ ...x, key_stem: 'k' })) });
-  assert.equal(mainAction(film({ phase: 'board' })).label, 'Draw the keyframes');
+  assert.equal(mainAction(film({ phase: 'board' })).label, 'Draw the first frames');
   assert.deepEqual(mainAction(whole), { label: 'Film', body: { go: true } });
   const shooting = { ...whole, phase: 'shooting', shot: 1, shots: whole.shots.map((x, k) => (k === 0 ? { ...x, takes: 2, checks: [true, false] } : x)) };
   assert.equal(mainAction(shooting).label, 'Go on filming');

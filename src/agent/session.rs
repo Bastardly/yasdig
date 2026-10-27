@@ -58,7 +58,7 @@ pub fn next_step(chat: &Chat) -> Step {
             .iter()
             .find(|a| a.state == ActionState::Queued)
             .map_or(Step::End, |a| Step::Escalate(a.id)),
-        Next::Film => chat.film.as_ref().and_then(board_step).unwrap_or(Step::End),
+        Next::Film => chat.film.as_ref().and_then(draw_step).unwrap_or(Step::End),
         Next::Shoot => chat.film.as_ref().filter(|f| f.shot < f.shots.len()).map_or(Step::End, |f| Step::Shot(f.shot)),
         Next::Take => Step::Turn(Mode::Take),
     }
@@ -71,6 +71,11 @@ pub fn next_step(chat: &Chat) -> Step {
 /// picture is drawn from it; the person's picture is saved first and the
 /// sheet drawn from it.
 pub fn board_step(film: &Film) -> Option<Step> {
+    cast_step(film).or_else(|| frame_step(film))
+}
+
+/// The next picture of the cast to draw.
+fn cast_step(film: &Film) -> Option<Step> {
     for (k, m) in film.cast.iter().enumerate() {
         let sheet = film.wants_sheet(m) && m.sheet_stem.is_none();
         match (m.theirs(), m.stem.is_none(), sheet) {
@@ -79,7 +84,18 @@ pub fn board_step(film: &Film) -> Option<Step> {
             _ => {}
         }
     }
-    (0..film.shots.len()).find(|&k| film.needs_keyframe(k) && film.shots[k].key_stem.is_none()).map(Step::Keyframe)
+    None
+}
+
+/// The next keyframe to draw: missing, or stale since its cast changed.
+fn frame_step(film: &Film) -> Option<Step> {
+    (0..film.shots.len()).find(|&k| film.keyframe_missing(k)).map(Step::Keyframe)
+}
+
+/// What the press being drawn draws next: the cast, then the keyframes only
+/// when the press was *Draw the first frames* (`Film.frames`).
+fn draw_step(film: &Film) -> Option<Step> {
+    cast_step(film).or_else(|| film.frames.then(|| frame_step(film)).flatten())
 }
 
 /// Whether a film may be shot: its board whole and ready, or its filming
@@ -229,6 +245,10 @@ pub struct BoardEdit {
     pub text: Option<String>,
     pub cast: Option<Vec<String>>,
     pub cut: Option<bool>,
+    /// Shot `shot`'s first frame dropped, to be drawn again.
+    pub redraw_keyframe: bool,
+    /// Shot `shot` starts from its words (`true`) or a first frame again.
+    pub no_keyframe: Option<bool>,
 }
 
 /// Apply a [`BoardEdit`] to a board still being written or ready, then make
@@ -307,8 +327,16 @@ pub fn edit_board(c: &mut Chat, e: &BoardEdit) -> Result<(), String> {
         if let Some(cut) = e.cut {
             s.cut = cut && k > 0;
         }
+        if let Some(off) = e.no_keyframe {
+            s.no_key = off;
+            if off {
+                s.keyframe = None;
+                s.key_stem = None;
+                s.key_cast = None;
+            }
+        }
         // A keyframe shows what the shot said: a changed shot draws its own.
-        if before != (s.text.clone(), s.cast.clone(), s.cut) {
+        if e.redraw_keyframe || before != (s.text.clone(), s.cast.clone(), s.cut) {
             s.keyframe = None;
             s.key_stem = None;
         }
@@ -330,11 +358,18 @@ pub fn board_advance(chat: &mut Chat, shot_seconds: f32, draw: bool) {
     }
     if board_step(film).is_some() {
         film.phase = Phase::Board;
-        chat.session.next = if draw { Next::Film } else { Next::Nothing };
+        let more = draw && draw_step(film).is_some();
+        // A cast press drawn whole: the keyframes wait for theirs.
+        let cast_done = draw && !more && chat.session.next == Next::Film && film.cast.iter().all(|m| m.stem.is_some());
+        chat.session.next = if more { Next::Film } else { Next::Nothing };
+        if cast_done {
+            chat.note("The cast is drawn. Look them over, then press Draw the first frames.");
+        }
         return;
     }
     let was = film.phase;
     film.phase = Phase::Ready;
+    film.frames = false;
     chat.session.next = Next::Nothing;
     let n = film.shots.len();
     if was == Phase::Board {
@@ -344,6 +379,15 @@ pub fn board_advance(chat: &mut Chat, shot_seconds: f32, draw: bool) {
             if n == 1 { "" } else { "s" }
         ));
     }
+}
+
+/// The Story panel's main button pressed: *Draw the cast* while a member
+/// lacks a picture, else *Draw the first frames*.
+pub fn board_press(chat: &mut Chat, shot_seconds: f32) {
+    if let Some(f) = chat.film.as_mut() {
+        f.frames = cast_step(f).is_none();
+    }
+    board_advance(chat, shot_seconds, true);
 }
 
 /// A picture of the board landed: member or shot `k`'s, kept in the chat
@@ -364,9 +408,11 @@ pub fn board_picture_done(chat: &mut Chat, step: Step, picture: ImageRef, stem: 
             }
         }
         Step::Keyframe(k) => {
+            let marks = film.cast_marks(k);
             if let Some(s) = film.shots.get_mut(k) {
                 s.keyframe = Some(picture);
                 s.key_stem = Some(stem);
+                s.key_cast = Some(marks);
             }
         }
         _ => return,
@@ -774,6 +820,8 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
             if was.text == shot.text && was.cast == shot.cast && was.cut == shot.cut {
                 shot.keyframe = was.keyframe.clone();
                 shot.key_stem = was.key_stem.clone();
+                shot.key_cast = was.key_cast.clone();
+                shot.no_key = was.no_key;
             }
         }
         shots.push(shot);
@@ -808,14 +856,16 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
         image_model: image,
         sheets,
         watch: false,
+        frames: false,
         retakes: old.as_ref().map_or(super::knobs::DEFAULT_RETAKES, |f| f.retakes),
         clip: None,
         phase: Phase::Board,
         shot: 0,
     });
     board_advance(chat, video.shot_seconds(), false);
-    if chat.film.as_ref().is_some_and(|f| f.phase == Phase::Board) {
-        notes.push("The storyboard is written. Read the cast in the Story panel, change what you like, then press Draw the cast.".into());
+    if let Some(f) = chat.film.as_ref().filter(|f| f.phase == Phase::Board) {
+        let press = if cast_step(f).is_some() { "Draw the cast" } else { "Draw the first frames" };
+        notes.push(format!("The storyboard is written. Read the cast in the Story panel, change what you like, then press {press}."));
     }
 }
 
@@ -1485,10 +1535,14 @@ mod tests {
         // Written, and left for the person to read before anything is drawn.
         assert_eq!(next_step(&c), Step::End);
         assert!(matches!(c.messages.last(), Some(Msg::Note { text, .. }) if text.contains("Draw the cast")));
-        board_advance(&mut c, 5.0, true);
+        board_press(&mut c, 5.0);
         // Mara's picture is the person's; Leo's is drawn.
         assert_eq!(next_step(&c), Step::CastPicture(1));
         board_picture_done(&mut c, Step::CastPicture(1), img("leo"), "leo-s0".into(), 5.0);
+        // The cast press stops at the cast, for the person to look it over.
+        assert_eq!(next_step(&c), Step::End);
+        assert!(matches!(c.messages.last(), Some(Msg::Note { text, .. }) if text.contains("Draw the first frames")));
+        board_press(&mut c, 5.0);
         // On Wan, shot 1 and every cut start from a keyframe.
         assert_eq!(next_step(&c), Step::Keyframe(0));
         board_picture_done(&mut c, Step::Keyframe(0), img("k0"), "k0-s0".into(), 5.0);
@@ -1502,7 +1556,7 @@ mod tests {
         let mut c = film_chat();
         let t = film_tk(&c, true);
         story(&mut c, &t, board());
-        board_advance(&mut c, 5.0, true);
+        board_press(&mut c, 5.0);
         board_picture_done(&mut c, Step::CastPicture(1), img("leo"), "leo-s0".into(), 5.0);
         assert_eq!(c.film.as_ref().unwrap().phase, Phase::Ready);
     }
@@ -1523,7 +1577,7 @@ mod tests {
         story(&mut c, &t, b.clone());
         let f = c.film.as_ref().unwrap();
         assert_eq!((f.image_model.as_str(), f.sheets), ("klein", true));
-        board_advance(&mut c, 5.0, true);
+        board_press(&mut c, 5.0);
         // Mara's picture is the person's: kept as it is, her sheet drawn from it.
         assert_eq!(next_step(&c), Step::CastSheet(0));
         board_picture_done(&mut c, Step::CastSheet(0), img("t0"), "t0-s0".into(), 5.0);
@@ -1553,13 +1607,82 @@ mod tests {
         let mut c = film_chat();
         let t = film_tk(&c, h3);
         story(&mut c, &t, board());
-        board_advance(&mut c, 5.0, true);
-        while let Step::CastPicture(k) | Step::CastSheet(k) | Step::Keyframe(k) = next_step(&c) {
-            let step = next_step(&c);
-            board_picture_done(&mut c, step, img(&format!("p{k}")), format!("p{k}-s0"), 5.0);
-        }
+        draw_all(&mut c);
         assert_eq!(c.film.as_ref().unwrap().phase, Phase::Ready);
         c
+    }
+
+    /// Press the Story panel's main button until the board lacks nothing.
+    fn draw_all(c: &mut Chat) {
+        for _ in 0..2 {
+            board_press(c, 5.0);
+            while let Step::CastPicture(k) | Step::CastSheet(k) | Step::Keyframe(k) = next_step(c) {
+                let step = next_step(c);
+                board_picture_done(c, step, img(&format!("p{k}")), format!("p{k}-s0"), 5.0);
+            }
+        }
+    }
+
+    #[test]
+    fn a_first_frame_clicked_is_drawn_again_at_once_and_alone() {
+        let mut c = ready(false);
+        let was = c.film.as_ref().unwrap().shots[0].key_stem.clone();
+        edit_board(&mut c, &BoardEdit { shot: Some(0), redraw_keyframe: true, ..Default::default() }).unwrap();
+        board_press(&mut c, 5.0);
+        assert_eq!(next_step(&c), Step::Keyframe(0));
+        board_picture_done(&mut c, Step::Keyframe(0), img("k0b"), "k0b-s0".into(), 5.0);
+        let f = c.film.as_ref().unwrap();
+        assert_eq!(next_step(&c), Step::End, "the other frames stand");
+        assert_eq!(f.phase, Phase::Ready);
+        assert_ne!(f.shots[0].key_stem, was);
+    }
+
+    #[test]
+    fn a_shot_may_start_from_its_words() {
+        let mut c = ready(false);
+        edit_board(&mut c, &BoardEdit { shot: Some(0), no_keyframe: Some(true), ..Default::default() }).unwrap();
+        board_press(&mut c, 5.0);
+        let f = c.film.as_ref().unwrap();
+        assert_eq!(f.phase, Phase::Ready, "nothing to draw: it starts from its words");
+        assert!(f.shots[0].key_stem.is_none() && !f.needs_keyframe(0));
+        let cut = (1..f.shots.len()).find(|&k| f.shots[k].cut).unwrap();
+        edit_board(&mut c, &BoardEdit { shot: Some(cut), no_keyframe: Some(true), ..Default::default() }).unwrap();
+        let f = c.film.as_ref().unwrap();
+        let spec = shot_spec(f, cut, 7);
+        assert!(spec.cut && spec.keyframe.is_none(), "a cut from its words");
+        // Asked for again, it is drawn.
+        edit_board(&mut c, &BoardEdit { shot: Some(0), no_keyframe: Some(false), ..Default::default() }).unwrap();
+        board_press(&mut c, 5.0);
+        assert_eq!(next_step(&c), Step::Keyframe(0));
+    }
+
+    #[test]
+    fn a_redrawn_member_draws_their_first_frames_again_on_the_next_press() {
+        let mut c = ready(false);
+        let f = c.film.as_ref().unwrap();
+        // Leo is in shot 3, a cut; Mara in shot 1.
+        let leo = f.cast.iter().position(|m| m.name == "Leo").unwrap();
+        let in_leo: Vec<usize> = (0..f.shots.len()).filter(|&k| f.needs_keyframe(k) && f.shots[k].cast.iter().any(|n| n == "Leo")).collect();
+        assert!(!in_leo.is_empty());
+        edit_board(&mut c, &BoardEdit { member: Some(leo), picture: Some(None), ..Default::default() }).unwrap();
+        board_press(&mut c, 5.0);
+        assert_eq!(next_step(&c), Step::CastPicture(leo));
+        board_picture_done(&mut c, Step::CastPicture(leo), img("leo2"), "leo2-s0".into(), 5.0);
+        // Redrawing him stops at him, though his frames are stale now.
+        assert_eq!(next_step(&c), Step::End);
+        let f = c.film.as_ref().unwrap();
+        assert_eq!(f.phase, Phase::Board, "stale frames can't be filmed");
+        assert!(in_leo.iter().all(|&k| f.keyframe_missing(k)));
+        assert!((0..f.shots.len()).filter(|k| !in_leo.contains(k)).all(|k| !f.keyframe_missing(k)), "the others stand");
+        board_press(&mut c, 5.0);
+        assert_eq!(next_step(&c), Step::Keyframe(in_leo[0]));
+        // A board from before has no record, and is not stale.
+        let f = c.film.as_mut().unwrap();
+        for s in &mut f.shots {
+            s.key_cast = None;
+            s.key_stem.get_or_insert("k".into());
+        }
+        assert!((0..f.shots.len()).all(|k| !f.keyframe_missing(k)));
     }
 
     fn take_reply(c: &mut Chat, answers: Value, better: &str) {
@@ -1622,7 +1745,7 @@ mod tests {
         edit_board(&mut c, &BoardEdit { member: Some(1), picture: Some(None), ..Default::default() }).unwrap();
         let leo = &c.film.as_ref().unwrap().cast[1];
         assert!(leo.picture.is_none() && leo.stem.is_none() && leo.sheet_stem.is_none());
-        board_advance(&mut c, 5.0, true);
+        board_press(&mut c, 5.0);
         assert_eq!(next_step(&c), Step::CastPicture(1), "drawn on the same press");
     }
 
@@ -1701,7 +1824,7 @@ mod tests {
         let mut c = film_chat();
         let t = film_tk(&c, false);
         story(&mut c, &t, board());
-        board_advance(&mut c, 5.0, true);
+        board_press(&mut c, 5.0);
         board_picture_done(&mut c, Step::CastPicture(1), img("leo"), "leo-s0".into(), 5.0);
         board_picture_done(&mut c, Step::Keyframe(0), img("k0"), "k0-s0".into(), 5.0);
         board_picture_done(&mut c, Step::Keyframe(2), img("k2"), "k2-s0".into(), 5.0);
@@ -1717,13 +1840,13 @@ mod tests {
         assert_eq!(f.shots[0].key_stem.as_deref(), Some("k0-s0"), "an unchanged shot keeps its keyframe");
         assert!(f.shots[2].key_stem.is_none(), "a reworded one draws its own");
         assert_eq!(f.phase, Phase::Board, "back to drawing, when the person says");
-        board_advance(&mut c, 5.0, true);
+        board_press(&mut c, 5.0);
         assert_eq!(next_step(&c), Step::Keyframe(2));
         // A drawn picture whose look changed is drawn again.
         b["cast"][1]["look"] = json!("a boy in a **green** raincoat");
         story(&mut c, &t, b);
         assert_eq!(c.film.as_ref().unwrap().cast[1].look, "a boy in a green raincoat", "no Markdown in a look");
-        board_advance(&mut c, 5.0, true);
+        board_press(&mut c, 5.0);
         assert_eq!(next_step(&c), Step::CastPicture(1));
     }
 

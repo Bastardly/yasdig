@@ -21,8 +21,10 @@ What changed in each release of yasdig. Each release's executables are on the
 - **A short movie from a story**: ask the agent for a film of a story, an idea, or the
   people in your pictures ("this is Mara"), and it writes a storyboard — the cast with how
   each looks, and the shots. The Story panel shows the board: every name, look, picture
-  and shot is yours to change, and *Draw the cast* draws a picture of each in the cast
-  and, on Wan, the pictures its cuts start from, saved to Outputs. The agent picks the
+  and shot is yours to change, *Draw the cast* draws a picture of each in the cast and,
+  once you have looked them over, *Draw the first frames* the pictures its cuts start
+  from on Wan, saved to Outputs. Redraw someone and the first frames they are in are
+  drawn again on the next press. The agent picks the
   model that draws them; on one that follows reference pictures (the Kleins) each
   character first gets a turnaround sheet — front, three-quarter, side and back in one
   picture — and every later picture of them follows it. Then it waits for your

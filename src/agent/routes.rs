@@ -297,6 +297,12 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         cast: Option<Vec<String>>,
         #[serde(default)]
         cut: Option<bool>,
+        /// Shot `shot`'s first frame drawn again (a click on it).
+        #[serde(default)]
+        redraw_keyframe: bool,
+        /// Shot `shot` starts from its words (`true`), or a first frame again.
+        #[serde(default)]
+        no_keyframe: Option<bool>,
         #[serde(default)]
         every: Option<String>,
         /// Draw what the board is missing (*Draw the cast*).
@@ -394,9 +400,15 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
             text: dto.text.clone(),
             cast: dto.cast.clone(),
             cut: dto.cut,
+            redraw_keyframe: dto.redraw_keyframe,
+            no_keyframe: dto.no_keyframe,
         };
         session::edit_board(c, &edit).map_err(|e| anyhow::anyhow!(e))?;
-        session::board_advance(c, shot_seconds, dto.draw);
+        if dto.draw {
+            session::board_press(c, shot_seconds);
+        } else {
+            session::board_advance(c, shot_seconds, false);
+        }
         let draws = c.session.next == Next::Film;
         if draws {
             c.session.state = State::Queued;

@@ -221,7 +221,7 @@ const wantsSheet = (f, m) => f.sheets && m.kind === 'character';
 function memberCard(chat, m, k, lock) {
   const theirs = m.picture && m.picture.kind !== 'item';
   const sheet = m.sheet ? `<div class="storysheet" title="${esc(m.name)} from every side">${thumb(chat, m.sheet, `${m.name}, turnaround`)}</div>`
-    : wantsSheet(chat.film, m) ? '<p class="sub">Turnaround drawn next</p>' : '';
+    : '';
   const pic = m.picture ? thumb(chat, m.picture, m.name)
     : `<span class="sub">${chat.film.phase === 'board' ? 'Drawn next' : 'No picture'}</span>`;
   return `<div class="storymember">
@@ -239,8 +239,26 @@ function memberCard(chat, m, k, lock) {
     </div>${sheet}</div>`;
 }
 
+// The pictures shot k's keyframe is drawn with, as `Film::cast_marks`.
+function castMarks(f, s) {
+  return s.cast.map((n) => {
+    const m = f.cast.find((c) => c.name === n);
+    return m ? `${m.stem ?? ''}|${m.sheet_stem ?? ''}` : '';
+  });
+}
+
+// Shot k has no keyframe to start from: none drawn, or one drawn with a
+// cast picture that has changed since (`Film::keyframe_missing`).
+export function keyMissing(f, s, k) {
+  if (f.references || s.no_key || !(k === 0 || s.cut)) return false;
+  return !s.key_stem || (Array.isArray(s.key_cast) && s.key_cast.join('\n') !== castMarks(f, s).join('\n'));
+}
+
 // Where a shot is in the filming: its takes and the last one's checks.
 function shotState(f, s, k) {
+  if (['board', 'ready'].includes(f.phase) && s.key_stem && keyMissing(f, s, k)) {
+    return '<span class="sub">Its cast changed: drawn again</span>';
+  }
   if (!['shooting', 'done'].includes(f.phase)) return '';
   const marks = s.checks?.length ? ` <span class="chatchecks inline" title="The agent's checks">${
     s.checks.map((c) => (c ? '✓' : '✗')).join('')}</span>` : '';
@@ -248,11 +266,27 @@ function shotState(f, s, k) {
   return f.phase === 'shooting' && k === f.shot ? '<span class="sub">Next</span>' : '';
 }
 
+// A shot's first frame: a click draws it again (after a confirm) while
+// the board can change; removed, the shot starts from its words.
+function keyColumn(chat, s, k, lock) {
+  const f = chat.film;
+  if (s.no_key && !f.references && (k === 0 || s.cut)) {
+    return `<div class="storykey"><span class="sub">Starts from its words</span>${lock ? ''
+      : `<button type="button" class="btn" data-film-addkey="${k}">Draw a first frame</button>`}</div>`;
+  }
+  if (!s.keyframe) return '';
+  const pic = thumb(chat, s.keyframe, `Shot ${k + 1}`);
+  if (lock) return `<div class="storykey" title="The picture shot ${k + 1} starts from">${pic}</div>`;
+  return `<div class="storykey"><button type="button" class="storykeypic" data-film-key="${k}" title="The picture shot ${
+    k + 1} starts from — click to draw it again">${pic}</button><button type="button" class="btn" data-film-nokey="${
+    k}" title="Start shot ${k + 1} from its words">Remove first frame</button></div>`;
+}
+
 function shotRow(chat, s, k, lock) {
   const how = k === 0 ? '<span class="sub">First shot</span>'
     : `<select data-film-shot="${k}" data-field="cut" aria-label="How shot ${k + 1} begins"${lock}>
         <option value="0"${s.cut ? '' : ' selected'}>Continue</option><option value="1"${s.cut ? ' selected' : ''}>Cut</option></select>`;
-  const key = s.keyframe ? `<div class="storykey" title="The picture shot ${k + 1} starts from">${thumb(chat, s.keyframe, `Shot ${k + 1}`)}</div>` : '';
+  const key = keyColumn(chat, s, k, lock);
   return `<li class="storyshot">
     <div class="storyshothead"><b>${k + 1}</b>${how}${shotState(chat.film, s, k)}</div>
     <div class="storyshotbody">${key}<div class="storyfields">
@@ -287,8 +321,7 @@ export function drawLabel(film) {
   if (!film || !['board', 'ready'].includes(film.phase)) return null;
   const done = (m) => m.stem && (!wantsSheet(film, m) || m.sheet_stem);
   if (!film.cast.every(done)) return film.cast.some(done) ? 'Draw the rest of the cast' : 'Draw the cast';
-  const keys = film.shots.some((s, k) => !film.references && (k === 0 || s.cut) && !s.key_stem);
-  return keys ? 'Draw the keyframes' : null;
+  return film.shots.some((s, k) => keyMissing(film, s, k)) ? 'Draw the first frames' : null;
 }
 
 //   models  the toolkit's runnable models, for the board's image model
@@ -359,7 +392,7 @@ export function stateText(chat) {
   const s = chat.session;
   const f = chat.film;
   if (s.state === 'running' && f && s.next === 'film') {
-    return f.cast.some((m) => !m.stem) ? 'Drawing the cast' : 'Drawing keyframes';
+    return f.cast.some((m) => !m.stem) ? 'Drawing the cast' : 'Drawing the first frames';
   }
   if (s.state === 'running' && s.next === 'turn' && s.mode === 'story') return 'Writing the storyboard';
   if (s.state === 'running' && f && s.next === 'shoot') return `Filming shot ${f.shot + 1} of ${f.shots.length}`;

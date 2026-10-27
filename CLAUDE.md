@@ -792,8 +792,13 @@ Break silently:
   **rewritten whole**, never patched; what survives is matched by the server — a member
   keeps its picture by name and an unchanged look (or when it is the person's), a shot
   its keyframe when its words, cast and cut are unchanged. **A continue that names someone not in the shot before is made a cut** (`recut_board`, after the board turn and every panel edit, with a note): a continue carries only the last frame, so a return would be drawn from words. **Nothing is drawn until the
-  person presses *Draw the cast*** (`/chats/film {draw}`, `board_advance(…, draw)`), so
-  the looks can be read first. **Board pictures run on `Film.image_model`**
+  person presses *Draw the cast*** (`/chats/film {draw}`, `board_press`), so
+  the looks can be read first, **and a cast press stops at the cast**: keyframes need
+  a press of their own (`Film.frames`, set by `board_press` only when the cast is whole;
+  `draw_step` reads it, `board_step` doesn't), so redrawing a member never redraws every
+  frame they are in each time. **A keyframe records the cast pictures it was drawn
+  with** (`FilmShot.key_cast`, `Film::cast_marks`); one that differs now is missing
+  (`keyframe_missing`, `None` = an old board, never stale), so Film waits for it. **Board pictures run on `Film.image_model`**
   (`board_settings`: the chat's settings switched as a model change switches them; the
   agent's `image_model` pick, else the chat's). On one that `takes_references`
   (`Film.sheets`) a character gets a **turnaround sheet** (`CastSheet`, 2:1): a drawn
@@ -1133,8 +1138,8 @@ the stem** (one stem, one picture), keeps the mtime (grid order), rebuilds each 
 and leaves the sidecar; the page cache-busts the tile (`edited` in `outputs.js`).
 
 - **Deleting is `gridmark.js`**, shared with the work-item grid.
-  **Delete all = the same request with every id.** One of four `confirm()`s
-  (with Close server, Jobs Stop/Remove, and the Outputs viewer's unsaved edit).
+  **Delete all = the same request with every id.** One of five `confirm()`s
+  (with Close server, Jobs Stop/Remove, the Outputs viewer's unsaved edit, and redrawing a film's first frame).
 - **`outputGrid` is the one tile** (`height`, `empty`, `onPick`, optional `star`); height must match
   `.wigrid`.
 - **Arrow keys yield to a focused range input**; listener on `document`.
@@ -1697,8 +1702,9 @@ from `family` goes on `VideoModelDto`.
   - **A cut from a picture** (`ShotSpec.keyframe`/`Segment.keyframe`, an output
     stem; the row's `data-key`) is any `chains()` family's: `render_shot`'s `-i` is
     the keyframe instead of the last frame. Never on shot 1 (that is `source`), a
-    continue, or beside references. **A cut on Wan needs one** — its only way to
-    change scene; an H3 cut may have neither (fresh from words).
+    continue, or beside references. A cut with neither starts fresh from its words,
+    on any family (as shot 1 with no first frame); a film's shot does when the
+    person removes its first frame (`FilmShot.no_key`).
   - **Extend, Redo and the × are one request** (`Engine::extend_clip`,
     `ExtendClipRequest`, `POST /videos/extend {id, keep, shots, every?, negative?}`,
     `Work::ExtendClip` on the queue): keep the first `keep` segments (≥ 1; shot 1 is
