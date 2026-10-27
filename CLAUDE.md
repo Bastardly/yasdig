@@ -826,6 +826,12 @@ Break silently:
   **Silence is written too** (`with_lines`): the last on-screen speaker closes their
   lips, the shot's cast with no line stay silent, "Nothing more is said"; no lines
   is "No one speaks" — time left unaccounted for, H3 fills with invented speech.
+  **A voice** (`Member.voice`, a sound stem, the person's pick; kept by name across a
+  rewrite) goes with a shot that may take references (`shot_spec`: speakers in
+  first-line order, ≤ `MAX_REF_AUDIO`) as `ShotSpec.audio`, bound in
+  `subject_definitions` as the guide words it — `<Audio k> is the voice-timbre
+  reference for <Subject j> (Sx).`, the speaker's own ID — and a voice alone makes
+  the shot Ref2VA too.
   `every` goes inside, so `shoot` sends none of its own. H3's encoder takes the
   prompt whole (`prompt_attn_range {0,0}`), so `(S1)` and `[Shot 1]` survive.
 - **Shooting a film** (`session::go`, `Next::Shoot`/`Next::Take`): **the movie is an
@@ -1709,6 +1715,16 @@ from `family` goes on `VideoModelDto`.
     `-i` is a first frame there; VACE reads it as a reference, T2V ignores it).
     Failure or Stop at shot k>1 keeps 1..k-1 with `VideoResult.note` (`cut_short`). A
     multi-shot clip drops sd-cli's `clip.avi` (it is shot 1 alone).
+  - **Sounds are outputs**: `work/output/{stem}.wav` (`Store::import_audio`, from
+    `POST /upload-audio`: 16-bit PCM only, the page decodes and resamples to 32 kHz
+    stereo, `wavenc.js`; `find_audio_output`; listed `audio: true` + `seconds`;
+    `free_stem`, `media`, delete and star take `.wav`). A shot's `audio` is one
+    `--ref-audio` each, staged into scratch; `plan_shots` puts them where references
+    may go, H3 with an audio VAE, ≤ `MAX_REF_AUDIO`; `Engine::check_sounds` the
+    lengths (`REF_AUDIO_SECONDS`, MiniMax's: 2–15 s each, 15 s in all — sd.cpp checks
+    none). **H3's fl2va and ref2va files have the same header and length** (checked
+    2026-10-27), so both are one family and either is offered references and sounds;
+    the catalog has a card for each.
   - **References are H3's alone** (`VideoFamily::takes_references`,
     `references` on `/video-models`): sd.cpp refuses H3's Ref2VA beside a keyframe, so
     a shot with references has no `-i` (`VideoIo.refs` → one `-r` each, staged into

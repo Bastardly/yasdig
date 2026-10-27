@@ -5,7 +5,8 @@ import { onJobs, passRunning, soonJobs } from './jobs.js';
 import { S } from './state.js';
 import { cancelPost, onPassResult, onViewerResult, setLook, setViewerImage, showFullSize } from './viewer.js';
 import { openWorkItem } from './workitems.js';
-import { choosePicture, upload } from './source-slot.js';
+import { choosePicture, chooseSound, upload } from './source-slot.js';
+import { askForSound, playSound } from './sounds.js';
 import { mainAction, parseLines, renderChat, sessionHtml, stateText, storyHtml } from './chatview.js';
 import { openGetModels } from './getmodels.js';
 
@@ -231,7 +232,14 @@ function initStory() {
     else if (d.filmUpload != null) {
       pickFor = Number(d.filmUpload);
       $('astoryfile').click();
-    }
+    } else if (d.filmVoiceplay != null) playSound(d.filmVoiceplay);
+    else if (d.filmVoicepick != null) {
+      const k = Number(d.filmVoicepick);
+      chooseSound((stem) => editFilm({ member: k, voice: stem }));
+    } else if (d.filmVoiceup != null) {
+      const k = Number(d.filmVoiceup);
+      askForSound((s) => editFilm({ member: k, voice: s.stem }), (msg) => { $('astoryerr').textContent = msg; });
+    } else if (d.filmNovoice != null) editFilm({ member: Number(d.filmNovoice), voice: null });
   });
   $('astorydraw').addEventListener('click', () => {
     const what = mainAction(data?.chat.film);

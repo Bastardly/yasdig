@@ -202,6 +202,11 @@ pub struct Member {
     pub sheet: Option<ImageRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sheet_stem: Option<String>,
+    /// A character's voice on H3: a sound output's stem (`.wav`), sent with
+    /// a shot it speaks in that follows references, as H3's voice-timbre
+    /// reference for them. The person's pick; the agent never sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<String>,
 }
 
 impl Member {

@@ -151,10 +151,24 @@ pub fn shot_spec(f: &Film, k: usize, seed: i64) -> crate::pipeline::ShotSpec {
         Vec::new()
     };
     let references = pictured.iter().filter_map(|m| m.stem.clone()).collect();
+    // The voices of those who speak on screen or over it, in the order they
+    // first do, where references may go: a continue can't take them.
+    let mut voiced: Vec<&Member> = Vec::new();
+    if fresh && f.references {
+        for l in &s.lines {
+            if let Some(m) = f.member(&l.who).filter(|m| m.voice.is_some()) {
+                if !voiced.iter().any(|v| v.name == m.name) && voiced.len() < crate::pipeline::MAX_REF_AUDIO {
+                    voiced.push(m);
+                }
+            }
+        }
+    }
+    let audio = voiced.iter().filter_map(|m| m.voice.clone()).collect();
     // H3's whole prompt, `every` inside it (`shoot` sends none of its own).
     let text = if f.references {
         let names: Vec<String> = pictured.iter().map(|m| m.name.clone()).collect();
-        super::h3prompt::compose(f, k, &names, !fresh)
+        let voices: Vec<String> = voiced.iter().map(|m| m.name.clone()).collect();
+        super::h3prompt::compose(f, k, &names, &voices, !fresh)
     } else {
         s.text.clone()
     };
@@ -165,6 +179,7 @@ pub fn shot_spec(f: &Film, k: usize, seed: i64) -> crate::pipeline::ShotSpec {
         cut: k > 0 && s.cut,
         references,
         keyframe: if k > 0 && s.cut && !f.references { s.key_stem.clone() } else { None },
+        audio,
     }
 }
 
@@ -262,6 +277,8 @@ pub struct BoardEdit {
     pub lines: Option<Vec<super::chat::Line>>,
     pub sound: Option<String>,
     pub music: Option<String>,
+    /// Member `member`'s voice, a sound output's stem; `None` takes it away.
+    pub voice: Option<Option<String>>,
 }
 
 /// Apply a [`BoardEdit`] to a board still being written or ready, then make
@@ -311,6 +328,11 @@ pub fn edit_board(c: &mut Chat, e: &BoardEdit) -> Result<(), String> {
                 m.sheet = None;
                 m.sheet_stem = None;
             }
+            None => {}
+        }
+        match &e.voice {
+            Some(Some(stem)) if !crate::workitems::valid_id(stem) => return Err(format!("'{stem}' is not a sound")),
+            Some(v) => m.voice = v.clone(),
             None => {}
         }
     }
@@ -821,6 +843,8 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
                 m.sheet_stem = was.sheet_stem.clone();
             }
         }
+        // A voice is the person's pick, whatever the look became.
+        m.voice = old.as_ref().and_then(|f| f.member(&m.name)).and_then(|w| w.voice.clone());
         cast.push(m);
     }
     let mut shots: Vec<FilmShot> = Vec::new();
@@ -1793,12 +1817,23 @@ N/A"), "{}", s0.text);
         assert!(s1.text.contains("[Shot 1] cinematic, warm light. She steps into the rain. Mara (S1) says in an off-screen voiceover"));
 
         // A board rewritten keeps what it says, and the panel can change it.
-        story(&mut c, &t, b);
+        story(&mut c, &t, b.clone());
         edit_board(&mut c, &BoardEdit { shot: Some(0), music: Some("Slow piano.".into()), ..Default::default() }).unwrap();
         assert!(shot_spec(c.film.as_ref().unwrap(), 0, 7).text.ends_with("non_diegetic_music:
 Slow piano."));
         let bad = BoardEdit { shot: Some(0), lines: Some(vec![Line { who: "Bob".into(), words: "Hi".into(), ..Default::default() }]), ..Default::default() };
         assert!(edit_board(&mut c, &bad).is_err());
+
+        // Mara's voice goes with the shot that follows her picture, bound to
+        // her ID, and not with a continue; a rewritten board keeps it.
+        edit_board(&mut c, &BoardEdit { member: Some(0), voice: Some(Some("100-1-sound".into())), ..Default::default() }).unwrap();
+        story(&mut c, &t, b);
+        let f = c.film.as_ref().unwrap();
+        let s0 = shot_spec(f, 0, 7);
+        assert_eq!(s0.audio, ["100-1-sound"]);
+        assert!(s0.text.contains("<Audio 1> is the voice-timbre reference for <Subject 1> (S1)."), "{}", s0.text);
+        assert!(shot_spec(f, 1, 7).audio.is_empty(), "a continue can't take references");
+        assert!(edit_board(&mut c, &BoardEdit { member: Some(0), voice: Some(Some("../x".into())), ..Default::default() }).is_err());
     }
 
     #[test]

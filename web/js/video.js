@@ -8,6 +8,7 @@ import { initClipView, openClipView } from './clipview.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
 import { shotState, rowMatches } from './shots.js';
 import { editRefs } from './refs.js';
+import { editSounds } from './sounds.js';
 import { wireHints } from './hints.js';
 import { sourceSlot, choosePicture } from './source-slot.js';
 import { partRows } from './parts.js';
@@ -109,7 +110,7 @@ function setVTurbo(on) {
 // frame) or fresh from its words — on H3 maybe following reference pictures. Each row is
 // conditioned on its own words with *Every shot* in front, never another
 // row's, or a line spoken in shot 1 is spoken again in every shot. A row
-// holds its own state in the DOM: the boxes, and `data-cut`/`data-refs`/`data-key`. The
+// holds its own state in the DOM: the boxes, and `data-cut`/`data-refs`/`data-audio`/`data-key`. The
 // marks are `syncShots`'s, against the clip on the stage (`shots.js`).
 
 const rowEls = () => [...$('vshots').querySelectorAll('.shotrow')];
@@ -123,6 +124,7 @@ function readRow(el) {
     frames: Number.isFinite(frames) ? frames : null,
     cut: el.dataset.cut === '1',
     refs: JSON.parse(el.dataset.refs || '[]'),
+    audio: JSON.parse(el.dataset.audio || '[]'),
     key: el.dataset.key || null,
     folded: el.classList.contains('folded'),
   };
@@ -142,12 +144,14 @@ function liveRows() {
 // A drawn clip's shots as rows: the seeds they were drawn with, so Generate
 // makes them again unless a seed is reset.
 const rowsOf = (c) => (c.segments ?? []).map((s) => ({
-  text: s.text, seed: s.seed, frames: s.frames, cut: !!s.cut, refs: s.references ?? [], key: s.keyframe ?? null,
+  text: s.text, seed: s.seed, frames: s.frames, cut: !!s.cut, refs: s.references ?? [], audio: s.audio ?? [],
+  key: s.keyframe ?? null,
 }));
 
 // The wire's shape for a row; a blank Frames box is the model's.
 const shotWire = (r) => ({
-  prompt: r.text, seed: r.seed, frames: r.frames, cut: r.cut, references: r.refs, keyframe: r.cut ? r.key : null,
+  prompt: r.text, seed: r.seed, frames: r.frames, cut: r.cut, references: r.refs, audio: r.audio ?? [],
+  keyframe: r.cut ? r.key : null,
 });
 
 // Whether a clip's own family can go on from its last frame — by the clip's
@@ -165,7 +169,7 @@ function drawShots(rows) {
   $('vshots').innerHTML = rows.map((r, k) => {
     const folded = r.folded ?? was[k] ?? false;
     return `
-    <div class="shotrow${folded ? ' folded' : ''}" data-cut="${r.cut ? 1 : 0}" data-refs="${esc(JSON.stringify(r.refs ?? []))}" data-key="${esc(r.key ?? '')}">
+    <div class="shotrow${folded ? ' folded' : ''}" data-cut="${r.cut ? 1 : 0}" data-refs="${esc(JSON.stringify(r.refs ?? []))}" data-audio="${esc(JSON.stringify(r.audio ?? []))}" data-key="${esc(r.key ?? '')}">
       <div class="shothead">
         <button type="button" class="shotfold" aria-expanded="${!folded}" title="Fold or unfold this shot">
           <b>Shot ${k + 1}</b></button>
@@ -196,6 +200,7 @@ function drawShots(rows) {
           <img class="shotkeythumb" alt="" hidden>
           <button type="button" class="btn shotkeyclear" hidden>Clear</button>
           <button type="button" class="btn shotrefs" hidden>References…</button>
+          <button type="button" class="btn shotsounds" hidden>Sounds…</button>
         </div>
       </div>
     </div>`;
@@ -319,9 +324,14 @@ function syncShots() {
     const key = el.dataset.key || '';
     refs.hidden = !refsOk || (i === 0 ? !!vSource.get() : !cut || !!key);
     refs.textContent = n ? `References (${n})` : 'References…';
+    // Sounds go where references go, on an H3 with its audio VAE.
+    const sounds = el.querySelector('.shotsounds');
+    const a = JSON.parse(el.dataset.audio || '[]').length;
+    sounds.hidden = !m?.sounds || (i === 0 ? !!vSource.get() : !cut || !!key);
+    sounds.textContent = a ? `Sounds (${a})` : 'Sounds…';
     // A cut may start from a picture instead — on Wan the only way to cut.
     const keyBtn = el.querySelector('.shotkey');
-    keyBtn.hidden = !cut || !keyOk || n > 0;
+    keyBtn.hidden = !cut || !keyOk || n > 0 || a > 0;
     keyBtn.textContent = key ? 'Another picture…' : 'Start from a picture…';
     const thumb = el.querySelector('.shotkeythumb');
     thumb.hidden = keyBtn.hidden || !key;
@@ -1077,7 +1087,7 @@ export function initVideo() {
       row.dataset.cut = e.target.closest('[data-start]').dataset.start;
       // A shot that goes on from a frame can't follow references, or start
       // from a picture of its own.
-      if (row.dataset.cut === '0') { row.dataset.refs = '[]'; row.dataset.key = ''; }
+      if (row.dataset.cut === '0') { row.dataset.refs = '[]'; row.dataset.audio = '[]'; row.dataset.key = ''; }
     } else if (e.target.closest('.shotkey')) {
       choosePicture((stem) => {
         row.dataset.key = stem;
@@ -1097,6 +1107,16 @@ export function initVideo() {
       }, `Pictures shot ${i + 1} follows: a face, a costume, a place — MiniMax H3 keeps who and what is in `
         + 'them. The shot starts fresh, a new camera shot, since H3 cannot follow references and go on from '
         + 'a frame at once. Say in its prompt who is who.');
+      return;
+    } else if (e.target.closest('.shotsounds')) {
+      editSounds(JSON.parse(row.dataset.audio || '[]'), (stems) => {
+        row.dataset.audio = JSON.stringify(stems);
+        syncShots();
+        syncVideoSummaries();
+        keepDraft();
+      }, `Sounds shot ${i + 1} follows, up to three and 15 seconds in all: a voice to speak in, a sound to `
+        + 'match. Name them in its prompt as <Audio 1>, <Audio 2> — "the woman speaks in the voice of '
+        + '<Audio 1>". Like references, they start the shot fresh.');
       return;
     } else return;
     syncShots();

@@ -535,7 +535,15 @@ pub struct ShotSpec {
     /// A `work/output/` stem the cut starts from. Only on a cut after shot 1
     /// (shot 1's is the clip's `source`), never beside references.
     pub keyframe: Option<String>,
+    /// `work/output/` sound stems (`.wav`), one `--ref-audio` each: H3's
+    /// Ref2VA, so only where `references` may be.
+    pub audio: Vec<String>,
 }
+
+/// H3's rule for its reference sounds, from MiniMax's model card: at most
+/// three, each 2–15 s and 15 s in all. sd.cpp checks none of it.
+pub const MAX_REF_AUDIO: usize = 3;
+pub const REF_AUDIO_SECONDS: (f32, f32) = (2.0, 15.0);
 
 /// *Extend clip*, *Redo from shot k* and the × on the last shot, as one
 /// request: keep clip `id`'s first `keep` shots, then draw `shots` after
@@ -2166,6 +2174,7 @@ impl Engine {
         let mut shots = req.shots.clone();
         shots[0].seed = seed;
         let mut segments = plan_shots(&vars, &m, &shots, &every, 0, init.is_some())?;
+        self.check_sounds(&segments)?;
         let n = segments.len();
 
         let id = workitems::new_id(seed);
@@ -2252,6 +2261,40 @@ impl Engine {
         Ok(VideoResult { clip, gen_ms, note })
     }
 
+    /// Each shot's sounds are there and within H3's length: `plan_shots`'
+    /// rules over what only the files know, before anything is drawn.
+    fn check_sounds(&self, segs: &[Segment]) -> Result<()> {
+        let (lo, hi) = REF_AUDIO_SECONDS;
+        for (k, seg) in segs.iter().enumerate().filter(|(_, s)| !s.audio.is_empty()) {
+            let mut total = 0.0;
+            for stem in &seg.audio {
+                let path = self.items.find_audio_output(stem).with_context(|| format!("no saved sound '{stem}'"))?;
+                let secs = crate::avi::read_wav(&path)?.seconds();
+                if secs < lo - 0.05 {
+                    bail!("the sound '{stem}' is {secs:.1} s; H3 needs at least {lo:.0} s of one");
+                }
+                total += secs;
+            }
+            if total > hi + 0.05 {
+                bail!("a shot's sounds are {total:.1} s in all; H3 takes at most {hi:.0} s (shot {})", k + 1);
+            }
+        }
+        Ok(())
+    }
+
+    /// A shot's sounds, copied into scratch for its `--ref-audio`
+    /// (invariant 8).
+    fn stage_shot_audio(&self, id: &str, k: usize, seg: &Segment) -> Result<Vec<PathBuf>> {
+        let mut out = Vec::new();
+        for (i, stem) in seg.audio.iter().enumerate() {
+            let src = self.items.find_audio_output(stem).with_context(|| format!("no saved sound '{stem}'"))?;
+            let dst = self.scratch.join(format!("{id}-shot{k}-audio{}.wav", i + 1));
+            std::fs::copy(&src, &dst).with_context(|| format!("copying {}", src.display()))?;
+            out.push(dst);
+        }
+        Ok(out)
+    }
+
     /// A shot's references, copied into scratch for its `-r` (invariant 8),
     /// no bigger than the clip's frame — sd.cpp fits them to it anyway.
     fn stage_shot_refs(&self, id: &str, k: usize, m: &VideoModel, seg: &Segment) -> Result<Vec<PathBuf>> {
@@ -2281,15 +2324,16 @@ impl Engine {
         let mut ms = m.clone();
         ms.frames = seg.frames;
         let refs = self.stage_shot_refs(id, 0, m, seg)?;
+        let audio = self.stage_shot_audio(id, 0, seg)?;
         let ran = self.sd().video(
             &ms,
             &seg.conditioned,
             negative,
             seg.seed,
-            &VideoIo { init, control: None, out, refs: &refs },
+            &VideoIo { init, control: None, out, refs: &refs, audio: &audio },
             (n > 1).then_some((1, n)),
         );
-        for r in &refs {
+        for r in refs.iter().chain(&audio) {
             let _ = std::fs::remove_file(r);
         }
         ran.map(|_| ())
@@ -2305,6 +2349,7 @@ impl Engine {
         let mut ms = m.clone();
         ms.frames = seg.frames;
         let refs = self.stage_shot_refs(id, k, m, seg)?;
+        let audio = self.stage_shot_audio(id, k, seg)?;
         // A cut from a picture starts there, as shot 1 does from the clip's
         // first frame; any other cut from nothing.
         let key = match &seg.keyframe {
@@ -2317,10 +2362,10 @@ impl Engine {
             &seg.conditioned,
             negative,
             seg.seed,
-            &VideoIo { init, control: None, out: &out, refs: &refs },
+            &VideoIo { init, control: None, out: &out, refs: &refs, audio: &audio },
             Some((k + 1, n)),
         );
-        for r in &refs {
+        for r in refs.iter().chain(&audio) {
             let _ = std::fs::remove_file(r);
         }
         if let Err(e) = ran {
@@ -2367,6 +2412,7 @@ impl Engine {
         // Everything checked before a frame is cut: a refused row must not
         // cost the shots it would have replaced.
         let planned = plan_shots(&vars, &m, &req.shots, &every, req.keep, clip.source.is_some())?;
+        self.check_sounds(&planned)?;
         if !planned.is_empty() {
             let missing = m.missing();
             if !missing.is_empty() {
@@ -4535,6 +4581,30 @@ fn plan_shots(
         if let Some(bad) = shot.references.iter().find(|r| !workitems::valid_id(r)) {
             bail!("'{bad}' is not an output image");
         }
+        // Sounds go where references go: Ref2VA, never beside a first frame.
+        if !shot.audio.is_empty() {
+            if !m.family.takes_references() {
+                bail!("shot {}: sounds need MiniMax H3; a {} model takes none", k + 1, m.family.label());
+            }
+            if m.audio_vae.is_none() {
+                bail!("shot {}: H3 hears a sound through its audio VAE — pick one in the model's parts", k + 1);
+            }
+            if keyframe.is_some() {
+                bail!("shot {}: a cut starts from a picture or follows sounds, not both — sd.cpp can't give H3 both", k + 1);
+            }
+            if k > 0 && !cut {
+                bail!("shot {}: sounds need a cut — H3 can't follow them and go on from the last frame", k + 1);
+            }
+            if k == 0 && has_init {
+                bail!("shot 1: sounds can't sit beside a first frame on H3 — clear the first frame, or the sounds");
+            }
+            if shot.audio.len() > MAX_REF_AUDIO {
+                bail!("shot {}: H3 follows at most {MAX_REF_AUDIO} sounds", k + 1);
+            }
+            if let Some(bad) = shot.audio.iter().find(|r| !workitems::valid_id(r)) {
+                bail!("'{bad}' is not an output sound");
+            }
+        }
         let seed = if shot.seed < 0 { random_seed().wrapping_add(k as i64) } else { shot.seed };
         out.push(Segment {
             conditioned: shot_prompt(every, &variables::expand(&text, vars, seed)?),
@@ -4545,6 +4615,7 @@ fn plan_shots(
             cut,
             references: shot.references.clone(),
             keyframe: keyframe.map(str::to_string),
+            audio: shot.audio.clone(),
         });
     }
     Ok(out)
@@ -4697,6 +4768,36 @@ mod tests {
         assert!(e.to_string().contains("first frame"), "{e}");
         let first = plan_shots(&vars, &h3, &[cut(shot("x", 1, None))], "", 0, false).unwrap();
         assert!(!first[0].cut);
+    }
+
+    /// Sounds go where references go — H3 with its audio VAE, a cut or shot
+    /// 1 with no first frame, never beside a picture — and three at most.
+    #[test]
+    fn a_shot_takes_sounds_where_it_could_take_references() {
+        let vars = Default::default();
+        let sound = |mut s: ShotSpec, n: usize| {
+            s.audio = (0..n).map(|i| format!("100-{i}-sound")).collect();
+            s.cut = true;
+            s
+        };
+        let e = plan_shots(&vars, &video("wan22_ti2v_5b"), &[sound(shot("x", 1, None), 1)], "", 1, false).unwrap_err();
+        assert!(e.to_string().contains("need MiniMax H3"), "{e}");
+        let mut h3 = video("minimax_h3");
+        let e = plan_shots(&vars, &h3, &[sound(shot("x", 1, None), 1)], "", 1, false).unwrap_err();
+        assert!(e.to_string().contains("audio VAE"), "{e}");
+        h3.audio_vae = Some("a.safetensors".into());
+        let segs = plan_shots(&vars, &h3, &[sound(shot("x", 1, None), 3)], "", 1, false).unwrap();
+        assert_eq!(segs[0].audio.len(), 3);
+        let e = plan_shots(&vars, &h3, &[sound(shot("x", 1, None), 4)], "", 1, false).unwrap_err();
+        assert!(e.to_string().contains("at most 3"), "{e}");
+        let mut on = sound(shot("x", 1, None), 1);
+        on.cut = false;
+        assert!(plan_shots(&vars, &h3, &[on], "", 1, false).unwrap_err().to_string().contains("need a cut"));
+        let mut keyed = sound(shot("x", 1, None), 1);
+        keyed.keyframe = Some("100-7-s0".into());
+        assert!(plan_shots(&vars, &h3, &[keyed], "", 1, false).unwrap_err().to_string().contains("not both"));
+        let e = plan_shots(&vars, &h3, &[sound(shot("x", 1, None), 1)], "", 0, true).unwrap_err();
+        assert!(e.to_string().contains("first frame"), "{e}");
     }
 
     /// A cut may start from a picture on any family that takes a first

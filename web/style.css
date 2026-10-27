@@ -858,6 +858,15 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
   color: var(--text); font-size: var(--fs-title); text-shadow: 0 1px 4px var(--ink-900);
 }
+/* A sound's tile: no picture, a note and its length. */
+.soundtile {
+  display: grid; place-items: center; align-content: center; gap: var(--sp-1);
+  background: var(--ink-600); border-radius: var(--r-md); color: var(--text);
+}
+.soundmark { font-size: var(--fs-display); line-height: 1; }
+.soundlen { font-size: var(--fs-sm); color: var(--text-dim); }
+.soundslist { list-style: none; margin: var(--sp-3) 0; padding: 0; display: grid; gap: var(--sp-2); }
+.soundslist li { display: flex; align-items: center; gap: var(--sp-2); }
 #lbclose, #cbclose {
   z-index: 1002;
   position: absolute; top: 10px; right: 14px;

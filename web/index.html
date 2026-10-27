@@ -1578,6 +1578,24 @@
   <div class="lbfoot">Press Esc to close</div>
   <button type="button" id="lbclose" aria-label="Close">&times;</button>
 </dialog>
+<!-- A shot's sounds, up to three, numbered as the prompt names them
+     (sounds.js). Modal like the References dialog. -->
+<dialog id="soundsdlg" aria-labelledby="soundstitle">
+  <div class="jobsbox">
+    <div class="wihead">
+      <b id="soundstitle">Sounds</b>
+      <button type="button" id="soundsdone" class="btn">Done</button>
+    </div>
+    <p class="sub" id="soundsnote"></p>
+    <ul id="soundslist" class="soundslist"></ul>
+    <div class="btnrow">
+      <button type="button" id="soundschoose" class="btn">Choose…</button>
+      <button type="button" id="soundsupload" class="btn">Upload…</button>
+    </div>
+    <div id="soundserr" class="err"></div>
+  </div>
+</dialog>
+
 <!-- Reference images for the next generation: up to four, numbered as the
      prompt names them. Each is a source slot (pick, upload, drop); a paste goes
      to the first empty one (refs.js). Modal like the Jobs dialog. -->
@@ -1665,7 +1683,7 @@
 </dialog>
 <dialog id="picker">
   <div class="wihead">
-    <b>Pick a picture</b>
+    <b id="picktitle">Pick a picture</b>
     <!-- Either gallery: a favourite is a stem like any other, and the server
          looks in both (`Store::find_output`). -->
     <span class="wishelf">

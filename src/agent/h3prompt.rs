@@ -7,9 +7,10 @@
 //! - Text alone or from a first frame: `integrated_multimodal_description`,
 //!   `overall_soundscape`, `non_diegetic_music`, one `label: value` each; a
 //!   first frame (`-i`, a continue) puts the I2VA instruction line first.
-//! - Following the cast's pictures (Ref2VA): six sections, `label:` and the
-//!   value on the next line, the people as `<Subject N>` defined against the
-//!   `<Picture N>` sd.cpp presents each reference as, in the order sent.
+//! - Following the cast's pictures or voices (Ref2VA): six sections, `label:`
+//!   and the value on the next line, the people as `<Subject N>` defined
+//!   against the `<Picture N>` sd.cpp presents each reference as, in the order
+//!   sent, and each voice an `<Audio N>` bound to its speaker's `(Sx)`.
 //!
 //! sd.cpp encodes H3's prompt whole (`prompt_attn_range {0,0}`), so `(S1)`,
 //! `[Shot 1]` and `<d>` reach the encoder as written.
@@ -23,20 +24,21 @@ pub const NARRATOR: &str = "narrator";
 const FROM_FRAME: &str = "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.";
 
 /// Shot `k` of an H3 film. `refs` are the members' names whose pictures are
-/// sent as references, in order; `from_frame` when it goes on from the last
+/// sent as references, in order; `voices` those whose voices are sent
+/// (`--ref-audio`), in order; `from_frame` when it goes on from the last
 /// frame of the shot before.
-pub fn compose(f: &Film, k: usize, refs: &[String], from_frame: bool) -> String {
+pub fn compose(f: &Film, k: usize, refs: &[String], voices: &[String], from_frame: bool) -> String {
     let s = &f.shots[k];
     let ids = speakers(f);
     let sound = or_na(&s.sound);
     let music = or_na(&s.music);
-    if refs.is_empty() {
-        let body = with_lines(&crate::videos::shot_prompt(&f.every, &s.text), s, &ids, &[]);
+    if refs.is_empty() && voices.is_empty() {
+        let body = with_lines(&crate::videos::shot_prompt(&f.every, &s.text), s, &ids, &[], &[]);
         let core =
             format!("integrated_multimodal_description: [Shot 1] {body}\n\noverall_soundscape: {sound}\n\nnon_diegetic_music: {music}");
         return if from_frame { format!("{FROM_FRAME}\n\n{core}") } else { core };
     }
-    let defs: Vec<String> = refs
+    let mut defs: Vec<String> = refs
         .iter()
         .enumerate()
         .map(|(i, n)| {
@@ -49,17 +51,28 @@ pub fn compose(f: &Film, k: usize, refs: &[String], from_frame: bool) -> String 
             }
         })
         .collect();
-    let kept: Vec<String> = refs
+    let mut kept: Vec<String> = refs
         .iter()
         .enumerate()
         .map(|(i, n)| format!("<Subject {}> (appears in [Shot 1]): fully_preserved - {n}'s face, hair, build and clothes are retained.", i + 1))
         .collect();
+    // The guide's binding: the speaker's ID, never one of its own, and none
+    // in `retention_analysis`.
+    for (i, n) in voices.iter().enumerate() {
+        let a = i + 1;
+        let id = ids.iter().position(|w| *w == n.to_lowercase()).map_or(0, |i| i + 1);
+        defs.push(format!("<Audio {a}> is the voice-timbre reference for {} (S{id}).", named(n, refs)));
+        kept.push(format!(
+            "<Audio {a}>: reference - the target speaker follows <Audio {a}>'s voice timbre without copying the original signal."
+        ));
+    }
+    let task = if voices.is_empty() { "reference generation" } else { "reference generation + audio reference" };
     let text = subjects(&s.text, refs);
     let style = f.every.trim().trim_end_matches('.');
     let opening = if style.is_empty() { String::new() } else { format!("The target video is {style}.\n") };
-    let body = with_lines(&text, s, &ids, refs);
+    let body = with_lines(&text, s, &ids, refs, voices);
     format!(
-        "subject_definitions:\n{}\n\nsummary:\n[reference generation] {text}\n\nretention_analysis:\n{}\n\n\
+        "subject_definitions:\n{}\n\nsummary:\n[{task}] {text}\n\nretention_analysis:\n{}\n\n\
          detailed_description:\n{opening}[Shot 1] {body}\n\noverall_soundscape:\n{sound}\n\nnon_diegetic_music:\n{music}",
         defs.join("\n"),
         kept.join("\n"),
@@ -84,8 +97,8 @@ fn speakers(f: &Film) -> Vec<String> {
 /// holding one short line got a made-up sentence at its end. So the speech
 /// is closed off (the guide's own examples close the speaker's lips after a
 /// line) and each of the shot's cast with no line is said to stay silent.
-fn with_lines(text: &str, s: &FilmShot, ids: &[String], refs: &[String]) -> String {
-    let named = |n: &str| refs.iter().position(|r| r.eq_ignore_ascii_case(n)).map_or(n.to_string(), |i| format!("<Subject {}>", i + 1));
+fn with_lines(text: &str, s: &FilmShot, ids: &[String], refs: &[String], voices: &[String]) -> String {
+    let named = |n: &str| named(n, refs);
     let mut out = text.trim().to_string();
     let mut last_on_screen = None;
     for l in &s.lines {
@@ -102,12 +115,17 @@ fn with_lines(text: &str, s: &FilmShot, ids: &[String], refs: &[String]) -> Stri
             format!("An off-screen narrator (S{id}) says in an off-screen voiceover: {said}")
         } else {
             let who = named(&l.who);
+            // As the guide's example cites its voice: where the speech is.
+            let timbre = voices
+                .iter()
+                .position(|v| v.eq_ignore_ascii_case(&l.who))
+                .map_or(String::new(), |a| format!(" in the voice timbre referenced from <Audio {}>", a + 1));
             if l.voiceover {
                 last_on_screen = None;
-                format!("{who} (S{id}) says in an off-screen voiceover: {said} while {who}'s lips remain completely closed.")
+                format!("{who} (S{id}) says in an off-screen voiceover{timbre}: {said} while {who}'s lips remain completely closed.")
             } else {
                 last_on_screen = Some(who.clone());
-                format!("{who} (S{id}) says: {said}")
+                format!("{who} (S{id}) says{timbre}: {said}")
             }
         };
         out.push(' ');
@@ -129,6 +147,11 @@ fn with_lines(text: &str, s: &FilmShot, ids: &[String], refs: &[String]) -> Stri
     }
     out.push_str(" Nothing more is said for the rest of the shot.");
     out
+}
+
+/// A member as the prompt names them: its `<Subject N>` when pictured.
+fn named(n: &str, refs: &[String]) -> String {
+    refs.iter().position(|r| r.eq_ignore_ascii_case(n)).map_or(n.to_string(), |i| format!("<Subject {}>", i + 1))
 }
 
 /// `N/A`: no music, or — for the soundscape — silence, as the guide says.
@@ -241,7 +264,7 @@ mod tests {
 
     #[test]
     fn a_shot_from_words_has_the_three_fields_and_no_score_unasked() {
-        let p = compose(&film(), 1, &[], false);
+        let p = compose(&film(), 1, &[], &[], false);
         assert_eq!(
             p,
             "integrated_multimodal_description: [Shot 1] Live-action, cinematic, soft rain light. Mara smiles at him. \
@@ -251,7 +274,7 @@ mod tests {
              non_diegetic_music: Slow solo piano."
         );
         // Leo spoke first in the film, so he is S1 in every shot.
-        let p0 = compose(&film(), 0, &[], true);
+        let p0 = compose(&film(), 0, &[], &[], true);
         assert!(p0.starts_with(&format!("{FROM_FRAME}\n\nintegrated_multimodal_description: [Shot 1] ")), "{p0}");
         assert!(p0.contains(
             "Leo (S1) says: <d>[English] You came back.</d> Then Leo closes their lips. Mara stays silent throughout, lips closed. \
@@ -262,7 +285,7 @@ mod tests {
 
     #[test]
     fn a_shot_after_the_casts_pictures_names_them_as_subjects_in_the_order_sent() {
-        let p = compose(&film(), 0, &["Mara".into(), "Leo".into()], false);
+        let p = compose(&film(), 0, &["Mara".into(), "Leo".into()], &[], false);
         assert!(p.starts_with(
             "subject_definitions:\n<Subject 1> is Mara in <Picture 1>: a woman in a red coat.\n\
              <Subject 2> is Leo in <Picture 2>: a man in a grey raincoat.\n\nsummary:\n[reference generation] \
@@ -280,8 +303,19 @@ mod tests {
     fn a_shot_with_no_lines_says_no_one_speaks() {
         let mut f = film();
         f.shots[1].lines.clear();
-        let p = compose(&f, 1, &[], false);
+        let p = compose(&f, 1, &[], &[], false);
         assert!(p.contains("Mara smiles at him. No one speaks in this shot: everyone stays silent, lips closed, until it ends.\n\n"), "{p}");
+    }
+
+    #[test]
+    fn a_voice_is_bound_to_its_speakers_id_and_cited_where_they_speak() {
+        let p = compose(&film(), 0, &["Mara".into(), "Leo".into()], &["Leo".into()], false);
+        assert!(p.contains("<Subject 2> is Leo in <Picture 2>: a man in a grey raincoat.\n<Audio 1> is the voice-timbre reference for <Subject 2> (S1).\n\nsummary:\n[reference generation + audio reference] "), "{p}");
+        assert!(p.contains("\n<Audio 1>: reference - the target speaker follows <Audio 1>'s voice timbre"), "{p}");
+        assert!(p.contains("<Subject 2> (S1) says in the voice timbre referenced from <Audio 1>: <d>[English] You came back.</d>"), "{p}");
+        // A voice alone, nobody pictured, is Ref2VA too.
+        let p = compose(&film(), 0, &[], &["Leo".into()], false);
+        assert!(p.starts_with("subject_definitions:\n<Audio 1> is the voice-timbre reference for Leo (S1)."), "{p}");
     }
 
     #[test]

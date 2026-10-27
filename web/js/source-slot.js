@@ -72,6 +72,8 @@ export async function upload(file) {
 // slot initialises first.
 let pickFor = null;
 let pickGallery = 'outputs';
+// Pictures, or — for a shot's sounds and a voice — sounds.
+let pickSounds = false;
 let pickerWired = false;
 
 async function drawPicker() {
@@ -81,12 +83,15 @@ async function drawPicker() {
   $('pickfavorites').classList.toggle('active', fav);
   grid.innerHTML = '<p class="sub">Loading…</p>';
   const from = pickGallery;
-  // Pictures only: a saved clip is never a picture to start from.
-  const list = (await fetchOutputs(from)).filter((o) => !o.video);
-  if (from !== pickGallery) return;
+  const sounds = pickSounds;
+  // Pictures only, or sounds only: a saved clip is never either.
+  const list = (await fetchOutputs(from)).filter((o) => !o.video && !!o.audio === sounds);
+  if (from !== pickGallery || sounds !== pickSounds) return;
   outputGrid(grid, list, {
     height: 140,
-    empty: fav
+    empty: sounds
+      ? '<p class="sub">No sounds yet — upload one with the button beside Choose.</p>'
+      : fav
       ? '<p class="sub">No favorite outputs yet — keep some on the Outputs tab.</p>'
       : '<p class="sub">Nothing in work/output/ yet — save an image, or '
         + 'upload one with the button beside Choose.</p>',
@@ -105,12 +110,26 @@ function wirePicker() {
   }
 }
 
-// The picker for anyone else who wants a stem: the Agent tab's composer.
-export function choosePicture(onPick) {
+// Every open goes through here and says which kind it wants: the kind is
+// module state, and a slot that left it as the last opener did showed only
+// sounds after a voice was chosen.
+function openPickerFor(onPick, sounds) {
   wirePicker();
   pickFor = onPick;
+  pickSounds = sounds;
+  $('picktitle').textContent = sounds ? 'Pick a sound' : 'Pick a picture';
   $('picker').showModal();
   drawPicker();
+}
+
+// The picker for anyone else who wants a stem: the Agent tab's composer.
+export function choosePicture(onPick) {
+  openPickerFor(onPick, false);
+}
+
+// The same picker over the sounds (`sounds.js`).
+export function chooseSound(onPick) {
+  openPickerFor(onPick, true);
 }
 
 // `tab` is the tab's container id, for the paste guard; `none` is what the name
@@ -146,9 +165,7 @@ export function sourceSlot({ prefix, tab, none, err, onChange = () => {}, paste 
   // differs, because this one is a dialog rather than a panel.
   // The stem is all a slot keeps, whichever gallery it came from.
   function openPicker() {
-    pickFor = set;
-    $('picker').showModal();
-    drawPicker();
+    openPickerFor(set, false);
   }
 
   function init() {

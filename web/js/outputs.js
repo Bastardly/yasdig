@@ -5,6 +5,7 @@ import { cancelPost, guardClose, lookKey, onPassResult, onViewerResult, setLook,
 import { gridMarks, star, wireStars } from './gridmark.js';
 import { passRunning } from './jobs.js';
 import { openOutputClip } from './clipview.js';
+import { playSound } from './sounds.js';
 
 // ---- Outputs ----------------------------------------------------------------
 //
@@ -57,6 +58,13 @@ const edited = new Map();
 // star. The picker behind "Start from" passes none — choosing is its only job.
 export function outputGrid(el, list, { height = 200, empty = '', onPick, star: stars }) {
   el.innerHTML = list.map((o) => {
+    // A sound has no picture: a note and its length, square.
+    if (o.audio) {
+      const tile = `<button type="button" data-stem="${esc(o.stem)}" class="soundtile" title="${esc(o.stem)}&#10;a sound"
+        style="width:${height}px;height:${height}px"><span class="soundmark" aria-hidden="true">♪</span>
+        <span class="soundlen">${(o.seconds ?? 0).toFixed(1)} s</span></button>`;
+      return stars ? `<span class="tile">${tile}${star(o.favorite)}</span>` : tile;
+    }
     const w = o.height ? Math.round(height * o.width / o.height) : height;
     // A saved clip has no size or seed in its listing, and a play mark.
     const tip = o.video ? `${esc(o.stem)}&#10;a clip` : `${esc(o.prompt || o.stem)}&#10;${o.width}×${o.height} · seed ${o.seed}${
@@ -191,8 +199,14 @@ function pick(stem) {
     return;
   }
   // A saved clip plays in the clip dialog; Refine & adjust is for pictures.
-  if (outputs.find((o) => o.stem === stem)?.video) {
+  const o = outputs.find((x) => x.stem === stem);
+  if (o?.video) {
     openOutputClip(stem);
+    return;
+  }
+  // A sound plays where it is.
+  if (o?.audio) {
+    playSound(stem);
     return;
   }
   openAt(outputs.findIndex((o) => o.stem === stem));
@@ -285,7 +299,7 @@ function mayLeave() {
 function step(d) {
   // Over the saved clips, which Refine & adjust can't open.
   let i = index + d;
-  while (i >= 0 && i < outputs.length && outputs[i].video) i += d;
+  while (i >= 0 && i < outputs.length && (outputs[i].video || outputs[i].audio)) i += d;
   if (i < 0 || i >= outputs.length) return;
   // `index` is already the in-flight target while one is opening, so a second
   // press computes the one after it and coalesces rather than repeating.

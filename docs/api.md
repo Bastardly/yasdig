@@ -190,6 +190,13 @@ needs a Vulkan device and nothing else.
   a canvas first, so the format support tracks your browser's rather than a Rust
   crate's feature list. Answered on the connection thread, and it is the one path
   `http.rs` gives a large body limit (32 MiB; anything over is a `413`).
+- `POST /upload-audio` — a **binary body** too: a 16-bit PCM WAV (`Content-Type:
+  audio/wav`), kept in `work/output/` as `{stem}.wav` for an H3 shot to follow.
+  2–15 seconds (MiniMax's limit for one reference sound), else a 400 saying so.
+  Answers `{ "stem": "…-sound", "seconds": 4.2 }`. The page decodes any format the
+  browser plays and sends 32 kHz stereo. It is listed by `/outputs` with
+  `audio: true` and `seconds`, served at `GET /outputs/{stem}/sound.wav`, and deleted
+  and starred like a picture. Same 32 MiB limit.
 - `POST /img2img` — one img2img pass over an image already in `work/output/`.
   `prompt`, `template` and `source` are required; the rest are the same per-request
   overrides `/generate` takes, minus `width`/`height` (sd.cpp derives the size from
@@ -539,7 +546,9 @@ needs a Vulkan device and nothing else.
   or, on MiniMax H3, from its words and up to four `references` (`work/output/` stems;
   `references: true` on `/video-models`). Never both, and references never beside a first
   frame: sd.cpp refuses H3's references beside a keyframe, so shot 1 takes them only with
-  no `source`. Shot 1's starting picture is `source`, never a `keyframe`. Every shot is conditioned on `"{every}. {its own text}"` — never on
+  no `source`. A shot may also carry up to three `audio` stems (sounds from
+  `/upload-audio`), one `--ref-audio` each, where `references` may go and on a model with
+  its audio VAE (`sounds: true` on `/video-models`); 15 s in all. Shot 1's starting picture is `source`, never a `keyframe`. Every shot is conditioned on `"{every}. {its own text}"` — never on
   another shot's text — and `every`'s variables roll once, off shot 1's seed. An empty
   shot is refused by its number.
   `parts` picks the model's separate files, by name under the models dir as `/video-models`
@@ -555,7 +564,7 @@ needs a Vulkan device and nothing else.
     "gen_ms": 214000, "note": null }
   ```
   `clip.segments` is one record per shot, `{text, conditioned, seed, start, frames,
-  cut?, references?, keyframe?}` (typed text, what sd-cli was told, its seed, its first frame in the
+  cut?, references?, keyframe?, audio?}` (typed text, what sd-cli was told, its seed, its first frame in the
   clip, how many frames sd-cli made — a continuing shot adds one fewer, its first being
   the seam — and whether it was a cut, with references or from a picture); `clip.prompt`/`clip.seed` are
   shot 1's; `clip.every` the typed
@@ -637,14 +646,17 @@ the chat, whose `rev` moves on every write.
   turn follows in the same job; its pictures wait for `/chats/film {draw: true}`). `video` is the Video tab's model now. At most four pictures, copied into the
   chat. `409` while the agent is working on the chat.
 - `POST /chats/film` — `{ id, every?, member?, name?, look?, picture?, shot?, text?,
-  cast?, cut?, lines?, sound?, music?, redraw_keyframe?, no_keyframe?, draw?, image_model?, video_model?, go? }`: an edit of the storyboard before it is filmed — the look every shot
+  cast?, cut?, lines?, sound?, music?, voice?, redraw_keyframe?, no_keyframe?, draw?, image_model?, video_model?, go? }`: an edit of the storyboard before it is filmed — the look every shot
   shares, cast member `member`'s name, look or picture (`{kind: "output", id}`, or `null`
   to have it drawn again), shot `shot`'s words, cast (names) or cut. A reworded shot's
   keyframe is dropped, as is one sent with `redraw_keyframe: true` (a click on it in the
   Story panel); `no_keyframe: true` starts shot `shot` from its words with none drawn
   (`false` draws one again); on H3, `lines` (`[{who, words, language?, voiceover?}]`, `who` a
   cast name or `narrator`), `sound` and `music` are what shot `shot` says, sounds like and
-  is scored with (empty sound is silence, empty music none); `image_model` is the installed model the pictures still missing are
+  is scored with (empty sound is silence, empty music none), and `voice` cast member
+  `member`'s voice (a sound output's stem, or `null` for none) — sent with each shot they
+  speak in that starts fresh from the cast's pictures, as H3's voice-timbre reference;
+  `image_model` is the installed model the pictures still missing are
   drawn with (one that takes references gives characters a turnaround sheet). `video_model` is the installed video model it is shot on (the Video tab's when the board was written); on one whose cuts start from keyframes, the switch may leave keyframes to draw. `draw: true` (the Story panel's *Draw the cast*, then *Draw the first frames*) queues
   a leg that draws what the cast is missing or, with the cast whole, the first frames
   missing or drawn with a cast picture since changed; `go: true` (*Film*) one that films it — shot 1 a new

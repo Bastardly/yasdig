@@ -235,8 +235,22 @@ function memberCard(chat, m, k, lock) {
         <button type="button" class="btn" data-film-upload="${k}" title="Use a picture from this computer"${lock}>Upload…</button>
         <button type="button" class="btn" data-film-redraw="${k}" title="Let the agent draw this one from its look"${lock}>${
           theirs ? 'Draw one' : 'Draw again'}</button>
-      </div>
+      </div>${voiceRow(chat.film, m, k, lock)}
     </div>${sheet}</div>`;
+}
+
+// On H3, a character's voice: a sound H3 follows on the shots that start
+// from the cast's pictures (a continue can't take one).
+function voiceRow(f, m, k, lock) {
+  if (!f.references || m.kind !== 'character') return '';
+  const has = !!m.voice;
+  return `<div class="btnrow storyvoice" title="A voice ${esc(m.name)} speaks in, on the shots that start fresh from the cast">
+      <span class="sub">Voice: ${has ? esc(m.voice) : 'H3 picks one'}</span>
+      ${has ? `<button type="button" class="btn" data-film-voiceplay="${esc(m.voice)}">Play</button>` : ''}
+      <button type="button" class="btn" data-film-voicepick="${k}"${lock}>Choose…</button>
+      <button type="button" class="btn" data-film-voiceup="${k}"${lock}>Upload…</button>
+      ${has ? `<button type="button" class="btn" data-film-novoice="${k}"${lock}>Remove</button>` : ''}
+    </div>`;
 }
 
 // The pictures shot k's keyframe is drawn with, as `Film::cast_marks`.

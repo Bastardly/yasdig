@@ -152,6 +152,10 @@ pub struct Segment {
     /// scene, since it has no references.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keyframe: Option<String>,
+    /// Sounds H3 follows (`--ref-audio`): `work/output/` `.wav` stems, a
+    /// voice or a sound for this shot. Where references may be.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio: Vec<String>,
 }
 
 /// What a shot is conditioned on: the *Every shot* text in front of its own.
@@ -178,6 +182,7 @@ impl Clip {
             cut: false,
             references: Vec::new(),
             keyframe: None,
+            audio: Vec::new(),
         }
     }
 
@@ -213,6 +218,7 @@ impl Clip {
                     cut: false,
                     references: Vec::new(),
                     keyframe: None,
+                    audio: Vec::new(),
                 });
             }
             self.segments = segs;
@@ -230,6 +236,7 @@ impl Clip {
                     cut: false,
                     references: Vec::new(),
                     keyframe: None,
+                    audio: Vec::new(),
                 })
                 .collect();
             self.prompt = shots[0].clone();

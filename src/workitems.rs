@@ -462,6 +462,7 @@ impl Store {
         for p in [
             dir.join(format!("{stem}.png")),
             dir.join(format!("{stem}.avi")),
+            dir.join(format!("{stem}.wav")),
             dir.join(format!("{stem}-thumb.png")),
             dir.join(format!("{stem}.json")),
         ] {
@@ -553,8 +554,12 @@ impl Store {
     fn free_stem(&self, base: &str) -> String {
         let mut stem = base.to_string();
         for n in 2.. {
-            // A picture or a saved clip: one stem, one thing, in either gallery.
-            if self.find_output(&stem).is_none() && self.find_clip_output(&stem).is_none() {
+            // A picture, a saved clip or a sound: one stem, one thing, in
+            // either gallery.
+            if self.find_output(&stem).is_none()
+                && self.find_clip_output(&stem).is_none()
+                && self.find_audio_output(&stem).is_none()
+            {
                 break;
             }
             stem = format!("{base}-{n}");
@@ -633,6 +638,38 @@ impl Store {
         Ok(stem)
     }
 
+    /// Take a sound the person supplied (`POST /upload-audio`) into
+    /// `work/output/` as `{stem}.wav`, returning its stem and length: a voice
+    /// or a sound for H3 to follow ([`crate::pipeline::ShotSpec::audio`]).
+    /// 16-bit PCM only — the page decodes whatever the browser can play and
+    /// writes that, as it re-encodes pictures to PNG. The length is H3's
+    /// rule for one clip ([`crate::pipeline::REF_AUDIO_SECONDS`]), checked
+    /// here so a sound that can never be used is never kept.
+    pub fn import_audio(&self, wav: &[u8]) -> Result<(String, f32)> {
+        let audio = crate::avi::parse_wav(wav).context("the sound isn't a 16-bit PCM WAV file")?;
+        let secs = audio.seconds();
+        let (lo, hi) = crate::pipeline::REF_AUDIO_SECONDS;
+        // A hair over the top: the page trims to exactly 15 s of samples.
+        if secs < lo || secs > hi + 0.05 {
+            bail!("a sound for H3 is {lo:.0} to {hi:.0} seconds long; this one is {secs:.1} s");
+        }
+        std::fs::create_dir_all(&self.output)
+            .with_context(|| format!("creating {}", self.output.display()))?;
+        // `create_new`, retried, for `import`'s reason.
+        let base = format!("{}-sound", new_id(0));
+        let (stem, path, mut file) = loop {
+            let stem = self.free_stem(&base);
+            let path = self.output.join(format!("{stem}.wav"));
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(f) => break (stem, path, f),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e).with_context(|| format!("creating {}", path.display())),
+            }
+        };
+        std::io::Write::write_all(&mut file, wav).with_context(|| format!("writing {}", path.display()))?;
+        Ok((stem, secs))
+    }
+
     /// `work/output/` itself, for the one caller that writes a whole
     /// subdirectory into it rather than a single image.
     pub fn output_dir(&self) -> &Path {
@@ -674,6 +711,18 @@ impl Store {
         [&self.output, &self.favorite_outputs]
             .into_iter()
             .map(|d| d.join(format!("{stem}.avi")))
+            .find(|p| p.is_file())
+    }
+
+    /// A saved sound (`{stem}.wav`) in either gallery — a shot's or a film
+    /// member's voice. Apart from [`Store::find_output`] for its reason.
+    pub fn find_audio_output(&self, stem: &str) -> Option<PathBuf> {
+        if !valid_id(stem) {
+            return None;
+        }
+        [&self.output, &self.favorite_outputs]
+            .into_iter()
+            .map(|d| d.join(format!("{stem}.wav")))
             .find(|p| p.is_file())
     }
 
@@ -848,9 +897,10 @@ impl Store {
             .filter_map(|e| e.ok())
             .filter_map(|e| {
                 let path = e.path();
-                let video = match path.extension()?.to_str()? {
-                    "png" => false,
-                    "avi" => true,
+                let (video, audio) = match path.extension()?.to_str()? {
+                    "png" => (false, false),
+                    "avi" => (true, false),
+                    "wav" => (false, true),
                     _ => return None,
                 };
                 let stem = path.file_stem()?.to_str()?;
@@ -862,6 +912,11 @@ impl Store {
                 let mut entry = self.output_entry(stem, &path);
                 entry.favorite = gallery == Gallery::Favorites;
                 entry.video = video;
+                if audio {
+                    entry.audio = true;
+                    // A header and a length: a sound is a few hundred KB.
+                    entry.seconds = crate::avi::read_wav(&path).map_or(0.0, |a| a.seconds());
+                }
                 Some(entry)
             })
             .collect();
@@ -908,6 +963,8 @@ impl Store {
                 .unwrap_or_default(),
             favorite: false,
             video: false,
+            audio: false,
+            seconds: 0.0,
         }
     }
 }
@@ -955,9 +1012,10 @@ fn remove_edits(dir: &Path) -> Result<()> {
     std::fs::remove_dir(dir).with_context(|| format!("deleting {}", dir.display()))
 }
 
-/// `{stem}.png` or `{stem}.avi` in `dir`: a saved picture or a saved clip.
+/// `{stem}.png`, `{stem}.avi` or `{stem}.wav` in `dir`: a saved picture, a
+/// saved clip or a sound.
 fn media(dir: &Path, stem: &str) -> Option<PathBuf> {
-    ["png", "avi"].into_iter().map(|x| dir.join(format!("{stem}.{x}"))).find(|p| p.is_file())
+    ["png", "avi", "wav"].into_iter().map(|x| dir.join(format!("{stem}.{x}"))).find(|p| p.is_file())
 }
 
 fn copy_picture(from: &Path, to: &Path, stem: &str, sidecar: bool) -> Result<()> {
@@ -1019,6 +1077,10 @@ pub struct Output {
     /// A saved clip (`{stem}.avi`), opened in the clip dialog rather than
     /// Refine & adjust. Its tile carries a play mark.
     pub video: bool,
+    /// A sound (`{stem}.wav`, an upload): no picture, no tile image; its
+    /// tile plays it. `seconds` is its length, 0 for everything else.
+    pub audio: bool,
+    pub seconds: f32,
 }
 
 fn write_sidecar(path: &Path, item: &WorkItem) -> Result<()> {
@@ -1238,6 +1300,38 @@ mod tests {
         assert!(store.find_clip_output("500-1").is_some_and(|p| p.starts_with(store.gallery_dir(Gallery::Favorites))));
         store.delete_output(Gallery::Favorites, "500-1").unwrap();
         assert!(store.find_clip_output("500-1").is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An uploaded sound is an output too: H3's length checked on the way
+    /// in, listed with its length, its stem its own, starred and deleted
+    /// like a picture — and never a picture or a clip.
+    #[test]
+    fn an_uploaded_sound_is_an_output_of_its_own_kind() {
+        let dir = std::env::temp_dir().join(format!("yasdig-soundout-{}", new_id(4)));
+        let store = Store::new(&dir, &dir.join("user"));
+        let wav = |secs: u32| {
+            let tmp = dir.join("in.wav");
+            std::fs::create_dir_all(&dir).unwrap();
+            let audio = crate::avi::Audio { sample_rate: 32_000, channels: 2, pcm: vec![0; (32_000 * 4 * secs) as usize] };
+            crate::avi::write_wav(&tmp, &audio).unwrap();
+            std::fs::read(&tmp).unwrap()
+        };
+        let e = store.import_audio(&wav(1)).unwrap_err();
+        assert!(e.to_string().contains("2 to 15 seconds"), "{e}");
+        assert!(store.import_audio(&wav(16)).is_err());
+        assert!(store.import_audio(b"RIFF....WAVEjunk").is_err());
+        let (stem, secs) = store.import_audio(&wav(4)).unwrap();
+        assert!((secs - 4.0).abs() < 0.01);
+        let listed = store.list_outputs(Gallery::Output);
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].audio && !listed[0].video && (listed[0].seconds - 4.0).abs() < 0.01);
+        assert!(store.find_output(&stem).is_none() && store.find_clip_output(&stem).is_none());
+        assert_eq!(store.free_stem(&stem), format!("{stem}-2"));
+        store.favorite_output(&stem).unwrap();
+        assert!(store.find_audio_output(&stem).is_some_and(|p| p.starts_with(store.gallery_dir(Gallery::Favorites))));
+        store.delete_output(Gallery::Favorites, &stem).unwrap();
+        assert!(store.find_audio_output(&stem).is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 

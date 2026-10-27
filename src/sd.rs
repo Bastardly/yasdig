@@ -11,7 +11,7 @@
 
 use crate::config::{Components, Config, Profile, VideoModel, MIN_STRENGTH};
 use anyhow::{bail, Context, Result};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -474,6 +474,9 @@ impl<'a> SdRunner<'a> {
         for r in io.refs {
             cmd.args(["-r", &path_str(r)]);
         }
+        for a in io.audio {
+            cmd.args(["--ref-audio", &path_str(a)]);
+        }
         cmd.args(crate::config::memory_args(m.memory_mode(), &m.extra_args));
         cmd.args(crate::config::gpu_reserve_args(self.cfg.settings().gpu_reserve_gb, &m.extra_args));
         if m.vae_tiling {
@@ -865,6 +868,13 @@ impl<'a> SdRunner<'a> {
             // offer the ways out rather than grep a sentence for them.
             let gpu = out_tail.iter().chain(err_tail.iter()).any(|l| is_out_of_memory(l));
             if gpu || killed_by_system(&status) {
+                // To the console, for the case the page can't explain: memory
+                // on the card that sd.cpp counts as neither its weights nor its
+                // runtime ("other runtime 0.00 MB"). Read after the child is
+                // gone, so whatever is left is this server's or another program's.
+                if gpu {
+                    eprintln!("[yasdig] {label} ran out of GPU memory; {}", held_vram_note());
+                }
                 let (phase, step, steps) = oom_phase(out_tail.iter().chain(err_tail.iter()), last, last_step);
                 let shortfall = out_tail.iter().chain(err_tail.iter()).rev().find_map(|l| parse_shortfall(l));
                 return Err(OutOfMemory {
@@ -1156,6 +1166,54 @@ pub fn vram() -> Option<u64> {
         .max()
 }
 
+/// What is on the card once sd-cli has exited: this server's own share
+/// (its FSR/upscaler device, from `/proc/self/fdinfo`) and the whole card's
+/// use. A share of several GB here is memory a restart would free.
+fn held_vram_note() -> String {
+    let own = std::fs::read_dir("/proc/self/fdinfo").ok().map(|dir| {
+        let texts: Vec<String> = dir.flatten().filter_map(|e| std::fs::read_to_string(e.path()).ok()).collect();
+        own_vram_kib(texts.iter().map(String::as_str))
+    });
+    let read = |p: PathBuf| -> Option<u64> { std::fs::read_to_string(p).ok()?.trim().parse().ok() };
+    // The card with the most VRAM, as `vram` and `gtt` pick it.
+    let card = std::fs::read_dir("/sys/class/drm").ok().and_then(|dir| {
+        dir.flatten()
+            .map(|e| e.path().join("device"))
+            .filter_map(|d| Some((read(d.join("mem_info_vram_total"))?, read(d.join("mem_info_vram_used"))?)))
+            .max_by_key(|(total, _)| *total)
+    });
+    let mb = |b: u64| b / (1024 * 1024);
+    let own = match own {
+        Some(kib) => format!("this server holds {} MB of it", kib / 1024),
+        None => "this server's own share can't be read here".to_string(),
+    };
+    match card {
+        Some((total, used)) => format!("after sd-cli exited, {} of {} MB are in use and {own}", mb(used), mb(total)),
+        None => format!("after sd-cli exited, {own}"),
+    }
+}
+
+/// A process's VRAM in KiB from its `fdinfo` files: each DRM client once
+/// (several descriptors can share one), `drm-memory-vram` or the newer
+/// `drm-resident-vram`.
+fn own_vram_kib<'a>(fdinfos: impl Iterator<Item = &'a str>) -> u64 {
+    let mut seen = HashSet::new();
+    let mut total = 0;
+    for text in fdinfos {
+        let field = |key: &str| {
+            text.lines().find_map(|l| l.strip_prefix(key)).map(|v| v.trim().trim_end_matches("KiB").trim().to_string())
+        };
+        let Some(id) = field("drm-client-id:") else { continue };
+        let kib = field("drm-memory-vram:").or_else(|| field("drm-resident-vram:"));
+        if let Some(kib) = kib.and_then(|k| k.parse::<u64>().ok()) {
+            if seen.insert(id) {
+                total += kib;
+            }
+        }
+    }
+    total
+}
+
 /// `MemAvailable` from `/proc/meminfo`, in bytes — what sd.cpp's auto-fit
 /// plans RAM with (`backend_fit.cpp`, `available_ram_bytes`). `None` where
 /// there is no such file.
@@ -1240,6 +1298,9 @@ pub struct VideoIo<'a> {
     /// Reference pictures, one `-r` each: H3's Ref2VA, on a shot with no
     /// `init` (sd.cpp refuses the two together).
     pub refs: &'a [PathBuf],
+    /// Reference sounds, one `--ref-audio` each: H3's Ref2VA too, presented
+    /// to the model after the pictures as `<Audio N>`.
+    pub audio: &'a [PathBuf],
 }
 
 fn path_str(p: &Path) -> String {
@@ -2056,11 +2117,19 @@ flow_shift = 3.0
             "the dwarf turns back",
             "",
             42,
-            &VideoIo { init: None, control: None, out: Path::new("o_%03d.png"), refs: &refs },
+            &VideoIo {
+                init: None,
+                control: None,
+                out: Path::new("o_%03d.png"),
+                refs: &refs,
+                audio: &[PathBuf::from("/work/current/a1.wav")],
+            },
         );
         let a = argv(&cmd);
         let r: Vec<_> = a.iter().enumerate().filter(|(_, s)| *s == "-r").map(|(i, _)| a[i + 1].as_str()).collect();
         assert_eq!(r, ["/work/current/r0.png", "/work/current/r1.png"]);
+        let s: Vec<_> = a.iter().enumerate().filter(|(_, s)| *s == "--ref-audio").map(|(i, _)| a[i + 1].as_str()).collect();
+        assert_eq!(s, ["/work/current/a1.wav"]);
         assert!(!a.contains(&"-i".to_string()), "{a:?}");
     }
 
@@ -2078,6 +2147,7 @@ flow_shift = 3.0
                 control: None,
                 out: Path::new("/work/videos/1/frame_%03d.png"),
                 refs: &[],
+                audio: &[],
             },
         );
         let a = argv(&cmd);
@@ -2132,6 +2202,7 @@ flow_shift = 3.0
                 control: None,
                 out: Path::new("o_%03d.png"),
                 refs: &[],
+                audio: &[],
             },
         ));
         assert_eq!(flag(&a, "--high-noise-steps"), Some("8"));
@@ -2154,6 +2225,7 @@ flow_shift = 3.0
                 control: None,
                 out: Path::new("o_%03d.png"),
                 refs: &[],
+                audio: &[],
             },
         ));
         for dead in [
@@ -2181,6 +2253,7 @@ flow_shift = 3.0
                 control: None,
                 out: Path::new("o_%03d.png"),
                 refs: &[],
+                audio: &[],
             },
         ));
         assert!(flag(&a, "--high-noise-steps").is_none());
@@ -2205,6 +2278,7 @@ flow_shift = 3.0
                 control: None,
                 out: Path::new("o_%03d.png"),
                 refs: &[],
+                audio: &[],
             },
         ));
         // 16 is the A14B's grid, and frames round *down* to 4k+1.
@@ -2228,6 +2302,7 @@ flow_shift = 3.0
                 control: None,
                 out: Path::new("o_%03d.png"),
                 refs: &[],
+                audio: &[],
             },
         ));
         assert_eq!(flag(&a, "--fps"), Some("24"));
@@ -2708,6 +2783,16 @@ binary = "/opt/sd-cli"
 
     /// System RAM's figure counts the files it holds and not the text
     /// encoders it releases; MemAvailable is read in bytes.
+    /// A server's own VRAM is each DRM client once, whichever key the
+    /// kernel writes, and descriptors that aren't the GPU's count nothing.
+    #[test]
+    fn own_vram_counts_each_drm_client_once() {
+        let a = "pos:\t0\ndrm-driver:\tamdgpu\ndrm-client-id:\t7\ndrm-memory-vram:\t9784 KiB\n";
+        let b = "drm-client-id:\t8\ndrm-resident-vram:\t12 KiB\n";
+        let plain = "pos:\t0\nflags:\t02\n";
+        assert_eq!(own_vram_kib([a, a, b, plain].into_iter()), 9796);
+    }
+
     #[test]
     fn ram_needed_counts_held_weights_but_not_the_text_encoder() {
         let dir = std::env::temp_dir().join(format!("yasdig-ramneed-{}", std::process::id()));
@@ -2866,6 +2951,7 @@ lora_dir = "loras""#,
                 control: None,
                 out: Path::new("o_%03d.png"),
                 refs: &[],
+                audio: &[],
             },
         ));
         assert_eq!(
@@ -2890,7 +2976,7 @@ lora_dir = "loras""#,
         assert_eq!(l(Expert::High).tags(false), "<lora:w.safetensors:0.8>");
         let (cfg, mut m) = video_fixture("");
         m.picked_loras = vec![l(Expert::Both)];
-        let io = VideoIo { init: None, control: None, out: Path::new("o_%03d.png"), refs: &[] };
+        let io = VideoIo { init: None, control: None, out: Path::new("o_%03d.png"), refs: &[], audio: &[] };
         let a = argv(&SdRunner::new(&cfg).video_cmd(&m, "cat", "", 1, &io));
         assert!(flag(&a, "-p").unwrap().contains("<lora:w.safetensors:0.8>"));
         assert_eq!(flag(&a, "--lora-model-dir"), Some(path_str(&cfg.lora_dir()).as_str()));
@@ -2917,6 +3003,7 @@ lora_dir = "loras""#,
                 control: Some(Path::new("/work/videos/7")),
                 out: Path::new("/work/videos/8/frame_%03d.png"),
                 refs: &[],
+                audio: &[],
             },
         ));
         assert_eq!(flag(&a, "--control-video"), Some("/work/videos/7"));
@@ -3057,7 +3144,7 @@ lora_dir = "loras""#,
         std::fs::create_dir_all(&dir).unwrap();
         let m = Monitor::with_preview(dir.clone());
         let (cfg, model) = video_fixture("");
-        let io = VideoIo { init: None, control: None, out: Path::new("o_%03d.png"), refs: &[] };
+        let io = VideoIo { init: None, control: None, out: Path::new("o_%03d.png"), refs: &[], audio: &[] };
         let a = argv(&SdRunner::watched(&cfg, &m).video_cmd(&model, "cat", "", 1, &io));
         assert_eq!(flag(&a, "--preview-path"), Some(path_str(&dir.join(VIDEO_PREVIEW)).as_str()));
 

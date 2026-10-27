@@ -18,6 +18,11 @@ What changed in each release of yasdig. Each release's executables are on the
 - **A video shot can cut to a picture**: a *Cut* in the Shots panel can *Start from a
   picture* — a keyframe from your outputs — on TI2V-5B, A14B and H3. That is how a Wan
   clip changes scene; H3 cuts can still follow references instead.
+- **Sounds for MiniMax H3**: a shot that can follow references can follow up to three
+  sounds too (*Sounds…*), a voice to speak in or a sound to match, named in its prompt
+  as `<Audio 1>`. Upload any sound the browser plays; it is kept in Outputs as a WAV,
+  where its tile plays it. Get models also has H3's **Ref2VA** file, the weights
+  MiniMax made for following references.
 - **A short movie from a story**: ask the agent for a film of a story, an idea, or the
   people in your pictures ("this is Mara"), and it writes a storyboard — the cast with how
   each looks, and the shots. The Story panel shows the board: every name, look, picture
@@ -38,7 +43,9 @@ What changed in each release of yasdig. Each release's executables are on the
   MiniMax's own guide sets out, so H3 no longer invents a narrator or music. The
   prompt also says who stays silent: after the last line the speaker closes their
   lips and nothing more is said, and a shot with no lines says no one speaks, since
-  H3 filled the unspoken end of a shot with a sentence of its own.
+  H3 filled the unspoken end of a shot with a sentence of its own. On H3 a character
+  can also be given a **voice** (*Voice* on their card: a sound from Outputs, or an
+  upload), which H3 speaks their lines in on the shots that start fresh from the cast.
   Settings → Agent's *Make movies* turns it off.
 - **Comparisons**: ask "which CFG works best?" or "which model draws hands better?" and it
   draws one round per value on the same seeds, judges them, counts per value the
@@ -64,6 +71,8 @@ What changed in each release of yasdig. Each release's executables are on the
 - The executable carries a second program, the agent's driver (built from llama.cpp),
   in the same network sandbox as sd-cli.
 - CFG scale tops out at 30 everywhere.
+- When sd-cli runs out of GPU memory, the console says how much of the card is still in
+  use once it has exited, and how much of that the server itself holds.
 
 ### Fixed
 

@@ -223,3 +223,11 @@ test('an H3 shot edits what is said, heard and scored; the lines read back as th
   assert.ok(html.includes('data-field="lines"') && html.includes('value="Rain"') && html.includes('data-field="music"'));
   assert.ok(!storyHtml(chat({ film: film() })).includes('data-field="sound"'), 'Wan films no sound');
 });
+
+test("an H3 film's characters take a voice; a Wan film's don't", () => {
+  const cast = [{ ...film().cast[0], voice: '100-1-sound' }, film().cast[1]];
+  const html = storyHtml(chat({ film: film({ references: true, cast }) }));
+  assert.ok(html.includes('Voice: 100-1-sound') && html.includes('data-film-voiceplay="100-1-sound"') && html.includes('data-film-novoice="0"'));
+  assert.ok(html.includes('Voice: H3 picks one') && html.includes('data-film-voicepick="1"'));
+  assert.ok(!storyHtml(chat({ film: film({ cast }) })).includes('data-film-voicepick'));
+});

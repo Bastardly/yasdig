@@ -310,6 +310,9 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         sound: Option<String>,
         #[serde(default)]
         music: Option<String>,
+        /// A character's voice: a sound output's stem, or `null` for none.
+        #[serde(default, deserialize_with = "crate::double_option")]
+        voice: Option<Option<String>>,
         #[serde(default)]
         every: Option<String>,
         /// Draw what the board is missing (*Draw the cast*).
@@ -346,6 +349,11 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         }
         _ => None,
     };
+    if let Some(Some(stem)) = &dto.voice {
+        if crate::workitems::Store::new(&cfg.base_dir.join("work"), &cfg.user_dir()).find_audio_output(stem).is_none() {
+            return err(conn, 400, &format!("no saved sound '{stem}': choose or upload one"));
+        }
+    }
     // At the model it is about to be shot on, when that changes.
     let shot_seconds = store.load(&dto.id).ok().and_then(|c| c.film).map_or(0.0, |mut f| {
         if let Some(v) = &dto.video_model {
@@ -412,6 +420,7 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
             lines: dto.lines.clone(),
             sound: dto.sound.clone(),
             music: dto.music.clone(),
+            voice: dto.voice.clone(),
         };
         session::edit_board(c, &edit).map_err(|e| anyhow::anyhow!(e))?;
         if dto.draw {

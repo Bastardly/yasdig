@@ -32,6 +32,7 @@ export function rowMatches(row, seg, k) {
     // Shot 1 starts fresh whatever its row says.
     && (k === 0 || !!row.cut === !!seg.cut)
     && same(row.refs ?? [], seg.references ?? [])
+    && same(row.audio ?? [], seg.audio ?? [])
     // A continue's picture is the last frame, whatever the row holds.
     && (k === 0 || !row.cut || (row.key || null) === (seg.keyframe ?? null));
 }

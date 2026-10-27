@@ -51,6 +51,16 @@ test('a cut, or other references, is a different shot', () => {
   assert.equal(shotState(first, clip('a dwarf walks'), true).action, 'none');
 });
 
+test('other sounds are a different shot', () => {
+  const c = { segments: [seg('a dwarf walks', 0), { ...seg('he sings', 1), cut: true, audio: ['100-1-sound'] }] };
+  const r = rows('a dwarf walks', 'he sings');
+  r[1].cut = true;
+  r[1].audio = ['100-1-sound'];
+  assert.equal(shotState(r, c, true).action, 'none');
+  r[1].audio = [];
+  assert.equal(shotState(r, c, true).action, 'redo');
+});
+
 test('shot 1 is the clip: changing it is a Generate, and it is never cut', () => {
   const r = rows('a crab runs', 'it lifts a claw');
   assert.equal(shotState(r, clip('a crab walks', 'it lifts a claw'), true).action, 'generate');

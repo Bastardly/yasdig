@@ -567,6 +567,41 @@ url = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_a
 dest = "vae/minimax_h3_audio_vae_fp32.safetensors"
 bytes = 605254808
 
+# The same H3 trained for reference generation (Ref2VA). Its header is the
+# fl2va file's tensor for tensor, the same length too (checked 2026-10-27),
+# so nothing tells the two apart but the name the person sees: both are one
+# family, and either takes references and sounds. The shared parts are the
+# card above's, from the same URLs.
+[[video]]
+id = "minimax-h3-ref2va-pruned-q4"
+family = "minimax_h3"
+label = "MiniMax H3 Ref2VA (pruned, Q4_K_M GGUF)"
+note = "The H3 weights MiniMax made for following reference pictures and sounds — a cast's faces, a voice — where the first card's go on from a frame. Shares its text encoder and VAEs with that card, so beside it this is 11 GB more. Pick it on the Video tab for shots that follow references. Its licence restricts where it may be used; read it on the model's page before downloading."
+
+[[video.file]]
+slot = "model"
+url = "https://huggingface.co/leejet/MiniMax-H3-GGUF/resolve/main/minimax_h3_ref2va_pruned-Q4_K_M.gguf"
+dest = "diffusion_models/minimax_h3_ref2va_pruned-Q4_K_M.gguf"
+bytes = 11420663904
+
+[[video.file]]
+slot = "llm"
+url = "https://huggingface.co/leejet/MiniMax-H3-GGUF/resolve/main/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+dest = "text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+bytes = 18218065024
+
+[[video.file]]
+slot = "vae"
+url = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors"
+dest = "vae/minimax_h3_video_vae_fp16.safetensors"
+bytes = 5207808496
+
+[[video.file]]
+slot = "audio_vae"
+url = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors"
+dest = "vae/minimax_h3_audio_vae_fp32.safetensors"
+bytes = 605254808
+
 # ---------------------------------------------------------------------------
 # Upscalers: the models an Output upscale or the Refine dialog's Upscale can
 # pick instead of FSR. Their own table, because nothing about them is a family:

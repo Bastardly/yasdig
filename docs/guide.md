@@ -502,6 +502,9 @@ and can be picked as an *Image to image* source — the picker
 behind **Choose…** has the same Current / Favorites toggle. A new save never takes
 the name of a favourite, so one name always means one picture.
 
+A **sound** you uploaded for a video shot is a tile here too — a note and its length.
+A click plays it (and a second stops it); it is deleted and starred like a picture.
+
 Refine, Edit, Extend and Scale work here too, on the opened file: it already has its
 grade and its sharpening in the pixels, so the sliders start at zero, and a pass over
 it is a choice you make, like picking it as a source. **Refine with**, at the top of the
@@ -778,6 +781,15 @@ pictures** (a face, a costume, a place) from your outputs or an upload — say i
 prompt who is who. Not both on one shot: sd.cpp can't give H3 references and a
 starting frame at once. Shot 1 can take references too when no first frame is picked.
 Other models have no references.
+
+**Sounds.** Where an H3 shot may take references it may also take **sounds**, when the
+model has its audio VAE: *Sounds…* picks up to three from your outputs or uploads one —
+a voice to speak in, a sound to match — 15 seconds in all, each at least 2 (MiniMax's
+limits). Name them in the shot's prompt as `<Audio 1>`, `<Audio 2>`: "the woman speaks
+in the voice of `<Audio 1>`". Any sound the browser can play uploads; it is kept as a
+32 kHz stereo WAV, cut to 15 seconds. H3 comes as two files with the same shape, so
+yasdig can't tell them apart: Get models has both, and the **Ref2VA** one is the one
+MiniMax made for following references — pick it for shots that do.
 
 **Current and Favorites.** Every clip is kept in `work/videos/` and listed on the
 **Current** panel, the Image tab's way: click once to show it, again to open the clip

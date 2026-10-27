@@ -11,6 +11,7 @@ import { S, clearPane } from './state.js';
 import { initViewer } from './viewer.js';
 import { initRedraw } from './redraw.js';
 import { initRefs } from './refs.js';
+import { initSounds } from './sounds.js';
 import { initHints } from './hints.js';
 import { initImage, layoutImageTab, restoreImage } from './image.js';
 import { initJobs, jobCount } from './jobs.js';
@@ -181,6 +182,7 @@ initBusy();
 initStatusCards();
 // Before initImage(): its model list calls syncRefs as soon as it loads.
 initRefs();
+initSounds();
 initImage();
 // After initViewer(): it hooks into the dialog viewer.js owns, and its mask's
 // pointerdown must come after the pane's pan listener.

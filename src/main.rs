@@ -880,6 +880,7 @@ fn route(
         // limit to. Filesystem-only, so it stays off the queue — an upload must
         // not wait out the render it is meant to replace.
         ("POST", "/upload") => handle_upload(conn, cfg, &req.body),
+        ("POST", "/upload-audio") => handle_upload_audio(conn, cfg, &req.body),
         ("POST", "/png-settings") => handle_png_settings(conn, cfg, &req.body),
         ("POST", "/refine") => handle_refine(conn, lanes, &req.body),
         ("POST", "/hires") => handle_hires(conn, lanes, &req.body),
@@ -1109,9 +1110,9 @@ fn route(
             handle_output_thumb(conn, cfg, stem)
         }
         // A saved clip, for the clip dialog: what it is, its frames, its sound
-        // and the file itself.
+        // and the file itself; and a sound output, to play.
         ("GET", p) if p.starts_with("/outputs/") && (p.ends_with("/video.json")
-            || p.ends_with("/audio.wav") || p.ends_with("/clip.avi") || p.contains("/frames/")) => {
+            || p.ends_with("/audio.wav") || p.ends_with("/sound.wav") || p.ends_with("/clip.avi") || p.contains("/frames/")) => {
             handle_output_clip(conn, cfg, p.trim_start_matches("/outputs/"))
         }
 
@@ -1269,6 +1270,9 @@ struct VideoModelDto {
     /// Whether a shot can be a cut with reference pictures
     /// ([`config::VideoFamily::takes_references`]).
     references: bool,
+    /// Whether a shot can follow reference sounds: references and an audio
+    /// VAE to hear them with ([`pipeline::MAX_REF_AUDIO`]).
+    sounds: bool,
     /// The memory mode the model runs with, resolved — `memory` beside it is
     /// the raw entry, which an old `offload_to_cpu` key leaves unset.
     memory_mode: String,
@@ -1553,6 +1557,7 @@ fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> 
             is_moe: m.family.is_moe(),
             chains: m.family.chains(),
             references: m.family.takes_references(),
+            sounds: m.family.takes_references() && m.audio_vae.is_some(),
             memory_mode: m.memory_mode().to_string(),
             missing: m.missing().iter().map(|p| p.display().to_string()).collect(),
             duration: m.duration(),
@@ -1585,6 +1590,8 @@ struct ShotDto {
     references: Vec<String>,
     #[serde(default)]
     keyframe: Option<String>,
+    #[serde(default)]
+    audio: Vec<String>,
 }
 
 impl ShotDto {
@@ -1596,6 +1603,7 @@ impl ShotDto {
             cut: self.cut,
             references: self.references,
             keyframe: self.keyframe,
+            audio: self.audio,
         }
     }
 }
@@ -1997,6 +2005,12 @@ fn handle_output_clip(conn: &mut http::Connection, cfg: &Config, rest: &str) -> 
     let Some((stem, what)) = rest.split_once('/') else {
         return not_found(conn);
     };
+    if what == "sound.wav" {
+        return match store(cfg).find_audio_output(stem).and_then(|p| std::fs::read(p).ok()) {
+            Some(body) => conn.respond(200, "audio/wav", &body),
+            None => not_found(conn),
+        };
+    }
     if what == "clip.avi" {
         return match store(cfg).find_clip_output(stem).and_then(|p| std::fs::read(p).ok()) {
             Some(body) => conn.respond_with(
@@ -2751,6 +2765,19 @@ fn handle_img2img(
 ///
 /// Answered on the connection thread: a decode and two file writes, which must
 /// not queue behind a render the user is uploading an image in order to replace.
+/// `POST /upload-audio`: a sound as raw 16-bit PCM WAV bytes, kept as a
+/// `work/output/` sound (`Store::import_audio`) for H3 to follow.
+fn handle_upload_audio(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    match store(cfg).import_audio(body) {
+        Ok((stem, secs)) => conn.respond(
+            200,
+            "application/json",
+            serde_json::json!({ "stem": stem, "seconds": secs }).to_string().as_bytes(),
+        ),
+        Err(e) => conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
+    }
+}
+
 fn handle_upload(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
     // Decoded rather than trusted, for two reasons: the dimensions go in the
     // sidecar, and a body that isn't a PNG should fail now rather than minutes

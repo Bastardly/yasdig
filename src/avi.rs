@@ -39,6 +39,12 @@ impl Audio {
         self.channels * 2
     }
 
+    /// How long it plays.
+    pub fn seconds(&self) -> f32 {
+        let per_second = u64::from(self.sample_rate) * u64::from(self.block_align());
+        if per_second == 0 { 0.0 } else { self.pcm.len() as f32 / per_second as f32 }
+    }
+
     fn samples(&self) -> u32 {
         (self.pcm.len() / usize::from(self.block_align().max(1))) as u32
     }
@@ -314,8 +320,13 @@ pub fn write_wav(path: &Path, audio: &Audio) -> Result<()> {
 /// found by walking rather than assumed at fixed offsets.
 pub fn read_wav(path: &Path) -> Result<Audio> {
     let b = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    parse_wav(&b).with_context(|| path.display().to_string())
+}
+
+/// [`read_wav`] over bytes in hand: an upload is checked before it is kept.
+pub fn parse_wav(b: &[u8]) -> Result<Audio> {
     if b.get(0..4) != Some(b"RIFF") || b.get(8..12) != Some(b"WAVE") {
-        bail!("{} is not a WAV file", path.display());
+        bail!("not a WAV file");
     }
     let mut format = None;
     let mut i = 12;
@@ -326,7 +337,7 @@ pub fn read_wav(path: &Path) -> Result<Audio> {
             b"fmt " if data.len() >= 16 => {
                 let bits = u16::from_le_bytes(data[14..16].try_into()?);
                 if u16::from_le_bytes(data[0..2].try_into()?) != 1 || bits != 16 {
-                    bail!("{} is not 16-bit PCM", path.display());
+                    bail!("not 16-bit PCM");
                 }
                 format = Some((u16::from_le_bytes(data[2..4].try_into()?), u32::from_le_bytes(data[4..8].try_into()?)));
             }
@@ -338,7 +349,7 @@ pub fn read_wav(path: &Path) -> Result<Audio> {
         }
         i += 8 + len + len % 2;
     }
-    bail!("{} has no audio data", path.display())
+    bail!("no audio data")
 }
 
 #[cfg(test)]
