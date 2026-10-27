@@ -125,7 +125,11 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
         if offered.is_empty() {
             s.push_str("\n\nYou may not change any settings in this chat; advise only.");
         } else {
-            s.push_str("\n\nSettings you may change, in `change`:");
+            s.push_str(
+                "\n\nSettings you may change, in `change`. Each is shown at the value the next picture is drawn \
+                 with: this model's own unless the chat changed it. Change one only when the person asks for it \
+                 or a check needs it.",
+            );
             for k in &offered {
                 let range = match (k.kind, k.min, k.max) {
                     ("int" | "float" | "size", Some(a), Some(b)) => format!(" Range {a}–{b}."),

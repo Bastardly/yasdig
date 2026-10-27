@@ -141,6 +141,14 @@ pub struct Film {
     /// Each shot is looked at after it is filmed: the agent model sees.
     #[serde(default)]
     pub watch: bool,
+    /// How many times a shot failing a check is filmed again: Settings →
+    /// Agent's as it was at go.
+    #[serde(default = "one_retake")]
+    pub retakes: u32,
+}
+
+fn one_retake() -> u32 {
+    super::knobs::DEFAULT_RETAKES
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

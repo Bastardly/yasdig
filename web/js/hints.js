@@ -448,6 +448,10 @@ const HELP = [
         + 'writes a storyboard, draws the cast and the pictures shots start from '
         + '(saved to Outputs), then waits for your go before filming on the Video '
         + 'tab’s model.' },
+  { ids: ['agentretakes'],
+    text: 'When the agent watches a filmed shot and a check fails, it films the '
+        + 'shot again on a new seed, up to this many times, then goes on. 0 keeps '
+        + 'every first take. Each retake is a whole shot’s render.' },
   { ids: ['setembedpng'],
     text: 'Writes the prompt, negative prompt, model, seed, steps, sampler and CFG '
         + 'into each image you save to output, in the format A1111, Forge and Civitai '

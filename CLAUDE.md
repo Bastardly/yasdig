@@ -713,6 +713,14 @@ Break silently:
   plus the agent's keys. `with_turbo` adds the catalog Turbo LoRA (steps/CFG/sigmas)
   when there is no `loras` key — `toolkit::locks_for` reads the same absence. A model
   switch (`knobs::write`) removes steps/CFG/size/sampler/LoRAs/parts, keeps the prompts.
+- **The agent is shown every knob at the value the next round draws with**
+  (`toolkit::shown`: the chat's, `with_turbo`'s, then the registry profile's). The
+  chat's settings hold only what was set in it; shown as null, CFG was guessed at 7.
+- **A session ends when stopped or overtaken** (`session::close_session`, from every
+  stop path and `send`): a round cut short is closed at what it holds — left open, the
+  next chat draw filled it at the session's size — and a comparison's knob goes back.
+- **Board edits are `session::edit_board`** (tested); the route only keeps the picture,
+  looks up the model and queues. Errors show in the Story panel (`#astoryerr`).
 - **The rules are Settings', read per turn** (`knobs::Rules`, `[agent]`; `toolkit::resolve`
   loads them): a whitelist of keys, no ask-first, no bounds but `hard_bounds`. A chat
   carries none. An old `chat.json`'s `pending`/`awaiting` read as `rejected`/`idle` (serde
@@ -807,8 +815,8 @@ Break silently:
   defaults plus its catalog Turbo LoRA (`with_video_turbo`); the agent never picks
   size, steps or length. **A take's checks are the server's** (`take_checks`), never
   the model's; it sees `take_cast`'s pictures, the frame before (a continue) and the
-  shot's first, middle and last (`take_frames`, staged like pictures). One retake
-  (`takes` < 2), then on. `Film.watch` is the agent model's vision at go: without it
+  shot's first, middle and last (`take_frames`, staged like pictures). Retakes are
+  `Film.retakes` (Settings → Agent's `film_retakes` at go, default 1), then on. `Film.watch` is the agent model's vision at go: without it
   nothing is checked, and the chat says so. A take's reply is recorded before the film
   moves on (`film_on`), so the clip card follows it.
 - **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.

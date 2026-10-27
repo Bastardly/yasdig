@@ -275,6 +275,7 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
             if !more {
                 store.update(id, |c| {
                     c.session.state = if queue.stopping(job) {
+                        session::close_session(c);
                         State::Stopped
                     } else {
                         session::finished(c)
@@ -307,6 +308,7 @@ fn end_stopped(store: &ChatStore, id: &str) {
     let _ = store.update(id, |c| {
         c.session.state = State::Stopped;
         c.session.job = None;
+        session::close_session(c);
         c.note("Stopped.");
         Ok(())
     });
@@ -801,7 +803,7 @@ fn picture_output(cfg: &Config, store: &ChatStore, chat_id: &str, p: &ImageRef) 
 /// schedule goes only with the LoRA's own steps. A chat begun on the Image
 /// tab's whole body (before chats started from the model alone) carries its
 /// own `loras` and is left as it is.
-fn with_turbo(cfg: &Config, settings: &mut serde_json::Value) {
+pub(super) fn with_turbo(cfg: &Config, settings: &mut serde_json::Value) {
     let Some(obj) = settings.as_object_mut() else { return };
     if obj.contains_key("loras") {
         return;

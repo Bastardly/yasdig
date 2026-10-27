@@ -29,7 +29,7 @@ export function drawRules(el, rules) {
     el.innerHTML = '<p class="sub">What the agent may change couldn’t be read; it is kept as it is.</p>';
     return;
   }
-  const r = rules ?? { knobs: [], actions: [], film: true };
+  const r = rules ?? { knobs: [], actions: [], film: true, film_retakes: 1 };
   const box = (attr, key, label, help, on) => `<div class="checks"><label data-help="${esc(help)}">`
     + `<input type="checkbox" ${attr}="${esc(key)}"${on ? ' checked' : ''}> ${esc(label)}</label></div>`;
   const knobs = table.knobs.map((k) => box('data-rule-knob', k.key, k.label, k.help, r.knobs?.includes(k.key))).join('');
@@ -43,6 +43,8 @@ export function drawRules(el, rules) {
     <label class="grouphead" data-help="agentpasses">Passes it may run on a keeper</label>${passes}
     <div class="checks"><label data-help="agentfilm"><input type="checkbox" id="set-agent-film"${
       r.film !== false ? ' checked' : ''}> Make movies</label></div>
+    <label for="set-agent-retakes" data-help="agentretakes">Retakes of a failing shot</label>
+    <input type="number" id="set-agent-retakes" min="0" step="1" value="${Number(r.film_retakes ?? 1)}">
     <label for="set-agent-default" data-help="setagent">Agent for new chats</label>
     <select id="set-agent-default">${options.join('')}</select>
     <p class="sub">It decides how many pictures and rounds from what you write, up to ${
@@ -61,5 +63,7 @@ export function readRules(el) {
   out.knobs = ticked('data-rule-knob');
   out.actions = ticked('data-rule-action');
   out.film = $('set-agent-film').checked;
+  // Whole and not below 0; no top, a long film is the person's to wait for.
+  out.film_retakes = Math.max(0, Math.floor(Number($('set-agent-retakes').value) || 0));
   return out;
 }

@@ -842,7 +842,8 @@
       <div id="astorybody"></div>
       <input type="file" id="astoryfile" accept="image/*" hidden>
     </div>
-    <div class="fpfoot"><button type="button" class="btn btn-run" id="astorydraw" hidden>Draw the cast</button></div>
+    <!-- An edit the server refused says why here, beside what was pressed. -->
+    <div class="fpfoot"><div class="err" id="astoryerr"></div><button type="button" class="btn btn-run" id="astorydraw" hidden>Draw the cast</button></div>
   </section>
   <section class="fpanel" id="panel-agent-current" aria-label="Current" hidden>
     <header class="fphead"><b>Current</b><button type="button" class="fpclose" aria-label="Close Current">&times;</button></header>
@@ -1173,6 +1174,11 @@
            is what most visits end with; neutral. -->
       <button type="button" id="lbdownload" class="btn btn-block"
         title="Save the picture as you see it to your computer, at full size, with its settings in the PNG when Settings says so.">Download</button>
+      <!-- The Agent tab's: the chat's picture, on the Image tab with its
+           settings, as a reopened work item. Above Save to output, the amber
+           main action, which ends the rail. -->
+      <button type="button" id="lbtoimage" class="btn btn-block" hidden
+        title="Open this picture on the Image tab, with the settings that made it.">Open on Image tab</button>
       <!-- The Image tab's keep-this-one, and the rail's main action there
            (amber): what is on screen into work/output/, look and all. Only
            generations are archived on their own. Shown from the start, since
@@ -1180,10 +1186,6 @@
            Agent tab shows it too). -->
       <button type="button" id="saveout" class="btn btn-run btn-block"
         title="Save the picture as you see it to work/output/ — the Outputs tab.">Save to output</button>
-      <!-- The Agent tab's: the chat's picture, on the Image tab with its
-           settings, as a reopened work item. -->
-      <button type="button" id="lbtoimage" class="btn btn-block" hidden
-        title="Open this picture on the Image tab, with the settings that made it.">Open on Image tab</button>
       <!-- A copy, beside the original: for keeping both. Neutral, since
            Save changes below is what an edit usually ends with. -->
       <button type="button" id="lbsave" class="btn btn-block" hidden

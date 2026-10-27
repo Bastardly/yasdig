@@ -169,6 +169,16 @@ pub struct Rules {
     /// default, since nothing is filmed until the person says go.
     #[serde(default = "yes")]
     pub film: bool,
+    /// How many times a film's shot is filmed again when a check fails.
+    #[serde(default = "default_retakes")]
+    pub film_retakes: u32,
+}
+
+/// One more take of a failing shot, unless Settings says otherwise.
+pub const DEFAULT_RETAKES: u32 = 1;
+
+fn default_retakes() -> u32 {
+    DEFAULT_RETAKES
 }
 
 fn yes() -> bool {
@@ -210,7 +220,7 @@ fn action_set<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeSet<String>, D::Er
 
 impl Default for Rules {
     fn default() -> Self {
-        Rules { agent: None, knobs: default_knobs(), actions: BTreeSet::new(), film: true }
+        Rules { agent: None, knobs: default_knobs(), actions: BTreeSet::new(), film: true, film_retakes: DEFAULT_RETAKES }
     }
 }
 

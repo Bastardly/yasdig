@@ -92,6 +92,7 @@ async function openChat(id) {
 
 function show(got, { scroll = true } = {}) {
   const was = data?.chat;
+  if (was?.id !== got.chat.id) $('astoryerr').textContent = '';
   data = got;
   liveSeq = null;
   draw(scroll || was?.id !== got.chat.id || was?.messages.length !== got.chat.messages.length);
@@ -181,11 +182,13 @@ function drawStory() {
 // One field of the board, as it was edited.
 async function editFilm(fields) {
   if (!data) return;
+  $('astoryerr').textContent = '';
   try {
     show(await post('/chats/film', { id: chatId(), ...fields }), { scroll: false });
     soonJobs();
   } catch (e) {
-    err(String(e.message || e));
+    // In the panel: the chat's own error line is often out of view behind it.
+    $('astoryerr').textContent = String(e.message || e);
     drawStory();
   }
 }
@@ -215,7 +218,8 @@ function initStory() {
     const d = b.dataset;
     const picture = (k) => (stem) => editFilm({ member: k, picture: { kind: 'output', id: stem } });
     if (d.filmPick != null) choosePicture(picture(Number(d.filmPick)));
-    else if (d.filmRedraw != null) editFilm({ member: Number(d.filmRedraw), picture: null });
+    // Drawn on the same press, as a person pressing it means.
+    else if (d.filmRedraw != null) editFilm({ member: Number(d.filmRedraw), picture: null, draw: true });
     else if (d.filmUpload != null) {
       pickFor = Number(d.filmUpload);
       $('astoryfile').click();

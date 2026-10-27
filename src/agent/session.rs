@@ -95,7 +95,7 @@ pub fn can_go(f: &Film) -> bool {
 /// The person's go (the Story panel's *Film*, or "go" in the chat): film the
 /// shots from the first, or from where a stop left it. `watch`: the agent
 /// model sees, so each shot is looked at.
-pub fn go(chat: &mut Chat, watch: bool) -> Result<(), String> {
+pub fn go(chat: &mut Chat, watch: bool, retakes: u32) -> Result<(), String> {
     let f = chat.film.as_mut().ok_or("this chat has no storyboard")?;
     if !can_go(f) {
         return Err(match f.phase {
@@ -115,6 +115,7 @@ pub fn go(chat: &mut Chat, watch: bool) -> Result<(), String> {
     }
     f.phase = Phase::Shooting;
     f.watch = watch;
+    f.retakes = retakes;
     chat.session.next = Next::Shoot;
     Ok(())
 }
@@ -191,7 +192,7 @@ fn next_shot(chat: &mut Chat) {
     }
     f.phase = Phase::Done;
     chat.session.next = Next::Nothing;
-    let (id, title, watch) = (f.clip.clone().unwrap_or_default(), f.title.clone(), f.watch);
+    let (id, title, watch, retakes) = (f.clip.clone().unwrap_or_default(), f.title.clone(), f.watch, f.retakes);
     let failing: Vec<String> =
         f.shots.iter().enumerate().filter(|(_, s)| s.checks.contains(&false)).map(|(k, s)| format!("{} ({} takes)", k + 1, s.takes)).collect();
     let n = chat.next_n();
@@ -199,11 +200,123 @@ fn next_shot(chat: &mut Chat) {
     if !watch {
         chat.note("No shot was checked: the agent model can't see pictures.");
     } else if !failing.is_empty() {
+        let after = match retakes {
+            0 => "with retakes off in Settings → Agent",
+            1 => "after a retake",
+            _ => "after its retakes",
+        };
         chat.note(format!(
-            "Still failing a check after a retake: shot {}. Redo from that shot on the Video tab, or ask for another take.",
+            "Still failing a check {after}: shot {}. Redo from that shot on the Video tab, or ask for another take.",
             failing.join(", ")
         ));
     }
+}
+
+/// An edit of the board from the Story panel, the route's body less what
+/// needs the disk: the picture is already kept in the chat, the image model
+/// already looked up.
+#[derive(Debug, Default)]
+pub struct BoardEdit {
+    /// The model the pictures still missing are drawn with, and whether it
+    /// follows references (a character's turnaround).
+    pub image_model: Option<(String, bool)>,
+    pub member: Option<usize>,
+    pub name: Option<String>,
+    pub look: Option<String>,
+    /// A picture of the person's, or `None` to have it drawn again.
+    pub picture: Option<Option<ImageRef>>,
+    pub shot: Option<usize>,
+    pub text: Option<String>,
+    pub cast: Option<Vec<String>>,
+    pub cut: Option<bool>,
+}
+
+/// Apply a [`BoardEdit`] to a board still being written or ready, then make
+/// a cut of any continue it left bringing someone in ([`recut_board`]).
+pub fn edit_board(c: &mut Chat, e: &BoardEdit) -> Result<(), String> {
+    let f = c.film.as_mut().ok_or("this chat has no storyboard")?;
+    if let Some((name, sheets)) = &e.image_model {
+        f.image_model = name.clone();
+        f.sheets = *sheets;
+    }
+    if let Some(k) = e.member {
+        let old = f.cast.get(k).map(|m| m.name.clone()).ok_or_else(|| format!("there is no cast member {}", k + 1))?;
+        if let Some(name) = e.name.as_ref().map(|n| n.split_whitespace().collect::<Vec<_>>().join(" ")) {
+            if name.is_empty() {
+                return Err("a cast member needs a name".into());
+            }
+            if f.cast.iter().enumerate().any(|(i, m)| i != k && m.name.eq_ignore_ascii_case(&name)) {
+                return Err(format!("{name} is in the cast already"));
+            }
+            // The shots name it too.
+            for s in &mut f.shots {
+                for n in &mut s.cast {
+                    if *n == old {
+                        *n = name.clone();
+                    }
+                }
+            }
+            f.cast[k].name = name;
+        }
+        let m = &mut f.cast[k];
+        if let Some(look) = &e.look {
+            m.look = look.trim().to_string();
+        }
+        match &e.picture {
+            Some(Some(p)) => {
+                let p = p.clone();
+                m.stem = Some(p.id.clone());
+                m.picture = Some(p);
+                m.sheet = None;
+                m.sheet_stem = None;
+            }
+            // Its sheet goes too: it was drawn from the picture, or the
+            // picture from it.
+            Some(None) => {
+                m.picture = None;
+                m.stem = None;
+                m.sheet = None;
+                m.sheet_stem = None;
+            }
+            None => {}
+        }
+    }
+    if let Some(k) = e.shot {
+        let names: Vec<String> = f.cast.iter().map(|m| m.name.clone()).collect();
+        let s = f.shots.get_mut(k).ok_or_else(|| format!("there is no shot {}", k + 1))?;
+        let before = (s.text.clone(), s.cast.clone(), s.cut);
+        if let Some(t) = &e.text {
+            let t = t.trim();
+            if t.is_empty() {
+                return Err("a shot needs words".into());
+            }
+            s.text = t.to_string();
+        }
+        if let Some(cast) = &e.cast {
+            s.cast = cast
+                .iter()
+                .filter_map(|n| names.iter().find(|x| x.eq_ignore_ascii_case(n.trim())).cloned())
+                .fold(Vec::new(), |mut v, n| {
+                    if !v.contains(&n) {
+                        v.push(n);
+                    }
+                    v
+                });
+            s.cast.truncate(crate::config::MAX_REFERENCES);
+        }
+        if let Some(cut) = e.cut {
+            s.cut = cut && k > 0;
+        }
+        // A keyframe shows what the shot said: a changed shot draws its own.
+        if before != (s.text.clone(), s.cast.clone(), s.cut) {
+            s.keyframe = None;
+            s.key_stem = None;
+        }
+    }
+    if let Some(n) = recut_board(c.film.as_mut().expect("checked above")) {
+        c.note(n);
+    }
+    Ok(())
 }
 
 /// After the board changed: with `draw`, draw what it is missing; without,
@@ -695,6 +808,7 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
         image_model: image,
         sheets,
         watch: false,
+        retakes: old.as_ref().map_or(super::knobs::DEFAULT_RETAKES, |f| f.retakes),
         clip: None,
         phase: Phase::Board,
         shot: 0,
@@ -718,20 +832,21 @@ fn pick_image_model(chat: &Chat, picked: Option<&str>, old: Option<&Film>, t: &T
         .unwrap_or_else(|| chat.settings.get("template").and_then(|v| v.as_str()).unwrap_or("").to_string())
 }
 
-/// A take judged: one retake on a new seed when a check failed and the shot
-/// has had only one, with the agent's better words if it wrote some. `true`
+/// A take judged: a retake on a new seed when a check failed and the shot
+/// has retakes left (`Film.retakes`), with the agent's better words if it
+/// wrote some. `true`
 /// when the film moves on instead, which the caller does after recording
 /// the reply, so the clip comes after it in the chat.
 fn take(chat: &mut Chat, r: &ReplyJson, notes: &mut Vec<String>) -> bool {
     let Some(f) = chat.film.as_mut() else { return false };
-    let k = f.shot;
+    let (k, retakes) = (f.shot, f.retakes);
     let want = take_checks(f, k).len();
     let Some(s) = f.shots.get_mut(k) else { return false };
     let mut answers: Vec<bool> = r.answers.clone().unwrap_or_default().into_iter().take(want).collect();
     // An answer the grammar didn't deliver is no pass.
     answers.resize(want, false);
     s.checks = answers;
-    if s.checks.iter().all(|b| *b) || s.takes >= 2 {
+    if s.checks.iter().all(|b| *b) || s.takes > retakes {
         return true;
     }
     let better = plain(r.better_text.as_deref().unwrap_or(""));
@@ -772,6 +887,44 @@ pub fn parse_reply(text: &str) -> anyhow::Result<ReplyJson> {
         (Some(a), Some(b)) if a < b => serde_json::from_str(&t[a..=b])
             .map_err(|e| anyhow::anyhow!("the agent's reply isn't the JSON it was asked for ({e})")),
         _ => anyhow::bail!("the agent's reply isn't the JSON it was asked for"),
+    }
+}
+
+/// End whatever session the chat was in, when it is stopped or the person
+/// sends: what comes next is the chat's. A round cut short is closed at what
+/// it holds — left open, the next chat "draw" filled it, at the session's
+/// size and on the session's changes. A comparison stopped part way puts its
+/// knob back. The goal stays, so the Session panel says what ran.
+pub fn close_session(chat: &mut Chat) {
+    let s = &mut chat.session;
+    if matches!(s.mode, Mode::Plan | Mode::Critique) {
+        if let Some((k, sw)) = s.sweep.as_ref().and_then(|sw| Some((knobs::knob(&sw.knob)?, sw))) {
+            knobs::write(&mut chat.settings, k, &sw.before);
+            chat.settings_rev += 1;
+        }
+    }
+    let s = &mut chat.session;
+    let last = chat.messages.iter().rposition(|m| matches!(m, Msg::Batch { .. }));
+    if let Some(i) = last {
+        if let Msg::Batch { images, size, .. } = &mut chat.messages[i] {
+            let held = images.len() as u32;
+            if held == 0 {
+                chat.messages.remove(i);
+                s.round = s.round.saturating_sub(1);
+            } else if held < whole(*size) {
+                *size = held;
+            }
+        }
+    }
+    s.checks.clear();
+    s.sweep = None;
+    s.rounds = 0;
+    s.per_round = 0;
+    s.count = 0;
+    s.reference.clear();
+    s.mode = Mode::Chat;
+    if matches!(s.next, Next::Batch | Next::Critique | Next::Escalate) {
+        s.next = Next::Nothing;
     }
 }
 
@@ -1031,7 +1184,7 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
                         None => Next::Nothing,
                     }
                 }
-                Some("go") => match go(chat, t.vision) {
+                Some("go") => match go(chat, t.vision, t.rules.film_retakes) {
                     Ok(()) => Next::Shoot,
                     Err(why) => {
                         notes_out.push(format!("Not filming: {why}."));
@@ -1434,7 +1587,7 @@ mod tests {
     fn each_shot_is_looked_at_and_a_failed_one_is_filmed_once_more() {
         let mut c = ready(false);
         assert!(can_go(c.film.as_ref().unwrap()));
-        go(&mut c, true).unwrap();
+        go(&mut c, true, 1).unwrap();
         assert_eq!(next_step(&c), Step::Shot(0));
         shot_done(&mut c, 0, 11, "clip1");
         assert_eq!(next_step(&c), Step::Turn(Mode::Take));
@@ -1457,13 +1610,71 @@ mod tests {
         assert_eq!(f.shots[1].takes, 2);
         assert!(c.messages.iter().any(|m| matches!(m, Msg::Clip { id, .. } if id == "clip1")));
         assert!(matches!(c.messages.last(), Some(Msg::Note { text, .. }) if text.contains("shot 2 (2 takes)")));
-        assert!(go(&mut c, true).is_err(), "a film is shot once");
+        assert!(go(&mut c, true, 1).is_err(), "a film is shot once");
+    }
+
+    #[test]
+    fn draw_again_clears_a_drawn_picture_and_draws_it_at_once() {
+        let mut c = ready(false);
+        assert_eq!(next_step(&c), Step::End);
+        let leo = c.film.as_ref().unwrap().cast[1].clone();
+        assert!(leo.stem.is_some() && !leo.theirs(), "Leo was drawn");
+        edit_board(&mut c, &BoardEdit { member: Some(1), picture: Some(None), ..Default::default() }).unwrap();
+        let leo = &c.film.as_ref().unwrap().cast[1];
+        assert!(leo.picture.is_none() && leo.stem.is_none() && leo.sheet_stem.is_none());
+        board_advance(&mut c, 5.0, true);
+        assert_eq!(next_step(&c), Step::CastPicture(1), "drawn on the same press");
+    }
+
+    #[test]
+    fn a_board_edit_renames_through_the_shots_and_refuses_what_it_cant_be() {
+        let mut c = ready(false);
+        let e = |m: Option<usize>, name: &str| BoardEdit { member: m, name: Some(name.into()), ..Default::default() };
+        edit_board(&mut c, &e(Some(1), "  Leon   Smith ")).unwrap();
+        let f = c.film.as_ref().unwrap();
+        assert_eq!(f.cast[1].name, "Leon Smith");
+        assert!(f.shots.iter().any(|s| s.cast.contains(&"Leon Smith".to_string())), "the shots name him too");
+        assert!(edit_board(&mut c, &e(Some(1), "mara")).is_err(), "a name once");
+        assert!(edit_board(&mut c, &e(Some(1), " ")).is_err());
+        assert!(edit_board(&mut c, &e(Some(9), "Bob")).is_err());
+        // A shot's words changed: its keyframe goes, as it showed the old ones.
+        let had = c.film.as_ref().unwrap().shots[0].key_stem.is_some();
+        edit_board(&mut c, &BoardEdit { shot: Some(0), text: Some("Mara shuts the door.".into()), ..Default::default() }).unwrap();
+        assert!(had && c.film.as_ref().unwrap().shots[0].key_stem.is_none());
+        assert!(edit_board(&mut c, &BoardEdit { shot: Some(0), text: Some("  ".into()), ..Default::default() }).is_err());
+        // Shot 2 goes on from shot 1 with Mara alone; adding Leon makes it a cut.
+        edit_board(&mut c, &BoardEdit { shot: Some(1), cast: Some(vec!["mara".into(), "leon smith".into()]), ..Default::default() }).unwrap();
+        let s = &c.film.as_ref().unwrap().shots[1];
+        assert_eq!(s.cast, ["Mara", "Leon Smith"], "spelt as the cast spells them");
+        assert!(s.cut);
+    }
+
+    #[test]
+    fn the_retakes_are_settings() {
+        // None: a failing shot is kept, and the note says why.
+        let mut c = ready(false);
+        go(&mut c, true, 0).unwrap();
+        shot_done(&mut c, 0, 11, "clip1");
+        take_reply(&mut c, json!([false, true]), "");
+        assert_eq!(next_step(&c), Step::Shot(1));
+        // Two: filmed three times in all.
+        let mut c = ready(false);
+        go(&mut c, true, 2).unwrap();
+        for seed in [11, 12] {
+            shot_done(&mut c, 0, seed, "clip1");
+            take_reply(&mut c, json!([false, true]), "");
+            assert_eq!(next_step(&c), Step::Shot(0), "take {seed} is retaken");
+        }
+        shot_done(&mut c, 0, 13, "clip1");
+        take_reply(&mut c, json!([false, true]), "");
+        assert_eq!(next_step(&c), Step::Shot(1));
+        assert_eq!(c.film.as_ref().unwrap().shots[0].takes, 3);
     }
 
     #[test]
     fn an_agent_that_cant_see_films_every_shot_and_says_none_was_checked() {
         let mut c = ready(true);
-        go(&mut c, false).unwrap();
+        go(&mut c, false, 1).unwrap();
         for k in 0..3 {
             assert_eq!(next_step(&c), Step::Shot(k));
             shot_done(&mut c, k, 1, "clip1");
@@ -1475,12 +1686,12 @@ mod tests {
     #[test]
     fn a_stopped_film_goes_on_from_its_shot() {
         let mut c = ready(false);
-        go(&mut c, true).unwrap();
+        go(&mut c, true, 1).unwrap();
         shot_done(&mut c, 0, 11, "clip1");
         take_reply(&mut c, json!([true, true]), "");
         c.session.next = Next::Nothing; // stopped
         assert!(can_go(c.film.as_ref().unwrap()));
-        go(&mut c, true).unwrap();
+        go(&mut c, true, 1).unwrap();
         assert_eq!(next_step(&c), Step::Shot(1));
         assert_eq!(c.film.as_ref().unwrap().clip.as_deref(), Some("clip1"));
     }
@@ -1547,6 +1758,45 @@ mod tests {
         apply_reply(&mut c, Mode::Critique, r, &t, &Locks::default(), vec![], Default::default());
         assert_eq!(c.session.next, Next::Nothing, "round 2 of 2 was the last");
         assert_eq!(next_step(&c), Step::End);
+    }
+
+    #[test]
+    fn a_session_stopped_part_way_leaves_the_next_draw_to_the_chat() {
+        let mut c = chat();
+        let t = tk(&c);
+        apply_reply(&mut c, Mode::Plan, reply(json!({"notes": "", "checks": ["Is there a hat?"], "rounds": 3, "count": 4, "reply": "ok"})), &t, &Locks::default(), vec![], Default::default());
+        start_round(&mut c, 100);
+        image_done(&mut c, img("a"));
+        // Stopped with one of four drawn, then "draw one cat".
+        close_session(&mut c);
+        assert!(matches!(c.messages.last(), Some(Msg::Batch { size: 1, .. })), "the round is closed at what it holds");
+        let draw = reply(json!({"notes": "", "action": "draw", "count": 1, "seeds": "new", "change": {"prompt": "a cat"}, "reply": ""}));
+        apply_reply(&mut c, Mode::Chat, draw, &t, &Locks::default(), vec![], Default::default());
+        assert!(needs_round(&c), "a new round, not the stopped one filled up");
+        start_round(&mut c, 200);
+        assert_eq!((c.session.round, round_size(&c)), (2, 1));
+        image_done(&mut c, img("b"));
+        assert_eq!(next_step(&c), Step::End, "not judged against the old checks");
+
+        // Stopped before a picture: the empty round goes, and its number is reused.
+        let mut c = chat();
+        apply_reply(&mut c, Mode::Plan, reply(json!({"notes": "", "checks": ["Is there a hat?"], "reply": "ok"})), &t, &Locks::default(), vec![], Default::default());
+        start_round(&mut c, 100);
+        close_session(&mut c);
+        assert!(!c.messages.iter().any(|m| matches!(m, Msg::Batch { .. })));
+        assert_eq!((c.session.round, c.session.next, c.session.mode), (0, Next::Nothing, Mode::Chat));
+    }
+
+    #[test]
+    fn a_comparison_stopped_part_way_puts_its_knob_back() {
+        let mut c = chat();
+        c.settings["cfg_scale"] = json!(6.0);
+        c.session.mode = Mode::Critique;
+        c.session.sweep = Some(Sweep { knob: "cfg_scale".into(), values: vec![json!(3.0), json!(9.0)], before: json!(6.0) });
+        c.settings["cfg_scale"] = json!(9.0);
+        close_session(&mut c);
+        assert_eq!(c.settings["cfg_scale"], json!(6.0));
+        assert!(c.session.sweep.is_none());
     }
 
     #[test]

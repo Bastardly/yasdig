@@ -28,7 +28,7 @@ What changed in each release of yasdig. Each release's executables are on the
   picture — and every later picture of them follows it. Then it waits for your
   go: *Film* shoots it shot by shot on the Video tab's model (or the one picked in the panel's *Filmed with*), looks at each shot (is it
   what the shot says, do the people look like their pictures, does it follow on) and
-  films a failing one once more. The film is an ordinary clip in the Video tab, where
+  films a failing one again — once, or as often as Settings → Agent says. The film is an ordinary clip in the Video tab, where
   *Redo from shot k* works on it. "Make shot 2 at night" rewrites it, keeping the pictures that still fit. A shot that goes on from the one before can only keep who that shot showed, so one that brings someone in — or back — is made a cut, which starts from their picture.
   Settings → Agent's *Make movies* turns it off.
 - **Comparisons**: ask "which CFG works best?" or "which model draws hands better?" and it

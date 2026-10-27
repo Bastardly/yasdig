@@ -229,12 +229,36 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     let image = models.iter().any(|m| m.name == template);
     let installed: Vec<VideoView> = cfg.video_models().iter().filter(|m| m.exists).map(VideoView::of).collect();
     let video = chat.video.as_deref().and_then(|name| installed.iter().find(|v| v.name == name)).cloned();
-    let mut t = build(&rules, &chat.settings, &locks, models, profile.map(|p| p.family));
+    let mut t = build(&rules, &shown(cfg, chat, profile), &locks, models, profile.map(|p| p.family));
     t.film_off = film_off(&rules, image, chat.video.as_deref(), video.as_ref());
     t.board_ready = chat.film.as_ref().is_some_and(super::session::can_go);
     t.video = video;
     t.videos = installed.into_iter().filter(|v| v.chains).collect();
     t
+}
+
+/// The settings a round of the chat draws with, as the agent is shown them:
+/// the chat's own, the Turbo LoRA's steps and CFG where a round adds it, and
+/// the model's for the rest. The chat holds only what was set in it, and a
+/// setting shown as null was answered with a guess — SD's CFG 7 on MOSS.
+fn shown(cfg: &Config, chat: &Chat, profile: Option<&Profile>) -> Value {
+    let mut s = chat.settings.clone();
+    super::with_turbo(cfg, &mut s);
+    if let (Some(p), Some(o)) = (profile, s.as_object_mut()) {
+        fill_from(o, p);
+    }
+    s
+}
+
+fn fill_from(o: &mut serde_json::Map<String, Value>, p: &Profile) {
+    for (k, v) in [
+        ("cfg_scale", serde_json::json!(p.cfg_scale)),
+        ("steps", serde_json::json!(p.steps)),
+        ("width", serde_json::json!(p.width)),
+        ("height", serde_json::json!(p.height)),
+    ] {
+        o.entry(k).or_insert(v);
+    }
 }
 
 /// Why a chat can't make a film: it needs the agent allowed to, an image
@@ -327,6 +351,16 @@ mod tests {
 
     fn choice(name: &str, f: ImageFamily) -> ModelChoice {
         ModelChoice { name: name.into(), family: f.as_str(), label: f.label(), references: f.takes_references(), locks: Locks::default() }
+    }
+
+    #[test]
+    fn a_setting_the_chat_never_set_is_shown_at_the_models_value() {
+        let p = Profile { cfg_scale: 4.5, steps: 28, ..Profile::default() };
+        let mut o = serde_json::json!({"template": "moss", "steps": 12}).as_object().cloned().unwrap();
+        fill_from(&mut o, &p);
+        let t = build(&Rules::default(), &Value::Object(o), &Locks::default(), vec![], Some(ImageFamily::Sdxl));
+        assert_eq!(t.knob("cfg_scale").unwrap().value, serde_json::json!(4.5), "not null, for the agent to guess 7 at");
+        assert_eq!(t.knob("steps").unwrap().value, serde_json::json!(12), "the chat's own wins");
     }
 
     #[test]

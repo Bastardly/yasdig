@@ -344,12 +344,13 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
     // Each shot is looked at when the chat's agent can see.
     let watch = dto.go
         && store.load(&dto.id).ok().and_then(|c| super::agent_for(cfg, c.agent.as_deref()).ok()).is_some_and(|m| m.vision());
+    let retakes = crate::settings::Settings::load_or_default(&cfg.user_dir()).agent.film_retakes;
     let r = store.update(&dto.id, |c| {
         if c.session.busy() {
             anyhow::bail!("the agent is working on this chat — wait, or stop it first");
         }
         if dto.go {
-            session::go(c, watch).map_err(|e| anyhow::anyhow!(e))?;
+            session::go(c, watch, retakes).map_err(|e| anyhow::anyhow!(e))?;
             c.session.state = State::Queued;
             c.session.job = None;
             c.session.error = None;
@@ -375,90 +376,26 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
             f.references = v.references;
             c.video = Some(v.name);
         }
-        let f = c.film.as_mut().expect("checked above");
         // A new model draws what is missing from here on; what is drawn stays.
-        if let Some(name) = &dto.image_model {
-            let m = models.iter().find(|m| &m.name == name).ok_or_else(|| anyhow::anyhow!("'{name}' isn't an installed model"))?;
-            f.image_model = m.name.clone();
-            f.sheets = m.references;
-        }
-        if let Some(k) = dto.member {
-            let old = f.cast.get(k).map(|m| m.name.clone()).ok_or_else(|| anyhow::anyhow!("there is no cast member {}", k + 1))?;
-            if let Some(name) = dto.name.as_ref().map(|n| n.split_whitespace().collect::<Vec<_>>().join(" ")) {
-                if name.is_empty() {
-                    anyhow::bail!("a cast member needs a name");
-                }
-                if f.cast.iter().enumerate().any(|(i, m)| i != k && m.name.eq_ignore_ascii_case(&name)) {
-                    anyhow::bail!("{name} is in the cast already");
-                }
-                // The shots name it too.
-                for s in &mut f.shots {
-                    for n in &mut s.cast {
-                        if *n == old {
-                            *n = name.clone();
-                        }
-                    }
-                }
-                f.cast[k].name = name;
+        let image_model = match &dto.image_model {
+            Some(name) => {
+                let m = models.iter().find(|m| &m.name == name).ok_or_else(|| anyhow::anyhow!("'{name}' isn't an installed model"))?;
+                Some((m.name.clone(), m.references))
             }
-            let m = &mut f.cast[k];
-            if let Some(look) = &dto.look {
-                m.look = look.trim().to_string();
-            }
-            match &dto.picture {
-                Some(Some(_)) => {
-                    let p = kept.clone().expect("kept above");
-                    m.stem = Some(p.id.clone());
-                    m.picture = Some(p);
-                    m.sheet = None;
-                    m.sheet_stem = None;
-                }
-                // Its sheet goes too: it was drawn from the picture, or the
-                // picture from it.
-                Some(None) => {
-                    m.picture = None;
-                    m.stem = None;
-                    m.sheet = None;
-                    m.sheet_stem = None;
-                }
-                None => {}
-            }
-        }
-        if let Some(k) = dto.shot {
-            let names: Vec<String> = f.cast.iter().map(|m| m.name.clone()).collect();
-            let s = f.shots.get_mut(k).ok_or_else(|| anyhow::anyhow!("there is no shot {}", k + 1))?;
-            let before = (s.text.clone(), s.cast.clone(), s.cut);
-            if let Some(t) = &dto.text {
-                let t = t.trim();
-                if t.is_empty() {
-                    anyhow::bail!("a shot needs words");
-                }
-                s.text = t.to_string();
-            }
-            if let Some(cast) = &dto.cast {
-                s.cast = cast
-                    .iter()
-                    .filter_map(|n| names.iter().find(|x| x.eq_ignore_ascii_case(n.trim())).cloned())
-                    .fold(Vec::new(), |mut v, n| {
-                        if !v.contains(&n) {
-                            v.push(n);
-                        }
-                        v
-                    });
-                s.cast.truncate(crate::config::MAX_REFERENCES);
-            }
-            if let Some(cut) = dto.cut {
-                s.cut = cut && k > 0;
-            }
-            // A keyframe shows what the shot said: a changed shot draws its own.
-            if before != (s.text.clone(), s.cast.clone(), s.cut) {
-                s.keyframe = None;
-                s.key_stem = None;
-            }
-        }
-        if let Some(n) = session::recut_board(c.film.as_mut().expect("checked above")) {
-            c.note(n);
-        }
+            None => None,
+        };
+        let edit = session::BoardEdit {
+            image_model,
+            member: dto.member,
+            name: dto.name.clone(),
+            look: dto.look.clone(),
+            picture: dto.picture.as_ref().map(|p| p.as_ref().map(|_| kept.clone().expect("kept above"))),
+            shot: dto.shot,
+            text: dto.text.clone(),
+            cast: dto.cast.clone(),
+            cut: dto.cut,
+        };
+        session::edit_board(c, &edit).map_err(|e| anyhow::anyhow!(e))?;
         session::board_advance(c, shot_seconds, dto.draw);
         let draws = c.session.next == Next::Film;
         if draws {
@@ -548,6 +485,8 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         if let Some(v) = dto.video.as_ref().filter(|v| !v.is_empty()) {
             c.video = Some(v.clone());
         }
+        // What the person says now overtakes a session left stopped or done.
+        session::close_session(c);
         let n = c.next_n();
         c.messages.push(Msg::User { n, ms: super::chat::now_ms(), text: text.clone(), images: refs.clone() });
         c.session.mode = Mode::Chat;
@@ -603,6 +542,7 @@ fn stop(conn: &mut Connection, cfg: &Config, lanes: &Lanes, monitor: &Monitor, b
             if c.session.busy() {
                 c.session.state = State::Stopped;
                 c.session.job = None;
+                session::close_session(c);
                 c.note("Stopped.");
             }
             Ok(())

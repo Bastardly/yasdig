@@ -123,6 +123,7 @@
   --chat-max: 1400px;
   --chat-pic: 160px;     /* a picture in the conversation, its height */
   --story-pic: 144px;    /* a cast picture or a keyframe in the Story panel, its width */
+  --story-text-h: 100px; /* a Story panel text box, before it is dragged taller */
   --chat-pic-large: 90vh; /* a large one's cap, so a portrait still fits on screen */
   --preview-h: 420px;    /* the live preview under the progress line; a cap,
                             so a portrait render can't push the folds away */
@@ -711,7 +712,8 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* A panel's actions, pinned under its scrolling body: others above, the main
    one last and amber, as in a tab's dock. */
 .fpfoot { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-top: var(--line); }
-.fpfoot > [hidden] { display: none; }
+.fpfoot > [hidden], .fpfoot > .err:empty { display: none; }
+.fpfoot > .err { margin-top: 0; }
 .fpbody > .fold:first-child, .fpbody > :first-child { margin-top: var(--sp-2); }
 
 /* What a pass is doing and what went wrong, in the pane's lower left; gone
@@ -1204,6 +1206,11 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .storysheet img { width: 100%; height: auto; border-radius: var(--r-sm); }
 .storyfields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
 .storyshots { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--sp-2); }
+/* A line between cast cards and between shots, so a long board reads as
+   rows; the cast is a grid, so every card has its line above it. */
+.storymember { border-top: var(--line); padding-top: var(--sp-2); }
+.storyshots > li + li { border-top: var(--line); padding-top: var(--sp-2); }
+#astorybody textarea { min-height: var(--story-text-h); resize: vertical; }
 .storyshothead { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-1); }
 .storyshothead select { width: auto; }
 
