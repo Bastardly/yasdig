@@ -20,6 +20,7 @@ import { initWorkItems, loadWorkItems, markGrid } from './workitems.js';
 import { initOutputs, loadOutputs } from './outputs.js';
 import { initVideo, layoutVideoTab } from './video.js';
 import { initAssistants, mountAssistant } from './assistant.js';
+import { initBoard } from './board.js';
 import { initConvert } from './convert.js';
 import { initSettings, layoutSettingsTab } from './settings.js';
 import { initHelp, openHelp } from './help.js';
@@ -194,6 +195,8 @@ mountAssistant({
 });
 mountAssistant({ pane: 'video', panel: $('panel-vid-assist') });
 initAssistants();
+// The Video chat's film on the Shots rows and the Cast panel.
+initBoard();
 initConvert();
 initGetModels();
 initHelp();

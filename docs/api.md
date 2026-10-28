@@ -647,11 +647,25 @@ the chat, whose `rev` moves on every write.
   Image tab's controls as they are now (a `/generate` body), allowed while the agent
   works — the next round or turn draws with them. The same settings (numbers alike
   whatever their spelling) are no write. `409` on a Video chat.
-- `GET /chats/{id}` — `{ chat, toolkit }`: the chat as stored, and the knob table
+- `GET /chats/{id}` — `{ chat, toolkit, board }`: the chat as stored, and the knob table
   resolved for it under Settings → Agent — each knob's `allowed`, limits, `locked` reason
   and value, the passes, the models it could pick, `locks`, the film's `video` model
   `{name, family, label, chains, references, sounds, width, height, frames, fps}` and
-  `film_off`, why no film can be made in it (`null` when one can).
+  `film_off`, why no film can be made in it (`null` when one can), and `videos`, every
+  installed video model in that shape. `board` is a Video chat's film as the Shots rows
+  show it (`null` without one): `{ every, source, shots: [{text, seed, frames, cut, refs,
+  audio, key, cast, lines, sound, music, subjects, voices, fresh, no_key, key_drawn,
+  key_stale}], note }` — each row holding everything any model takes (the cast's pictures
+  and voices, then the person's own picks; the first frame, shot 1's too), `source` shot
+  1's first frame, `note` what the Video tab's model won't use and what isn't drawn yet.
+- `POST /chats/board` — `{ id, every?, shots?, video?, clip? }`: the Shots rows written back
+  into the film (`shots` as `board` gives them; blank rows are no shots, and at least one
+  must be left). A shot whose words, cast and cut are unchanged keeps its first frame; a
+  `key` the film didn't draw (an output stem) becomes the shot's own, and an emptied one
+  starts it from its words; `refs`/`audio` beyond the cast's own are kept as the shot's
+  picks. `video` is the Video tab's model, which decides whether cuts start from a first
+  frame (and the note); `clip` the clip made from the rows. Answers the chat, with
+  `warning` for names the cast doesn't have. `409` while the agent is working on the chat.
 - `GET /chats/{id}/live` — the reply being written while a turn runs: `{ seq, text,
   phase, step, steps }`, or `{ seq: null }`.
 - `GET /chats/{id}/thumb.png`, `GET /chats/{id}/img/{name}.png` — the chat's own copies
@@ -667,8 +681,8 @@ the chat, whose `rev` moves on every write.
   cast?, cut?, lines?, sound?, music?, voice?, redraw_keyframe?, no_keyframe?, draw?, image_model? }`: an edit of the storyboard — the look every shot
   shares, cast member `member`'s name, look or picture (`{kind: "output", id}`, or `null`
   to have it drawn again), shot `shot`'s words, cast (names) or cut. A reworded shot's
-  keyframe is dropped, as is one sent with `redraw_keyframe: true` (a click on it in the
-  Story panel); `no_keyframe: true` starts shot `shot` from its words with none drawn
+  keyframe is dropped, as is one sent with `redraw_keyframe: true` (a row's *Draw
+  again*); `no_keyframe: true` starts shot `shot` from its words with none drawn
   (`false` draws one again); on H3, `lines` (`[{who, words, language?, voiceover?}]`, `who` a
   cast name or `narrator`), `sound` and `music` are what shot `shot` says, sounds like and
   is scored with (empty sound is silence, empty music none), and `voice` cast member
@@ -679,15 +693,8 @@ the chat, whose `rev` moves on every write.
   a leg that draws what the cast is missing — with `frames: true` (*Draw the first
   frames*) then the first frames missing or drawn with a cast picture since changed;
   `frames: false` is *Draw the cast*, absent the cast while it lacks one, else the
-  frames. Both are optional. `409` while the agent is working on the chat.
-  `{ id, send: true, video_model? }` (*Send to Video tab*) changes nothing and answers the
-  board as Shots rows, each holding everything any model takes (the page sends a model's
-  part, `sentRow` in `shots.js`); `video_model` (the Video tab's; absent is the board's)
-  only words the note:
-  `{ every, source, shots: [{text, seed, frames, cut, refs, audio, key, cast, lines,
-  sound, music, subjects, voices}], note }` — `source` shot 1's first frame, `note` what
-  that model won't use, and pictures not drawn yet (those shots start from their
-  words).
+  frames. Both are optional. `409` while the agent is working on the chat. The shots
+  themselves are edited through `/chats/board`.
 - `POST /agent/undo` — `{ chat, change }`: put an applied change's settings back, if they
   still hold what it set (else `409`). Recorded as a change of yours.
 - `POST /agent/session` — `{ chat, start }`: answer the proposed session. `start: true`

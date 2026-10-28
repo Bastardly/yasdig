@@ -804,12 +804,19 @@ into the prompt layout MiniMax's own guide sets out, and says who stays silent, 
 doesn't invent a narrator, a score or a closing sentence. A shot with none of them
 filled is sent as typed.
 
-**From a storyboard.** The Video tab's Assistant can write a storyboard for a short film and draw
-its cast and first frames; its *Send to Video tab* puts the shots here as a new clip —
-first frames, references, voices and lines filled in — for you to change and generate.
-Each shot keeps both its first frame and its references: on H3 it follows the
-references and voices, on Wan it starts from the first frame, so you can switch model
-after sending.
+**From a storyboard.** Ask the Video tab's Assistant for a short film and it writes the
+shots into these rows and the cast into the **Cast** panel — who each one is, how they
+look, their picture and, on H3, their voice. While its chat is open the rows *are* the
+storyboard: what you change here the agent sees, and what it changes ("make shot 2 at
+night") lands here, keeping what still fits. *Who is in it* decides which of the cast's
+pictures a shot follows; the Cast panel's *Draw the cast* and this panel's *Draw the
+first frames* draw them (optional), and a row's first frame can be drawn again, removed
+or replaced with your own. Each row holds both its first frame and the cast's pictures:
+on H3 it follows the pictures and voices, on Wan it starts from the first frame, so
+switching model loses nothing — the agent may pick the model when it writes the board.
+Generate clip, Extend and Redo work as for any clip. Opening another clip leaves the
+storyboard; *Back to the storyboard* returns to it and its clip. While the agent works
+on the chat, the rows wait for it.
 
 **Current and Favorites.** Every clip is kept in `work/videos/` and listed on the
 **Current** panel, the Image tab's way: click once to show it, again to open the clip

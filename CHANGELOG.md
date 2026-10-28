@@ -40,21 +40,23 @@ What changed in each release of yasdig. Each release's executables are on the
   lines in. A row with none of these filled is sent as typed.
 - **A storyboard for a short movie**: ask the Video tab's Assistant for a film of a story, an idea, or
   the people in your pictures ("this is Mara"), and it writes a storyboard for the Video
-  tab's model — the cast with how each looks, and the shots. The Story panel shows the
-  board: every name, look, picture and shot is yours to change. Pictures are optional:
-  *Draw the cast*, under the cast, draws a picture of each, and *Draw the first frames*
+  tab's model (or picks the model, when it may) — the cast with how each looks, and the
+  shots. The shots *are* the Shots rows and the cast is the **Cast** panel, while the chat
+  is open: every name, look, picture and shot is yours to change there, and the agent
+  sees your changes as you see its. Pictures are optional:
+  *Draw the cast*, in the Cast panel, draws a picture of each, and *Draw the first frames*
   the pictures its cuts start from on Wan, saved to Outputs. Redraw someone and
   the first frames they are in are drawn again on the next press. The agent picks the
   model that draws them; on one that follows reference pictures (the Kleins) each
   character first gets a turnaround sheet — front, three-quarter, side and back in one
-  picture — and every later picture of them follows it. *Send to Video tab*, there
-  whatever has been drawn, puts the shots in the Video tab's Shots panel as a new clip — first frames, the cast's
-  pictures as references, what is said, heard and scored. Each row keeps all of it and
-  the Video tab sends what its model takes — references and voices on H3, first frames
-  on Wan — so switching model afterwards loses nothing. Change what you like and press
-  Generate clip. The agent doesn't make the clip itself, and says so.
+  picture — and every later picture of them follows it. Each row holds the first frame,
+  the cast's pictures as references (and any you add) and what is said, heard and
+  scored, and the Video tab sends what its model takes — references and voices on H3,
+  first frames on Wan — so switching model loses nothing. Generate clip, Extend and
+  Redo work as for any clip; opening another clip leaves the storyboard, and *Back to the
+  storyboard* returns. The agent doesn't make the clip itself, and says so.
   "Make shot 2 at night" or "Leo says something kinder" changes the board, keeping the
-  pictures and words that still fit, and it can be sent again. A shot that goes on from
+  pictures, words, seeds and lengths that still fit. A shot that goes on from
   the one before can only keep who that shot showed, so one that brings someone in — or
   back — is made a cut, which starts from their picture. On H3 each shot also says what
   is spoken, heard and scored, and a character can be given a **voice** (*Voice* on

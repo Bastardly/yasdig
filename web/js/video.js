@@ -120,6 +120,21 @@ function setVTurbo(on) {
 
 const rowEls = () => [...$('vshots').querySelectorAll('.shotrow')];
 
+// The rows as the panel holds them now, blank ones too.
+export const rowsNow = () => rowEls().map(readRow);
+
+// The storyboard the rows show while a Video chat's film is bound to them
+// (`board.js`), or null. Its hooks: `edited()` (a row or Every shot changed),
+// `landed(clip)` (a press drew onto the rows), `left()` (the person put
+// another clip, or a new one, on the stage), `isBoardClip(id)`,
+// `rowExtras(el, k)` (the first-frame buttons of the board's shot k) and
+// `framesLabel()`. The rows hold everything; the hooks keep the film in step.
+let board = null;
+export function setBoard(b) {
+  board = b;
+  syncShots();
+}
+
 function readRow(el) {
   const seed = parseInt(el.querySelector('.shotseed').value, 10);
   const frames = parseInt(el.querySelector('.shotframes').value, 10);
@@ -200,7 +215,7 @@ const shotsNow = () => shotState(liveRows(), clip, chains(clip), clipTake(clip))
 
 // A row folds to its heading line, a panel's way: the fold is the row's own
 // (`folded` on a row read back), else what row k was before the redraw.
-function drawShots(rows) {
+export function drawShots(rows) {
   const was = rowEls().map((el) => el.classList.contains('folded'));
   $('vshots').innerHTML = rows.map((r, k) => {
     const folded = r.folded ?? was[k] ?? false;
@@ -233,10 +248,12 @@ function drawShots(rows) {
         <label data-help="vprompt">Prompt</label>
         <prompt-box><textarea class="short" aria-label="Shot ${k + 1} prompt"
           placeholder="${k ? 'what happens next: an action, where the camera is' : 'the crab lifts a claw, slow camera push in'}">${esc(r.text ?? '')}</textarea></prompt-box>
-        <div class="shotsoundrows" hidden>
+        <div class="shotcastrow" hidden>
           <label data-help="vshotcast">Who is in it</label>
           <input type="text" class="shotcast" value="${esc((r.cast ?? []).join(', '))}" placeholder="Mara, Leo"
             aria-label="Who is in shot ${k + 1}">
+        </div>
+        <div class="shotsoundrows" hidden>
           <label data-help="vshotlines">Spoken</label>
           <textarea class="short shotlines" aria-label="Spoken in shot ${k + 1}"
             placeholder="One line each — Mara: Who's there?  Leo (voiceover): I never left.">${esc(linesText(r.lines ?? []))}</textarea>
@@ -254,6 +271,7 @@ function drawShots(rows) {
           <button type="button" class="btn shotkeyclear" hidden>Clear</button>
           <button type="button" class="btn shotrefs" hidden>References…</button>
           <button type="button" class="btn shotsounds" hidden>Sounds…</button>
+          <span class="shotboard"></span>
         </div>
         <p class="sub shotwhy" hidden>A continue goes on from the last frame; references and sounds go on a cut.</p>
       </div>
@@ -307,6 +325,8 @@ function matchesClip(c, rows, every, negative) {
 // Record the panel as clip `c`'s draft, or drop the draft when there is
 // nothing unsent. `rows` defaults to the panel's.
 function setDraft(c, rows = rowEls().map(readRow), every = $('veverytext').value, negative = $('vnegative').value) {
+  // A storyboard's clip keeps none: the film is its draft.
+  if (board?.isBoardClip(c.id)) return;
   clearTimeout(draftTimer);
   const map = draftMap();
   const m = currentVideoModel();
@@ -391,6 +411,9 @@ function syncShots() {
     sounds.textContent = a ? `Sounds (${a})` : 'Sounds…';
     el.querySelector('.shotwhy').hidden = !refsOk || fresh;
     el.querySelector('.shotsoundrows').hidden = !m?.sounds;
+    // Who is in it decides a storyboard's references and first frames on any
+    // model; off a board, only H3 reads it.
+    el.querySelector('.shotcastrow').hidden = !m?.sounds && !board;
     // Shot 1's image is the clip's first frame; a cut's is how Wan cuts.
     const keyBtn = el.querySelector('.shotkey');
     keyBtn.hidden = !fresh || (i > 0 && !keyOk) || followed > 0;
@@ -405,9 +428,15 @@ function syncShots() {
     const x = el.querySelector('.shotx');
     x.hidden = (doneRows.has(i) && (i !== lastDone || busy)) || els.length === 1;
     x.title = i === lastDone ? 'Cut this shot off the clip — its text stays, to draw it again' : 'Remove this shot';
+    const extras = el.querySelector('.shotboard');
+    extras.innerHTML = board?.rowExtras(live.findIndex((r) => r.i === i), refsOk) ?? '';
   });
   const foot = st.action === 'extend' || st.action === 'redo';
-  $('vextendfoot').hidden = !foot || busy;
+  $('vextend').hidden = !foot || busy;
+  const frames = board?.framesLabel() ?? null;
+  $('vframes').hidden = !frames;
+  if (frames) $('vframes').textContent = frames;
+  $('vextendfoot').hidden = $('vextend').hidden && $('vframes').hidden;
   const n = st.pending.length;
   $('vextend').textContent = st.action === 'redo'
     ? (n ? `Redo from shot ${st.done + 1}` : `Cut from shot ${st.done + 1}`)
@@ -727,6 +756,8 @@ function vidPayload(rows) {
 function landRows(c, sent) {
   drawShots([...rowsOf(c), ...sent.slice((c.segments ?? []).length)]);
   syncVideoSummaries();
+  // Named before the draft: a storyboard's clip keeps none.
+  board?.landed(c);
   setDraft(c);
 }
 
@@ -986,6 +1017,16 @@ function clickClip(c) {
     openClipView(clip);
     return;
   }
+  // The board's pending edits are read before the rows change; it is left
+  // after, since its clip keeps no draft and the staging must still know it.
+  board?.flush();
+  stageClip(c);
+  board?.left();
+}
+
+// A clip onto the stage, its rows into the panel. For a storyboard's own
+// clip too (`board.js`), which then draws the board's rows over them.
+export function stageClip(c) {
   keepDraft();
   stageSeq++;
   $('verr').textContent = '';
@@ -1001,6 +1042,15 @@ function clickClip(c) {
 // are made here, not part of the one left behind. Allowed mid-render; that
 // clip then only joins the grid.
 function newClip() {
+  board?.flush();
+  freshStage();
+  board?.left();
+  rowEls()[0]?.querySelector('textarea').focus();
+}
+
+// An empty stage and one empty row: *New clip*'s, and a storyboard's before
+// it has a clip (`board.js`), which then draws its rows.
+export function freshStage() {
   keepDraft();
   stageSeq++;
   clearClip();
@@ -1013,7 +1063,6 @@ function newClip() {
   snapShotFrames();
   syncVideoSummaries();
   syncRailDots();
-  rowEls()[0]?.querySelector('textarea').focus();
 }
 
 // Put a clip's stored settings back in the controls, so the next Generate starts
@@ -1052,7 +1101,7 @@ function applyClip(c) {
   $('veverytext').value = c.every ?? '';
   drawShots(rowsOf(c));
   // What was added or changed on it and not drawn yet.
-  const d = draftMap().get(c.id);
+  const d = board?.isBoardClip(c.id) ? null : draftMap().get(c.id);
   if (d) {
     $('veverytext').value = d.every ?? '';
     $('vnegative').value = d.negative ?? $('vnegative').value;
@@ -1064,22 +1113,13 @@ function applyClip(c) {
   syncVideoSummaries();
 }
 
-// ---- From the Assistant -------------------------------------------------------
-
-// A storyboard's shots, sent from the Assistant (`/chats/film {send}`), as a
-// new clip: the one on screen keeps its draft. Nothing is drawn until
-// Generate clip.
-export function openShots({ every, source, shots, note }) {
-  newClip();
-  $('veverytext').value = every ?? '';
-  const frames = currentVideoModel()?.frames ?? null;
-  drawShots(shots.map((r, k) => ({ ...r, frames: r.frames ?? frames, key: k === 0 ? source ?? null : r.key, folded: false })));
-  snapShotFrames();
-  $('vsentnote').textContent = note || '';
-  document.querySelector('.tab[data-tab="video"]')?.click();
-  $('vfold-prompt').open = true;
-  syncVideoSummaries();
-  syncRailDots();
+// A clip by id onto the stage, for a storyboard opened with its clip
+// (`board.js`): false when it is gone.
+export async function stageClipById(id) {
+  await loadClips();
+  const c = grids.map((g) => g.find(id)).find(Boolean);
+  if (c && clip?.id !== c.id) stageClip(c);
+  return !!c;
 }
 
 // A row's starting image from this computer: the row whose Upload was pressed.
@@ -1109,7 +1149,7 @@ const PANEL_DEFS = [
   { id: 'vid-current', open: true, corner: 'bottom-right' },
   { id: 'vid-favorites' },
   { id: 'vid-assist', both: true },
-  { id: 'vid-story', both: true },
+  { id: 'vid-cast', both: true },
 ];
 
 // A rail button's dot is its panel header's line in the accent.
@@ -1235,6 +1275,8 @@ export function initVideo() {
   $('tab-video').addEventListener('input', syncShots);
   // The Shots panel's edits are the stage clip's draft.
   for (const ev of ['input', 'change', 'click']) $('vfold-prompt').addEventListener(ev, keepDraftSoon);
+  // And a bound storyboard's: the rows are its shots.
+  for (const ev of ['input', 'change', 'click']) $('vfold-prompt').addEventListener(ev, () => board?.edited());
   window.addEventListener('pagehide', keepDraft);
   $('vextend').addEventListener('click', extendClip);
   $('vclearmodel').addEventListener('click', () => saveVideoDefaults(true));
@@ -1267,8 +1309,7 @@ export function initVideo() {
   videoLoras.init();
   $('pickclose').addEventListener('click', () => $('picker').close());
   for (const g of grids) g.init();
-  // A sent board's note spoke of the model it was sent to.
-  $('vmodel').addEventListener('change', () => { $('vsentnote').textContent = ''; syncVideo(); });
+  $('vmodel').addEventListener('change', syncVideo);
   $('vturbo').addEventListener('change', () => {
     const m = currentVideoModel();
     if (m) vTurboMem.remember(m.name, $('vturbo').checked);

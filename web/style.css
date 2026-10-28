@@ -431,7 +431,12 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .shotstart label { margin: 0; }
 .shotstart .btn-choice { padding: var(--sp-1) var(--sp-3); }
 .shotfrom { margin-top: var(--sp-2); align-items: center; }
-.shotfrom:not(:has(> :not([hidden]))) { display: none; }
+.shotfrom:not(:has(> :not([hidden], .shotboard:empty))) { display: none; }
+/* A storyboard's first-frame buttons, beside the row's own (`rowKeyHtml`). */
+.shotboard { display: contents; }
+.shotboard:empty { display: none; }
+/* Whose rows these are, above Every shot (`board.js`). */
+.boardline { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-2); }
 /* The picture a cut starts from, small beside its buttons. */
 .shotkeythumb { height: calc(var(--thumb-h-chosen) / 2); border-radius: var(--r-sm); }
 /* A shot the clip on the stage already has (`shots.js`): ticked in the
@@ -1187,32 +1192,24 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chatchecks.inline { position: static; }
 .chatprompt { margin: 0; white-space: pre-wrap; font-size: var(--fs-sm); }
 
-/* The Story panel: the cast as cards of picture and fields, the shots as a
-   numbered list with the keyframe a shot starts from beside its words. */
-/* Wide from the start and wider or taller by its corner (`both`); the cast
-   fills as many columns as the width holds. */
-#panel-vid-story { --fpanel-w: min(680px, 90vw); }
+/* The Cast panel: the cast as cards of picture and fields. Wide from the
+   start and wider or taller by its corner (`both`); the cast fills as many
+   columns as the width holds. */
+#panel-vid-cast { --fpanel-w: min(680px, 90vw); }
 .storycast { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: var(--sp-3); }
-.storymember, .storyshotbody { display: flex; gap: var(--sp-2); align-items: flex-start; }
-.storypic, .storykey { flex: 0 0 auto; width: var(--story-pic); line-height: 0; }
-.storypic img, .storykey img { width: 100%; height: auto; border-radius: var(--r-sm); }
-.storykey { display: flex; flex-direction: column; gap: var(--sp-2); line-height: normal; }
-.storykeypic { padding: 0; border: 0; background: none; cursor: pointer; line-height: 0; }
-.storykeypic:hover img { outline: var(--line-strong); }
+.storymember { display: flex; gap: var(--sp-2); align-items: flex-start; }
+.storypic { flex: 0 0 auto; width: var(--story-pic); line-height: 0; }
+.storypic img { width: 100%; height: auto; border-radius: var(--r-sm); }
 .storypic .sub { line-height: normal; }
 /* A turnaround: four figures side by side, so the card's whole width. */
 .storymember { flex-wrap: wrap; }
 .storysheet { flex: 1 0 100%; line-height: 0; }
 .storysheet img { width: 100%; height: auto; border-radius: var(--r-sm); }
 .storyfields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
-.storyshots { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--sp-2); }
-/* A line between cast cards and between shots, so a long board reads as
-   rows; the cast is a grid, so every card has its line above it. */
+/* A line between cast cards; the cast is a grid, so every card has its line
+   above it. */
 .storymember { border-top: var(--line); padding-top: var(--sp-2); }
-.storyshots > li + li { border-top: var(--line); padding-top: var(--sp-2); }
-#astorybody textarea { min-height: var(--story-text-h); resize: vertical; }
-.storyshothead { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-1); }
-.storyshothead select { width: auto; }
+#castbody textarea { min-height: var(--story-text-h); resize: vertical; }
 
 /* The composer, the panel's footer. */
 .composer { gap: var(--sp-2); }

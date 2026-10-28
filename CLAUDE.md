@@ -735,7 +735,7 @@ Break silently:
   stop path and `send`): a round cut short is closed at what it holds — left open, the
   next chat draw filled it at the session's size — and a comparison's knob goes back.
 - **Board edits are `session::edit_board`** (tested); the route only keeps the picture,
-  looks up the model and queues. Errors show in the Story panel (`#astoryerr`).
+  looks up the model and queues. Errors show in the Cast panel (`#casterr`).
 - **The rules are Settings', read per turn** (`knobs::Rules`, `[agent]`; `toolkit::resolve`
   loads them): a whitelist of keys, no ask-first for a change, no bounds but `hard_bounds`. A chat
   carries none. An old `chat.json`'s `pending`/`awaiting` read as `rejected`/`idle` (serde
@@ -808,10 +808,10 @@ Break silently:
   **rewritten whole**, never patched; what survives is matched by the server — a member
   keeps its picture by name and an unchanged look (or when it is the person's), a shot
   its keyframe when its words, cast and cut are unchanged. **A continue that names someone not in the shot before is made a cut** (`recut_board`, after the board turn and every panel edit, with a note): a continue carries only the last frame, so a return would be drawn from words. **Nothing is drawn unasked, and
-  drawing is optional**: *Send to Video tab* is always there, and an undrawn member is
-  words, an undrawn first frame a cut from words. *Draw the cast* (under the cast) and
-  *Draw the first frames* (above Send) are `/chats/film {draw, frames}` →
-  `board_press_for`; a keyframe click and *addkey* keep `board_press`'s automatic pick.
+  drawing is optional**: an undrawn member is words, an undrawn first frame a cut from
+  words. *Draw the cast* (Cast footer) and *Draw the first frames* (Shots footer,
+  `#vframes`) are `/chats/film {draw, frames}` → `board_press_for`; a row's *Draw again*
+  and *Draw a first frame* (`rowKeyHtml`) keep `board_press`'s automatic pick.
   **A cast press stops at the cast**: keyframes need a press of their own
   (`Film.frames`, set only when the cast is whole;
   `draw_step` reads it, `board_step` doesn't), so redrawing a member never redraws every
@@ -832,12 +832,29 @@ Break silently:
   doesn't `chains()`). A new chat's settings have no `prompt` key, which `GenerateDto`
   requires: a board picture inserts its own, a round an empty one. A film's turns get the video family's skills too
   (`skills::select` takes both families' names, which never collide).
-- **The agent never films** (checked 2026-10-28; it used to shoot and judge each take):
-  *Send to Video tab* is `/chats/film {send}` → `session::send_shots`, the board as Shots
-  rows for **any** model (`shot_spec`: the pictured cast as references with `subjects`,
-  the speakers' voices as `audio` with `voices`, *and* the keyframe; the `note` names
-  what the Video tab's model won't use), which `video.js` `openShots` draws as a new
-  clip. **A row holds every model's part; `shots.js` `sentRow` picks what is sent**
+- **The board is the Shots rows, while its chat is open** (`web/js/board.js`, *bound*;
+  no Story panel, no Send — a copy sent over lost every later edit on either side).
+  Film → rows: `chat_json`'s `board` (`session::board_rows`: `shot_spec` per shot — the
+  pictured cast as references with `subjects`, the speakers' voices as `audio` with
+  `voices`, then the shot's own picks, *and* the key, shot 1's too), drawn when its JSON
+  moves and the person isn't typing in the panel. Rows → film: `/chats/board` →
+  `session::set_rows` (debounced, deduplicated): matched by place, a shot keeps its
+  first frame while words/cast/cut hold (the person's always), a key the film didn't
+  draw is the person's (copied into the chat by the route), an emptied one `no_key`,
+  `refs`/`audio` less the cast's own are `FilmShot.references`/`audio`; then
+  `recut_board`. `FilmShot.seed`/`frames` are the row's (a reworded shot −1;
+  `FilmShot`'s `Default` is by hand for that). `#vmodel` → `{video}` →
+  `session::set_video` (`Film.references`, so what *Draw the first frames* draws follows
+  the model); a press that lands → `{clip}` (`Film.clip`, staged on bind; its rows keep
+  no draft — `setBoard` hooks `isBoardClip`). The person opening another clip or New
+  clip leaves (`board.flush()` before the stage changes, `left()` after);
+  `#vboardback` binds again. While the chat is busy the rows are `inert`: the story
+  turn rewrites the board whole and would overtake an edit. A story turn may pick the
+  video model (`video_model`, `schema::board_videos`, needs Model allowed and two that
+  `chains()`); `apply_story` writes `Chat.video` first and keeps an unchanged shot's
+  seed, length and picks.
+- **The agent never films** (checked 2026-10-28; it used to shoot and judge each take).
+  **A row holds every model's part; `shots.js` `sentRow` picks what is sent**
   (references/sounds on H3, the image only beside neither; Wan the image) — rows
   built for the model at the press lost the references on a switch to H3. `shotState`
   compares `sentRow` for the clip's own family (`clipTake`), so held references
@@ -845,7 +862,7 @@ Break silently:
   `Board`/`Ready`; old `shooting`/`done` and `next: shoot|take` read through serde
   aliases; `Mode::Take` only so old messages read). The Lines/sound/music are plain
   fields; the H3 layout is the engine's (*Video*, below). A board's `video_model` is
-  what it was written for (`Chat.video`), shown, never picked.
+  the Video tab's (`set_video`) or the story turn's pick.
 - **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.
 
 ## The job queue
@@ -1230,7 +1247,8 @@ only `js/app.js`.
 | `prompt-box.js` / `prompt-weight.js` | the custom element; pure weighting maths |
 | `help.js` | Help tab `TOPICS` |
 | `settings.js` / `modelsettings.js` | Settings form from `FIELDS`; *Per model* card |
-| `assistant.js` | the Assistant panel (`mountAssistant`, per tab): chats, the composer, following a turn, the Image tab's controls both ways, the Story panel |
+| `assistant.js` | the Assistant panel (`mountAssistant`, per tab): chats, the composer, following a turn, the Image tab's controls both ways |
+| `board.js` | a Video chat's film as the Shots rows (both ways) and the Cast panel |
 | `chatview.js` / `agentperms.js` | a chat as HTML, pure; Settings → Agent's whitelist |
 | `app.js` | `showTab`, boot order |
 
@@ -1752,7 +1770,7 @@ from `family` goes on `VideoModelDto`.
     the layout would make its soundscape `N/A`, i.e. silence. `every` goes inside.
     H3's encoder takes the prompt whole (`prompt_attn_range {0,0}`), so `(S1)` and
     `[Shot 1]` survive. Page: the rows' *Who is in it* / *Spoken* / *Sound* / *Music*
-    (`m.sounds`), `lines.js` shared with the Story panel, names in the borrowed
+    (`m.sounds`; *Who is in it* on any model while a storyboard is bound), names in the borrowed
     References/Sounds dialogs (`editRefs(…, names)`, `editSounds(…, voices)`).
   - **References are H3's alone** (`VideoFamily::takes_references`,
     `references` on `/video-models`): sd.cpp refuses H3's Ref2VA beside a keyframe, so

@@ -10,7 +10,8 @@ The cast:
 - `look`: what it looks like, in one or two sentences a stranger could draw from: age, build, hair, face, clothes and their colours; for a place, what is in it and the light.
 - `prompt`: its picture, which every shot it is in follows. The subject alone, whole, facing the viewer, on a plain light-grey background, in the film's look. A person standing, head to toe, in their clothes. A place as a wide view with nobody in it.
 - One name per member, spelt the same everywhere.
-- `image_model`, when you are asked for it: the model that draws the cast and the keyframes. One that follows reference pictures keeps each character the same person from every side; take it unless the person named another.
+- `image_model`, when asked: what draws the cast and keyframes. Take one that follows reference pictures (each character the same from every side) unless the person named another.
+- `video_model`, when asked: H3 when people speak or sound matters, else Wan, unless the person named one.
 
 The shots:
 - One action per shot, said in the present tense: "Mara opens the door and steps into the rain."

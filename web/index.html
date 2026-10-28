@@ -578,6 +578,7 @@
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-current">Current</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-favorites">Favorites</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-assist">Assistant</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="vid-cast">Cast</button>
     <div class="railfoot">
       <!-- Not the image tab's Stop, which finishes the image in flight and then
            ends the run. There is only ever one clip in flight, so stopping it
@@ -604,6 +605,12 @@
   <section class="fpanel fpboth" id="vfold-prompt" aria-label="Shots" hidden>
     <header class="fphead"><b>Shots</b> <span class="foldstate" id="vsum-prompt"></span><button type="button" class="fpclose" aria-label="Close Shots">&times;</button></header>
     <div class="fpbody">
+      <!-- Whose rows these are while an Assistant chat's film is open on them
+           (`board.js`), or the way back to it after another clip. -->
+      <div class="boardline" id="vboardline" hidden>
+        <span class="sub" id="vboardtext"></span>
+        <button type="button" class="btn" id="vboardback" hidden>Back to the storyboard</button>
+      </div>
       <label for="veverytext" data-help="vevery">Every shot</label>
       <prompt-box>
         <textarea id="veverytext" class="short" placeholder="who and where: a red-haired woman in a green coat, a rainy street at night, film grain"></textarea>
@@ -618,7 +625,7 @@
       </prompt-box>
 
       <label class="grouphead" data-help="vshots">Shots</label>
-      <!-- What a storyboard sent from the Assistant left out (`openShots`). -->
+      <!-- What the storyboard on the rows leaves out on this model (`board.js`). -->
       <p class="sub" id="vsentnote"></p>
       <div id="vshots"></div>
       <!-- A shot's starting image from this computer: the row's Upload. -->
@@ -627,7 +634,9 @@
       <p class="sub" id="vshotnote"></p>
     </div>
     <div class="fpfoot" id="vextendfoot" hidden>
-      <button type="button" id="vextend" class="btn btn-run btn-block">Extend clip</button>
+      <button type="button" id="vframes" class="btn btn-block" hidden
+        title="The pictures the storyboard's shots start from, drawn with the cast — any of the cast not drawn yet first. Optional">Draw the first frames</button>
+      <button type="button" id="vextend" class="btn btn-run btn-block" hidden>Extend clip</button>
     </div>
   </section>
   <section class="fpanel" id="vfold-gen" aria-label="Generation" hidden>
@@ -777,19 +786,20 @@
   <section class="fpanel assistpanel" id="panel-vid-assist" aria-label="Assistant" hidden>
     <header class="fphead"><b>Assistant</b><button type="button" class="fpclose" aria-label="Close Assistant">&times;</button></header>
   </section>
-  <section class="fpanel" id="panel-vid-story" aria-label="Story" hidden>
-    <header class="fphead"><b>Story</b><button type="button" class="fpclose" aria-label="Close Story">&times;</button></header>
+  <!-- A film's cast (`board.js`): who must look the same in every shot, with
+       their pictures, turnarounds and voices, and the model they are drawn
+       with. Its shots are the Shots rows. -->
+  <section class="fpanel" id="panel-vid-cast" aria-label="Cast" hidden>
+    <header class="fphead"><b>Cast</b><button type="button" class="fpclose" aria-label="Close Cast">&times;</button></header>
     <div class="fpbody">
-      <div id="astorybody"></div>
-      <input type="file" id="astoryfile" accept="image/*" hidden>
+      <div id="castbody"></div>
+      <input type="file" id="castfile" accept="image/*" hidden>
     </div>
     <!-- An edit the server refused says why here, beside what was pressed.
-         Send is always there with a board; the first frames are optional, as
-         is the cast's *Draw the cast* under the cast. -->
-    <div class="fpfoot"><div class="err" id="astoryerr"></div>
-      <button type="button" class="btn" id="astoryframes" hidden
-        title="The pictures shots start from, drawn with the cast — any of the cast not drawn yet first. Optional">Draw the first frames</button>
-      <button type="button" class="btn btn-run" id="astorydraw" hidden>Send to Video tab</button></div>
+         Drawing the cast is optional: a shot follows a member's words without. -->
+    <div class="fpfoot"><div class="err" id="casterr"></div>
+      <button type="button" class="btn" id="castdraw" hidden
+        title="A picture of each in the cast, from their look: what the first frames are drawn with, and on H3 what the shots follow. Optional">Draw the cast</button></div>
   </section>
   <div class="statuscard">
     <div id="verr" class="err"></div>

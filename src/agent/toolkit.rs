@@ -73,6 +73,9 @@ pub struct Toolkit {
     /// The video model a film is shot on: the Video tab's when the person
     /// last wrote.
     pub video: Option<VideoView>,
+    /// Every installed video model, which a story turn may write the board
+    /// for (`video_model`) when the model knob is allowed.
+    pub videos: Vec<VideoView>,
     /// Why this chat can't make a film, or `None` when it can.
     pub film_off: Option<String>,
     /// An Image chat's: the settings shown are the Image tab's own controls.
@@ -236,6 +239,7 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     };
     t.image_tab = chat.context == super::chat::Pane::Image;
     t.video = video;
+    t.videos = installed;
     t
 }
 
@@ -339,6 +343,7 @@ pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelCh
         family_label: family.map(ImageFamily::label),
         locks: locks.clone(),
         video: None,
+        videos: Vec::new(),
         film_off: Some("no video model".into()),
         image_tab: false,
         vision: false,

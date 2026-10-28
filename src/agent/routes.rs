@@ -36,6 +36,7 @@ pub fn route(
         ("POST", "/chats/rename") => edit(conn, cfg, body, Edit::Rename),
         ("POST", "/chats/settings") => settings(conn, cfg, body),
         ("POST", "/chats/film") => film(conn, cfg, lanes, body),
+        ("POST", "/chats/board") => board(conn, cfg, body),
         ("POST", "/agent/send") => send(conn, cfg, lanes, body),
         ("POST", "/agent/undo") => undo(conn, cfg, body),
         ("POST", "/agent/stop") => stop(conn, cfg, lanes, monitor, body),
@@ -134,7 +135,89 @@ fn listing(conn: &mut Connection, cfg: &Config, shelf: Shelf) -> Result<()> {
 }
 
 fn chat_json(cfg: &Config, c: &Chat) -> Value {
-    json!({ "chat": c, "toolkit": toolkit::resolve(cfg, c), "favorite": c.favorite })
+    let t = toolkit::resolve(cfg, c);
+    // A Video chat's board as the Shots rows show it, for the tab's model.
+    let board = c.film.as_ref().filter(|_| c.context == Pane::Video).map(|f| session::board_rows(f, t.video.as_ref()));
+    json!({ "chat": c, "toolkit": t, "favorite": c.favorite, "board": board })
+}
+
+/// The Shots rows written back into the board (`session::set_rows`), the
+/// Video tab's model it is shot on, and the clip made from it. A first frame
+/// the board didn't draw is copied into the chat first, as a picked picture
+/// is. Answers the chat, with `warning` for names the board doesn't know.
+fn board(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Dto {
+        id: String,
+        #[serde(default)]
+        every: Option<String>,
+        #[serde(default)]
+        shots: Option<Vec<session::RowIn>>,
+        #[serde(default)]
+        video: Option<String>,
+        #[serde(default)]
+        clip: Option<String>,
+    }
+    let Some(mut dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let store = super::store(cfg);
+    let film = match store.load(&dto.id) {
+        Ok(c) => c.film,
+        Err(e) => return err(conn, 404, &format!("{e:#}")),
+    };
+    let Some(film) = film else { return err(conn, 404, "this chat has no storyboard") };
+    let shot_seconds = super::shot_seconds(cfg, &film);
+    let to = match dto.video.as_deref() {
+        Some(name) => match cfg.video_models().iter().find(|m| m.name == name && m.exists) {
+            Some(m) => Some(toolkit::VideoView::of(m)),
+            None => return err(conn, 400, &format!("'{name}' isn't an installed video model")),
+        },
+        None => None,
+    };
+    if let Some(id) = dto.clip.as_deref().filter(|id| !crate::workitems::valid_id(id)) {
+        return err(conn, 400, &format!("'{id}' is not a clip"));
+    }
+    for (k, row) in dto.shots.iter_mut().flatten().enumerate() {
+        let Some(stem) = row.key.clone().filter(|s| !s.is_empty()) else { continue };
+        if film.shots.get(k).and_then(|s| s.key_stem.as_deref()) == Some(stem.as_str()) {
+            continue;
+        }
+        let bytes = match super::attach_bytes(cfg, "output", &stem) {
+            Ok(b) => b,
+            Err(e) => return err(conn, 400, &format!("shot {}'s first frame: {e:#}", k + 1)),
+        };
+        let file = format!("k{}-{k}.png", super::chat::now_ms());
+        if let Err(e) = super::keep_picture(&store, &dto.id, &file, &bytes) {
+            return err(conn, 500, &format!("{e:#}"));
+        }
+        row.key_ref = Some(ImageRef { kind: "output".into(), id: stem, file, seed: None });
+    }
+    let mut warning = Vec::new();
+    let r = store.update(&dto.id, |c| {
+        if c.session.busy() {
+            anyhow::bail!("the agent is working on this chat — wait, or stop it first");
+        }
+        if let Some(v) = &to {
+            session::set_video(c, v);
+        }
+        if let Some(id) = &dto.clip {
+            if let Some(f) = c.film.as_mut() {
+                f.clip = Some(id.clone());
+            }
+        }
+        if dto.every.is_some() || dto.shots.is_some() {
+            warning = session::set_rows(c, dto.every.as_deref(), dto.shots.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
+        }
+        session::board_advance(c, shot_seconds, false);
+        Ok(c.clone())
+    });
+    match r {
+        Ok(c) => {
+            let mut v = chat_json(cfg, &c);
+            v["warning"] = json!(warning.join(" "));
+            ok(conn, v)
+        }
+        Err(e) => err(conn, 409, &format!("{e:#}")),
+    }
 }
 
 fn get_chat(conn: &mut Connection, cfg: &Config, id: &str) -> Result<()> {
@@ -363,28 +446,9 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         /// The image model the board's pictures are drawn with.
         #[serde(default)]
         image_model: Option<String>,
-        /// *Send to Video tab*: the board as Shots rows, for the Video
-        /// tab's model `video_model` (else the board's).
-        #[serde(default)]
-        send: bool,
-        #[serde(default)]
-        video_model: Option<String>,
     }
     let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
     let store = super::store(cfg);
-    if dto.send {
-        let Some(f) = store.load(&dto.id).ok().and_then(|c| c.film) else {
-            return err(conn, 404, "this chat has no storyboard");
-        };
-        let name = dto.video_model.as_deref().unwrap_or(&f.video_model);
-        let Some(to) = cfg.video_models().iter().find(|m| m.name == name && m.exists).map(toolkit::VideoView::of) else {
-            return err(conn, 409, &format!("'{name}' isn't an installed video model: pick one on the Video tab"));
-        };
-        return match session::send_shots(&f, &to) {
-            Ok(v) => conn.respond(200, "application/json", v.to_string().as_bytes()),
-            Err(e) => err(conn, 409, &e),
-        };
-    }
     // A picked picture is copied into the chat before the write, as a
     // message's are.
     let kept = match dto.picture.as_ref() {

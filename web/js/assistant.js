@@ -1,11 +1,9 @@
 import { $, esc, getJSON, post } from './dom.js';
 import { onJobs, queueChanged, soonJobs } from './jobs.js';
 import { openWorkItem } from './workitems.js';
-import { choosePicture, chooseSound, upload } from './source-slot.js';
-import { askForSound, playSound } from './sounds.js';
-import { framesLabel, mainAction, renderChat, sessionHtml, stateText, storyHtml } from './chatview.js';
-import { parseLines } from './lines.js';
-import { openShots } from './video.js';
+import { choosePicture, upload } from './source-slot.js';
+import { renderChat, sessionHtml, stateText } from './chatview.js';
+import { flushBoard, follow as followBoard, showBoard } from './board.js';
 import { openGetModels } from './getmodels.js';
 import { wireHints } from './hints.js';
 
@@ -21,7 +19,8 @@ import { wireHints } from './hints.js';
 // the agent works from it from its next round or turn; what the agent
 // changes lands in the controls (`apply`). Its pictures land on the stage, as
 // Generate's do. What it may change is Settings → Agent, for every chat. On
-// the Video tab a chat makes films: its storyboard is the Story panel.
+// the Video tab a chat makes films: its storyboard is the Shots rows and the
+// Cast panel while the chat is open (`board.js`).
 //
 // The server holds the chat (`work/chats/{id}/chat.json`, `agent::chat`); the
 // panel draws it and re-reads it as its `rev` moves, polled with the jobs
@@ -70,8 +69,8 @@ const WORDS = {
     placeholder: 'A fox in a red knitted hat, snowy forest — keep trying until the hat is red',
   },
   video: {
-    empty: 'Ask for a short film: the agent writes a storyboard — its cast, shots and lines — '
-      + 'which you change, then send to the Shots panel.',
+    empty: 'Ask for a short film: the agent writes its shots into the Shots panel and its cast into the '
+      + 'Cast panel, which you change as you like, then Generate clip.',
     placeholder: 'A one-minute film: two friends meet in the rain at a bus stop',
   },
 };
@@ -157,7 +156,7 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
 
   async function openChat(id) {
     const mine = ++seq;
-    if (id !== data?.chat.id) { sessionPanel(false); storyPanel(false); }
+    if (id !== data?.chat.id) sessionPanel(false);
     err('');
     try {
       const got = await getJSON(`/chats/${encodeURIComponent(id)}`);
@@ -170,7 +169,6 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
 
   function show(got, { scroll = true } = {}) {
     const was = data?.chat;
-    if (story && was?.id !== got.chat.id) $('astoryerr').textContent = '';
     data = got;
     liveSeq = null;
     draw(scroll || was?.id !== got.chat.id || was?.messages.length !== got.chat.messages.length);
@@ -180,9 +178,6 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
     const begun = was?.id === got.chat.id && s.goal
       && (s.goal !== was.session.goal || s.first_round !== was.session.first_round);
     if ((begun || was?.id !== got.chat.id) && ['queued', 'running'].includes(s.state)) sessionPanel(true);
-    // A film opens the Story panel when it is written, and with its chat.
-    const film = got.chat.film;
-    if (film && (was?.id !== got.chat.id || !was?.film)) storyPanel(true);
     drawPanels();
     drawList();
     follows(got.chat);
@@ -249,7 +244,7 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
     }, 600);
   }
 
-  // ---- The Session and Story panels -----------------------------------------------------
+  // ---- The Session panel, and the Video tab's board ----------------------------------------
 
   // The Session panel (Image) has no rail button: it opens when the agent
   // starts a session, or on coming to a chat whose session is still going, and
@@ -259,126 +254,15 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
     if (onImage) $('panel-img-session').open = on;
   }
 
-  // The Story panel (Video) likewise: it opens with a film, and on the
-  // storyboard card's button.
-  function storyPanel(on) {
-    if (story) $('panel-vid-story').open = on;
-  }
-
   function drawPanels() {
     if (onImage) $('asessionbody').innerHTML = data ? sessionHtml(data.chat) : '<p class="sub">No chat yet.</p>';
-    if (story) drawStory();
+    // The film is the Shots rows and the Cast panel (`board.js`).
+    if (story) followBoard(data, (g) => show(g, { scroll: false }));
     if (data?.chat.agent && q('amodel').value !== data.chat.agent
         && agentsList.models.some((m) => m.name === data.chat.agent)) {
       q('amodel').value = data.chat.agent;
       syncModelNote();
     }
-  }
-
-  // A redraw while the person is typing in the panel would take the box from
-  // under them: an answer that changes nothing they are editing waits for the
-  // box to lose focus.
-  function drawStory() {
-    const what = busy() ? null : mainAction(data?.chat.film);
-    $('astorydraw').hidden = !what;
-    if (what) $('astorydraw').textContent = what.label;
-    $('astoryframes').hidden = busy() || !framesLabel(data?.chat.film);
-    const body = $('astorybody');
-    if (body.contains(document.activeElement) && document.activeElement.matches('input, textarea')) {
-      body.dataset.stale = '1';
-      return;
-    }
-    delete body.dataset.stale;
-    body.innerHTML = storyHtml(data?.chat ?? { film: null }, { busy: busy(), off: data?.toolkit.film_off, models: data?.toolkit.models ?? [] });
-  }
-
-  // One field of the board, as it was edited.
-  async function editFilm(fields) {
-    if (!data) return;
-    $('astoryerr').textContent = '';
-    try {
-      show(await post('/chats/film', { id: chatId(), ...fields }), { scroll: false });
-      soonJobs();
-    } catch (e) {
-      // In the panel: the chat's own error line is often out of view behind it.
-      $('astoryerr').textContent = String(e.message || e);
-      drawStory();
-    }
-  }
-
-  // The board's shots into the Shots panel, as a new clip for the tab's model.
-  // Sent again after an edit, it is another new clip.
-  async function sendToVideo() {
-    if (!data) return;
-    $('astoryerr').textContent = '';
-    try {
-      openShots(await post('/chats/film', { id: chatId(), send: true, video_model: videoModel() }));
-    } catch (e) {
-      $('astoryerr').textContent = String(e.message || e);
-    }
-  }
-
-  let pickFor = null; // the cast member an upload is for
-
-  function initStory() {
-    const body = $('astorybody');
-    body.addEventListener('change', (e) => {
-      const t = e.target;
-      if (t.matches('[data-film-every]')) editFilm({ every: t.value });
-      else if (t.matches('[data-film-model]')) editFilm({ image_model: t.value });
-      else if (t.dataset.filmMember != null) editFilm({ member: Number(t.dataset.filmMember), [t.dataset.field]: t.value });
-      else if (t.dataset.filmShot != null) {
-        const k = Number(t.dataset.filmShot);
-        const f = t.dataset.field;
-        editFilm({ shot: k, [f]: f === 'cut' ? t.value === '1' : f === 'cast' ? t.value.split(',').map((x) => x.trim()).filter(Boolean)
-          : f === 'lines' ? parseLines(t.value) : t.value });
-      }
-    });
-    body.addEventListener('focusout', () => {
-      if (body.dataset.stale) setTimeout(drawStory, 0);
-    });
-    body.addEventListener('click', (e) => {
-      const b = e.target.closest('button');
-      if (!b) return;
-      const d = b.dataset;
-      const picture = (k) => (stem) => editFilm({ member: k, picture: { kind: 'output', id: stem } });
-      if (d.filmDrawcast != null) editFilm({ draw: true, frames: false });
-      else if (d.filmPick != null) choosePicture(picture(Number(d.filmPick)));
-      // Drawn on the same press, as a person pressing it means.
-      else if (d.filmRedraw != null) editFilm({ member: Number(d.filmRedraw), picture: null, draw: true });
-      else if (d.filmKey != null) {
-        const k = Number(d.filmKey);
-        if (confirm(`Draw shot ${k + 1}'s first frame again? The one there now is replaced.`)) {
-          editFilm({ shot: k, redraw_keyframe: true, draw: true });
-        }
-      } else if (d.filmNokey != null) editFilm({ shot: Number(d.filmNokey), no_keyframe: true });
-      else if (d.filmAddkey != null) editFilm({ shot: Number(d.filmAddkey), no_keyframe: false, draw: true });
-      else if (d.filmUpload != null) {
-        pickFor = Number(d.filmUpload);
-        $('astoryfile').click();
-      } else if (d.filmVoiceplay != null) playSound(d.filmVoiceplay);
-      else if (d.filmVoicepick != null) {
-        const k = Number(d.filmVoicepick);
-        chooseSound((stem) => editFilm({ member: k, voice: stem }));
-      } else if (d.filmVoiceup != null) {
-        const k = Number(d.filmVoiceup);
-        askForSound((s) => editFilm({ member: k, voice: s.stem }), (msg) => { $('astoryerr').textContent = msg; });
-      } else if (d.filmNovoice != null) editFilm({ member: Number(d.filmNovoice), voice: null });
-    });
-    $('astorydraw').addEventListener('click', () => {
-      if (mainAction(data?.chat.film)) sendToVideo();
-    });
-    $('astoryframes').addEventListener('click', () => editFilm({ draw: true, frames: true }));
-    $('astoryfile').addEventListener('change', async () => {
-      const f = $('astoryfile').files[0];
-      $('astoryfile').value = '';
-      if (!f || pickFor == null) return;
-      try {
-        await editFilm({ member: pickFor, picture: { kind: 'output', id: await upload(f) } });
-      } catch (ex) {
-        err(String(ex.message || ex));
-      }
-    });
   }
 
   // ---- Sending ------------------------------------------------------------------------
@@ -412,6 +296,7 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
     try {
       const id = await ensureChat();
       clearTimeout(editTimer);
+      if (story) await flushBoard();
       const body = onImage ? settings() : null;
       if (body) sentJSON = JSON.stringify(body);
       await post('/agent/send', {
@@ -493,7 +378,6 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
   function newChat() {
     seq++;
     sessionPanel(false);
-    storyPanel(false);
     data = null;
     appliedRev = null;
     sentJSON = null;
@@ -595,7 +479,7 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
         // The Video tab opens it (`video.js`).
         document.dispatchEvent(new CustomEvent('yasdig:openclip', { detail: d.openClip }));
       } else if (d.openStory != null) {
-        storyPanel(true);
+        showBoard();
       } else if (d.openItem) {
         // On the Image tab's stage, in Refine & adjust, like any work item.
         await openWorkItem(d.openItem);
@@ -617,7 +501,6 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
 
   // ---- Wiring -------------------------------------------------------------------------------
 
-  if (story) initStory();
   initLarge();
   if (onImage && edits) {
     edits.addEventListener('input', edited);

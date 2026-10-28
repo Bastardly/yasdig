@@ -165,6 +165,10 @@ pub struct Film {
     /// without drawing every frame they are in each time.
     #[serde(default)]
     pub frames: bool,
+    /// The clip made from this board on the Video tab, opened on its stage
+    /// with the chat: the rows' done marks are against it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,7 +234,8 @@ impl Member {
 /// A line spoken in a shot: by a member (by name) or the narrator.
 pub use crate::videos::Line;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+// `Default` by hand: a shot's seed is −1 (a new one each time), never 0.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FilmShot {
     pub text: String,
     /// The members in it, by name.
@@ -260,6 +265,43 @@ pub struct FilmShot {
     pub sound: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub music: String,
+    /// The Shots row's seed and length: −1 is a new seed each time, `None`
+    /// the model's length. A reworded shot goes back to −1.
+    #[serde(default = "new_seed")]
+    pub seed: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frames: Option<u32>,
+    /// Pictures and sounds the person picked for the shot by hand (output
+    /// stems), sent after the cast's own (`session::shot_spec`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio: Vec<String>,
+}
+
+fn new_seed() -> i64 {
+    -1
+}
+
+impl Default for FilmShot {
+    fn default() -> Self {
+        FilmShot {
+            text: String::new(),
+            cast: Vec::new(),
+            cut: false,
+            keyframe: None,
+            key_stem: None,
+            key_cast: None,
+            no_key: false,
+            lines: Vec::new(),
+            sound: String::new(),
+            music: String::new(),
+            seed: -1,
+            frames: None,
+            references: Vec::new(),
+            audio: Vec::new(),
+        }
+    }
 }
 
 impl Film {

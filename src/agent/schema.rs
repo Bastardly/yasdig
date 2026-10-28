@@ -150,8 +150,12 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
     shot.insert("cast".into(), json!({ "type": "array", "items": text(40), "maxItems": crate::config::MAX_REFERENCES }));
     shot.insert("cut".into(), json!({ "type": "boolean" }));
     // H3 films sound; its prompt says what is spoken, heard and scored
-    // (`h3prompt`), so the board asks for each.
-    if t.video.as_ref().is_some_and(|v| v.references) {
+    // (`h3prompt`), so the board asks for each — and when the agent may pick
+    // H3 for it, since the board is written for the model it picks.
+    let videos = board_videos(t);
+    let h3 = t.video.as_ref().is_some_and(|v| v.references)
+        || videos.as_ref().is_some_and(|v| t.videos.iter().any(|m| m.references && v.contains(&m.name)));
+    if h3 {
         let mut line = Map::new();
         line.insert("who".into(), text(40));
         line.insert("words".into(), text(300));
@@ -163,6 +167,9 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
     }
     props.insert("title".into(), text(80));
     props.insert("every".into(), text(300));
+    if let Some(models) = videos {
+        props.insert("video_model".into(), json!({ "enum": models }));
+    }
     if let Some(models) = board_models(t) {
         props.insert("image_model".into(), json!({ "enum": models }));
     }
@@ -171,6 +178,13 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
         "shots".into(),
         json!({ "type": "array", "items": object(shot), "minItems": 1, "maxItems": crate::pipeline::MAX_SHOTS }),
     );
+}
+
+/// The video models a storyboard may be written for, when the model knob is
+/// allowed and there is a choice: those that go on from shot to shot.
+pub fn board_videos(t: &Toolkit) -> Option<Vec<String>> {
+    let names: Vec<String> = t.videos.iter().filter(|v| v.chains).map(|v| v.name.clone()).collect();
+    (t.knob("model").is_some_and(|k| k.allowed) && names.len() > 1).then_some(names)
 }
 
 /// The models a storyboard may draw its pictures with, when it has a choice.

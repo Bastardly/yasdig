@@ -460,9 +460,9 @@ const HELP = [
         + 'step on that picture, so nothing is lost if it goes wrong.' },
   { ids: ['agentfilm'],
     text: 'Ticked, the agent may plan a short movie when you ask for one: it '
-        + 'writes a storyboard and, if you press for them, draws the cast and the '
-        + 'pictures shots start from (saved to Outputs). Send to Video tab puts the '
-        + 'shots there, where you generate the clip.' },
+        + 'writes its shots into the Video tab’s Shots panel and its cast into the '
+        + 'Cast panel and, if you press for them, draws the cast and the pictures '
+        + 'shots start from (saved to Outputs). You generate the clip there.' },
   { ids: ['setembedpng'],
     text: 'Writes the prompt, negative prompt, model, seed, steps, sampler and CFG '
         + 'into each image you save to output, in the format A1111, Forge and Civitai '
