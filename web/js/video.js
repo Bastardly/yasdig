@@ -1064,9 +1064,9 @@ function applyClip(c) {
   syncVideoSummaries();
 }
 
-// ---- From the Agent tab ------------------------------------------------------
+// ---- From the Assistant -------------------------------------------------------
 
-// A storyboard's shots, sent from the Agent tab (`/chats/film {send}`), as a
+// A storyboard's shots, sent from the Assistant (`/chats/film {send}`), as a
 // new clip: the one on screen keeps its draft. Nothing is drawn until
 // Generate clip.
 export function openShots({ every, source, shots, note }) {
@@ -1108,6 +1108,8 @@ const PANEL_DEFS = [
   { id: 'vid-info' },
   { id: 'vid-current', open: true, corner: 'bottom-right' },
   { id: 'vid-favorites' },
+  { id: 'vid-assist', both: true },
+  { id: 'vid-story', both: true },
 ];
 
 // A rail button's dot is its panel header's line in the accent.
@@ -1137,7 +1139,7 @@ export function initVideo() {
   for (const ev of ['input', 'change']) $('tab-video').addEventListener(ev, syncVideoSummaries);
   $('vgo').addEventListener('click', startClip);
   $('vnew').addEventListener('click', newClip);
-  // A clip the Agent tab made, opened from its chat: the grids learn of it
+  // A clip a chat made, opened from it: the grids learn of it
   // first, since it landed while this tab wasn't looking.
   document.addEventListener('yasdig:openclip', async (e) => {
     document.querySelector('.tab[data-tab="video"]')?.click();

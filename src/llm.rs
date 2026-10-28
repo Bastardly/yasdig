@@ -409,8 +409,8 @@ impl Reader {
 fn out_of_memory(label: &str, kind: &str) -> String {
     let what = if kind == "ram" { "system memory" } else { "graphics memory" };
     format!(
-        "the agent ({label}) ran out of {what}. Pick a smaller agent model in the Agent tab's \
-         Model panel, or one whose file is a smaller quantization."
+        "the agent ({label}) ran out of {what}. Pick a smaller agent model beside the Assistant's \
+         Send button, or one whose file is a smaller quantization."
     )
 }
 

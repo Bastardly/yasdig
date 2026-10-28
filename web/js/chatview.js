@@ -3,14 +3,14 @@ import { linesText } from './lines.js';
 
 // ---- A chat as HTML ---------------------------------------------------------
 //
-// The Agent tab's message list, drawn from the chat the server sent
+// The Assistant's message list, drawn from the chat the server sent
 // (`GET /chats/{id}`). Pure — strings in, a string out — so `chatview.test.js`
 // can hold it to what it shows: every word the model wrote goes through `esc`,
 // a change is a card with Undo while it holds,
 // a round is a row of its pictures with what the agent made of each — one
 // picture alone is drawn large.
 //
-// The buttons carry what they act on in `data-` attributes; `agent.js` has one
+// The buttons carry what they act on in `data-` attributes; `assistant.js` has one
 // delegated listener for the lot.
 //
 //   chat   the server's chat (`agent::chat::Chat`)
@@ -102,6 +102,22 @@ function batchPictures(chat, m, judged) {
   }).join('');
 }
 
+// A session the agent wants to run, waiting for the person: nothing is drawn
+// until Start (`/agent/session`), and a new message drops it.
+function proposalCard(p) {
+  const what = p.sweep
+    ? `Compare ${esc(KNOB_LABEL[p.sweep.knob] ?? p.sweep.knob)}: ${p.sweep.values.map((v) => esc(valueText(p.sweep.knob, v))).join(', ')}`
+      + ` — ${p.per_round} picture${p.per_round === 1 ? '' : 's'} each, on the same seeds, every one judged.`
+    : 'Draw rounds, judge each against yes/no checks and change the prompt or settings until the pictures are right.';
+  return `<div class="chatcard">
+    <p class="chatcardhead">${p.sweep ? 'Run this comparison?' : 'Run this session?'}</p>
+    <p class="chatprompt">${esc(p.goal)}</p><p class="sub">${what}</p>
+    <div class="btnrow">
+      <button type="button" class="btn" data-proposal="start">Start</button>
+      <button type="button" class="btn" data-proposal="no">No thanks</button>
+    </div></div>`;
+}
+
 function agentMessage(chat, m) {
   const changes = (m.changes ?? []).map((id) => chat.changes.find((c) => c.id === id)).filter(Boolean);
   const action = m.action != null ? chat.actions.find((a) => a.id === m.action) : null;
@@ -125,6 +141,7 @@ function agentMessage(chat, m) {
   return `<div class="chatmsg agent" data-n="${m.n}">
     ${m.reply ? `<p class="chattext">${replyHtml(m.reply)}</p>` : ''}
     ${checks}${describe}${board}${changes.map(changeCard).join('')}${action ? actionCard(chat, action) : ''}
+    ${chat.session.proposal?.n === m.n ? proposalCard(chat.session.proposal) : ''}
     <div class="chatfoot">${notes}${stats}</div></div>`;
 }
 
@@ -190,7 +207,7 @@ export function liveReply(text) {
 export function sessionHtml(chat) {
   const s = chat.session;
   if (!s.goal) {
-    return '<p class="sub">No session yet. Ask the agent to get something right or improve a round, and it runs one: it writes checks, draws a round, judges it and tries again, as many rounds as you ask for (three when you don’t say). Ask it to find something out (“which CFG works best?”) and it compares: one round per value on the same seeds, then counts which passed.</p>';
+    return '<p class="sub">No session yet. Ask the agent to get something right or improve a round, and it offers one; once you press Start it writes checks, draws a round, judges it and tries again, as many rounds as you ask for (three when you don’t say). Ask it to find something out (“which CFG works best?”) and it offers a comparison: one round per value on the same seeds, then counts which passed.</p>';
   }
   const sw = s.sweep;
   const sweep = sw ? `<p><b>Comparing ${esc(KNOB_LABEL[sw.knob] ?? sw.knob)}</b>: ${
@@ -207,7 +224,7 @@ export function sessionHtml(chat) {
 //
 // A film's storyboard (`agent::chat::Film`): its look, the cast with their
 // pictures, the shots. Every field is the person's to edit until the film is
-// shot; an edit is posted as it is made (`agent.js`, `/chats/film`), and a
+// shot; an edit is posted as it is made (`assistant.js`, `/chats/film`), and a
 // picture dropped or a keyframe's shot reworded is drawn again by the agent.
 // `locked` while the agent works on the chat.
 

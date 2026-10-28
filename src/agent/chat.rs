@@ -65,6 +65,10 @@ pub struct Chat {
     /// The movie this chat is making, once the agent has written a storyboard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub film: Option<Film>,
+    /// The tab whose Assistant panel holds it. A chat from before the panels
+    /// is the Image tab's, unless it has a film (`ChatStore::load`).
+    #[serde(default)]
+    pub context: Pane,
     /// Where it was read from; never stored.
     #[serde(skip)]
     pub favorite: bool,
@@ -72,6 +76,29 @@ pub struct Chat {
 
 fn one() -> u32 {
     1
+}
+
+/// Two settings bodies alike, a number alike whatever its JSON spelling (the
+/// page's `7` is the agent's `7.0`).
+fn same_settings(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+        (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same_settings(v, w))),
+        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(v, w)| same_settings(v, w)),
+        _ => a == b,
+    }
+}
+
+/// Which tab a chat works on. An Image chat's settings *are* the Image tab's
+/// controls (the page writes them in, `ChatStore::take_settings`, and follows
+/// the agent's writes), and its pictures land on the stage; a Video chat makes
+/// films, its board pictures in the agent's own slot.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Pane {
+    #[default]
+    Image,
+    Video,
 }
 fn empty_object() -> Value {
     Value::Object(Map::new())
@@ -286,6 +313,22 @@ pub struct Sweep {
     pub values: Vec<Value>,
     /// What the knob held before, put back when the verdict picks nothing.
     pub before: Value,
+}
+
+/// A session proposed and not yet started: what `session::begin` is handed
+/// on *Start*.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Proposal {
+    /// The agent message that proposed it, which the card is drawn under.
+    pub n: u32,
+    pub goal: String,
+    /// A comparison's knob and values; `per_round` and `rounds` are its.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweep: Option<Sweep>,
+    #[serde(default)]
+    pub per_round: u32,
+    #[serde(default)]
+    pub rounds: u32,
 }
 
 /// A picture a message shows.
@@ -541,6 +584,11 @@ pub struct Session {
     /// plan and every critique judge against.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reference: Vec<ImageRef>,
+    /// A session the agent wants to run, waiting for the person's *Start* or
+    /// *No thanks* (`session::propose`, `/agent/session`): a session draws
+    /// round after round on its own, so it never starts unasked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<Proposal>,
     /// The job carrying the session now, while queued or running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<u64>,
@@ -556,6 +604,19 @@ impl Session {
 }
 
 impl Chat {
+    /// The Image tab's controls as the page reads them (a `/generate` body),
+    /// written over an Image chat's settings — the person's edit wins, and the
+    /// agent works from it from its next round or turn. Same settings are no
+    /// write (the page sends back what it just applied); `true` when it wrote.
+    pub fn take_settings(&mut self, v: Value) -> bool {
+        if !v.is_object() || same_settings(&self.settings, &v) {
+            return false;
+        }
+        self.settings = v;
+        self.settings_rev += 1;
+        true
+    }
+
     pub fn new(id: String, settings: Value, agent: Option<String>) -> Chat {
         let ms = now_ms();
         Chat {
@@ -574,6 +635,7 @@ impl Chat {
             session: Session::default(),
             video: None,
             film: None,
+            context: Pane::Image,
             favorite: false,
         }
     }
@@ -682,6 +744,11 @@ impl ChatStore {
         let bytes = std::fs::read(&path).with_context(|| format!("that chat is gone ({})", path.display()))?;
         let mut chat: Chat = serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
         chat.favorite = path.starts_with(&self.favorites);
+        // Written before the panels: a film was the Agent tab's, which the
+        // Video tab's panel takes over.
+        if chat.film.is_some() {
+            chat.context = Pane::Video;
+        }
         Ok(chat)
     }
 
@@ -824,6 +891,35 @@ mod tests {
 
     fn chat(id: &str) -> Chat {
         Chat::new(id.into(), serde_json::json!({"prompt": "a cat", "template": "sdxl"}), None)
+    }
+
+    #[test]
+    fn the_image_tabs_controls_are_written_in_only_when_they_differ() {
+        let mut c = chat("a");
+        let page = serde_json::json!({"prompt": "a cat", "template": "sdxl", "cfg_scale": 7, "loras": []});
+        assert!(c.take_settings(page.clone()));
+        assert_eq!(c.settings_rev, 1);
+        // The agent's 7.0 is the page's 7: what was just applied comes back.
+        c.settings["cfg_scale"] = serde_json::json!(7.0);
+        assert!(!c.take_settings(page), "no write, so nothing moves under the person");
+        assert!(!c.take_settings(serde_json::json!("not a body")));
+        assert!(c.take_settings(serde_json::json!({"prompt": "a dog", "template": "sdxl", "cfg_scale": 7, "loras": []})));
+        assert_eq!(c.settings_rev, 2);
+    }
+
+    #[test]
+    fn a_chat_from_before_the_panels_is_the_image_tabs_unless_it_has_a_film() {
+        let (st, d) = store("pane");
+        let mut c = chat("a");
+        let mut v = serde_json::to_value(&c).unwrap();
+        v.as_object_mut().unwrap().remove("context");
+        st.create(&serde_json::from_value(v.clone()).unwrap()).unwrap();
+        assert_eq!(st.load("a").unwrap().context, Pane::Image);
+        c.id = "b".into();
+        c.film = Some(Film::default());
+        st.create(&c).unwrap();
+        assert_eq!(st.load("b").unwrap().context, Pane::Video, "a film was the Agent tab's, now the Video tab's");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

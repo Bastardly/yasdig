@@ -130,6 +130,12 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                  with: this model's own unless the chat changed it. Change one only when the person asks for it \
                  or a check needs it.",
             );
+            if t.image_tab {
+                s.push_str(
+                    " They are the Image tab's controls, as the person left them; what you change, they see \
+                     change there, and your pictures land on its stage.",
+                );
+            }
             for k in &offered {
                 let range = match (k.kind, k.min, k.max) {
                     ("int" | "float" | "size", Some(a), Some(b)) => format!(" Range {a}–{b}."),
@@ -216,6 +222,10 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                          pictures per value, 2 when the person didn't say. `goal`: the question, in one sentence.",
                     );
                 }
+                s.push_str(
+                    "\n\nAn improvement or a comparison is offered to the person, who starts it or turns it \
+                     down: `reply` asks, in a sentence, whether to go ahead with what you propose.",
+                );
             }
         }
         let passes: Vec<_> = t.offered_actions().collect();

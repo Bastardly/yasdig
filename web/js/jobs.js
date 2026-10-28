@@ -18,6 +18,36 @@ import { $, esc, post } from './dom.js';
 
 const BUSY_MS = 700;
 const IDLE_MS = 2500;
+// A poll that never answers would hold `polling` for ever, and with it every
+// readout on the page; past this it is dropped and the next one goes out.
+const POLL_TIMEOUT_MS = 8000;
+
+// A value that tells its subscribers when it moves, with when it did (`at`,
+// the page's clock). The one pattern for "something on the server happened":
+// a subscriber refetches what it shows, whatever it believed before.
+function observable(value) {
+  const subs = new Set();
+  const o = {
+    value,
+    at: 0,
+    set(v) {
+      if (v === o.value) return;
+      o.value = v;
+      o.at = Date.now();
+      for (const fn of subs) {
+        try { fn(v); } catch (e) { console.error('[yasdig] a queue subscriber failed', e); }
+      }
+    },
+    subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
+  };
+  return o;
+}
+
+// The queue's own change counter (`Queue::changed`): it moves when a job is
+// queued, starts, steps (an agent leg's reply, each picture), ends, fails or
+// is stopped, and when an image is published. Panels that show something a
+// job writes subscribe to it rather than guess from their own state.
+export const queueChanged = observable(null);
 
 // What the dialog calls each kind of job. The server's names are the keys.
 const KINDS = {
@@ -233,7 +263,7 @@ async function drawVideoPreview() {
 
 async function deliverLatest(seq) {
   try {
-    const data = await (await fetch('/jobs/latest')).json();
+    const data = await (await fetch('/jobs/latest', { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) })).json();
     if (data.error) return;
     seenSeq = seq;
     for (const fn of resultHooks) fn(data);
@@ -247,7 +277,7 @@ export async function pollJobs() {
   polling = true;
   clearTimeout(timer);
   try {
-    const got = await (await fetch('/jobs')).json();
+    const got = await (await fetch('/jobs', { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) })).json();
     // An `{error}` body adopted as the snapshot used to throw in `finally`
     // below, and the poll was never scheduled again until a reload.
     if (!Array.isArray(got.jobs) || !Array.isArray(got.notices)) return;
@@ -267,12 +297,15 @@ export async function pollJobs() {
     const text = progressText();
     // All three tabs' readouts: they report the same worker, and only one of
     // them is ever visible.
-    for (const id of ['prog', 'vprog', 'cprog', 'rdprog', 'aprog']) $(id).textContent = text;
+    for (const id of ['prog', 'vprog', 'cprog', 'rdprog']) $(id).textContent = text;
     drawPreview();
     drawVideoPreview();
     drawButton();
     if ($('jobsdlg').open) drawList();
-    for (const fn of jobsHooks) fn(snap);
+    for (const fn of jobsHooks) {
+      try { fn(snap); } catch (e) { console.error('[yasdig] a jobs hook failed', e); }
+    }
+    queueChanged.set(snap.changed ?? null);
   } catch {
     // A dropped poll needs no reporting — the next one is a moment away, and
     // the request that actually matters reports its own failure.

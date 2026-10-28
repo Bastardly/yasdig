@@ -1,7 +1,7 @@
 import { $, esc, getJSON, post } from './dom.js';
 import { loadModels } from './image.js';
 import { loadVideoModels } from './video.js';
-import { loadAgents } from './agent.js';
+import { loadAgents } from './assistant.js';
 
 // The Get models tab: the server's catalog (`src/catalog.toml`), one card per
 // set of files — a family may have two, in different precisions — and what
@@ -105,7 +105,7 @@ const categories = () => [
   { id: 'upscaler', title: 'Upscalers', entries: view.upscalers ?? [],
     where: 'Everything is here. Pick it under Output upscale, or in Refine & adjust’s Scale.' },
   { id: 'agent', title: 'Agent models', entries: view.agents ?? [],
-    where: 'Everything is here. Pick it in the Agent tab’s Model panel.' },
+    where: 'Everything is here. Pick it beside the Assistant panel’s Send button, on the Image or Video tab.' },
 ].filter((c) => c.entries.length);
 
 function card(e, i, where, first) {

@@ -156,6 +156,8 @@ pub struct Snapshot {
     /// knows to fetch it without being sent a megabyte of base64 per poll.
     pub latest_seq: u64,
     pub notices: Vec<Notice>,
+    /// [`State::changed`]: compare it, never read meaning into it.
+    pub changed: u64,
 }
 
 /// Failures kept for the page to pick up. A run that fails has no request
@@ -171,6 +173,12 @@ struct State<T> {
     seq: u64,
     latest: Option<(u64, Arc<String>)>,
     notices: VecDeque<Notice>,
+    /// Moves on every change a page could show: a job queued, started,
+    /// relabelled (an agent leg's next step), past an image, finished, failed
+    /// or stopped, and an image published. The page's one signal to refresh
+    /// (`jobs.js` `queueChanged`), so a panel never decides from its own copy
+    /// of the state whether anything happened.
+    changed: u64,
 }
 
 pub struct Queue<T> {
@@ -202,6 +210,7 @@ impl<T: Clone> Queue<T> {
                     seq: 0,
                     latest: None,
                     notices: VecDeque::new(),
+                    changed: 0,
                 }),
                 Condvar::new(),
             )),
@@ -213,6 +222,14 @@ impl<T: Clone> Queue<T> {
         // is still a valid queue — keep serving rather than poisoning every
         // connection thread with it.
         self.inner.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The lock, for a change: `changed` moves. Every method that alters what
+    /// [`Queue::snapshot`] serves takes this one.
+    fn change(&self) -> MutexGuard<'_, State<T>> {
+        let mut s = self.lock();
+        s.changed += 1;
+        s
     }
 
     /// Queue a job and return its id. `total` is the number of images for a
@@ -229,7 +246,7 @@ impl<T: Clone> Queue<T> {
         reply: Option<Sender<Result<String>>>,
         priority: bool,
     ) -> u64 {
-        let mut s = self.lock();
+        let mut s = self.change();
         let id = Self::insert(&mut s, kind, label, total, work, reply, priority);
         drop(s);
         self.inner.1.notify_all();
@@ -247,7 +264,7 @@ impl<T: Clone> Queue<T> {
     /// queues a fresh one. One lock for the look and the push, so two quick
     /// requests can't both find no loop and make two.
     pub fn push_loop(&self, kind: Kind, label: String, work: T) -> (u64, bool) {
-        let mut s = self.lock();
+        let mut s = self.change();
         let work = match Self::replace_loop(&mut s, kind, label.clone(), work) {
             Ok(id) => return (id, true),
             Err(work) => work,
@@ -262,7 +279,7 @@ impl<T: Clone> Queue<T> {
     /// it saw running. If the loop has ended meanwhile, an edit is not a
     /// request to start another.
     pub fn update_loop(&self, kind: Kind, label: String, work: T) -> Option<u64> {
-        Self::replace_loop(&mut self.lock(), kind, label, work).ok()
+        Self::replace_loop(&mut self.change(), kind, label, work).ok()
     }
 
     fn replace_loop(s: &mut State<T>, kind: Kind, label: String, work: T) -> Result<u64, T> {
@@ -338,6 +355,7 @@ impl<T: Clone> Queue<T> {
                     work: front.work.clone(),
                 };
                 s.running = Some(t.id);
+                s.changed += 1;
                 return t;
             }
             s = self.inner.1.wait(s).unwrap_or_else(|e| e.into_inner());
@@ -353,7 +371,7 @@ impl<T: Clone> Queue<T> {
     /// it would otherwise hold the queue for ever and every job after it would
     /// be a job that never runs.
     pub fn image_done(&self, id: u64) -> bool {
-        let mut s = self.lock();
+        let mut s = self.change();
         s.running = None;
         let Some(i) = s.entries.iter().position(|e| e.id == id) else {
             return false;
@@ -397,7 +415,7 @@ impl<T: Clone> Queue<T> {
     /// so the kill can only land on the image it was meant for — checking
     /// first and killing after could kill the next image's sd-cli instead.
     pub fn skip(&self, id: u64, kill: impl FnOnce() -> bool) -> Skip {
-        let mut s = self.lock();
+        let mut s = self.change();
         if s.running != Some(id) {
             return Skip::NotInFlight;
         }
@@ -423,7 +441,7 @@ impl<T: Clone> Queue<T> {
 
     /// An indivisible job is over: answer whoever is waiting and drop it.
     pub fn finish(&self, id: u64, result: Result<String>) {
-        let mut s = self.lock();
+        let mut s = self.change();
         s.running = None;
         if let Some(i) = s.entries.iter().position(|e| e.id == id) {
             let e = s.entries.remove(i).expect("position came from this deque");
@@ -438,7 +456,7 @@ impl<T: Clone> Queue<T> {
     /// the run ends here rather than repeating it, and the message is kept for
     /// the page, since no request is waiting on a run.
     pub fn fail_run(&self, id: u64, message: String, oom: Option<serde_json::Value>) {
-        let mut s = self.lock();
+        let mut s = self.change();
         s.running = None;
         if let Some(i) = s.entries.iter().position(|e| e.id == id) {
             s.entries.remove(i);
@@ -455,7 +473,7 @@ impl<T: Clone> Queue<T> {
     /// depends on whether the worker has the job yet. `kill` is called for a
     /// running indivisible job, under the lock — see [`Queue::skip`].
     pub fn stop(&self, id: u64, kill: impl FnOnce() -> bool) -> Stopped<T> {
-        let mut s = self.lock();
+        let mut s = self.change();
         let Some(i) = s.entries.iter().position(|e| e.id == id) else {
             return Stopped::Unknown;
         };
@@ -488,14 +506,14 @@ impl<T: Clone> Queue<T> {
 
     /// Say what an entry is doing now, in the Jobs dialog's words.
     pub fn relabel(&self, id: u64, label: String) {
-        if let Some(e) = self.lock().entries.iter_mut().find(|e| e.id == id) {
+        if let Some(e) = self.change().entries.iter_mut().find(|e| e.id == id) {
             e.label = label;
         }
     }
 
     /// Publish an image result for the page to pick up.
     pub fn set_latest(&self, json: String) {
-        let mut s = self.lock();
+        let mut s = self.change();
         s.seq += 1;
         let seq = s.seq;
         s.latest = Some((seq, Arc::new(json)));
@@ -530,6 +548,7 @@ impl<T: Clone> Queue<T> {
         Snapshot {
             jobs,
             latest_seq: s.latest.as_ref().map_or(0, |(seq, _)| *seq),
+            changed: s.changed,
             notices: s.notices.iter().cloned().collect(),
         }
     }
@@ -589,6 +608,42 @@ mod tests {
         assert_eq!(q.next().id, lp);
         assert!(q.image_done(lp));
         assert_eq!(ids(&q), ["loop"]);
+    }
+
+    /// The page refreshes on `changed` alone, so every transition it could
+    /// show moves it — an agent leg's steps included — and reading doesn't.
+    #[test]
+    fn every_change_the_page_could_show_moves_the_counter() {
+        let q = Queue::new();
+        let at = |q: &Queue<&str>| q.snapshot().changed;
+        let mut was = at(&q);
+        let mut moved = |q: &Queue<&str>, what: &str| {
+            let now = at(q);
+            assert!(now > was, "{what} didn't move it");
+            was = now;
+        };
+        let a = q.push(Kind::Agent, "chat".into(), None, "agent", None, false);
+        moved(&q, "a push");
+        q.next();
+        moved(&q, "a start");
+        q.relabel(a, "chat · reply".into());
+        moved(&q, "a step's label");
+        assert!(q.image_done(a));
+        moved(&q, "a step done");
+        q.set_latest("{}".into());
+        moved(&q, "an image");
+        q.next();
+        q.stop(a, || true);
+        moved(&q, "a stop");
+        assert!(!q.image_done(a), "a stopped leg ends");
+        let g = q.push(Kind::Upscale, "u".into(), None, "up", None, false);
+        was = at(&q);
+        q.next();
+        q.finish(g, Ok(String::new()));
+        assert!(at(&q) > was, "a finish didn't move it");
+        let still = at(&q);
+        q.snapshot();
+        assert_eq!(at(&q), still, "reading is no change");
     }
 
     /// An agent leg is a step at a time: a button press runs between its

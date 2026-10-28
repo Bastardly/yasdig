@@ -116,7 +116,7 @@ make sense of is refused, not guessed at.
 **Models load in a sandbox with no network (Linux and Windows).** Model files come
 from strangers, and the code that reads them (stable-diffusion.cpp, written in C++)
 could have a bug a crafted file exploits to run code on your computer. So the programs
-that load and run every model — the image models' and the Agent tab's — are started unable to open an internet connection —
+that load and run every model — the image models' and the Assistant's — are started unable to open an internet connection —
 nor can anything it starts — and the lock can't be lifted from inside. Even a file
 that broke in couldn't send your pictures or anything else anywhere, or fetch more.
 On Windows it also can't open your files outside yasdig's own folders.
@@ -188,9 +188,10 @@ under `models/`.
 - **Outputs and favourites:** a gallery of what you saved, with the same sliders, and
   favourites that *Delete all* can't touch.
 - **Convert:** shrink a model to GGUF (q8, q4 and others) so it fits your card.
-- **Agent:** a local assistant that writes prompts, describes a picture as a prompt,
-  and can run a few rounds of draw → judge → adjust towards a goal, changing only the
-  settings you allow. It runs on your GPU too, from about 4 GB.
+- **Assistant:** a local agent in the Image and Video tabs that writes prompts,
+  describes a picture as a prompt, runs a few rounds of draw → judge → adjust towards a
+  goal on the Image tab's own settings (changing only the ones you allow), and writes
+  storyboards for short films. It runs on your GPU too, from about 4 GB.
 - **Settings and per-model defaults:** steps, CFG and the rest, saved once per model.
 
 The app's **Help** tab explains all of it, and every control has an ⓘ.

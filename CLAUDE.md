@@ -5,7 +5,7 @@
 with stable-diffusion.cpp (a subprocess, never FFI), then escalate on demand with
 img2img passes and a native FSR post-process in `wgpu`. All sd.cpp work goes through
 one job queue and one diffusion worker; the viewer's re-filters run on a display worker
-sharing the one FSR device behind a lock (*## The job queue*). The Agent tab runs a
+sharing the one FSR device behind a lock (*## The job queue*). The Assistant panels run a
 second subprocess the same way — llama.cpp, through our own driver (*## The agent*).
 
 **`README.md` is short and for users** (why escalation, install, what's supported —
@@ -672,9 +672,12 @@ card omits them (`fields_mark_exactly_the_page_only_keys`). The page then shows 
 
 ## The agent
 
-The Agent tab (`src/agent/`, `src/llm.rs`, `src/agents.rs`, `llm/yasdig-llm.cpp`,
-`web/js/agent.js`): a chat with a local VLM over its own settings, started from the
-Image tab's model. A turn is one run of our driver on the job queue; nothing stays loaded.
+The Assistant (`src/agent/`, `src/llm.rs`, `src/agents.rs`, `llm/yasdig-llm.cpp`,
+`web/js/assistant.js`): a chat with a local VLM, a panel in the tab it works on —
+`mountAssistant` once on the Image tab, once on the Video tab (there is no Agent tab,
+checked 2026-10-28: a chat's own copy of the tab's settings and board was what every
+handoff lost things between). A turn is one run of our driver on the job queue; nothing
+stays loaded.
 
 **The driver, not llama.cpp's CLIs** (checked at v0.7.0): `llama-mtmd-cli` is one-shot
 only with both `-p` and `--image` and takes no conversation; `llama-cli` talks to an
@@ -707,10 +710,22 @@ offered as a text encoder. Catalog `[[agent]]` cards: each in its own folder
 
 Break silently:
 
-- **A chat's settings are a `/generate` body holding only what the agent set**
-  (`GenerateDto`, `chat.settings` as JSON): `/chats/new` makes `{template}`, so a round
-  (through `GenerateDto::run_plan` like the button) is that model's registry profile
-  plus the agent's keys. `with_turbo` adds the catalog Turbo LoRA (steps/CFG/sigmas)
+- **A chat is one tab's** (`Chat.context: Pane`, `image` by serde default; `ChatStore::load`
+  makes one with a film `video`). Each panel lists only its own (`/chats` carries
+  `context`). Only a Video chat films (`toolkit::resolve` sets `film_off` on an Image one).
+- **An Image chat's settings are the Image tab's controls**, both ways: the page writes
+  them in (`/chats/new`/`/agent/send` `settings`, and `/chats/settings` debounced on any
+  edit of the tab outside the panel, while the agent works too — the person's edit wins),
+  through `Chat::take_settings`, which is no write when they are the same
+  (`same_settings`: the page's `7` is the agent's `7.0`). The page puts the agent's writes
+  back when `settings_rev` moves (`follows` → `applyAssistantSettings`, the `knobs::KNOBS`
+  keys only, model first), and skips what it just sent itself. Rounds draw from noise
+  (`assistantSettings` leaves *Image to image*'s source out), into `Slot::Image`,
+  published as the latest (`agent::picture`), so they land on the stage like Generate's.
+- **A chat's settings are a `/generate` body** (`GenerateDto`, `chat.settings` as JSON):
+  a Video chat's (and an old one's) hold only what the agent set — `/chats/new` makes
+  `{template}`, so a round (through `GenerateDto::run_plan` like the button) is that
+  model's registry profile plus the agent's keys. `with_turbo` adds the catalog Turbo LoRA (steps/CFG/sigmas)
   when there is no `loras` key — `toolkit::locks_for` reads the same absence. A model
   switch (`knobs::write`) removes steps/CFG/size/sampler/LoRAs/parts, keeps the prompts.
 - **The agent is shown every knob at the value the next round draws with**
@@ -722,16 +737,21 @@ Break silently:
 - **Board edits are `session::edit_board`** (tested); the route only keeps the picture,
   looks up the model and queues. Errors show in the Story panel (`#astoryerr`).
 - **The rules are Settings', read per turn** (`knobs::Rules`, `[agent]`; `toolkit::resolve`
-  loads them): a whitelist of keys, no ask-first, no bounds but `hard_bounds`. A chat
+  loads them): a whitelist of keys, no ask-first for a change, no bounds but `hard_bounds`. A chat
   carries none. An old `chat.json`'s `pending`/`awaiting` read as `rejected`/`idle` (serde
   aliases); an old `[agent]` of tables reads as the defaults (`key_list`).
 - **One Send; the agent picks the action.** `/agent/send` is always a chat turn, whose
   schema branches are named for the request — `talk`, `draw`, `describe` (only when the
   turn shows pictures), `improve` (a `goal`) and `compare` (`vary`, `values`, `count`;
   absent when no `knobs::COMPARABLE` key is offered). `apply_reply` still reads the old
-  `none`/`generate`/`session`. An improve calls `session::begin` (goal, checks, rounds and
-  sweep cleared, `first_round`, `reference` = the newest user message's pictures,
-  `mode = Plan`) and `Next::Turn`. `Mode::Describe` is never started; kept so old chats read.
+  `none`/`generate`/`session`. **A session always asks first**: an improve or a
+  compare only stores `Session.proposal` (`Proposal {n, goal, sweep, per_round, rounds}`,
+  drawn as a card under message `n`) and ends the leg; `POST /agent/session {start}` →
+  `start_proposal` calls `session::begin` (goal, checks, rounds and sweep cleared,
+  `first_round`, `reference` = the newest user message's pictures, `mode = Plan`), re-reads
+  a sweep's `before` (the knob may have moved while it waited), `Next::Turn`, and queues;
+  `decline_proposal` notes "Not started.". `close_session` drops it, so a new message does
+  too. A compare's model switch is applied at once either way (undoable). `Mode::Describe` is never started; kept so old chats read.
 - **A comparison is the server's, not the model's** (`Session.sweep: Sweep {knob, values,
   before}`): `sweep_from` checks every value through `knobs::check` (whitelist, locks,
   `hard_bounds`; strings parsed per knob — the grammar can't type array items) and needs
@@ -745,14 +765,10 @@ Break silently:
 - **The agent sizes its work**: chat `count` (1 unless said), a plan's `rounds`/`count`
   (`Session.rounds`/`per_round`, 0 = `SESSION_ROUNDS`/`SESSION_BATCH`), a critique's
   `count`/`seeds`; `knobs::MAX_BATCH`/`MAX_ROUNDS` are the only caps.
-- **`Slot::Agent`**: rounds and passes never take the Image tab's picture. `open_in`
-  into `Slot::Agent` leaves a **live** entry where it is (it may be on the Image tab).
-- **`Slot::Chat` is the Agent tab's viewer** (`/workitems/open {pane: "agent"}`,
-  `JobKind::Open.slot`), apart from `Slot::Agent` so a round never evicts the picture
-  looked at; it takes a live entry out of `Agent` but leaves one in `Image`
-  (`stays_where_it_is`). Page: `PANES.agent`, `#lightbox.onagent` hides the mirrored pass
-  model/steps/CFG, and `escalateSettings`/`passPick`/`passSteps` send none on that pane,
-  so a pass runs on the picture's own profile.
+- **`Slot::Agent`**: a film's board pictures and the passes on a keeper never take the
+  Image tab's picture. `open_in` into `Slot::Agent` leaves a **live** entry where it is
+  (it may be on the Image tab). A chat's picture clicked opens on the Image tab
+  (`openWorkItem`).
 - **A leg is `Kind::Agent`, `total: None`**, stepped like a loop (`is_stepped`), never
   the loop (`replace_loop` needs `is_run`). Stop marks `stopping` **and** kills;
   `agent::step` checks `Queue::stopping`. A panic marks the chat failed in the worker
@@ -861,6 +877,13 @@ Break silently:
 - **A run answers `{job}` at once; images come via `/jobs/latest`** (`set_latest`,
   `latest_seq`). Refine, Hi-res, Video, Convert, Enlarge answer on their own request
   (`enqueue_wait`) and also publish; `takeResult` skips one already shown.
+- **`Queue::changed` is the page's refresh signal**: every method that alters the
+  snapshot takes `Queue::change()` (the lock, plus a bump), `next` bumps on handing out;
+  `every_change_the_page_could_show_moves_the_counter`. The page's `queueChanged`
+  (`jobs.js`, an observable with `at`) notifies on a move; a panel showing what a job
+  writes subscribes and refetches **without gating on its own idea of busy** (the
+  Assistant's `refresh`). The poll's fetches time out (`POLL_TIMEOUT_MS`) and a
+  throwing hook is logged, never allowed to stop the poll — `aprog` once did.
 - **Everything a run needs is captured at queue time — except the loop.** There is
   one (`Queue::push_loop`); a loop request updates it (kind, label, work; id and
   `done` kept), and the page re-sends the panel on change (`syncLoop` from
@@ -1144,8 +1167,9 @@ the stem** (one stem, one picture), keeps the mtime (grid order), rebuilds each 
 and leaves the sidecar; the page cache-busts the tile (`edited` in `outputs.js`).
 
 - **Deleting is `gridmark.js`**, shared with the work-item grid.
-  **Delete all = the same request with every id.** One of five `confirm()`s
-  (with Close server, Jobs Stop/Remove, the Outputs viewer's unsaved edit, and redrawing a film's first frame).
+  **Delete all = the same request with every id.** One of six `confirm()`s
+  (with Close server, Jobs Stop/Remove, the Outputs viewer's unsaved edit, redrawing a film's first frame, and
+  deleting the Assistant's chat — the panel has no click-to-delete grid).
 - **`outputGrid` is the one tile** (`height`, `empty`, `onPick`, optional `star`); height must match
   `.wigrid`.
 - **Arrow keys yield to a focused range input**; listener on `document`.
@@ -1206,7 +1230,7 @@ only `js/app.js`.
 | `prompt-box.js` / `prompt-weight.js` | the custom element; pure weighting maths |
 | `help.js` | Help tab `TOPICS` |
 | `settings.js` / `modelsettings.js` | Settings form from `FIELDS`; *Per model* card |
-| `agent.js` | Agent tab: chats, the composer, panels, following a turn |
+| `assistant.js` | the Assistant panel (`mountAssistant`, per tab): chats, the composer, following a turn, the Image tab's controls both ways, the Story panel |
 | `chatview.js` / `agentperms.js` | a chat as HTML, pure; Settings → Agent's whitelist |
 | `app.js` | `showTab`, boot order |
 

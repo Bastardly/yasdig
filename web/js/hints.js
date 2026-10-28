@@ -436,8 +436,8 @@ const HELP = [
         + 'tab. Starred chats are kept, and so are the pictures its rounds made — '
         + 'those are in Current on the Image tab. Only Close server does this.' },
   { ids: ['setagent'],
-    text: 'The agent a new chat talks to. The picker beside the Agent tab’s '
-        + 'message box switches it for one chat.' },
+    text: 'The agent a new chat talks to. The picker beside the Assistant '
+        + 'panel’s Send button switches it for one chat.' },
   { ids: ['amodel'],
     text: 'The language model the agent thinks with. One that sees pictures can '
         + 'judge a round and describe a picture; a text-only one can only talk. '

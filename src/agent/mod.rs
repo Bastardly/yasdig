@@ -1,4 +1,4 @@
-//! The Agent tab: a local vision-language model that helps with prompts and
+//! The Assistant: a local vision-language model that helps with prompts and
 //! settings, describes pictures as prompts, and runs a bounded generate →
 //! critique → revise loop over a chat's own copy of the Image tab's settings.
 //!
@@ -219,7 +219,7 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
         }
         Step::Image { round, k } => {
             queue.relabel(job, label(&format!("round {round}, picture {}/{}", k + 1, session::round_size(&chat))));
-            picture(engine, &store, &chat, round, k)
+            picture(engine, queue, &store, &chat, round, k)
         }
         Step::Escalate(action) => {
             queue.relabel(job, label("finishing a keeper"));
@@ -406,8 +406,10 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
 }
 
 /// Picture `k` of round `round`: the chat's settings through `/generate`'s
-/// own conversion, into the agent's slot.
-fn picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, round: u32, k: u32) -> Result<()> {
+/// own conversion. An Image chat's lands on the Image tab's stage, as the
+/// person's Generate does (published as the latest); a Video chat's in the
+/// agent's slot.
+fn picture(engine: &mut Engine, queue: &crate::Jobs, store: &ChatStore, chat: &chat::Chat, round: u32, k: u32) -> Result<()> {
     let mut settings = chat.settings.clone();
     with_turbo(engine.cfg(), &mut settings);
     // A chat whose prompt the agent may not write draws the model's empty one.
@@ -425,7 +427,11 @@ fn picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, round: u32
     let crate::Start::Generate(req) = plan.start else {
         bail!("an agent round is a generate");
     };
-    let r = engine.run_in(&req, false, Slot::Agent)?;
+    let on_stage = chat.context == chat::Pane::Image;
+    let r = engine.run_in(&req, false, if on_stage { Slot::Image } else { Slot::Agent })?;
+    if on_stage {
+        crate::latest(queue, &r);
+    }
     let work_id = r.work_id.clone().ok_or_else(|| anyhow!("the picture wasn't archived"))?;
     let trace = crate::workitems::AgentTrace {
         chat: chat.id.clone(),

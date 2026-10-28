@@ -13,7 +13,6 @@
 
   <div class="tabs">
     <h1 title="Yet Another Stable Diffusion Image Generator">YASDIG</h1>
-    <button type="button" class="btn btn-choice tab" data-tab="agent">Agent</button>
     <button type="button" class="btn btn-choice tab active" data-tab="image">Image</button>
     <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
     <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
@@ -51,6 +50,7 @@
     <button type="button" class="btn btn-choice railbtn" data-panel="img-info">Info</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="img-current">Current</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="img-favorites">Favorites</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="img-assist">Assistant</button>
     <!-- What starts and stops the work, always in reach: the seed (the one
          setting reached for between renders), stopping, starting. -->
     <div class="railfoot">
@@ -502,6 +502,17 @@
   <!-- What a run is doing and what went wrong, in the stage's lower left:
        the error and OOM box, the live preview, progress, "Loop updated".
        Shown only when it has something to say. -->
+  <!-- The Assistant: a chat with the agent about this tab's work
+       (`assistant.js` fills it). -->
+  <section class="fpanel assistpanel" id="panel-img-assist" aria-label="Assistant" hidden>
+    <header class="fphead"><b>Assistant</b><button type="button" class="fpclose" aria-label="Close Assistant">&times;</button></header>
+  </section>
+  <section class="fpanel" id="panel-img-session" aria-label="Session" hidden>
+    <header class="fphead"><b>Session</b><button type="button" class="fpclose" aria-label="Close Session">&times;</button></header>
+    <div class="fpbody">
+      <div id="asessionbody"></div>
+    </div>
+  </section>
   <div class="statuscard">
     <div id="err" class="err"></div>
     <!-- The run in flight, step by step. Driven by the Jobs poll (jobs.js);
@@ -566,6 +577,7 @@
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-info">Info</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-current">Current</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-favorites">Favorites</button>
+    <button type="button" class="btn btn-choice railbtn" data-panel="vid-assist">Assistant</button>
     <div class="railfoot">
       <!-- Not the image tab's Stop, which finishes the image in flight and then
            ends the run. There is only ever one clip in flight, so stopping it
@@ -606,7 +618,7 @@
       </prompt-box>
 
       <label class="grouphead" data-help="vshots">Shots</label>
-      <!-- What a storyboard sent from the Agent tab left out (`openShots`). -->
+      <!-- What a storyboard sent from the Assistant left out (`openShots`). -->
       <p class="sub" id="vsentnote"></p>
       <div id="vshots"></div>
       <!-- A shot's starting image from this computer: the row's Upload. -->
@@ -760,70 +772,12 @@
       <div id="vfgrid" class="wigrid"></div>
     </div>
   </section>
-  <div class="statuscard">
-    <div id="verr" class="err"></div>
-    <!-- The clip in flight, every latent frame looping: sd-cli's cheap preview,
-         at latent resolution, so blurry by nature (jobs.js, drawVideoPreview). -->
-    <details class="fold previewfold" id="vfold-preview" open>
-      <summary>Preview <span class="sub">(low resolution)</span></summary>
-      <canvas id="vlivepreview" class="livepreview" hidden></canvas>
-    </details>
-    <p class="sub" id="vprog"></p>
-  </div>
-  </div>
-
-  <!-- The Agent tab: a chat with a local vision-language model (`agent.js`).
-       A workspace like Video's: the rail's panels, and on the stage the
-       conversation in a column of the person's width with the composer
-       pinned under it. A chat keeps its own copy of the Image tab's settings;
-       the agent changes that copy, never the Image tab. -->
-  <div class="workspace" id="tab-agent" hidden>
-  <nav class="wsrail" aria-label="Agent">
-    <button type="button" class="btn btn-choice railbtn" data-panel="agent-current">Current</button>
-    <button type="button" class="btn btn-choice railbtn" data-panel="agent-favorites">Favorites</button>
-    <div class="railfoot">
-      <div class="runstop">
-        <button id="astop" class="btn btn-danger btn-block" hidden>Stop</button>
-      </div>
-      <!-- An empty stage: the chat on screen stays in Current. -->
-      <button type="button" id="anew" class="btn btn-run btn-block"
-        title="Start a new chat. The one on screen stays in Current.">New chat</button>
-    </div>
-  </nav>
-  <div class="stage astage" id="astage">
-    <div class="chatcol" id="chatcol">
-      <div class="chathead">
-        <input id="atitle" class="chattitle" placeholder="New chat" aria-label="Chat title">
-        <span class="sub" id="astate"></span>
-      </div>
-      <div class="chatlog" id="chatlog" data-empty="Ask for a prompt or a picture, attach a picture and ask about it, or say what you want got right or found out — the agent decides how."></div>
-      <div class="composer" id="acomposer">
-        <div class="chips" id="achips"></div>
-        <prompt-box>
-          <textarea id="atext" class="short" placeholder="Write to the agent: a fox in a red knitted hat, snowy forest — keep trying until the hat is red"></textarea>
-        </prompt-box>
-        <div class="btnrow composerrow">
-          <button type="button" id="apick" class="btn" title="Attach a picture from Outputs or Favorites">Choose…</button>
-          <button type="button" id="aupload" class="btn" title="Attach a picture from your computer (or paste or drop one)">Upload…</button>
-          <input type="file" id="afile" accept="image/*" multiple hidden>
-          <select id="amodel" class="composeragent" aria-label="Agent"
-            title="The agent this chat talks to. Settings → Agent sets the one new chats start with, and what it may change."></select>
-          <span class="grow"></span>
-          <button type="button" id="asend" class="btn" title="Send (Enter)">Send</button>
-        </div>
-        <p class="sub" id="amodelnote"></p>
-      </div>
-      <div class="chatgrip" id="chatgrip" title="Drag to change the width; double-click resets it"></div>
-    </div>
-  </div>
-  <section class="fpanel" id="panel-agent-session" aria-label="Session" hidden>
-    <header class="fphead"><b>Session</b><button type="button" class="fpclose" aria-label="Close Session">&times;</button></header>
-    <div class="fpbody">
-      <div id="asessionbody"></div>
-      <div class="checks"><label data-help="alarge"><input type="checkbox" id="alarge"> Large pictures</label></div>
-    </div>
+  <!-- The Assistant: a chat with the agent about this tab's work
+       (`assistant.js` fills it). -->
+  <section class="fpanel assistpanel" id="panel-vid-assist" aria-label="Assistant" hidden>
+    <header class="fphead"><b>Assistant</b><button type="button" class="fpclose" aria-label="Close Assistant">&times;</button></header>
   </section>
-  <section class="fpanel" id="panel-agent-story" aria-label="Story" hidden>
+  <section class="fpanel" id="panel-vid-story" aria-label="Story" hidden>
     <header class="fphead"><b>Story</b><button type="button" class="fpclose" aria-label="Close Story">&times;</button></header>
     <div class="fpbody">
       <div id="astorybody"></div>
@@ -837,36 +791,15 @@
         title="The pictures shots start from, drawn with the cast — any of the cast not drawn yet first. Optional">Draw the first frames</button>
       <button type="button" class="btn btn-run" id="astorydraw" hidden>Send to Video tab</button></div>
   </section>
-  <section class="fpanel" id="panel-agent-current" aria-label="Current" hidden>
-    <header class="fphead"><b>Current</b><button type="button" class="fpclose" aria-label="Close Current">&times;</button></header>
-    <div class="fpbody">
-      <div class="wihead">
-        <span class="wimodes">
-          <label><input type="radio" name="amode" value="open" checked> Click to open</label>
-          <label><input type="radio" name="amode" value="delete"> Click to delete</label>
-        </span>
-        <button id="adelete" class="btn btn-danger" hidden></button>
-        <button id="adeleteall" class="btn btn-danger" hidden></button>
-      </div>
-      <div id="agrid" class="wigrid chatgrid"></div>
-    </div>
-  </section>
-  <section class="fpanel" id="panel-agent-favorites" aria-label="Favorites" hidden>
-    <header class="fphead"><b>Favorites</b><button type="button" class="fpclose" aria-label="Close Favorites">&times;</button></header>
-    <div class="fpbody">
-      <div class="wihead">
-        <span class="wimodes">
-          <label><input type="radio" name="afmode" value="open" checked> Click to open</label>
-          <label><input type="radio" name="afmode" value="delete"> Click to delete</label>
-        </span>
-        <button id="afdelete" class="btn btn-danger" hidden></button>
-      </div>
-      <div id="afgrid" class="wigrid chatgrid"></div>
-    </div>
-  </section>
   <div class="statuscard">
-    <div id="aerr" class="err"></div>
-    <p class="sub" id="aprog"></p>
+    <div id="verr" class="err"></div>
+    <!-- The clip in flight, every latent frame looping: sd-cli's cheap preview,
+         at latent resolution, so blurry by nature (jobs.js, drawVideoPreview). -->
+    <details class="fold previewfold" id="vfold-preview" open>
+      <summary>Preview <span class="sub">(low resolution)</span></summary>
+      <canvas id="vlivepreview" class="livepreview" hidden></canvas>
+    </details>
+    <p class="sub" id="vprog"></p>
   </div>
   </div>
 
@@ -1166,16 +1099,10 @@
            is what most visits end with; neutral. -->
       <button type="button" id="lbdownload" class="btn btn-block"
         title="Save the picture as you see it to your computer, at full size, with its settings in the PNG when Settings says so.">Download</button>
-      <!-- The Agent tab's: the chat's picture, on the Image tab with its
-           settings, as a reopened work item. Above Save to output, the amber
-           main action, which ends the rail. -->
-      <button type="button" id="lbtoimage" class="btn btn-block" hidden
-        title="Open this picture on the Image tab, with the settings that made it.">Open on Image tab</button>
       <!-- The Image tab's keep-this-one, and the rail's main action there
            (amber): what is on screen into work/output/, look and all. Only
            generations are archived on their own. Shown from the start, since
-           the page opens on the Image tab; `showTab` hides it on Outputs (the
-           Agent tab shows it too). -->
+           the page opens on the Image tab; `showTab` hides it on Outputs. -->
       <button type="button" id="saveout" class="btn btn-run btn-block"
         title="Save the picture as you see it to work/output/ — the Outputs tab.">Save to output</button>
       <!-- A copy, beside the original: for keeping both. Neutral, since
@@ -1218,9 +1145,8 @@
       </div>
       <!-- The Image tab's model and numbers describe its own model: a chat's
            picture passes on the one that drew it (`escalateSettings`). -->
-      <div data-mirror="refmodel" class="notonagent"></div>
-      <div data-mirror="rsteps rcfg" class="notonagent"></div>
-      <p class="sub onagent">On the model that drew it, at that model's own steps and CFG.</p>
+      <div data-mirror="refmodel"></div>
+      <div data-mirror="rsteps rcfg"></div>
       <!-- One box, two numbers: the label says which. Whole image is the
            Refine pass panel's strength; area keeps its own (redraw.js). -->
       <div class="rdrow">
@@ -1304,9 +1230,8 @@
   <section class="fpanel" id="panel-hires" aria-label="Hi-res" hidden>
     <header class="fphead"><b>Hi-res</b><button type="button" class="fpclose" aria-label="Close Hi-res">&times;</button></header>
     <div class="fpbody">
-      <div data-mirror="hiresmodel" class="notonagent"></div>
-      <div data-mirror="hsteps hcfg" class="notonagent"></div>
-      <p class="sub onagent">On the model that drew it, at that model's own steps and CFG.</p>
+      <div data-mirror="hiresmodel"></div>
+      <div data-mirror="hsteps hcfg"></div>
       <div data-mirror="hstrength hiresscale"></div>
       <p class="sub" id="rdhiresnote"></p>
       <div data-mirror="hprompt" data-label="Prompt for this pass"></div>

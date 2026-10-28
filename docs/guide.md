@@ -804,7 +804,7 @@ into the prompt layout MiniMax's own guide sets out, and says who stays silent, 
 doesn't invent a narrator, a score or a closing sentence. A shot with none of them
 filled is sent as typed.
 
-**From a storyboard.** The Agent tab can write a storyboard for a short film and draw
+**From a storyboard.** The Video tab's Assistant can write a storyboard for a short film and draw
 its cast and first frames; its *Send to Video tab* puts the shots here as a new clip —
 first frames, references, voices and lines filled in — for you to change and generate.
 Each shot keeps both its first frame and its references: on H3 it follows the
@@ -837,13 +837,16 @@ Firefox on Linux may have no H.264 encoder; Chrome has.
 
 ## The agent
 
-The **Agent** tab is a chat with a small language model that runs on your own GPU, the
-way the image models do. It needs an agent model (Get models → *Agent models*; the 4B
-fits an 8 GB card). There is one *Send*: say what you want, and the agent decides
-whether that is an answer, a picture, a description, a session that improves or a
-comparison.
+The **Assistant** panel (on the Image and Video tabs' rails) is a chat with a small
+language model that runs on your own GPU, the way the image models do. It needs an agent
+model (Get models → *Agent models*; the 4B fits an 8 GB card). Each tab keeps its own
+chats — pick one, or *New chat*, at the top of the panel, with ☆ to keep it in
+Favorites and *Delete*. The Image tab's chats work on pictures (below); the Video tab's
+write storyboards for films (*From a storyboard*, under Video). There is one *Send*:
+say what you want, and the agent decides whether that is an answer, a picture, a
+description, a session that improves or a comparison.
 
-- **Talk about prompts.** Ask for a prompt, a rewrite, ideas. It can change the chat's
+- **Talk about prompts.** Ask for a prompt, a rewrite, ideas. It can change the tab's
   settings as it answers — each change is a card with its reason and an **Undo**.
 - **Draw.** "Draw a fox in a red hat", "three of those": it writes the prompt and draws
   as many as you said (one when you didn't).
@@ -855,15 +858,16 @@ comparison.
 - **Improve.** Ask it to get something right ("keep trying until the hat is red"),
   improve the round on screen ("make these better" — it judges that round first and keeps
   its seeds), or match a picture: attach one and say "find the best prompt for this".
-  This runs a *session*: the agent writes yes/no checks, draws a round, answers every check
+  The agent proposes a *session* — the goal, as a card with **Start** and **No thanks** —
+  and nothing is drawn until you press Start (a new message sets it aside). Then it writes yes/no checks, draws a round, answers every check
   for every picture, changes one or two settings and draws again — until a picture
   passes, it decides it can't do better, or the rounds run out. A picture attached to the
   message that starts it is the **picture to match**: the checks are written from it, and
   every round is judged beside it.
 - **Compare.** Ask it to find something out ("what's the best CFG for this?", "which
   model draws hands better?"). The agent picks the setting and the values to try (CFG,
-  steps, the prompt, the negative prompt or the model, whichever it may change); yasdig
-  then draws one round per value on the **same seeds**, so the value is the only
+  steps, the prompt, the negative prompt or the model, whichever it may change) and asks
+  first, as a session does; on Start yasdig draws one round per value on the **same seeds**, so the value is the only
   difference, and the agent answers every check for every picture without changing
   anything. After the last round a note gives the counts — per value, how many pictures
   passed every check, and each check's tally — and the agent answers from them. The value
@@ -871,19 +875,19 @@ comparison.
   what it was. A value it may not use (an unticked setting, a locked CFG) is left out with a
   note, and a comparison needs two values.
 - **Either way**, the pictures
-  land in Current on the Image tab like any generation. Each is marked with its answers
+  land on the stage and in Current like any generation. Each is marked with its answers
   (✓✗), the ones the agent kept, and — since a small model is a lenient judge of its
   own work — the ones every check said yes to. The *Session* panel (goal, what a comparison
   tries, the picture to match, checks, round) opens when one starts, or when you come back
   to a chat whose session is still going, and closes when you open another chat or a new one.
-  Opened on the Image tab, a picture the agent drew says so in *Info*, with its round and
-  the agent's reason; the chat's name there takes you back to the chat.
+  A picture the agent drew says so in *Info*, with its round and the agent's reason; the
+  chat's name there opens the chat.
 
-**A chat starts on the Image tab's model.** A new chat takes the model picked on the
-Image tab when you first write, with that model's saved defaults (Settings → *Per
-model*) and its Turbo LoRA when you have it, as the Image tab's *Turbo* does — nothing
-else. From there the chat keeps the settings the agent sets; it never changes the Image
-tab while you work there.
+**The agent works with the Image tab's settings.** What the boxes say when you write is
+what it starts from; what it changes, you see change in the boxes; Undo puts them back.
+Change a box while it works and it draws with yours from its next round. Coming back to
+a chat sets the boxes to that chat's settings. The source picked in *Image to image* is
+not the agent's: its pictures are drawn from noise.
 
 **Settings → Agent** says what the agent may do, in every chat: a tick per setting it
 may change and per pass it may run on a keeper. It starts with the prompt, negative
@@ -895,17 +899,15 @@ locks CFG and the negative prompt, which would do nothing — on that model: wit
 agent can switch to one that takes CFG in the same breath ("compare CFG on SDXL"). A Turbo LoRA locks nothing: as
 on the Image tab it sets steps and CFG, and the agent keeps them unless you ask. A pass it runs
 (Hi-res, Refine, an Edit on a model that can) is a History step on that picture. The
-agent a new chat talks to is set there too; the picker beside the message box switches
-it for one chat.
+agent a new chat talks to is set there too; the picker beside *Send* switches it for one
+chat.
 
-**Click a picture in the chat** to open it in Refine & adjust, on the Agent tab: ←/→ step
-through the chat's pictures, *Save to output* keeps one, *Open on Image tab* takes it
-there with its settings. Its passes run on the model that drew it, at that model's own
-steps and CFG. A session drawing its next round meanwhile leaves it alone.
+**Click a picture in the chat** to open it on the Image tab, with the settings that drew
+it.
 
-A round of one picture is drawn at the chat's width, up to 90% of the screen high; a round
-of several is a row of small ones. *Large pictures* in the Session panel draws every round
-large, one picture under the other (remembered per browser).
+A round of one picture is drawn at the panel's width, up to 90% of the screen high; a
+round of several is a row of small ones. *Large pictures*, under the chat, draws every
+round large, one picture under the other (remembered per browser).
 
 In plain chat the agent draws one picture, or as many as you ask for (up to 8); it keeps
 the last round's seeds when you ask for a change to those pictures, and draws new ones
@@ -919,9 +921,8 @@ difference between rounds is the change.
 A session is a run of steps on the job queue — a reply, a picture, a pass — so a Refine
 you press on the Image tab runs between them, and **Stop** ends it straight away. The
 agent's model loads for each reply and lets go of the GPU after, so it never shares the
-card with the image model: a bigger agent costs load time, not render time. Chats are
-kept in Current with a star for Favorites, like clips; *Clear agent chats* in Settings
-deletes the unstarred ones when the server closes.
+card with the image model: a bigger agent costs load time, not render time. *Clear agent
+chats* in Settings deletes the unstarred chats when the server closes.
 
 **Skills** are the notes the agent is given with each reply: how yasdig works, and how
 the chat's model wants its prompts written. Add your own as markdown files in

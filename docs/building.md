@@ -19,7 +19,7 @@ it (the folder is gitignored):
 git clone --recursive https://github.com/leejet/stable-diffusion.cpp
 ```
 
-For the Agent tab, put llama.cpp beside it at the tag release builds use (also
+For the Assistant, put llama.cpp beside it at the tag release builds use (also
 gitignored; without it the build works and has no agent):
 
 ```sh

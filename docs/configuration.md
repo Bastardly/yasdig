@@ -156,7 +156,7 @@ rest and can go anywhere under `models/`:
 | the tokenizer | [`tokenizer.json`](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/tree/main/tokenizer) |
 | the VAE — Flux.2's | the same file as Flux.2 Klein's, above |
 
-**Agent models** (the [Agent tab](guide.md#the-agent)) are a language model and,
+**Agent models** (the [Assistant](guide.md#the-agent)) are a language model and,
 for one that sees pictures, its vision projector (an `mmproj` file), both GGUF, in a
 folder of their own under `models/agents/`. A folder holding one model and one
 projector is one agent — that is how a projector is paired, since their headers can't
@@ -275,7 +275,7 @@ where it says something:
   This one *is* recursive, so `models/loras/sdxl/` works. See [LoRAs](guide.md#loras).
 - `[sd].upscaler_dir` — folder of ESRGAN upscaler models (default `upscalers/` inside
   the models dir). See [Upscalers](guide.md#upscalers).
-- `[sd].agent_dir` — folder of the Agent tab's models (default `agents/` inside the
+- `[sd].agent_dir` — folder of the Assistant's models (default `agents/` inside the
   models dir), left out of the checkpoint scan. See [Agent models](#get-a-model).
 - `[llm].binary` — path to the agent's driver, `yasdig-llm`. Leave it out to use the one
   built into a release executable; a checkout sets it to `llama.cpp/build-yasdig/bin/`.
@@ -325,7 +325,7 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `clear_workitems_on_close` | when **Close server** is pressed, delete every work item on the Current shelf. Default `false`. Favorites are never touched |
 | `clear_outputs_on_close` | the same for `work/output/` — saved images and uploads. Default `false`. Favorite outputs are never touched |
 | `clear_videos_on_close` | the same for `work/videos/` (each clip with its enlarged versions); starred clips in `user/favorite_clips/` are kept. Default `false` |
-| `clear_chats_on_close` | the same for `work/chats/`, the Agent tab's chats; starred ones in `user/favorite_chats/` are kept, and so are the pictures their rounds made (those are work items). Default `false` |
+| `clear_chats_on_close` | the same for `work/chats/`, the Assistant's chats; starred ones in `user/favorite_chats/` are kept, and so are the pictures their rounds made (those are work items). Default `false` |
 | `max_image_side` | the longest side Upscale, Hi-res or a generate's output upscale may produce (default 8192, 1024–32768). Past it, the pass is refused with a message naming this setting and the GPU's own limit, which nothing can raise (16384 on a 7900 XTX). Larger images are slow to show in the page |
 | `[agent]` | what the agent may do in every chat, read afresh each turn. `knobs`: the settings it may change, from `prompt`, `negative`, `cfg_scale`, `steps`, `size` and `model` (default all but `steps`; with `model` it may pick any installed model); `actions`: the passes it may run on a keeper, from `hires`, `refine` and `edit` (default none); `agent`: the agent model a new chat starts with (default the first installed). `film`: it may write storyboards for the Video tab and draw their pictures (default on). Values it writes are held to the limits in this table. Set from Settings → Agent. Page-level |
 | `[variables]` | named word lists a prompt draws from — `animal = ["crab", "horse"]` makes `{animal}` in any prompt one of them. Defaults: `animal = ["cat", "fox", "bear"]`, `color = ["red", "blue", "golden"]`; a file with no table gets these, and a table emptied in Settings stays empty. See [Prompt variables](guide.md#prompt-variables) |

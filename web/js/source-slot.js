@@ -122,7 +122,7 @@ function openPickerFor(onPick, sounds) {
   drawPicker();
 }
 
-// The picker for anyone else who wants a stem: the Agent tab's composer.
+// The picker for anyone else who wants a stem: the Assistant's composer.
 export function choosePicture(onPick) {
   openPickerFor(onPick, false);
 }

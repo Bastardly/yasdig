@@ -37,7 +37,7 @@ How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the detail
   src/sd.rs        sd-cli subprocess wrapper (txt2img + img2img + vid_gen)
   src/llm.rs       the agent's llama.cpp driver as a subprocess: one turn, framed stdout
   src/agents.rs    the agent's models: GGUF headers read, model and projector paired by folder
-  src/agent/       the Agent tab: chats (chat.rs), the knob table and its whitelist (knobs.rs,
+  src/agent/       the Assistant panels: chats (chat.rs), the knob table and its whitelist (knobs.rs,
                    toolkit.rs), the reply grammar (schema.rs), what a turn is shown
                    (context.rs), the bounded workflow (session.rs), skills, routes
   llm/             yasdig-llm.cpp: one chat turn over llama.cpp's libraries, built by build.rs

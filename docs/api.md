@@ -216,14 +216,16 @@ needs a Vulkan device and nothing else.
   ```json
   { "jobs": [{ "id": 7, "kind": "generate", "label": "sdxl-turbo", "done": 1,
                "total": 4, "state": "running", "skipping": false }],
-    "latest_seq": 12, "notices": [{ "seq": 9, "message": "…" }],
+    "latest_seq": 12, "changed": 31, "notices": [{ "seq": 9, "message": "…" }],
     "progress": { "busy": true, "phase": "sampling", "step": 7, "steps": 20, "rate": "1.23s/it" } }
   ```
   `kind` is `generate`, `img2img`, `refine`, `hires`, `video`, `enlarge` or `convert`;
   `total` is `null` for a loop; `state` is `running`, `stopping` or `queued`;
   `skipping` is true while the image in flight is being cancelled by `/jobs/skip`.
   `latest_seq` moves whenever a job publishes an image — fetch it from
-  `GET /jobs/latest`. `notices` are the last few failed runs, which have no request
+  `GET /jobs/latest`. `changed` moves on every change to the queue (a job queued,
+  started, past a step or an image, relabelled, ended, failed or stopped, an image
+  published) — compare it, never read meaning into it. `notices` are the last few failed runs, which have no request
   of their own to fail. Answered on the connection thread.
 - `GET /jobs/latest` — the newest image any job made, in the shape above; `404` before
   the first.
@@ -385,8 +387,6 @@ needs a Vulkan device and nothing else.
 - `POST /workitems/open` — `{ "id": "1758104523000-12345" }`. Copies the archived image
   back into the working set and returns the `/generate` shape with a fresh `image_id`,
   so the escalations and the sliders work on it immediately. No diffusion runs.
-  `"pane": "agent"` opens it in the Agent tab's viewer instead (`Slot::Chat`), which
-  takes neither the Image tab's picture nor a round the agent is drawing.
 - `POST /workitems/delete` — `{ "ids": ["…", "…"] }`. Returns `{ "deleted": 2 }`.
 - `POST /favorites/add` — `{ "ids": ["…", "…"] }`. Moves those work items — image,
   thumbnail and sidecar — into `user/favorite/`, out of reach of `Delete all` and the
@@ -622,7 +622,8 @@ needs a Vulkan device and nothing else.
 
 ### The agent
 
-The Agent tab's chats (`work/chats/{id}/`, starred ones in `user/favorite_chats/`). Every
+The Assistant panels' chats (`work/chats/{id}/`, starred ones in `user/favorite_chats/`),
+each the Image or the Video tab's (`context`). Every
 route but `/agent/send` (and a `/chats/film` edit that leaves a picture to draw) reads or
 writes files and answers at once; that one queues a *leg* on the job queue (kind `agent`) and answers `{ "job": id }` — the reply arrives in
 the chat, whose `rev` moves on every write.
@@ -633,11 +634,19 @@ the chat, whose `rev` moves on every write.
   this build has the driver, the agent a new chat starts with, and the table Settings →
   Agent draws its whitelist from (`[agent]` in `user/settings.toml`).
 - `GET /chats` / `GET /favorite-chats` — `[{id, title, updated_ms, created_ms, favorite,
-  state, thumb}]`, newest change first; Current lists starred ones too.
-- `POST /chats/new` — `{ template, agent?, video? }`: a chat on that model, whose rounds
-  start from its saved defaults (and its catalog Turbo LoRA when installed). `agent`
-  absent is Settings' default; `video` is the Video tab's model, which a storyboard is written for.
-  Answers `{ chat, toolkit }`.
+  state, thumb, context}]`, newest change first; Current lists starred ones too.
+  `context` is `"image"` or `"video"`: the tab whose panel holds it (a chat from before
+  the panels is the Image tab's, or the Video tab's when it has a film).
+- `POST /chats/new` — `{ template, agent?, video?, context?, settings? }`: a chat on that
+  model. `context` (default `image`) is the panel; an Image chat's `settings` are the
+  Image tab's controls as a `/generate` body, which its rounds draw with — without them,
+  its model's saved defaults (and its catalog Turbo LoRA when installed). A Video chat
+  makes films, and only a Video chat does. `agent` absent is Settings' default; `video`
+  is the Video tab's model, which a storyboard is written for. Answers `{ chat, toolkit }`.
+- `POST /chats/settings` — `{ id, settings }`: an Image chat's settings replaced by the
+  Image tab's controls as they are now (a `/generate` body), allowed while the agent
+  works — the next round or turn draws with them. The same settings (numbers alike
+  whatever their spelling) are no write. `409` on a Video chat.
 - `GET /chats/{id}` — `{ chat, toolkit }`: the chat as stored, and the knob table
   resolved for it under Settings → Agent — each knob's `allowed`, limits, `locked` reason
   and value, the passes, the models it could pick, `locks`, the film's `video` model
@@ -648,9 +657,10 @@ the chat, whose `rev` moves on every write.
 - `GET /chats/{id}/thumb.png`, `GET /chats/{id}/img/{name}.png` — the chat's own copies
   of its pictures; names are `[a-z0-9-]+.png`.
 - `POST /chats/agent` — `{ id, agent }`; `POST /chats/rename` — `{ id, title }`.
-- `POST /agent/send` — `{ chat, text, images: [{kind: "item"|"output", id}], video? }`: a
-  chat turn, whose reply may talk, draw, describe an attached picture as a prompt, start a
-  session (a plan turn follows in the same job), or write a film's storyboard (a story
+- `POST /agent/send` — `{ chat, text, images: [{kind: "item"|"output", id}], video?,
+  settings? }`: a chat turn — an Image chat's `settings` written in first, as
+  `/chats/settings` does — whose reply may talk, draw, describe an attached picture as a prompt, propose a
+  session or a comparison (`chat.session.proposal`, which waits for `/agent/session`), or write a film's storyboard (a story
   turn follows in the same job; its pictures wait for `/chats/film {draw: true}`). `video` is the Video tab's model now. At most four pictures, copied into the
   chat. `409` while the agent is working on the chat.
 - `POST /chats/film` — `{ id, every?, member?, name?, look?, picture?, shot?, text?,
@@ -680,6 +690,10 @@ the chat, whose `rev` moves on every write.
   words).
 - `POST /agent/undo` — `{ chat, change }`: put an applied change's settings back, if they
   still hold what it set (else `409`). Recorded as a change of yours.
+- `POST /agent/session` — `{ chat, start }`: answer the proposed session. `start: true`
+  begins it (a plan turn first) and answers `{job}`; `false` drops it with a note and
+  answers the chat. `409` with no proposal, or while the agent is working on the chat.
+  A new `/agent/send` drops an unanswered one.
 - `POST /agent/stop` — `{ chat }`: end the chat's leg, killing a reply or a render in flight.
 - `POST /chats/delete` / `POST /favorite-chats/delete` — `{ ids }`, one shelf each.
   `/favorite-chats/add` and `/favorite-chats/remove` move chats between the two. A chat

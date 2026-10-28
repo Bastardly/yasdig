@@ -50,7 +50,7 @@
 //!                        it's cheap enough to drive from a slider
 //!   GET  /workitems   -> every archived generation, newest first, settings and all
 //!   GET  /workitems/{id}/thumb.png
-//!   POST /workitems/open   -> {id, pane?} reopen one as a live image_id (pane "agent": the Agent tab's viewer)
+//!   POST /workitems/open   -> {id} reopen one as a live image_id
 //!   POST /workitems/delete -> {ids:[..]} remove them from disk
 //!   POST /favorites/add    -> {ids:[..]} move them to user/favorite/, so
 //!                        "delete all" on the grid can't reach them
@@ -203,7 +203,7 @@ enum JobKind {
     Open {
         id: String,
         shelf: Shelf,
-        /// `Slot::Image`, or `Slot::Chat` for the Agent tab's viewer.
+        /// `Slot::Image`, or `Slot::Agent` for the agent's keeper.
         slot: pipeline::Slot,
     },
     /// Reopen a finished image from `work/output/` as a live result in the
@@ -858,7 +858,7 @@ fn route(
         }
     }
 
-    // The Agent tab's own (`agent::routes`): chats, their pictures, a turn.
+    // The Assistant panels' (`agent::routes`): chats, their pictures, a turn.
     if let Some(r) = agent::routes::route(conn, &req.method, &req.path, &req.body, cfg, lanes, monitor) {
         return r;
     }
@@ -2088,22 +2088,12 @@ fn handle_open_workitem(
     #[derive(serde::Deserialize)]
     struct Dto {
         id: String,
-        /// `agent` opens it in the Agent tab's viewer (`Slot::Chat`).
-        #[serde(default)]
-        pane: Option<String>,
     }
 
     match parse_json::<Dto>(conn, body)? {
         // 400, same staleness contract as the escalations: an id that isn't
         // there means the UI's copy of the grid is stale, not that we broke.
-        Some(dto) => {
-            let slot = match dto.pane.as_deref() {
-                None | Some("image") => pipeline::Slot::Image,
-                Some("agent") => pipeline::Slot::Chat,
-                Some(other) => return conn.respond(400, "application/json", error_json(&format!("'{other}' is not a pane")).as_bytes()),
-            };
-            submit(conn, &lanes.display, JobKind::Open { id: dto.id, shelf, slot }, 400)
-        }
+        Some(dto) => submit(conn, &lanes.display, JobKind::Open { id: dto.id, shelf, slot: pipeline::Slot::Image }, 400),
         None => Ok(()),
     }
 }

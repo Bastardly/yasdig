@@ -75,6 +75,8 @@ pub struct Toolkit {
     pub video: Option<VideoView>,
     /// Why this chat can't make a film, or `None` when it can.
     pub film_off: Option<String>,
+    /// An Image chat's: the settings shown are the Image tab's own controls.
+    pub image_tab: bool,
     /// The agent model sees pictures. Set by a turn, which knows the model.
     #[serde(skip)]
     pub vision: bool,
@@ -227,7 +229,12 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     let installed: Vec<VideoView> = cfg.video_models().iter().filter(|m| m.exists).map(VideoView::of).collect();
     let video = chat.video.as_deref().and_then(|name| installed.iter().find(|v| v.name == name)).cloned();
     let mut t = build(&rules, &shown(cfg, chat, profile), &locks, models, profile.map(|p| p.family));
-    t.film_off = film_off(&rules, image, chat.video.as_deref(), video.as_ref());
+    t.film_off = match chat.context {
+        // In context: a film is begun from the Video tab's panel.
+        super::chat::Pane::Image => Some("films are made from the Assistant on the Video tab".into()),
+        super::chat::Pane::Video => film_off(&rules, image, chat.video.as_deref(), video.as_ref()),
+    };
+    t.image_tab = chat.context == super::chat::Pane::Image;
     t.video = video;
     t
 }
@@ -333,6 +340,7 @@ pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelCh
         locks: locks.clone(),
         video: None,
         film_off: Some("no video model".into()),
+        image_tab: false,
         vision: false,
         rules: rules.clone(),
     }

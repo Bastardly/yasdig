@@ -116,11 +116,6 @@
   --thumb-h-pick: 140px; /* the first-frame picker */
   --thumb-h-chosen: 120px; /* the one chosen image, above its buttons */
   --star: 28px;          /* the favourite star's disc on a thumbnail */
-  --chat-w: 760px;       /* the Agent tab's conversation, before it is dragged:
-                            a line of about 90 characters, and a round of four
-                            pictures side by side at a size a face reads at */
-  --chat-min: 480px;
-  --chat-max: 1400px;
   --chat-pic: 160px;     /* a picture in the conversation, its height */
   --story-pic: 144px;    /* a cast picture or a keyframe in the Story panel, its width */
   --story-text-h: 100px; /* a Story panel text box, before it is dragged taller */
@@ -653,9 +648,6 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    from page load, permanently, with close() having no attribute to remove. */
 #lightbox[open], #clipbox[open] { display: flex; }
 #lightbox::backdrop, #clipbox::backdrop { background: var(--scrim); }
-/* A chat's picture (the Agent tab's pane, `showTab`): its passes run on the
-   model that drew it, so the Image tab's pass model and numbers aren't shown. */
-#lightbox:not(.onagent) .onagent, #lightbox.onagent .notonagent { display: none; }
 /* The rail: a narrow column of panel toggles, and at its foot what acts on
    the whole picture. Fixed width; it scrolls on its own on a short window. */
 #lightbox, #clipbox { --railw: var(--rail-w); }
@@ -1111,16 +1103,14 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    420px controls card stranded beside empty space. One column, full width.
    The number is a literal because it has to be: custom properties are not
    allowed in a media query, so --col-* can't be used here. */
-/* ============================ The Agent tab ============================ */
+/* ============================ The Assistant ============================ */
 
-/* The conversation: a centred column of the person's width (`--chat-w`, the
-   grip on its right edge), its messages scrolling and the composer pinned
-   under them. */
-.astage { align-items: stretch; padding: var(--sp-3) var(--sp-4); }
-.chatcol {
-  position: relative; display: flex; flex-direction: column; gap: var(--sp-2);
-  width: clamp(var(--chat-min), var(--chat-w), min(var(--chat-max), 100%)); margin: 0 auto; min-height: 0;
-}
+/* The conversation, a panel of the Image and Video tabs: tall from the start
+   and wider or taller by its corner (`both`), its messages scrolling and the
+   composer pinned in its footer. */
+.assistpanel { --fpanel-w: min(520px, 90vw); height: 72vh; }
+.chatcol { display: flex; flex-direction: column; gap: var(--sp-2); overflow: hidden; }
+.chathead select { flex: 1; min-width: 0; }
 .chathead { display: flex; align-items: baseline; gap: var(--sp-3); }
 .chattitle { flex: 1; min-width: 0; font-size: var(--fs-title); background: transparent; border-color: transparent; }
 .chattitle:hover, .chattitle:focus { border-color: var(--ink-500); }
@@ -1132,11 +1122,6 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   overflow-wrap: anywhere;
 }
 .chatlog:empty::after { content: attr(data-empty); color: var(--text-dim); margin: auto; text-align: center; max-width: 36em; }
-.chatgrip {
-  position: absolute; top: 0; bottom: 0; right: calc(-1 * var(--sp-3)); width: var(--sp-2);
-  cursor: ew-resize; border-radius: var(--r-sm);
-}
-.chatgrip:hover { background: var(--ink-500); }
 
 .chatmsg { display: flex; flex-direction: column; gap: var(--sp-2); max-width: 100%; }
 .chatmsg.user {
@@ -1167,7 +1152,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chatpic img { height: var(--chat-pic); width: auto; max-width: 100%; object-fit: contain; display: block; border-radius: var(--r-sm); }
 /* A large round: one picture under the other at the column's width, capped in
    height. Always for a round of one; every round with the Session panel's
-   Large pictures (`#chatlog.large`). A picture smaller than the column keeps
+   Large pictures (`.chatlog.large`). A picture smaller than the column keeps
    its own size; it is never blown up. */
 .chatpics.large, .chatlog.large .chatmsg.batch .chatpics { flex-direction: column; align-items: flex-start; }
 .chatpics.large .chatpicimg, .chatlog.large .chatmsg.batch .chatpicimg { display: block; }
@@ -1206,7 +1191,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    numbered list with the keyframe a shot starts from beside its words. */
 /* Wide from the start and wider or taller by its corner (`both`); the cast
    fills as many columns as the width holds. */
-#panel-agent-story { --fpanel-w: min(680px, 90vw); }
+#panel-vid-story { --fpanel-w: min(680px, 90vw); }
 .storycast { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: var(--sp-3); }
 .storymember, .storyshotbody { display: flex; gap: var(--sp-2); align-items: flex-start; }
 .storypic, .storykey { flex: 0 0 auto; width: var(--story-pic); line-height: 0; }
@@ -1229,8 +1214,8 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .storyshothead { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-1); }
 .storyshothead select { width: auto; }
 
-/* The composer, under the conversation. */
-.composer { display: flex; flex-direction: column; gap: var(--sp-2); padding-top: var(--sp-2); border-top: var(--line); }
+/* The composer, the panel's footer. */
+.composer { gap: var(--sp-2); }
 .composerrow { align-items: center; }
 .composerrow .grow { flex: 1; }
 /* The chat's agent: as wide as its name, so the row keeps its buttons. */
@@ -1240,16 +1225,6 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chip { position: relative; line-height: 0; }
 .chip img { height: 56px; width: auto; border-radius: var(--r-sm); }
 .chip .hint { position: absolute; top: 2px; right: 2px; line-height: 1; background: var(--scrim-soft); }
-
-/* A chat's tile: its newest picture, or its title where it has none yet.
-   `:not(.star)`: the star is the tile's other child (`.wigrid .star`). */
-.chatgrid .chattile > button:not(.star) { display: flex; flex-direction: column; align-items: center; justify-content: center;
-  min-width: calc(var(--thumb-h) * .75); min-height: var(--thumb-h); background: var(--ink-800); }
-.chatgrid .chattile img { height: calc(var(--thumb-h) - 2 * var(--fs-sm)); }
-.chattiletitle {
-  line-height: var(--lh-body); font-size: var(--fs-sm); color: var(--text-dim); padding: 0 var(--sp-2);
-  max-width: calc(var(--thumb-h) * 1.2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 
 @media (max-width: 899px) {
   .col-controls, .col-result, .workitems { flex-basis: 100%; max-width: none; }

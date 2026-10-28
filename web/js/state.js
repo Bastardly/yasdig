@@ -38,7 +38,7 @@ export const S = {
   // generate, refine and hi-res — so a value living only in the DOM is reset by
   // the very actions you'd want it to survive.
   upFactor: 2,
-  // Which of the image panes is showing: `image`, `outputs` or `agent`.
+  // Which of the image panes is showing: `image` or `outputs`.
   pane: 'image',
   // The agent's note on the work item last reopened (`{ id, chat, title, round,
   // reason }`), shown in Info while that item's picture is up.
@@ -55,10 +55,6 @@ export const PANES = {
   // is already-filtered pixels, and diffusing over those is invariant 1. The two
   // places that read `result` reach it with `?.` for exactly this row.
   outputs: { err: 'oerr' },
-  // The Agent tab's: like Outputs, a picture that only exists in the viewer.
-  // Its passes run on the picture's own model (`escalateSettings`), so it has
-  // no pickers either.
-  agent: { err: 'aerr' },
 };
 export const P = (k) => $(PANES[S.pane][k]);
 

@@ -16,7 +16,7 @@
 
 use super::chat::{
     ActionRec, ActionState, Change, ChangeState, Chat, CheckRow, Film, FilmShot, ImageRef, Member, MemberKind, Mode, Msg, Next, Phase,
-    State, Sweep,
+    Proposal, State, Sweep,
 };
 use super::knobs::{self, Locks, MAX_BATCH, MAX_ROUNDS};
 use super::toolkit::Toolkit;
@@ -976,6 +976,7 @@ pub fn close_session(chat: &mut Chat) {
     }
     s.checks.clear();
     s.sweep = None;
+    s.proposal = None;
     s.rounds = 0;
     s.per_round = 0;
     s.count = 0;
@@ -984,6 +985,32 @@ pub fn close_session(chat: &mut Chat) {
     if matches!(s.next, Next::Batch | Next::Critique | Next::Escalate) {
         s.next = Next::Nothing;
     }
+}
+
+/// The person's *Start* on a proposed session: it begins as the reply asked,
+/// and the leg goes on to its plan turn. A comparison's `before` is read now,
+/// since the person may have moved the knob while it waited.
+pub fn start_proposal(chat: &mut Chat) -> Result<(), String> {
+    let p = chat.session.proposal.take().ok_or("there is no session waiting to start")?;
+    begin(chat, &p.goal);
+    if let Some(mut sw) = p.sweep {
+        if let Some(k) = knobs::knob(&sw.knob) {
+            sw.before = knobs::value_of(&chat.settings, k);
+        }
+        chat.session.per_round = p.per_round;
+        chat.session.rounds = p.rounds;
+        chat.session.sweep = Some(sw);
+    }
+    chat.session.next = Next::Turn;
+    Ok(())
+}
+
+/// The person's *No thanks*: the proposal goes, with a note saying so. A
+/// model the comparison switched to stays, as an undoable change.
+pub fn decline_proposal(chat: &mut Chat) -> Result<(), String> {
+    chat.session.proposal.take().ok_or("there is no session waiting to start")?;
+    chat.note("Not started.");
+    Ok(())
 }
 
 /// Start a session on `goal`: its own checks (the plan turn writes them),
@@ -1211,12 +1238,13 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
                     chat.session.fresh = r.seeds.as_deref() != Some("same");
                     Next::Batch
                 }
-                // The leg goes on to the plan turn, which writes the checks
-                // and sizes the session.
+                // A session is proposed, never begun: it draws round after
+                // round on its own, so the person starts it (`start_proposal`),
+                // and its plan turn then writes the checks and sizes it.
                 Some("improve" | "session") => match r.goal.as_deref().map(str::trim).filter(|g| !g.is_empty()) {
                     Some(goal) => {
-                        begin(chat, goal);
-                        Next::Turn
+                        chat.session.proposal = Some(Proposal { n, goal: goal.to_string(), sweep: None, per_round: 0, rounds: 0 });
+                        Next::Nothing
                     }
                     None => {
                         notes_out.push("The agent wanted to run a session but gave it no goal.".into());
@@ -1232,11 +1260,14 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
                     })).unwrap_or(locks);
                     match sweep_from(chat, &r, t, locks, &mut notes_out) {
                         Some(sw) => {
-                            begin(chat, &goal);
-                            chat.session.per_round = r.count.unwrap_or(2).clamp(1, MAX_BATCH);
-                            chat.session.rounds = sw.values.len() as u32;
-                            chat.session.sweep = Some(sw);
-                            Next::Turn
+                            chat.session.proposal = Some(Proposal {
+                                n,
+                                goal,
+                                per_round: r.count.unwrap_or(2).clamp(1, MAX_BATCH),
+                                rounds: sw.values.len() as u32,
+                                sweep: Some(sw),
+                            });
+                            Next::Nothing
                         }
                         None => Next::Nothing,
                     }
@@ -1969,7 +2000,7 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_reply_starts_a_session_on_its_own_goal_and_the_plan_turn_follows() {
+    fn a_chat_reply_proposes_a_session_that_starts_only_when_the_person_says() {
         let mut c = chat();
         c.session.goal.clear();
         c.session.checks = vec!["an old check".into()];
@@ -1980,6 +2011,11 @@ mod tests {
         assert_eq!(next_step(&c), Step::End, "no goal, no session");
         assert!(matches!(c.messages.last(), Some(Msg::Note { .. })));
         apply_reply(&mut c, Mode::Chat, start("A fox wearing a red hat"), &t, &Locks::default(), vec![], Default::default());
+        assert_eq!(next_step(&c), Step::End, "proposed, not begun");
+        let agent = c.messages.iter().rev().find_map(|m| matches!(m, Msg::Agent { .. }).then(|| m.n()));
+        assert_eq!(c.session.proposal.as_ref().map(|p| p.n), agent, "drawn under its message");
+        start_proposal(&mut c).unwrap();
+        assert!(c.session.proposal.is_none() && start_proposal(&mut c).is_err());
         assert_eq!(c.session.goal, "A fox wearing a red hat");
         assert!(c.session.checks.is_empty(), "the plan writes its own");
         assert_eq!(next_step(&c), Step::Turn(Mode::Plan));
@@ -1994,6 +2030,8 @@ mod tests {
         let go = |c: &mut Chat, mode: Mode, v: Value| apply_reply(c, mode, reply(v), &t, &Locks::default(), vec![], Default::default());
         go(&mut c, Mode::Chat, json!({"notes": "a comparison", "action": "compare", "goal": "Which CFG keeps the hat red?",
                                       "vary": "cfg_scale", "values": ["4", "9", "4", "x"], "count": 2, "reply": "Let's see."}));
+        assert_eq!(next_step(&c), Step::End, "proposed, not begun");
+        start_proposal(&mut c).unwrap();
         let sw = c.session.sweep.clone().expect("a comparison");
         assert_eq!(sw.values, [json!(4.0), json!(9.0)], "read as numbers, once each; the unreadable dropped");
         assert_eq!(sw.before, json!(6.0));
@@ -2053,6 +2091,7 @@ mod tests {
             "goal": "best CFG", "vary": "cfg_scale", "values": ["3", "5", "7"], "count": 2, "reply": ""}));
         apply_reply(&mut c, Mode::Chat, ask("moss"), &t, &t.locks.clone(), vec![], Default::default());
         assert_eq!(c.settings["template"], json!("moss"));
+        start_proposal(&mut c).unwrap();
         assert_eq!(c.session.sweep.as_ref().map(|s| s.values.len()), Some(3), "{:?}", c.messages);
         assert_eq!(next_step(&c), Step::Turn(Mode::Plan));
         // Staying on a model without CFG, there is nothing to compare.
@@ -2062,6 +2101,29 @@ mod tests {
         c2.session.mode = Mode::Chat;
         apply_reply(&mut c2, Mode::Chat, ask("klein"), &t, &t.locks.clone(), vec![], Default::default());
         assert!(c2.session.sweep.is_none());
+    }
+
+    #[test]
+    fn a_proposal_turned_down_or_talked_past_never_runs() {
+        let mut c = chat();
+        c.session.goal.clear();
+        c.session.mode = Mode::Chat;
+        let t = tk(&c);
+        let ask = || reply(json!({"notes": "", "action": "compare", "goal": "best CFG", "vary": "cfg_scale", "values": ["3", "7"], "reply": ""}));
+        apply_reply(&mut c, Mode::Chat, ask(), &t, &Locks::default(), vec![], Default::default());
+        decline_proposal(&mut c).unwrap();
+        assert!(c.session.proposal.is_none() && c.session.sweep.is_none());
+        assert!(matches!(c.messages.last(), Some(Msg::Note { text, .. }) if text == "Not started."));
+        assert_eq!(next_step(&c), Step::End);
+        // A new message closes the session it hasn't answered.
+        apply_reply(&mut c, Mode::Chat, ask(), &t, &Locks::default(), vec![], Default::default());
+        close_session(&mut c);
+        assert!(c.session.proposal.is_none());
+        // The knob moved while it waited: the comparison puts back what is there now.
+        apply_reply(&mut c, Mode::Chat, ask(), &t, &Locks::default(), vec![], Default::default());
+        c.settings["cfg_scale"] = json!(5.0);
+        start_proposal(&mut c).unwrap();
+        assert_eq!(c.session.sweep.as_ref().map(|s| s.before.clone()), Some(json!(5.0)));
     }
 
     #[test]
@@ -2082,6 +2144,7 @@ mod tests {
         c.messages.push(Msg::User { n: c.next_n(), ms: 0, text: "find the best prompt for this".into(), images: vec![img("ref")] });
         let t = tk(&c);
         apply_reply(&mut c, Mode::Chat, reply(json!({"notes": "", "action": "improve", "goal": "Match the picture", "reply": ""})), &t, &Locks::default(), vec![], Default::default());
+        start_proposal(&mut c).unwrap();
         assert_eq!(c.session.reference, [img("ref")]);
         assert_eq!(next_step(&c), Step::Turn(Mode::Plan));
     }

@@ -310,17 +310,19 @@ export const TOPICS = [
     title: 'The agent',
     html: `
       <h2>The agent</h2>
-      <p>The <b>Agent</b> tab is a chat with a small language model that runs on
-      your own GPU, like the image models do. It can write and rewrite prompts,
-      turn a picture into a prompt, and — given a goal — draw rounds of pictures,
-      judge them and try again. It needs an <b>agent model</b>: Get models → Agent
-      models has some, from about 4 GB.</p>
+      <p>The <b>Assistant</b> panel, on the Image and Video tabs’ rails, is a chat
+      with a small language model that runs on your own GPU, like the image models
+      do. On the Image tab it can write and rewrite prompts, turn a picture into a
+      prompt, and — given a goal — draw rounds of pictures, judge them and try
+      again; on the Video tab it writes storyboards for short films. Each tab
+      keeps its own chats, picked at the top of the panel. It needs an <b>agent
+      model</b>: Get models → Agent models has some, from about 4 GB.</p>
 
       <h3>What it changes</h3>
-      <p>A chat starts on the model picked on the Image tab, with that model’s saved
-      defaults (Settings → Per model) and its Turbo LoRA when you have it, as the
-      Image tab’s Turbo does, and keeps its own settings from there: the
-      agent never changes the Image tab while you work there. Every change it
+      <p>On the Image tab the agent works with the tab’s own settings: what you
+      set is what it starts from, what it changes you see change in the boxes,
+      and its pictures land on the stage and in Current as yours do. Change a box
+      while it works and it uses yours from its next round. Every change it
       makes is a card in the chat with its reason and an <b>Undo</b>.</p>
       <p><b>Settings → Agent</b> says what it may change, for every chat: a tick
       per setting (prompt, negative prompt, CFG, size and model at first) and per
@@ -331,14 +333,16 @@ export const TOPICS = [
       and CFG, as the Image tab’s Turbo does; the agent keeps them unless you ask. The agent
       a new chat talks to is set there too; the picker beside the message box
       switches it for one chat.</p>
-      <p>Click one of its pictures to open it in Refine &amp; adjust, right there:
-      ←/→ step through the chat’s pictures, and <i>Open on Image tab</i> takes
-      one there with its settings. Its passes run on the model that drew it.</p>
+      <p>Click one of its pictures to open it on the Image tab, with the settings
+      that drew it.</p>
 
       <h3>Improve and compare</h3>
       <p>There is one <b>Send</b>: the agent decides whether you asked for an
       answer, a picture, a picture described as a prompt, an improvement or a
       comparison.</p>
+      <p>Either one is <b>proposed first</b>: the agent says what it would do,
+      as a card with <b>Start</b> and <b>No thanks</b>, and nothing is drawn
+      until you press Start. Sending another message sets it aside.</p>
       <p><b>Improve</b> runs a session when you want something got right (“keep
       trying until the hat is red”), the round on screen improved (“make these
       better”), or a picture matched — attach it and say “find the best prompt

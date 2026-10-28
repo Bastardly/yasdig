@@ -245,6 +245,8 @@ const PANEL_DEFS = [
   { id: 'img-info' },
   { id: 'img-current', open: true, corner: 'bottom-right' },
   { id: 'img-favorites' },
+  { id: 'img-assist', both: true },
+  { id: 'img-session' },
 ];
 
 // A rail button's dot: a line in its panel is in the accent, so the panel
@@ -280,8 +282,6 @@ export const modelNamed = (name) => models.find((m) => m.name === name);
 // before it checks. An empty box sends nothing, so the profile's own count
 // stands — the picked model's here, the nearest thing the page holds.
 export function passSteps(which) {
-  // The Agent tab's dialog sends none: the server reads the picture's own.
-  if (S.pane === 'agent') return 1;
   const n = parseInt($(which === 'hires' ? 'hsteps' : 'rsteps').value, 10);
   if (Number.isFinite(n)) return n;
   return passModel(which === 'hires' ? 'hiresmodel' : 'refmodel')?.[`${which}_steps`] ?? 0;
@@ -851,7 +851,7 @@ export function render(data) {
   const trace = S.agentTrace;
   const byAgent = trace && data.work_id === trace.id
     ? `<div class="meta">Drawn by the agent in <b id="agenttrace" class="pin" `
-      + `title="Open this chat on the Agent tab">${esc(trace.title || 'a chat')}</b>, round ${trace.round}`
+      + `title="Open this chat in the Assistant">${esc(trace.title || 'a chat')}</b>, round ${trace.round}`
       + `${trace.reason ? `: ${esc(trace.reason)}` : ''}</div>` : '';
 
   const times = n => n > 1 ? ` ×${n}` : '';
@@ -873,8 +873,8 @@ export function render(data) {
     <div class="bars">${bars}</div>${cached}
     `;
   P('result').querySelector('img').addEventListener('click', () => showFullSize(S.currentSrc));
-  // The Agent tab opens it; an event rather than an import keeps the two
-  // tabs' modules out of each other.
+  // The Assistant opens it (`assistant.js`); an event rather than an import
+  // keeps the two modules out of each other.
   $('agenttrace')?.addEventListener('click', () => {
     document.dispatchEvent(new CustomEvent('yasdig:openchat', { detail: trace.chat }));
   });
@@ -1017,27 +1017,23 @@ async function escalate(which, path, payload, label, kind, err = escErr, land = 
 // rides on the one request that runs that pass rather than in the object both
 // share. Which is also why nothing strips a stray `model` key out of this any
 // more on the way to /generate.
-export const escalateSettings = () => {
-  // A chat's picture, in the Agent tab's dialog: its own model's pass steps
-  // and CFG, since the Image tab's boxes describe whatever model is picked
-  // there. Absent keeps the retained profile's; the mirrored fields are hidden.
-  const own = S.pane === 'agent';
-  return {
+export const escalateSettings = () => ({
     // Every pass: a Refine that ran out of memory is retried with this changed.
     memory: $('memory').value || null,
-    ...(own ? {} : { refine_steps: numOr('rsteps'), hires_steps: numOr('hsteps') }),
+    refine_steps: numOr('rsteps'),
+    hires_steps: numOr('hsteps'),
     refine_strength: numOr('rstrength'),
     hires_strength: numOr('hstrength'),
     // Here null is a value, not an omission: clearing the box unsets the override
     // so the pass follows the knob below it again. Sending nothing would pin
     // whatever was last set, which is the one thing these must never do.
-    ...(own ? {} : { refine_cfg_scale: numOr('rcfg'), hires_cfg_scale: numOr('hcfg') }),
+    refine_cfg_scale: numOr('rcfg'),
+    hires_cfg_scale: numOr('hcfg'),
     // Each pass's own prompt: blank is the image's own, on the server. Read by
     // a run's after-each passes, and by the dialog when its own box is blank.
     refine_prompt: $('rprompt').value.trim() || null,
     hires_prompt: $('hprompt').value.trim() || null,
-  };
-};
+});
 
 // The two escalation checkpoints, as a *generate* body spells them. They name no
 // pass this request runs — they are stored on the image so reopening it restores
@@ -1061,9 +1057,8 @@ export const escalateModels = () => ({
 // nobody reads. On Outputs there is no Refine pass fold's model: the dialog's
 // *Refine with* has already set the image's.
 // `extra` is the dialog's own: the references a ticked Refine follows.
-// A pass's checkpoint: the picked one, but never on the Agent tab, whose
-// pictures pass on the model that drew them (`escalateSettings`).
-const passPick = (id) => (S.pane === 'agent' ? null : $(id).value || null);
+// A pass's checkpoint: the picked one.
+const passPick = (id) => $(id).value || null;
 
 export const refine = (prompt, err, land, extra = {}) => escalate('redrawgo', '/refine', {
   // The Refine pass panel's model, which the dialog's Refine panel shows too,
@@ -1106,7 +1101,7 @@ function syncGoLabel() {
 // one per image of a pinned-seed run, so image 0 is still precisely that seed.
 // A batch over one source is therefore N seeds of one transform, which is a
 // real use — pick the best of eight.
-function genPayload() {
+function genPayload({ fromNoise = false } = {}) {
   const seed = parseInt($('seed').value, 10);
   const common = {
     prompt: $('prompt').value,
@@ -1148,7 +1143,7 @@ function genPayload() {
     // so a new image starts from the model's values rather than inheriting
     // wherever the last one's sliders were left.
   };
-  const source = imageSource.get();
+  const source = fromNoise ? null : imageSource.get();
   if (source) {
     return ['/img2img', {
       ...common,
@@ -1176,6 +1171,36 @@ function genPayload() {
     // take them (its start image is already the picture it works from).
     ...(refsActive() ? { references: references() } : {}),
   }];
+}
+
+// The controls as an Image chat holds them (`assistant.js`): a `/generate`
+// body, the source left out — the agent's rounds are drawn from noise.
+export const assistantSettings = () => genPayload({ fromNoise: true })[1];
+
+// What the agent may write (`knobs::KNOBS`), as `/generate` spells it, and the
+// control each is: the model first, since a new one refills every box.
+const AGENT_KEYS = [
+  ['prompt', 'prompt'], ['negative', 'negative'], ['steps', 'steps'], ['cfg_scale', 'cfg'], ['width', 'w'], ['height', 'h'],
+];
+
+// An Image chat's settings into the controls, where they differ: the agent's
+// change, an Undo of one, or the chat come back to. Each box fires its own
+// event, so the summaries, the loop and the chat hear it as an edit.
+export function applyAssistantSettings(s) {
+  const fire = (el) => el.dispatchEvent(new Event('change', { bubbles: true }));
+  if (s.template && s.template !== $('template').value && models.some((m) => m.name === s.template)) {
+    $('template').value = s.template;
+    fire($('template'));
+    // A Turbo default landing after the listing would undo steps it set too.
+    if (s.steps != null || s.cfg_scale != null) holdTurbo();
+  }
+  for (const [key, id] of AGENT_KEYS) {
+    if (!(key in s)) continue;
+    const v = s[key] ?? '';
+    if (String($(id).value) === String(v)) continue;
+    $(id).value = v;
+    fire($(id));
+  }
 }
 
 // The *After each generation* fold, as the run will carry it. The checkpoint

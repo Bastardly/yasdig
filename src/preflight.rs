@@ -446,7 +446,7 @@ pub fn check(cfg: &Config) -> Report {
         info.push(format!("agent driver ({whose}): {}", llm.display()));
     } else {
         info.push(format!(
-            "no agent driver at {} — the Agent tab is off (docs/building.md builds one)",
+            "no agent driver at {} — the Assistant is off (docs/building.md builds one)",
             llm.display()
         ));
     }

@@ -1,8 +1,8 @@
-//! The Agent tab's routes. Everything but `/agent/send` is a file read or
+//! The Assistant panels' routes. Everything but `/agent/send` is a file read or
 //! write and answers on the connection thread; that one queues a leg on the job queue and answer `{job}` at once — the reply arrives
 //! in the chat, which the page re-reads as its `rev` moves.
 
-use super::chat::{Chat, ChatStore, ImageRef, Mode, Msg, Next, State};
+use super::chat::{Chat, ChatStore, ImageRef, Pane, Mode, Msg, Next, State};
 use super::{knobs, session, toolkit};
 use crate::config::Config;
 use crate::http::Connection;
@@ -34,10 +34,12 @@ pub fn route(
         ("POST", "/favorite-chats/remove") => shelve(conn, cfg, body, false),
         ("POST", "/chats/agent") => edit(conn, cfg, body, Edit::Agent),
         ("POST", "/chats/rename") => edit(conn, cfg, body, Edit::Rename),
+        ("POST", "/chats/settings") => settings(conn, cfg, body),
         ("POST", "/chats/film") => film(conn, cfg, lanes, body),
         ("POST", "/agent/send") => send(conn, cfg, lanes, body),
         ("POST", "/agent/undo") => undo(conn, cfg, body),
         ("POST", "/agent/stop") => stop(conn, cfg, lanes, monitor, body),
+        ("POST", "/agent/session") => answer_proposal(conn, cfg, lanes, body),
         ("GET", p) if p.starts_with("/chats/") => {
             let rest = &p["/chats/".len()..];
             let parts: Vec<&str> = rest.split('/').collect();
@@ -122,6 +124,7 @@ fn summary(c: &Chat) -> Value {
         "favorite": c.favorite,
         "state": c.session.state,
         "thumb": c.newest_image().is_some(),
+        "context": c.context,
     })
 }
 
@@ -167,6 +170,12 @@ fn new_chat(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
         /// The Video tab's model: what a film is shot on.
         #[serde(default)]
         video: Option<String>,
+        /// The panel it is begun in.
+        #[serde(default)]
+        context: Pane,
+        /// An Image chat's: the Image tab's controls, which it starts from.
+        #[serde(default)]
+        settings: Option<Value>,
     }
     let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
     if !cfg.registry().contains_key(&dto.template) {
@@ -175,6 +184,10 @@ fn new_chat(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
     let agent = dto.agent.or_else(|| super::agent_for(cfg, None).ok().map(|m| m.name));
     let mut chat = Chat::new(super::chat::new_id(), json!({ "template": dto.template }), agent);
     chat.video = dto.video.filter(|v| !v.is_empty());
+    chat.context = dto.context;
+    if let Some(v) = dto.settings.filter(|_| dto.context == Pane::Image) {
+        chat.take_settings(v);
+    }
     let store = super::store(cfg);
     match store.create(&chat) {
         Ok(()) => ok(conn, chat_json(cfg, &chat)),
@@ -232,6 +245,31 @@ fn shelve(conn: &mut Connection, cfg: &Config, body: &[u8], keep: bool) -> Resul
 enum Edit {
     Agent,
     Rename,
+}
+
+/// The Image tab's controls into an Image chat, as the person changes them —
+/// while the agent works too: their edit wins, and the next round or turn
+/// draws with it (the worker re-reads the chat at every step).
+fn settings(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Dto {
+        id: String,
+        settings: Value,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    if !dto.settings.is_object() {
+        return err(conn, 400, "settings are a /generate body");
+    }
+    let r = super::store(cfg).update(&dto.id, |c| {
+        if c.context != Pane::Image {
+            anyhow::bail!("only an Image chat follows the Image tab");
+        }
+        Ok(c.take_settings(dto.settings.clone()))
+    });
+    match r {
+        Ok(_) => ok(conn, json!({ "ok": true })),
+        Err(e) => err(conn, 409, &format!("{e:#}")),
+    }
 }
 
 fn edit(conn: &mut Connection, cfg: &Config, body: &[u8], what: Edit) -> Result<()> {
@@ -463,6 +501,9 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         /// The Video tab's model now, which a film from here on is shot on.
         #[serde(default)]
         video: Option<String>,
+        /// An Image chat's: the Image tab's controls as they are now.
+        #[serde(default)]
+        settings: Option<Value>,
     }
     // Every message is a chat turn: the agent decides whether it talks,
     // draws, describes a picture or starts a session (`session::apply_reply`).
@@ -503,6 +544,9 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         if let Some(v) = dto.video.as_ref().filter(|v| !v.is_empty()) {
             c.video = Some(v.clone());
         }
+        if let Some(v) = dto.settings.clone().filter(|_| c.context == Pane::Image) {
+            c.take_settings(v);
+        }
         // What the person says now overtakes a session left stopped or done.
         session::close_session(c);
         let n = c.next_n();
@@ -518,6 +562,39 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         Ok(c) => c,
         Err(e) => return err(conn, 500, &format!("{e:#}")),
     };
+    let job = enqueue(lanes, &store, &c)?;
+    ok(conn, json!({ "job": job }))
+}
+
+/// *Start* or *No thanks* on the session the agent proposed.
+fn answer_proposal(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Dto {
+        chat: String,
+        start: bool,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let store = super::store(cfg);
+    let r = store.update(&dto.chat, |c| {
+        if c.session.busy() {
+            anyhow::bail!("the agent is working on this chat — stop it, or wait");
+        }
+        if !dto.start {
+            return session::decline_proposal(c).map_err(|e| anyhow::anyhow!(e)).map(|_| c.clone());
+        }
+        session::start_proposal(c).map_err(|e| anyhow::anyhow!(e))?;
+        c.session.state = State::Queued;
+        c.session.job = None;
+        c.session.error = None;
+        Ok(c.clone())
+    });
+    let c = match r {
+        Ok(c) => c,
+        Err(e) => return err(conn, 409, &format!("{e:#}")),
+    };
+    if !dto.start {
+        return get_chat(conn, cfg, &dto.chat);
+    }
     let job = enqueue(lanes, &store, &c)?;
     ok(conn, json!({ "job": job }))
 }
