@@ -49,12 +49,17 @@ export function setReferences(stems) {
 }
 
 // The dialog over someone else's picks — a Video shot's: `stems` in the
-// slots, `onDone(stems)` when it closes. The default words are the Image
-// tab's; a borrower says what its pictures do.
-export function editRefs(stems, onDone, note) {
+// slots, `onDone(stems, names)` when it closes. The default words are the
+// Image tab's; a borrower says what its pictures do. With `names` (one per
+// stem), each slot also asks who it shows, as an H3 shot's words name them.
+export function editRefs(stems, onDone, note, names = null) {
   parked = references();
   borrower = onDone;
   setReferences(stems);
+  slots.forEach((_, i) => {
+    $(`ref${i + 1}who`).hidden = !names;
+    $(`ref${i + 1}who`).value = names?.[i] ?? '';
+  });
   $('refsnote').textContent = note;
   openRefs();
 }
@@ -62,11 +67,13 @@ export function editRefs(stems, onDone, note) {
 function giveBack() {
   if (!borrower) return;
   const done = borrower;
-  const picked = references();
+  // Gaps closed, each name with its picture.
+  const kept = slots.map((s, i) => [s.get(), $(`ref${i + 1}who`).value.trim()]).filter(([stem]) => stem);
   setReferences(parked);
   borrower = null;
+  slots.forEach((_, i) => { $(`ref${i + 1}who`).hidden = true; });
   $('refsnote').textContent = IMAGE_NOTE;
-  done(picked);
+  done(kept.map(([stem]) => stem), kept.map(([, name]) => name));
 }
 
 export const onRefsChange = (fn) => { listeners.push(fn); };

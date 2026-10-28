@@ -123,10 +123,9 @@ pub struct Clip {
 /// its seed and length, how it began, and the frame it begins at in the
 /// clip's one frame sequence.
 ///
-/// The page's row for a shot holds `text`, `seed`, `frames`, `cut`,
-/// `references` and `keyframe`; a row that still matches all six is a shot
-/// that is done.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// The page's row for a shot holds every field but `conditioned` and
+/// `start`; a row that still matches them all is a shot that is done.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Segment {
     /// As typed, `{variables}` and all.
     pub text: String,
@@ -156,6 +155,65 @@ pub struct Segment {
     /// voice or a sound for this shot. Where references may be.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub audio: Vec<String>,
+    /// What it says, sounds like and is scored with, and who is in it: on
+    /// H3 written into its prompt layout ([`crate::h3prompt`]).
+    #[serde(flatten)]
+    pub words: ShotWords,
+}
+
+/// A shot's fields beyond its words, for H3's prompt layout: a storyboard
+/// fills them, or the Shots panel. All empty, the text is sent as typed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShotWords {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<Line>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sound: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub music: String,
+    /// Who is in it, by name: those with no line stay silent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cast: Vec<String>,
+    /// Who each reference picture shows, in `references`' order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subjects: Vec<Subject>,
+    /// Whose voice each sound is (`""` no one's), in `audio`'s order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub voices: Vec<String>,
+}
+
+impl ShotWords {
+    /// Whether any field is filled, so H3's layout is written.
+    pub fn any(&self) -> bool {
+        !self.lines.is_empty()
+            || !self.sound.trim().is_empty()
+            || !self.music.trim().is_empty()
+            || !self.cast.is_empty()
+            || self.subjects.iter().any(|s| !s.name.trim().is_empty())
+            || self.voices.iter().any(|v| !v.trim().is_empty())
+    }
+}
+
+/// A line spoken in a shot: by someone in it (by name) or the narrator.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Line {
+    pub who: String,
+    pub words: String,
+    /// The words' language, as H3's `<d>[English] …</d>` names it; empty is English.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub language: String,
+    /// Heard over the shot, the speaker's lips closed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub voiceover: bool,
+}
+
+/// Who a reference picture shows: a name the shot's words use, and a look.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Subject {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub look: String,
 }
 
 /// What a shot is conditioned on: the *Every shot* text in front of its own.
@@ -183,6 +241,7 @@ impl Clip {
             references: Vec::new(),
             keyframe: None,
             audio: Vec::new(),
+            words: Default::default(),
         }
     }
 
@@ -219,6 +278,7 @@ impl Clip {
                     references: Vec::new(),
                     keyframe: None,
                     audio: Vec::new(),
+                    words: Default::default(),
                 });
             }
             self.segments = segs;
@@ -237,6 +297,7 @@ impl Clip {
                     references: Vec::new(),
                     keyframe: None,
                     audio: Vec::new(),
+                    words: Default::default(),
                 })
                 .collect();
             self.prompt = shots[0].clone();

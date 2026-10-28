@@ -583,11 +583,13 @@
   <!-- The clip on screen, as a canvas player (`renderClip`). -->
   <div class="stage vstage" id="vresult" data-empty="Generate a clip to see it here"></div>
   <!-- The clip as shots, first to last (`shots.js`): Every shot in front of
-       each one's own words, then each shot's seed, length and prompt. A row
+       each one's own words, then each shot's seed, length and prompt, the
+       image it starts from (shot 1's is the clip's first frame), and on a
+       model with sound who is in it and what is said, heard and scored. A row
        the clip on the stage already has is marked done; a changed one is
        drawn again, with every row after it (*Redo from shot k*), and rows
        added under a whole clip are drawn onto it (*Extend clip*). -->
-  <section class="fpanel" id="vfold-prompt" aria-label="Shots" hidden>
+  <section class="fpanel fpboth" id="vfold-prompt" aria-label="Shots" hidden>
     <header class="fphead"><b>Shots</b> <span class="foldstate" id="vsum-prompt"></span><button type="button" class="fpclose" aria-label="Close Shots">&times;</button></header>
     <div class="fpbody">
       <label for="veverytext" data-help="vevery">Every shot</label>
@@ -604,7 +606,11 @@
       </prompt-box>
 
       <label class="grouphead" data-help="vshots">Shots</label>
+      <!-- What a storyboard sent from the Agent tab left out (`openShots`). -->
+      <p class="sub" id="vsentnote"></p>
       <div id="vshots"></div>
+      <!-- A shot's starting image from this computer: the row's Upload. -->
+      <input type="file" id="vkeyfile" accept="image/*" hidden>
       <button type="button" id="vshotadd" class="btn spaced">+ Add shot</button>
       <p class="sub" id="vshotnote"></p>
     </div>
@@ -631,25 +637,6 @@
       <label data-help="vloras">LoRAs</label>
       <div id="vloras"></div>
       <button type="button" id="vloraadd" class="btn spaced">+ Add LoRA</button>
-
-      <!-- The first frame comes from work/output/ — the images that were worth
-           keeping are the ones worth animating. Clearing it makes the same model
-           run as plain text-to-video. -->
-      <label class="grouphead" data-help="vfirstframe">First frame</label>
-      <!-- The Image tab's source slot (Image to image), from the same factory
-           (source-slot.js), so an uploaded photo can be animated too. -->
-      <div id="vsrcdrop" class="drop">
-        <div class="picked">
-          <img id="vsrcthumb" alt="" hidden>
-          <span id="vsrcname" class="sub"></span>
-          <div class="btnrow">
-            <button type="button" id="vsrcpick" class="btn">Choose…</button>
-            <button type="button" id="vsrcupload" class="btn">Upload…</button>
-            <button type="button" id="vsrcclear" class="btn" hidden>Clear</button>
-          </div>
-        </div>
-        <input type="file" id="vsrcfile" accept="image/*" hidden>
-      </div>
 
       <!-- The Image tab's size row: snapped to the model's multiple on change
            (`snapSize`), so the boxes say what runs. -->
@@ -842,8 +829,13 @@
       <div id="astorybody"></div>
       <input type="file" id="astoryfile" accept="image/*" hidden>
     </div>
-    <!-- An edit the server refused says why here, beside what was pressed. -->
-    <div class="fpfoot"><div class="err" id="astoryerr"></div><button type="button" class="btn btn-run" id="astorydraw" hidden>Draw the cast</button></div>
+    <!-- An edit the server refused says why here, beside what was pressed.
+         Send is always there with a board; the first frames are optional, as
+         is the cast's *Draw the cast* under the cast. -->
+    <div class="fpfoot"><div class="err" id="astoryerr"></div>
+      <button type="button" class="btn" id="astoryframes" hidden
+        title="The pictures shots start from, drawn with the cast — any of the cast not drawn yet first. Optional">Draw the first frames</button>
+      <button type="button" class="btn btn-run" id="astorydraw" hidden>Send to Video tab</button></div>
   </section>
   <section class="fpanel" id="panel-agent-current" aria-label="Current" hidden>
     <header class="fphead"><b>Current</b><button type="button" class="fpclose" aria-label="Close Current">&times;</button></header>
@@ -1619,6 +1611,7 @@
             <button type="button" id="ref1upload" class="btn">Upload…</button>
             <button type="button" id="ref1clear" class="btn" hidden>Clear</button>
           </div>
+          <input type="text" id="ref1who" class="refwho" placeholder="Who is it? — the name the shot uses" aria-label="Who picture 1 shows" hidden>
         </div>
         <input type="file" id="ref1file" accept="image/*" hidden>
       </div>
@@ -1632,6 +1625,7 @@
             <button type="button" id="ref2upload" class="btn">Upload…</button>
             <button type="button" id="ref2clear" class="btn" hidden>Clear</button>
           </div>
+          <input type="text" id="ref2who" class="refwho" placeholder="Who is it? — the name the shot uses" aria-label="Who picture 2 shows" hidden>
         </div>
         <input type="file" id="ref2file" accept="image/*" hidden>
       </div>
@@ -1645,6 +1639,7 @@
             <button type="button" id="ref3upload" class="btn">Upload…</button>
             <button type="button" id="ref3clear" class="btn" hidden>Clear</button>
           </div>
+          <input type="text" id="ref3who" class="refwho" placeholder="Who is it? — the name the shot uses" aria-label="Who picture 3 shows" hidden>
         </div>
         <input type="file" id="ref3file" accept="image/*" hidden>
       </div>
@@ -1658,6 +1653,7 @@
             <button type="button" id="ref4upload" class="btn">Upload…</button>
             <button type="button" id="ref4clear" class="btn" hidden>Clear</button>
           </div>
+          <input type="text" id="ref4who" class="refwho" placeholder="Who is it? — the name the shot uses" aria-label="Who picture 4 shows" hidden>
         </div>
         <input type="file" id="ref4file" accept="image/*" hidden>
       </div>

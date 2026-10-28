@@ -2,7 +2,7 @@
 // (`chatview.js`). Not in `web::WEB_FILES`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { drawLabel, linesText, mainAction, parseLines, renderChat, liveReply, replyHtml, sessionHtml, valueText, stateText, storyHtml } from './chatview.js';
+import { castLabel, framesLabel, mainAction, renderChat, liveReply, replyHtml, sessionHtml, valueText, stateText, storyHtml } from './chatview.js';
 
 const chat = (over = {}) => ({
   id: '1-0',
@@ -112,14 +112,14 @@ test('bold is drawn, and only after escaping', () => {
 });
 
 const film = (over = {}) => ({
-  title: 'Rain <b>', every: 'cinematic', video_model: 'wan5b', references: false, phase: 'ready', shot: 0,
+  title: 'Rain <b>', every: 'cinematic', video_model: 'wan5b', references: false, phase: 'ready',
   cast: [
     { name: 'Mara', kind: 'character', look: 'a red coat', picture: { kind: 'output', id: 'm', file: 'u0-0.png' }, stem: 'm' },
     { name: 'Leo"', kind: 'character', look: 'a raincoat', picture: { kind: 'item', id: '7', file: 'c1-1.png' }, stem: '7-s0' },
   ],
   shots: [
-    { text: 'Mara opens the door.', cast: ['Mara'], cut: false, keyframe: { kind: 'item', id: '8', file: 'k1-0.png' }, seed: 0, takes: 0 },
-    { text: 'Leo waits.', cast: ['Leo"'], cut: true, seed: 0, takes: 0 },
+    { text: 'Mara opens the door.', cast: ['Mara'], cut: false, keyframe: { kind: 'item', id: '8', file: 'k1-0.png' } },
+    { text: 'Leo waits.', cast: ['Leo"'], cut: true },
   ],
   ...over,
 });
@@ -133,16 +133,12 @@ test('the storyboard is escaped, says how each shot begins, and locks while the 
   assert.ok(html.includes('Draw one') && html.includes('Draw again'), 'the person’s picture is drawn only if asked');
   assert.ok(!html.includes(' disabled'));
   assert.ok(storyHtml(chat({ film: film() }), { busy: true }).includes(' disabled'));
-  assert.ok(storyHtml(chat({ film: film({ phase: 'shooting' }) })).includes(' disabled'), 'not once it is being filmed');
   assert.ok(storyHtml(chat()).includes('No film yet'));
 });
 
-test('the film’s video model is picked on the board, and one gone is still named', () => {
-  const videos = [{ name: 'wan5b', label: 'Wan 2.2 TI2V 5B' }, { name: 'h3', label: 'H3' }];
-  const html = storyHtml(chat({ film: film() }), { videos });
-  assert.ok(html.includes('<option value="wan5b" selected>') && html.includes('<option value="h3">'), html);
-  assert.ok(storyHtml(chat({ film: film({ video_model: 'gone' }) }), { videos }).includes('gone (not installed)'));
-  assert.ok(!storyHtml(chat({ film: film() })).includes('Filmed with'), 'nothing to pick from');
+test('the board names the model it was written for, and has nothing to film with', () => {
+  const html = storyHtml(chat({ film: film() }));
+  assert.ok(html.includes('2 shots for wan5b') && !html.includes('Filmed with'));
 });
 
 test('a storyboard reply is a card that opens the panel, and the header says what is drawn', () => {
@@ -153,6 +149,9 @@ test('a storyboard reply is a card that opens the panel, and the header says wha
   assert.equal(stateText(chat({ film: film(), session: { state: 'running', next: 'film', goal: '', checks: [], round: 0 } })), 'Drawing the first frames');
 });
 
+// What the panel offers to draw next: the cast's button, else the frames'.
+const drawLabel = (f) => castLabel(f) ?? framesLabel(f);
+
 test('the panel offers to draw only what the board lacks, and the card shows the cast', () => {
   const whole = film({ shots: film().shots.map((x) => ({ ...x, key_stem: 'k' })) });
   assert.equal(drawLabel(whole), null, 'everything is there');
@@ -161,7 +160,6 @@ test('the panel offers to draw only what the board lacks, and the card shows the
   assert.equal(drawLabel(film({ phase: 'board', cast: [film().cast[0], bare(film().cast[1])] })), 'Draw the rest of the cast');
   assert.equal(drawLabel(film({ phase: 'board' })), 'Draw the first frames', 'shot 2 is a cut on a model without references');
   assert.equal(drawLabel(film({ phase: 'board', references: true })), null, 'H3 cuts need none');
-  assert.equal(drawLabel(film({ phase: 'shooting', cast: film().cast.map(bare) })), null);
   const c = chat({ film: film(), messages: [{ role: 'agent', n: 0, mode: 'story', reply: '' }] });
   assert.ok(renderChat(c).includes('/chats/1-0/img/c1-1.png'));
 });
@@ -196,28 +194,29 @@ test('on a model that follows references a character is whole only with its turn
     'the card shows the turnaround');
 });
 
-test('the main action draws, then films, then goes on after a stop; a shot shows its takes', () => {
+test('Send to Video tab is always there; drawing the cast and the first frames is optional', () => {
   const whole = film({ shots: film().shots.map((x) => ({ ...x, key_stem: 'k' })) });
-  assert.equal(mainAction(film({ phase: 'board' })).label, 'Draw the first frames');
-  assert.deepEqual(mainAction(whole), { label: 'Film', body: { go: true } });
-  const shooting = { ...whole, phase: 'shooting', shot: 1, shots: whole.shots.map((x, k) => (k === 0 ? { ...x, takes: 2, checks: [true, false] } : x)) };
-  assert.equal(mainAction(shooting).label, 'Go on filming');
-  assert.equal(mainAction({ ...shooting, phase: 'done' }), null);
-  const html = storyHtml(chat({ film: shooting }));
-  assert.ok(html.includes('Filmed, 2 takes') && html.includes('✓✗') && html.includes('Next'));
-  assert.equal(stateText(chat({ film: shooting, session: { state: 'running', next: 'shoot', goal: '', checks: [], round: 0 } })), 'Filming shot 2 of 2');
+  const bare = (m) => ({ ...m, stem: null, picture: null });
+  const nothing = film({ phase: 'board', cast: film().cast.map(bare) });
+  assert.equal(mainAction(null), null);
+  for (const f of [nothing, film({ phase: 'board' }), whole]) {
+    assert.deepEqual(mainAction(f), { label: 'Send to Video tab', body: { send: true } });
+  }
+  assert.equal(framesLabel(nothing), 'Draw the first frames', 'offered beside the cast’s, which it draws first');
+  assert.ok(storyHtml(chat({ film: nothing })).includes('data-film-drawcast'), 'under the cast');
+  assert.ok(!storyHtml(chat({ film: nothing }), { busy: true }).includes('data-film-drawcast'));
+  assert.ok(!storyHtml(chat({ film: whole })).includes('data-film-drawcast'), 'the cast is drawn');
+  assert.ok(!storyHtml(chat({ film: whole })).includes(' disabled'), 'still editable once ready');
+  // An older chat's filmed board reads as ready; its clip card stays.
   const card = renderChat(chat({ messages: [{ role: 'clip', n: 0, id: 'c<1', title: 'Rain' }] }));
   assert.ok(card.includes('data-open-clip="c&lt;1"') && card.includes('/videos/c%3C1/thumb.png'));
 });
 
-test('an H3 shot edits what is said, heard and scored; the lines read back as they were', () => {
+test('an H3 shot edits what is said, heard and scored', () => {
   const lines = [
     { who: 'Mara', words: 'Who\'s there?', language: '', voiceover: false },
     { who: 'Leo', words: 'Hej.', language: 'Danish', voiceover: true },
   ];
-  assert.equal(linesText(lines), "Mara: Who's there?\nLeo (voiceover, Danish): Hej.");
-  assert.deepEqual(parseLines(linesText(lines) + '\n\n  '), lines);
-  assert.deepEqual(parseLines('Just words'), [{ who: '', words: 'Just words', language: '', voiceover: false }], 'the server says why');
   const h3 = film({ references: true, shots: [{ ...film().shots[0], lines, sound: 'Rain', music: '' }] });
   const html = storyHtml(chat({ film: h3 }));
   assert.ok(html.includes('data-field="lines"') && html.includes('value="Rain"') && html.includes('data-field="music"'));

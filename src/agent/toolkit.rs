@@ -75,12 +75,6 @@ pub struct Toolkit {
     pub video: Option<VideoView>,
     /// Why this chat can't make a film, or `None` when it can.
     pub film_off: Option<String>,
-    /// Every installed video model a film can be shot on: what the Story
-    /// panel's *Filmed with* picks from.
-    pub videos: Vec<VideoView>,
-    /// The chat's storyboard is ready to film (or its filming was stopped
-    /// and can go on): a chat turn may say go.
-    pub board_ready: bool,
     /// The agent model sees pictures. Set by a turn, which knows the model.
     #[serde(skip)]
     pub vision: bool,
@@ -100,6 +94,8 @@ pub struct VideoView {
     pub chains: bool,
     /// Its cuts follow the cast's pictures (H3) rather than a keyframe.
     pub references: bool,
+    /// And sounds, voices among them: H3 with its audio VAE.
+    pub sounds: bool,
     pub width: u32,
     pub height: u32,
     /// The most a shot may run: the model's own length, what fits this card.
@@ -115,6 +111,7 @@ impl VideoView {
             label: m.family.label(),
             chains: m.family.chains(),
             references: m.family.takes_references(),
+            sounds: m.family.takes_references() && m.audio_vae.is_some(),
             width: m.width,
             height: m.height,
             frames: m.frames,
@@ -231,9 +228,7 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     let video = chat.video.as_deref().and_then(|name| installed.iter().find(|v| v.name == name)).cloned();
     let mut t = build(&rules, &shown(cfg, chat, profile), &locks, models, profile.map(|p| p.family));
     t.film_off = film_off(&rules, image, chat.video.as_deref(), video.as_ref());
-    t.board_ready = chat.film.as_ref().is_some_and(super::session::can_go);
     t.video = video;
-    t.videos = installed.into_iter().filter(|v| v.chains).collect();
     t
 }
 
@@ -338,8 +333,6 @@ pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelCh
         locks: locks.clone(),
         video: None,
         film_off: Some("no video model".into()),
-        videos: Vec::new(),
-        board_ready: false,
         vision: false,
         rules: rules.clone(),
     }
@@ -399,7 +392,7 @@ mod tests {
     #[test]
     fn a_film_needs_the_rule_an_image_model_and_a_video_model_that_chains() {
         let wan = VideoView {
-            name: "wan".into(), family: "wan22_ti2v_5b", label: "Wan 2.2 TI2V 5B", chains: true, references: false,
+            name: "wan".into(), family: "wan22_ti2v_5b", label: "Wan 2.2 TI2V 5B", chains: true, references: false, sounds: false,
             width: 1280, height: 704, frames: 121, fps: 24,
         };
         let rules = Rules::default();

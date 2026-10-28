@@ -132,6 +132,7 @@ mod edits;
 mod foldscale;
 mod half;
 mod fsr;
+mod h3prompt;
 mod home;
 mod http;
 mod jobs;
@@ -1592,6 +1593,10 @@ struct ShotDto {
     keyframe: Option<String>,
     #[serde(default)]
     audio: Vec<String>,
+    /// H3's: what is said, heard and scored, who is in it, and who the
+    /// references and sounds are.
+    #[serde(flatten)]
+    words: videos::ShotWords,
 }
 
 impl ShotDto {
@@ -1604,6 +1609,7 @@ impl ShotDto {
             references: self.references,
             keyframe: self.keyframe,
             audio: self.audio,
+            words: self.words,
         }
     }
 }

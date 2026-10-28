@@ -335,8 +335,8 @@ test files.
 ## Image to image
 
 The *Image to image* fold (code says "Start from"): a picked source makes Generate run
-`/img2img`. `web/js/source-slot.js` is the factory; the Video first frame is a second
-instance. `Engine::img2img` is `run` with a source instead of txt2img.
+`/img2img`. `web/js/source-slot.js` is the factory (the References dialog's slots
+are instances too). `Engine::img2img` is `run` with a source instead of txt2img.
 
 - **The source is a `work/output/` stem**, resolved by `Engine::output_source` (shared
   with video), guarded by `workitems::valid_id`.
@@ -791,10 +791,13 @@ Break silently:
   hands over to a `Mode::Story` turn (its own schema, `n_predict` 3072), whose board is
   **rewritten whole**, never patched; what survives is matched by the server — a member
   keeps its picture by name and an unchanged look (or when it is the person's), a shot
-  its keyframe when its words, cast and cut are unchanged. **A continue that names someone not in the shot before is made a cut** (`recut_board`, after the board turn and every panel edit, with a note): a continue carries only the last frame, so a return would be drawn from words. **Nothing is drawn until the
-  person presses *Draw the cast*** (`/chats/film {draw}`, `board_press`), so
-  the looks can be read first, **and a cast press stops at the cast**: keyframes need
-  a press of their own (`Film.frames`, set by `board_press` only when the cast is whole;
+  its keyframe when its words, cast and cut are unchanged. **A continue that names someone not in the shot before is made a cut** (`recut_board`, after the board turn and every panel edit, with a note): a continue carries only the last frame, so a return would be drawn from words. **Nothing is drawn unasked, and
+  drawing is optional**: *Send to Video tab* is always there, and an undrawn member is
+  words, an undrawn first frame a cut from words. *Draw the cast* (under the cast) and
+  *Draw the first frames* (above Send) are `/chats/film {draw, frames}` →
+  `board_press_for`; a keyframe click and *addkey* keep `board_press`'s automatic pick.
+  **A cast press stops at the cast**: keyframes need a press of their own
+  (`Film.frames`, set only when the cast is whole;
   `draw_step` reads it, `board_step` doesn't), so redrawing a member never redraws every
   frame they are in each time. **A keyframe records the cast pictures it was drawn
   with** (`FilmShot.key_cast`, `Film::cast_marks`); one that differs now is missing
@@ -813,38 +816,20 @@ Break silently:
   doesn't `chains()`). A new chat's settings have no `prompt` key, which `GenerateDto`
   requires: a board picture inserts its own, a round an empty one. A film's turns get the video family's skills too
   (`skills::select` takes both families' names, which never collide).
-- **An H3 shot is sent as MiniMax's prompt guide lays it out** (`agent::h3prompt`,
-  from `shot_spec`; the guide is `skills/h3-prompt-writing/references/{base,ref}-en.txt`
-  in github.com/MiniMax-AI/MiniMax-H3): `integrated_multimodal_description` /
-  `overall_soundscape` / `non_diegetic_music` (`N/A` when empty), the I2VA
-  first-frame line first on a continue, Ref2VA's six sections with each pictured
-  member a `<Subject N>` in the order its `-r` is sent (sd.cpp presents them as
-  `<Picture N>`). The board holds plain fields — `FilmShot.lines` (`Line {who,
-  words, language, voiceover}`), `sound`, `music`, asked for only when the video
-  model `takes_references` — and the server writes the markup: speaker IDs by first
-  line in the film, `<d>[Lang] …</d>`, `clean_lines` strips markup a model wrote.
-  **Silence is written too** (`with_lines`): the last on-screen speaker closes their
-  lips, the shot's cast with no line stay silent, "Nothing more is said"; no lines
-  is "No one speaks" — time left unaccounted for, H3 fills with invented speech.
-  **A voice** (`Member.voice`, a sound stem, the person's pick; kept by name across a
-  rewrite) goes with a shot that may take references (`shot_spec`: speakers in
-  first-line order, ≤ `MAX_REF_AUDIO`) as `ShotSpec.audio`, bound in
-  `subject_definitions` as the guide words it — `<Audio k> is the voice-timbre
-  reference for <Subject j> (Sx).`, the speaker's own ID — and a voice alone makes
-  the shot Ref2VA too.
-  `every` goes inside, so `shoot` sends none of its own. H3's encoder takes the
-  prompt whole (`prompt_attn_range {0,0}`), so `(S1)` and `[Shot 1]` survive.
-- **Shooting a film** (`session::go`, `Next::Shoot`/`Next::Take`): **the movie is an
-  ordinary clip** — shot 1 is `Engine::video` (a retake of it a new clip, the old one
-  deleted), every later shot and every retake `extend_clip {keep: k}` — so the Video
-  tab's Redo, Enlarge and Save work on it. The Video tab's model with its saved
-  defaults plus its catalog Turbo LoRA (`with_video_turbo`); the agent never picks
-  size, steps or length. **A take's checks are the server's** (`take_checks`), never
-  the model's; it sees `take_cast`'s pictures, the frame before (a continue) and the
-  shot's first, middle and last (`take_frames`, staged like pictures). Retakes are
-  `Film.retakes` (Settings → Agent's `film_retakes` at go, default 1), then on. `Film.watch` is the agent model's vision at go: without it
-  nothing is checked, and the chat says so. A take's reply is recorded before the film
-  moves on (`film_on`), so the clip card follows it.
+- **The agent never films** (checked 2026-10-28; it used to shoot and judge each take):
+  *Send to Video tab* is `/chats/film {send}` → `session::send_shots`, the board as Shots
+  rows for **any** model (`shot_spec`: the pictured cast as references with `subjects`,
+  the speakers' voices as `audio` with `voices`, *and* the keyframe; the `note` names
+  what the Video tab's model won't use), which `video.js` `openShots` draws as a new
+  clip. **A row holds every model's part; `shots.js` `sentRow` picks what is sent**
+  (references/sounds on H3, the image only beside neither; Wan the image) — rows
+  built for the model at the press lost the references on a switch to H3. `shotState`
+  compares `sentRow` for the clip's own family (`clipTake`), so held references
+  aren't a change on a Wan clip; `matchesClip` (the draft) compares the raw row. Nothing is queued. The board stays editable (`Phase` is
+  `Board`/`Ready`; old `shooting`/`done` and `next: shoot|take` read through serde
+  aliases; `Mode::Take` only so old messages read). The Lines/sound/music are plain
+  fields; the H3 layout is the engine's (*Video*, below). A board's `video_model` is
+  what it was written for (`Chat.video`), shown, never picked.
 - **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.
 
 ## The job queue
@@ -1725,6 +1710,26 @@ from `family` goes on `VideoModelDto`.
     none). **H3's fl2va and ref2va files have the same header and length** (checked
     2026-10-27), so both are one family and either is offered references and sounds;
     the catalog has a card for each.
+  - **An H3 shot with any `ShotWords` filled is sent in MiniMax's prompt layout**
+    (`crate::h3prompt::compose`, from `plan_shots`; the guide is
+    `skills/h3-prompt-writing/references/{base,ref}-en.txt` in
+    github.com/MiniMax-AI/MiniMax-H3): `integrated_multimodal_description` /
+    `overall_soundscape` / `non_diegetic_music` (`N/A` when empty), the I2VA
+    first-frame line first when the shot has an `-i`, Ref2VA's six sections with each
+    reference a `<Subject N>` (`subjects`, parallel to `references`; sd.cpp presents
+    them as `<Picture N>`) and each sound an `<Audio N>` (`voices`, parallel to
+    `audio`: `<Audio k> is the voice-timbre reference for <Subject j> (Sx).`). Speaker
+    IDs by first line across the clip — `plan_shots` gets the kept `before` segments,
+    so an Extend keeps `(S1)`. `<d>[Lang] …</d>` is ours (`clean_lines` strips a
+    model's). **Silence is written too** (`with_lines`): the last on-screen speaker
+    closes their lips, the shot's `cast` with no line stay silent, "Nothing more is
+    said"; no lines is "No one speaks" — time left unaccounted for, H3 fills with
+    invented speech. **All fields empty sends the text as typed**: wrapping prose in
+    the layout would make its soundscape `N/A`, i.e. silence. `every` goes inside.
+    H3's encoder takes the prompt whole (`prompt_attn_range {0,0}`), so `(S1)` and
+    `[Shot 1]` survive. Page: the rows' *Who is in it* / *Spoken* / *Sound* / *Music*
+    (`m.sounds`), `lines.js` shared with the Story panel, names in the borrowed
+    References/Sounds dialogs (`editRefs(…, names)`, `editSounds(…, voices)`).
   - **References are H3's alone** (`VideoFamily::takes_references`,
     `references` on `/video-models`): sd.cpp refuses H3's Ref2VA beside a keyframe, so
     a shot with references has no `-i` (`VideoIo.refs` → one `-r` each, staged into
@@ -1733,7 +1738,10 @@ from `family` goes on `VideoModelDto`.
   - **A cut from a picture** (`ShotSpec.keyframe`/`Segment.keyframe`, an output
     stem; the row's `data-key`) is any `chains()` family's: `render_shot`'s `-i` is
     the keyframe instead of the last frame. Never on shot 1 (that is `source`), a
-    continue, or beside references. A cut with neither starts fresh from its words,
+    continue, or beside references. **Shot 1's row holds the clip's first frame** in
+    its own `data-key` (*Start from image*, no Generation-panel slot): `vidPayload`
+    sends it as `source`, `rowsOf` puts `c.source` back, `rowMatches` takes it as
+    the 4th argument. A cut with neither starts fresh from its words,
     on any family (as shot 1 with no first frame); a film's shot does when the
     person removes its first frame (`FilmShot.no_key`).
   - **Extend, Redo and the × are one request** (`Engine::extend_clip`,

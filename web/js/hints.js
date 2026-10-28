@@ -176,7 +176,27 @@ const HELP = [
         + 'draws it and the ones after it again, keeping those before; add a row '
         + 'and Extend clip draws it onto the end. Cheap to try at a few steps — '
         + 'then raise the steps and Generate clip makes every shot again with the '
-        + 'same seeds. TI2V-5B, A14B and H3 can do it.' },
+        + 'same seeds. TI2V-5B, A14B and H3 can do it. Shot 1 can start from an '
+        + 'image — Start from image, under its prompt: the clip animates it, which is '
+        + 'by far the most reliable way to control what the clip contains; without '
+        + 'one the model runs as plain text-to-video.' },
+  { ids: ['vshotcast'],
+    text: 'Who is in the shot, by the names Spoken uses, commas between. Anyone '
+        + 'here with no line is told to stay silent, lips closed: MiniMax H3 fills '
+        + 'time nobody accounted for with speech nobody wrote.' },
+  { ids: ['vshotlines'],
+    text: 'What is said, one line each: Mara: Who’s there? Put (voiceover) after '
+        + 'the name for a voice heard over the shot with the speaker’s lips closed, '
+        + 'and a language other than English the same way — Leo (Danish): Hej. '
+        + '“narrator: …” is a voice nobody on screen has. yasdig writes these into '
+        + 'H3’s own prompt layout, so write plain words, no tags. A sound in '
+        + 'Sounds… named as a speaker’s voice is the voice they speak in.' },
+  { ids: ['vshotsound'],
+    text: 'What the shot sounds like, besides speech: rain on the roof, a door, '
+        + 'traffic far off. Empty is silence.' },
+  { ids: ['vshotmusic'],
+    text: 'Music only the audience hears — a score, not a radio in the room (that '
+        + 'goes in Sound). Empty is none: without it H3 tends to add a score of its own.' },
   { ids: ['vshotseed'],
     text: 'The shot’s seed. -1 rolls a new one, and the box then shows the seed '
         + 'the shot was drawn with, so Generate clip draws it the same way again '
@@ -193,11 +213,11 @@ const HELP = [
     text: 'How the shot begins. Continue draws on from the last shot’s final '
         + 'frame: seamless, but one frame is all that carries over, so a face that '
         + 'leaves and comes back is drawn anew and may not match. Cut starts a new '
-        + 'camera shot and does not join the frame before. It can start from a '
-        + 'picture you pick — a keyframe, the way Wan changes scene — or, on MiniMax '
+        + 'camera shot and does not join the frame before. It can start from an '
+        + 'image you pick — a keyframe, the way Wan changes scene — or, on MiniMax '
         + 'H3, from its words and reference pictures (the dwarf’s face, his coat), '
-        + 'which H3 keeps. Never both: sd.cpp can’t give H3 references and a '
-        + 'starting frame at once.' },
+        + 'which H3 keeps, and sounds. Never both: sd.cpp can’t give H3 references '
+        + 'and a starting frame at once, which is also why a continue takes none.' },
   { ids: ['cbformat'],
     text: 'What to save the version on screen as, made here in the browser, so '
         + 'only what this browser can encode is offered. MP4 plays everywhere — '
@@ -331,11 +351,6 @@ const HELP = [
         + 'are only ever shrunk, never enlarged, and the aspect ratio is kept. '
         + 'It is the same budget the hi-res pass works to: that pass diffuses no '
         + 'larger than this and covers anything beyond it with an FSR upscale.' },
-  { ids: ['vfirstframe'],
-    text: 'The still the clip animates, chosen from work/output/. Leave it empty '
-        + 'and the same model runs as plain text-to-video; set it and the first '
-        + 'frame is yours, which is by far the most reliable way to control what '
-        + 'the clip contains.' },
   { ids: ['vw', 'vh'],
     text: 'The clip’s frame size. Wan publishes 832×480 and 1280×720, and going '
         + 'far past what a model was trained on costs VRAM quickly for little '
@@ -444,14 +459,10 @@ const HELP = [
         + 'or an Edit by instruction on a model that can. The result is a History '
         + 'step on that picture, so nothing is lost if it goes wrong.' },
   { ids: ['agentfilm'],
-    text: 'Ticked, the agent may make a short movie when you ask for one: it '
-        + 'writes a storyboard, draws the cast and the pictures shots start from '
-        + '(saved to Outputs), then waits for your go before filming on the Video '
-        + 'tab’s model.' },
-  { ids: ['agentretakes'],
-    text: 'When the agent watches a filmed shot and a check fails, it films the '
-        + 'shot again on a new seed, up to this many times, then goes on. 0 keeps '
-        + 'every first take. Each retake is a whole shot’s render.' },
+    text: 'Ticked, the agent may plan a short movie when you ask for one: it '
+        + 'writes a storyboard and, if you press for them, draws the cast and the '
+        + 'pictures shots start from (saved to Outputs). Send to Video tab puts the '
+        + 'shots there, where you generate the clip.' },
   { ids: ['setembedpng'],
     text: 'Writes the prompt, negative prompt, model, seed, steps, sampler and CFG '
         + 'into each image you save to output, in the format A1111, Forge and Civitai '

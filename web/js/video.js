@@ -6,11 +6,12 @@ import { soonJobs } from './jobs.js';
 import { clip, renderClip, stopPlayback, clearClip } from './player.js';
 import { initClipView, openClipView } from './clipview.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
-import { shotState, rowMatches } from './shots.js';
+import { shotState, rowMatches, sentRow, ALL } from './shots.js';
 import { editRefs } from './refs.js';
 import { editSounds } from './sounds.js';
 import { wireHints } from './hints.js';
-import { sourceSlot, choosePicture } from './source-slot.js';
+import { choosePicture, upload } from './source-slot.js';
+import { linesText, parseLines } from './lines.js';
 import { partRows } from './parts.js';
 import { loraPicker, turboMemory } from './loras.js';
 import { loadModelSettings } from './modelsettings.js';
@@ -106,12 +107,16 @@ function setVTurbo(on) {
 //
 // A clip is its shots, first to last: one sd-cli run each (`Engine::video`),
 // each but the first going on from the last one's final frame — or a cut,
-// which starts from a picture (`data-key`, any family that takes a first
-// frame) or fresh from its words — on H3 maybe following reference pictures. Each row is
+// which starts from an image (`data-key`, any family that takes a first
+// frame) or fresh from its words — on H3 maybe following reference pictures
+// and sounds. Shot 1's image is the clip's first frame (`source`). Each row is
 // conditioned on its own words with *Every shot* in front, never another
-// row's, or a line spoken in shot 1 is spoken again in every shot. A row
-// holds its own state in the DOM: the boxes, and `data-cut`/`data-refs`/`data-audio`/`data-key`. The
-// marks are `syncShots`'s, against the clip on the stage (`shots.js`).
+// row's, or a line spoken in shot 1 is spoken again in every shot. On a model
+// with sound a row also says who is in it, what is said, heard and scored,
+// which the server writes into H3's prompt layout (`h3prompt.rs`). A row
+// holds its own state in the DOM: the boxes, and `data-cut`/`data-refs`/
+// `data-subjects`/`data-audio`/`data-voices`/`data-key`. The marks are
+// `syncShots`'s, against the clip on the stage (`shots.js`).
 
 const rowEls = () => [...$('vshots').querySelectorAll('.shotrow')];
 
@@ -127,6 +132,12 @@ function readRow(el) {
     audio: JSON.parse(el.dataset.audio || '[]'),
     key: el.dataset.key || null,
     folded: el.classList.contains('folded'),
+    cast: el.querySelector('.shotcast').value.split(',').map((x) => x.trim()).filter(Boolean),
+    lines: parseLines(el.querySelector('.shotlines').value),
+    sound: el.querySelector('.shotsnd').value.trim(),
+    music: el.querySelector('.shotmusic').value.trim(),
+    subjects: JSON.parse(el.dataset.subjects || '[]'),
+    voices: JSON.parse(el.dataset.voices || '[]'),
   };
 }
 
@@ -142,25 +153,50 @@ function liveRows() {
 }
 
 // A drawn clip's shots as rows: the seeds they were drawn with, so Generate
-// makes them again unless a seed is reset.
-const rowsOf = (c) => (c.segments ?? []).map((s) => ({
+// makes them again unless a seed is reset. Shot 1's image is the clip's.
+const rowsOf = (c) => (c.segments ?? []).map((s, k) => ({
   text: s.text, seed: s.seed, frames: s.frames, cut: !!s.cut, refs: s.references ?? [], audio: s.audio ?? [],
-  key: s.keyframe ?? null,
+  key: (k === 0 ? c.source : s.keyframe) ?? null,
+  ...wordsOf(s),
 }));
 
-// The wire's shape for a row; a blank Frames box is the model's.
-const shotWire = (r) => ({
-  prompt: r.text, seed: r.seed, frames: r.frames, cut: r.cut, references: r.refs, audio: r.audio ?? [],
-  keyframe: r.cut ? r.key : null,
+// What a shot says, hears and is scored with, and who is in it, the
+// references and the sounds: as a segment records it, a row reads it and the
+// wire sends it.
+const wordsOf = (s) => ({
+  cast: s.cast ?? [], lines: s.lines ?? [], sound: s.sound ?? '', music: s.music ?? '',
+  subjects: s.subjects ?? [], voices: s.voices ?? [],
 });
+
+// What a model takes of a row (`sentRow`), from its `/video-models` entry.
+const takeOf = (m) => ({ references: !!m?.references, sounds: !!m?.sounds });
+
+// The wire's shape for a row, what a model that takes `take` takes of it; a
+// blank Frames box is the model's. Shot 1's image goes as the clip's `source`.
+const shotWire = (row, k, take) => {
+  const r = sentRow(row, k, take);
+  return {
+    prompt: r.text, seed: r.seed, frames: r.frames, cut: r.cut, references: r.refs, audio: r.audio,
+    keyframe: k > 0 && r.cut ? r.key : null,
+    ...wordsOf(r),
+  };
+};
 
 // Whether a clip's own family can go on from its last frame — by the clip's
 // family, since the model it was made with may be listed under another name
 // now (or be a [[video]] entry since removed).
 const chains = (c) => !!c && videoModels.some((m) => m.family === c.video?.family && m.chains);
 
+// What the clip's own family takes, which is what its shots were sent; with
+// none of it installed now, everything (a held reference then reads as a
+// change, never as drawn).
+const clipTake = (c) => {
+  const m = videoModels.find((v) => v.family === c?.video?.family);
+  return m ? takeOf(m) : ALL;
+};
+
 // The rows against the clip on the stage: which are done, what a press draws.
-const shotsNow = () => shotState(liveRows(), clip, chains(clip));
+const shotsNow = () => shotState(liveRows(), clip, chains(clip), clipTake(clip));
 
 // A row folds to its heading line, a panel's way: the fold is the row's own
 // (`folded` on a row read back), else what row k was before the redraw.
@@ -169,7 +205,9 @@ function drawShots(rows) {
   $('vshots').innerHTML = rows.map((r, k) => {
     const folded = r.folded ?? was[k] ?? false;
     return `
-    <div class="shotrow${folded ? ' folded' : ''}" data-cut="${r.cut ? 1 : 0}" data-refs="${esc(JSON.stringify(r.refs ?? []))}" data-audio="${esc(JSON.stringify(r.audio ?? []))}" data-key="${esc(r.key ?? '')}">
+    <div class="shotrow${folded ? ' folded' : ''}" data-cut="${r.cut ? 1 : 0}" data-refs="${esc(JSON.stringify(r.refs ?? []))}"
+      data-subjects="${esc(JSON.stringify(r.subjects ?? []))}" data-audio="${esc(JSON.stringify(r.audio ?? []))}"
+      data-voices="${esc(JSON.stringify(r.voices ?? []))}" data-key="${esc(r.key ?? '')}">
       <div class="shothead">
         <button type="button" class="shotfold" aria-expanded="${!folded}" title="Fold or unfold this shot">
           <b>Shot ${k + 1}</b></button>
@@ -194,14 +232,30 @@ function drawShots(rows) {
         <input class="shotframes" type="number" value="${r.frames ?? ''}" aria-label="Shot ${k + 1} frames">
         <label data-help="vprompt">Prompt</label>
         <prompt-box><textarea class="short" aria-label="Shot ${k + 1} prompt"
-          placeholder="${k ? 'what happens next: an action, a line spoken' : 'the crab lifts a claw, slow camera push in'}">${esc(r.text ?? '')}</textarea></prompt-box>
+          placeholder="${k ? 'what happens next: an action, where the camera is' : 'the crab lifts a claw, slow camera push in'}">${esc(r.text ?? '')}</textarea></prompt-box>
+        <div class="shotsoundrows" hidden>
+          <label data-help="vshotcast">Who is in it</label>
+          <input type="text" class="shotcast" value="${esc((r.cast ?? []).join(', '))}" placeholder="Mara, Leo"
+            aria-label="Who is in shot ${k + 1}">
+          <label data-help="vshotlines">Spoken</label>
+          <textarea class="short shotlines" aria-label="Spoken in shot ${k + 1}"
+            placeholder="One line each — Mara: Who's there?  Leo (voiceover): I never left.">${esc(linesText(r.lines ?? []))}</textarea>
+          <label data-help="vshotsound">Sound</label>
+          <input type="text" class="shotsnd" value="${esc(r.sound ?? '')}" placeholder="rain on the roof, footsteps — empty is silence"
+            aria-label="Sound in shot ${k + 1}">
+          <label data-help="vshotmusic">Music</label>
+          <input type="text" class="shotmusic" value="${esc(r.music ?? '')}" placeholder="only the audience hears it — empty is none"
+            aria-label="Music in shot ${k + 1}">
+        </div>
         <div class="btnrow shotfrom">
-          <button type="button" class="btn shotkey" hidden title="The picture this cut starts from">Start from a picture…</button>
+          <button type="button" class="btn shotkey" hidden title="The image this shot starts from">Start from image…</button>
+          <button type="button" class="btn shotkeyup" hidden title="An image from this computer">Upload…</button>
           <img class="shotkeythumb" alt="" hidden>
           <button type="button" class="btn shotkeyclear" hidden>Clear</button>
           <button type="button" class="btn shotrefs" hidden>References…</button>
           <button type="button" class="btn shotsounds" hidden>Sounds…</button>
         </div>
+        <p class="sub shotwhy" hidden>A continue goes on from the last frame; references and sounds go on a cut.</p>
       </div>
     </div>`;
   }).join('');
@@ -245,7 +299,7 @@ function storeDrafts() {
 function matchesClip(c, rows, every, negative) {
   const segs = c.segments ?? [];
   return rows.length === segs.length
-    && rows.every((r, k) => rowMatches(r, segs[k], k))
+    && rows.every((r, k) => rowMatches(r, segs[k], k, c.source))
     && every.trim() === (c.every ?? '').trim()
     && negative === (c.typed_negative ?? c.negative ?? '');
 }
@@ -301,7 +355,7 @@ function rowsSeconds(m) {
 function syncShots() {
   const m = currentVideoModel();
   const live = liveRows();
-  const st = shotState(live, clip, chains(clip));
+  const st = shotState(live, clip, chains(clip), clipTake(clip));
   const doneRows = new Set(live.slice(0, st.done).map((r) => r.i));
   const lastDone = st.dropLast >= 0 ? live[st.dropLast]?.i : -1;
   const els = rowEls();
@@ -317,22 +371,31 @@ function syncShots() {
     const start = el.querySelector('.shotstart');
     start.hidden = i === 0 || !keyOk;
     for (const b of start.querySelectorAll('[data-start]')) b.classList.toggle('active', (b.dataset.start === '1') === cut);
-    // References on a cut, or on shot 1 without a first frame: H3 can't
-    // follow them and go on from a frame at once.
+    // References on a cut, or on shot 1, never beside its image: H3 can't
+    // follow them and go on from a frame at once. A row may hold both (a
+    // storyboard's does): on H3 its references win and the image waits in
+    // `data-key` for Wan, which in turn holds the references unseen
+    // (`sentRow` sends what the model takes).
     const refs = el.querySelector('.shotrefs');
     const n = JSON.parse(el.dataset.refs || '[]').length;
+    const a = JSON.parse(el.dataset.audio || '[]').length;
     const key = el.dataset.key || '';
-    refs.hidden = !refsOk || (i === 0 ? !!vSource.get() : !cut || !!key);
+    const followed = (refsOk ? n : 0) + (m?.sounds ? a : 0);
+    // Shot 1 and a cut start fresh: from an image, or on H3 from references.
+    const fresh = i === 0 || cut;
+    refs.hidden = !refsOk || !fresh || (!!key && !followed);
     refs.textContent = n ? `References (${n})` : 'References…';
     // Sounds go where references go, on an H3 with its audio VAE.
     const sounds = el.querySelector('.shotsounds');
-    const a = JSON.parse(el.dataset.audio || '[]').length;
-    sounds.hidden = !m?.sounds || (i === 0 ? !!vSource.get() : !cut || !!key);
+    sounds.hidden = !m?.sounds || !fresh || (!!key && !followed);
     sounds.textContent = a ? `Sounds (${a})` : 'Sounds…';
-    // A cut may start from a picture instead — on Wan the only way to cut.
+    el.querySelector('.shotwhy').hidden = !refsOk || fresh;
+    el.querySelector('.shotsoundrows').hidden = !m?.sounds;
+    // Shot 1's image is the clip's first frame; a cut's is how Wan cuts.
     const keyBtn = el.querySelector('.shotkey');
-    keyBtn.hidden = !cut || !keyOk || n > 0 || a > 0;
-    keyBtn.textContent = key ? 'Another picture…' : 'Start from a picture…';
+    keyBtn.hidden = !fresh || (i > 0 && !keyOk) || followed > 0;
+    keyBtn.textContent = key ? 'Another image…' : 'Start from image…';
+    el.querySelector('.shotkeyup').hidden = keyBtn.hidden;
     const thumb = el.querySelector('.shotkeythumb');
     thumb.hidden = keyBtn.hidden || !key;
     if (key) thumb.src = `/outputs/${encodeURIComponent(key)}/thumb.png`;
@@ -637,7 +700,8 @@ function vidPayload(rows) {
     // Sent even when empty: an emptied box means "no negative", which is not
     // the same as "inherit the model's".
     negative: $('vnegative').value,
-    source: vSource.get(),
+    // Shot 1's image: the clip's first frame.
+    source: rows[0] ? sentRow(rows[0], 0, takeOf(m)).key : null,
     width: numOr('vw'),
     height: numOr('vh'),
     fps: numOr('vfps'),
@@ -652,7 +716,7 @@ function vidPayload(rows) {
     parts: videoParts.picked(),
     // Always sent, `[]` included: the picker is the whole answer.
     loras: videoLoras.get(),
-    shots: rows.map(shotWire),
+    shots: rows.map((r, k) => shotWire(r, k, takeOf(m))),
     every: $('veverytext').value,
   };
 }
@@ -735,13 +799,14 @@ async function startClip() {
 async function extendClip() {
   const c = clip;
   const live = liveRows();
-  const st = shotState(live, c, chains(c));
+  const st = shotState(live, c, chains(c), clipTake(c));
   if (!c || busyClips.has(c.id) || (st.action !== 'extend' && st.action !== 'redo')) return;
   const keep = st.action === 'redo' ? st.done : c.segments.length;
   await runOnClip({
     id: c.id,
     keep,
-    shots: st.pending.map(shotWire),
+    // On the clip's own model, so what it takes.
+    shots: st.pending.map((r, j) => shotWire(r, keep + j, clipTake(c))),
     every: $('veverytext').value,
     negative: $('vnegative').value,
   }, [...live.slice(0, keep), ...st.pending]);
@@ -942,7 +1007,7 @@ function newClip() {
   markClips();
   $('verr').textContent = '';
   $('veverytext').value = '';
-  vSource.set(null);
+  $('vsentnote').textContent = '';
   // A seed of its own from the start, so the first render can be drawn again.
   drawShots([{ text: '', seed: randomSeed(), frames: currentVideoModel()?.frames ?? null, folded: false }]);
   snapShotFrames();
@@ -981,7 +1046,7 @@ function applyClip(c) {
   $('vmoe').hidden = !(currentVideoModel() || {}).is_moe;
   $('vhsteps').value = v.high_noise_steps ?? '';
   $('vhcfg').value = v.high_noise_cfg_scale ?? '';
-  vSource.set(c.source);
+  $('vsentnote').textContent = '';
   // Its shots, with their seeds and lengths — to extend, to redo from one,
   // to make again, or to edit.
   $('veverytext').value = c.every ?? '';
@@ -999,18 +1064,39 @@ function applyClip(c) {
   syncVideoSummaries();
 }
 
-// ---- The first frame --------------------------------------------------------
+// ---- From the Agent tab ------------------------------------------------------
 
-// The Image tab's "Start from" slot, from the same factory. Its pick, upload,
-// drop and paste all end in a `work/output/` stem, which is what `/video` takes.
-export const vSource = sourceSlot({
-  prefix: 'vsrc',
-  tab: 'tab-video',
-  none: 'None — text to video. Choose, upload, drop or paste an image to animate it.',
-  err: 'verr',
-  // Shot 1's references can't sit beside a first frame.
-  onChange: () => syncShots(),
-});
+// A storyboard's shots, sent from the Agent tab (`/chats/film {send}`), as a
+// new clip: the one on screen keeps its draft. Nothing is drawn until
+// Generate clip.
+export function openShots({ every, source, shots, note }) {
+  newClip();
+  $('veverytext').value = every ?? '';
+  const frames = currentVideoModel()?.frames ?? null;
+  drawShots(shots.map((r, k) => ({ ...r, frames: r.frames ?? frames, key: k === 0 ? source ?? null : r.key, folded: false })));
+  snapShotFrames();
+  $('vsentnote').textContent = note || '';
+  document.querySelector('.tab[data-tab="video"]')?.click();
+  $('vfold-prompt').open = true;
+  syncVideoSummaries();
+  syncRailDots();
+}
+
+// A row's starting image from this computer: the row whose Upload was pressed.
+let uploadFor = null;
+
+async function takeImage(row, file) {
+  if (!row || !file) return;
+  $('verr').textContent = '';
+  try {
+    row.dataset.key = await upload(file);
+  } catch (e) {
+    $('verr').textContent = 'Could not import that image: ' + (e.message || e);
+  }
+  syncShots();
+  syncVideoSummaries();
+  keepDraft();
+}
 
 // The tab is a workspace like the Image tab's: its panels kept the folds' ids,
 // and the first time Prompts and Generation are open, Current in the corner.
@@ -1087,7 +1173,14 @@ export function initVideo() {
       row.dataset.cut = e.target.closest('[data-start]').dataset.start;
       // A shot that goes on from a frame can't follow references, or start
       // from a picture of its own.
-      if (row.dataset.cut === '0') { row.dataset.refs = '[]'; row.dataset.audio = '[]'; row.dataset.key = ''; }
+      if (row.dataset.cut === '0') {
+        for (const k of ['refs', 'subjects', 'audio', 'voices']) row.dataset[k] = '[]';
+        row.dataset.key = '';
+      }
+    } else if (e.target.closest('.shotkeyup')) {
+      uploadFor = row;
+      $('vkeyfile').click();
+      return;
     } else if (e.target.closest('.shotkey')) {
       choosePicture((stem) => {
         row.dataset.key = stem;
@@ -1099,24 +1192,33 @@ export function initVideo() {
     } else if (e.target.closest('.shotkeyclear')) {
       row.dataset.key = '';
     } else if (e.target.closest('.shotrefs')) {
-      editRefs(JSON.parse(row.dataset.refs || '[]'), (stems) => {
+      // Each picture's name, its look kept from the storyboard while the
+      // picture stays.
+      const was = JSON.parse(row.dataset.subjects || '[]');
+      const had = JSON.parse(row.dataset.refs || '[]');
+      editRefs(had, (stems, names) => {
         row.dataset.refs = JSON.stringify(stems);
+        row.dataset.subjects = JSON.stringify(stems.map((stem, k) => ({
+          name: names[k] ?? '', look: was[had.indexOf(stem)]?.look ?? '',
+        })));
         syncShots();
         syncVideoSummaries();
         keepDraft();
       }, `Pictures shot ${i + 1} follows: a face, a costume, a place — MiniMax H3 keeps who and what is in `
         + 'them. The shot starts fresh, a new camera shot, since H3 cannot follow references and go on from '
-        + 'a frame at once. Say in its prompt who is who.');
+        + 'a frame at once. Name who each one is, as the shot\'s words and lines do.', had.map((_, k) => was[k]?.name ?? ''));
       return;
     } else if (e.target.closest('.shotsounds')) {
-      editSounds(JSON.parse(row.dataset.audio || '[]'), (stems) => {
+      editSounds(JSON.parse(row.dataset.audio || '[]'), (stems, voices) => {
         row.dataset.audio = JSON.stringify(stems);
+        row.dataset.voices = JSON.stringify(voices);
         syncShots();
         syncVideoSummaries();
         keepDraft();
       }, `Sounds shot ${i + 1} follows, up to three and 15 seconds in all: a voice to speak in, a sound to `
-        + 'match. Name them in its prompt as <Audio 1>, <Audio 2> — "the woman speaks in the voice of '
-        + '<Audio 1>". Like references, they start the shot fresh.');
+        + 'match. Give a voice the name its speaker has in Spoken, or name it in the prompt as <Audio 1> — '
+        + '"the woman speaks in the voice of <Audio 1>". Like references, they start the shot fresh.',
+      JSON.parse(row.dataset.voices || '[]'));
       return;
     } else return;
     syncShots();
@@ -1135,11 +1237,36 @@ export function initVideo() {
   $('vextend').addEventListener('click', extendClip);
   $('vclearmodel').addEventListener('click', () => saveVideoDefaults(true));
   $('vstop').addEventListener('click', cancelClip);
-  vSource.init();
+  $('vkeyfile').addEventListener('change', (e) => {
+    takeImage(uploadFor, e.target.files[0]);
+    // Cleared so re-picking the same file fires `change` again.
+    e.target.value = '';
+  });
+  // An image dropped on a row's buttons starts that shot; a paste on the
+  // tab, shot 1 — the first frame, as the old slot took it.
+  $('vshots').addEventListener('dragover', (e) => { if (e.target.closest('.shotfrom')) e.preventDefault(); });
+  $('vshots').addEventListener('drop', (e) => {
+    const from = e.target.closest('.shotfrom');
+    if (!from || from.querySelector('.shotkey').hidden) return;
+    e.preventDefault();
+    takeImage(from.closest('.shotrow'), e.dataTransfer?.files?.[0]);
+  });
+  document.addEventListener('paste', (e) => {
+    if ($('tab-video').hidden || document.querySelector('dialog[open]')) return;
+    if (/^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName)) return;
+    const row = rowEls()[0];
+    if (!row || row.querySelector('.shotkey').hidden) return;
+    const file = [...(e.clipboardData?.items || [])].find((x) => x.kind === 'file' && x.type.startsWith('image/'));
+    if (file) {
+      e.preventDefault();
+      takeImage(row, file.getAsFile());
+    }
+  });
   videoLoras.init();
   $('pickclose').addEventListener('click', () => $('picker').close());
   for (const g of grids) g.init();
-  $('vmodel').addEventListener('change', syncVideo);
+  // A sent board's note spoke of the model it was sent to.
+  $('vmodel').addEventListener('change', () => { $('vsentnote').textContent = ''; syncVideo(); });
   $('vturbo').addEventListener('change', () => {
     const m = currentVideoModel();
     if (m) vTurboMem.remember(m.name, $('vturbo').checked);

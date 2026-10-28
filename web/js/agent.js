@@ -7,7 +7,9 @@ import { cancelPost, onPassResult, onViewerResult, setLook, setViewerImage, show
 import { openWorkItem } from './workitems.js';
 import { choosePicture, chooseSound, upload } from './source-slot.js';
 import { askForSound, playSound } from './sounds.js';
-import { mainAction, parseLines, renderChat, sessionHtml, stateText, storyHtml } from './chatview.js';
+import { framesLabel, mainAction, renderChat, sessionHtml, stateText, storyHtml } from './chatview.js';
+import { parseLines } from './lines.js';
+import { openShots } from './video.js';
 import { openGetModels } from './getmodels.js';
 
 // ---- The Agent tab ------------------------------------------------------------
@@ -171,13 +173,14 @@ function drawStory() {
   const what = busy() ? null : mainAction(data?.chat.film);
   $('astorydraw').hidden = !what;
   if (what) $('astorydraw').textContent = what.label;
+  $('astoryframes').hidden = busy() || !framesLabel(data?.chat.film);
   const body = $('astorybody');
   if (body.contains(document.activeElement) && document.activeElement.matches('input, textarea')) {
     body.dataset.stale = '1';
     return;
   }
   delete body.dataset.stale;
-  body.innerHTML = storyHtml(data?.chat ?? { film: null }, { busy: busy(), off: data?.toolkit.film_off, models: data?.toolkit.models ?? [], videos: data?.toolkit.videos ?? [] });
+  body.innerHTML = storyHtml(data?.chat ?? { film: null }, { busy: busy(), off: data?.toolkit.film_off, models: data?.toolkit.models ?? [] });
 }
 
 // One field of the board, as it was edited.
@@ -194,6 +197,18 @@ async function editFilm(fields) {
   }
 }
 
+// The board's shots onto the Video tab, as a new clip for its model: the
+// clip is made there. Sent again after an edit, it is another new clip.
+async function sendToVideo() {
+  if (!data) return;
+  $('astoryerr').textContent = '';
+  try {
+    openShots(await post('/chats/film', { id: chatId(), send: true, video_model: videoModel() }));
+  } catch (e) {
+    $('astoryerr').textContent = String(e.message || e);
+  }
+}
+
 let pickFor = null; // the cast member an upload is for
 
 function initStory() {
@@ -202,7 +217,6 @@ function initStory() {
     const t = e.target;
     if (t.matches('[data-film-every]')) editFilm({ every: t.value });
     else if (t.matches('[data-film-model]')) editFilm({ image_model: t.value });
-    else if (t.matches('[data-film-video]')) editFilm({ video_model: t.value });
     else if (t.dataset.filmMember != null) editFilm({ member: Number(t.dataset.filmMember), [t.dataset.field]: t.value });
     else if (t.dataset.filmShot != null) {
       const k = Number(t.dataset.filmShot);
@@ -219,7 +233,8 @@ function initStory() {
     if (!b) return;
     const d = b.dataset;
     const picture = (k) => (stem) => editFilm({ member: k, picture: { kind: 'output', id: stem } });
-    if (d.filmPick != null) choosePicture(picture(Number(d.filmPick)));
+    if (d.filmDrawcast != null) editFilm({ draw: true, frames: false });
+    else if (d.filmPick != null) choosePicture(picture(Number(d.filmPick)));
     // Drawn on the same press, as a person pressing it means.
     else if (d.filmRedraw != null) editFilm({ member: Number(d.filmRedraw), picture: null, draw: true });
     else if (d.filmKey != null) {
@@ -242,9 +257,9 @@ function initStory() {
     } else if (d.filmNovoice != null) editFilm({ member: Number(d.filmNovoice), voice: null });
   });
   $('astorydraw').addEventListener('click', () => {
-    const what = mainAction(data?.chat.film);
-    if (what) editFilm(what.body);
+    if (mainAction(data?.chat.film)) sendToVideo();
   });
+  $('astoryframes').addEventListener('click', () => editFilm({ draw: true, frames: true }));
   $('astoryfile').addEventListener('change', async () => {
     const f = $('astoryfile').files[0];
     $('astoryfile').value = '';

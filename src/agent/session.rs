@@ -37,9 +37,6 @@ pub enum Step {
     CastSheet(usize),
     /// Shot `k`'s keyframe is drawn.
     Keyframe(usize),
-    /// Shot `k` is filmed: shot 1 makes the clip, a later one extends it,
-    /// a retake redoes it.
-    Shot(usize),
     End,
 }
 
@@ -59,8 +56,6 @@ pub fn next_step(chat: &Chat) -> Step {
             .find(|a| a.state == ActionState::Queued)
             .map_or(Step::End, |a| Step::Escalate(a.id)),
         Next::Film => chat.film.as_ref().and_then(draw_step).unwrap_or(Step::End),
-        Next::Shoot => chat.film.as_ref().filter(|f| f.shot < f.shots.len()).map_or(Step::End, |f| Step::Shot(f.shot)),
-        Next::Take => Step::Turn(Mode::Take),
     }
 }
 
@@ -98,63 +93,96 @@ fn draw_step(film: &Film) -> Option<Step> {
     cast_step(film).or_else(|| film.frames.then(|| frame_step(film)).flatten())
 }
 
-/// Whether a film may be shot: its board whole and ready, or its filming
-/// stopped part way, to go on.
-pub fn can_go(f: &Film) -> bool {
-    match f.phase {
-        Phase::Ready => board_step(f).is_none(),
-        Phase::Shooting => f.shot < f.shots.len(),
-        _ => false,
-    }
-}
-
-/// The person's go (the Story panel's *Film*, or "go" in the chat): film the
-/// shots from the first, or from where a stop left it. `watch`: the agent
-/// model sees, so each shot is looked at.
-pub fn go(chat: &mut Chat, watch: bool, retakes: u32) -> Result<(), String> {
-    let f = chat.film.as_mut().ok_or("this chat has no storyboard")?;
-    if !can_go(f) {
-        return Err(match f.phase {
-            Phase::Board => "the storyboard still has pictures to draw: press Draw the cast first".into(),
-            Phase::Done => "this film is done; ask for a new storyboard to make another".into(),
-            _ => "nothing is left to film".into(),
-        });
-    }
-    if f.phase == Phase::Ready {
-        f.shot = 0;
-        f.clip = None;
-        for s in &mut f.shots {
-            s.takes = 0;
-            s.seed = 0;
-            s.checks.clear();
+/// The board as the Video tab's Shots panel takes it (`openShots` in
+/// `video.js`): its look, the first frame, a row per shot, each holding all
+/// the board has — the cast's pictures and voices, the keyframe, the words.
+/// The rows choose per model (`shotWire`): H3 follows the pictures, Wan
+/// starts a cut from its keyframe; chosen here for the model selected at the
+/// press, a switch on the Video tab afterwards had nothing to show. `to`, that
+/// model, only words the notes. Pictures not drawn yet are left out:
+/// drawing them is optional.
+pub fn send_shots(f: &Film, to: &super::toolkit::VideoView) -> Result<Value, String> {
+    let mut source = None;
+    let mut rows = Vec::new();
+    let mut wordless = 0;
+    for (k, s) in f.shots.iter().enumerate() {
+        let (spec, key) = shot_spec(f, k);
+        let fresh = k == 0 || s.cut;
+        if fresh && !to.references && key.is_none() && !s.no_key {
+            wordless += 1;
         }
+        if k == 0 {
+            source = key;
+        }
+        let w = &spec.words;
+        rows.push(serde_json::json!({
+            "text": spec.text,
+            "seed": -1,
+            "frames": null,
+            "cut": spec.cut,
+            "refs": spec.references,
+            "audio": spec.audio,
+            "key": spec.keyframe,
+            "lines": w.lines,
+            "sound": w.sound,
+            "music": w.music,
+            "cast": w.cast,
+            "subjects": w.subjects,
+            "voices": w.voices,
+        }));
     }
-    f.phase = Phase::Shooting;
-    f.watch = watch;
-    f.retakes = retakes;
-    chat.session.next = Next::Shoot;
-    Ok(())
+    let mut notes = Vec::new();
+    if wordless > 0 {
+        let one = wordless == 1;
+        notes.push(format!(
+            "{wordless} shot{} that start{} a scene {} no first frame: {} from {} words.",
+            if one { "" } else { "s" },
+            if one { "s" } else { "" },
+            if one { "has" } else { "have" },
+            if one { "it starts" } else { "they start" },
+            if one { "its" } else { "their" },
+        ));
+    }
+    // On H3 the cast's pictures are the references; one not drawn is words.
+    let unpictured: Vec<&str> = f
+        .cast
+        .iter()
+        .filter(|m| m.stem.is_none() && f.shots.iter().enumerate().any(|(k, s)| (k == 0 || s.cut) && s.cast.contains(&m.name)))
+        .map(|m| m.name.as_str())
+        .collect();
+    if to.references && !unpictured.is_empty() {
+        notes.push(format!("{} {} no picture yet, so the shots follow them from their words.", unpictured.join(", "), if unpictured.len() == 1 { "has" } else { "have" }));
+    }
+    let said = f.shots.iter().any(|s| !s.lines.is_empty() || !s.sound.trim().is_empty() || !s.music.trim().is_empty());
+    if said && !to.references {
+        notes.push(format!("{} films no sound, so the lines, sounds and music are left out.", to.name));
+    }
+    let voiced = f.cast.iter().any(|m| m.voice.is_some());
+    if voiced && to.references && !to.sounds {
+        notes.push(format!("{} has no audio VAE picked, so the cast's voices are left out.", to.name));
+    }
+    Ok(serde_json::json!({ "every": f.every, "source": source, "shots": rows, "note": notes.join(" ") }))
 }
 
-/// What shot `k` of the film is sent to the video model as — on H3 the
-/// prompt its guide lays out (`h3prompt`), else its words — with a
-/// seed of its own, the model's length. A cut — and shot 1 — starts from its
-/// keyframe on a model without references (shot 1's is the clip's source,
-/// not on the spec), and from the pictures of the cast it names on one with
-/// them (front pictures: a turnaround's four figures may read as four people).
-pub fn shot_spec(f: &Film, k: usize, seed: i64) -> crate::pipeline::ShotSpec {
+/// Shot `k` of the film as a Shots row, and the picture it starts from, for
+/// any video model. A cut — and shot 1 — carries the pictures of the cast it
+/// names (front pictures: a turnaround's four figures may read as four
+/// people) and the voices of those who speak in it, for H3, and its keyframe,
+/// which for shot 1 is the clip's first frame, not on the spec, for Wan. What
+/// is said, heard and scored goes too; the engine writes it into H3's prompt
+/// layout (`h3prompt`) and Wan's row never sends it.
+pub fn shot_spec(f: &Film, k: usize) -> (crate::pipeline::ShotSpec, Option<String>) {
     let s = &f.shots[k];
     let fresh = k == 0 || s.cut;
-    let pictured: Vec<&Member> = if fresh && f.references {
+    let pictured: Vec<&Member> = if fresh {
         s.cast.iter().filter_map(|n| f.member(n).filter(|m| m.stem.is_some())).take(crate::config::MAX_REFERENCES).collect()
     } else {
         Vec::new()
     };
-    let references = pictured.iter().filter_map(|m| m.stem.clone()).collect();
     // The voices of those who speak on screen or over it, in the order they
     // first do, where references may go: a continue can't take them.
     let mut voiced: Vec<&Member> = Vec::new();
-    if fresh && f.references {
+    if fresh {
         for l in &s.lines {
             if let Some(m) = f.member(&l.who).filter(|m| m.voice.is_some()) {
                 if !voiced.iter().any(|v| v.name == m.name) && voiced.len() < crate::pipeline::MAX_REF_AUDIO {
@@ -163,93 +191,26 @@ pub fn shot_spec(f: &Film, k: usize, seed: i64) -> crate::pipeline::ShotSpec {
             }
         }
     }
-    let audio = voiced.iter().filter_map(|m| m.voice.clone()).collect();
-    // H3's whole prompt, `every` inside it (`shoot` sends none of its own).
-    let text = if f.references {
-        let names: Vec<String> = pictured.iter().map(|m| m.name.clone()).collect();
-        let voices: Vec<String> = voiced.iter().map(|m| m.name.clone()).collect();
-        super::h3prompt::compose(f, k, &names, &voices, !fresh)
-    } else {
-        s.text.clone()
+    let key = (fresh && !s.no_key).then(|| s.key_stem.clone()).flatten();
+    let words = crate::videos::ShotWords {
+        lines: s.lines.clone(),
+        sound: s.sound.clone(),
+        music: s.music.clone(),
+        cast: s.cast.clone(),
+        subjects: pictured.iter().map(|m| crate::videos::Subject { name: m.name.clone(), look: m.look.clone() }).collect(),
+        voices: voiced.iter().map(|m| m.name.clone()).collect(),
     };
-    crate::pipeline::ShotSpec {
-        text,
-        seed,
+    let spec = crate::pipeline::ShotSpec {
+        text: s.text.clone(),
+        seed: -1,
         frames: None,
         cut: k > 0 && s.cut,
-        references,
-        keyframe: if k > 0 && s.cut && !f.references { s.key_stem.clone() } else { None },
-        audio,
-    }
-}
-
-/// Shot `k` is filmed, into clip `clip` on `seed`: looked at next when the
-/// agent can see, else the next shot.
-pub fn shot_done(chat: &mut Chat, k: usize, seed: i64, clip: &str) {
-    let Some(f) = chat.film.as_mut() else { return };
-    f.clip = Some(clip.to_string());
-    if let Some(s) = f.shots.get_mut(k) {
-        s.seed = seed;
-        s.takes += 1;
-        s.checks.clear();
-    }
-    if f.watch {
-        chat.session.next = Next::Take;
-    } else {
-        next_shot(chat);
-    }
-}
-
-/// The yes/no questions a take is judged by: the server's, the same for
-/// every film, so a small model can't set itself an easy test.
-pub fn take_checks(f: &Film, k: usize) -> Vec<String> {
-    let Some(s) = f.shots.get(k) else { return Vec::new() };
-    let mut out = vec![format!("Does the shot show what it should: \"{}\"?", s.text)];
-    let pictured: Vec<&str> = take_cast(f, k).iter().map(|m| m.name.as_str()).collect();
-    if !pictured.is_empty() {
-        out.push(format!("Do {} look like their pictures?", pictured.join(" and ")));
-    }
-    if k > 0 && !s.cut {
-        out.push("Does it carry on from the frame before it: the same people, place and light?".into());
-    }
-    out
-}
-
-/// The cast a take is shown beside the shot: its first two with a picture,
-/// as they should look.
-pub fn take_cast(f: &Film, k: usize) -> Vec<&Member> {
-    f.shots.get(k).map_or(Vec::new(), |s| s.cast.iter().filter_map(|n| f.member(n).filter(|m| m.picture.is_some())).take(2).collect())
-}
-
-/// The film moves on: the next shot, or done — its clip in the chat, and
-/// which shots were left failing a check.
-fn next_shot(chat: &mut Chat) {
-    let Some(f) = chat.film.as_mut() else { return };
-    f.shot += 1;
-    if f.shot < f.shots.len() {
-        chat.session.next = Next::Shoot;
-        return;
-    }
-    f.phase = Phase::Done;
-    chat.session.next = Next::Nothing;
-    let (id, title, watch, retakes) = (f.clip.clone().unwrap_or_default(), f.title.clone(), f.watch, f.retakes);
-    let failing: Vec<String> =
-        f.shots.iter().enumerate().filter(|(_, s)| s.checks.contains(&false)).map(|(k, s)| format!("{} ({} takes)", k + 1, s.takes)).collect();
-    let n = chat.next_n();
-    chat.messages.push(Msg::Clip { n, ms: super::chat::now_ms(), id, title });
-    if !watch {
-        chat.note("No shot was checked: the agent model can't see pictures.");
-    } else if !failing.is_empty() {
-        let after = match retakes {
-            0 => "with retakes off in Settings → Agent",
-            1 => "after a retake",
-            _ => "after its retakes",
-        };
-        chat.note(format!(
-            "Still failing a check {after}: shot {}. Redo from that shot on the Video tab, or ask for another take.",
-            failing.join(", ")
-        ));
-    }
+        references: pictured.iter().filter_map(|m| m.stem.clone()).collect(),
+        keyframe: if k > 0 { key.clone() } else { None },
+        audio: voiced.iter().filter_map(|m| m.voice.clone()).collect(),
+        words,
+    };
+    (spec, key)
 }
 
 /// An edit of the board from the Story panel, the route's body less what
@@ -366,7 +327,7 @@ pub fn edit_board(c: &mut Chat, e: &BoardEdit) -> Result<(), String> {
             if lines.iter().any(|l| l.who.trim().is_empty() && !l.words.trim().is_empty()) {
                 return Err("each line starts with who says it: \"Mara: Who's there?\"".into());
             }
-            let (lines, unknown) = super::h3prompt::clean_lines(&names, lines);
+            let (lines, unknown) = crate::h3prompt::clean_lines(&names, lines);
             if !unknown.is_empty() {
                 return Err(format!("{} isn't in the cast — a line is said by one of them, or the narrator", unknown.join(", ")));
             }
@@ -400,13 +361,10 @@ pub fn edit_board(c: &mut Chat, e: &BoardEdit) -> Result<(), String> {
 
 /// After the board changed: with `draw`, draw what it is missing; without,
 /// leave that to the person (the Story panel's *Draw the cast*), who may
-/// want to read the looks first. With nothing missing it is ready and waits
-/// for the person's go.
+/// want to read the looks first. With nothing missing it is ready to send
+/// to the Video tab.
 pub fn board_advance(chat: &mut Chat, shot_seconds: f32, draw: bool) {
     let Some(film) = chat.film.as_mut() else { return };
-    if !matches!(film.phase, Phase::Board | Phase::Ready) {
-        return;
-    }
     if board_step(film).is_some() {
         film.phase = Phase::Board;
         let more = draw && draw_step(film).is_some();
@@ -414,7 +372,7 @@ pub fn board_advance(chat: &mut Chat, shot_seconds: f32, draw: bool) {
         let cast_done = draw && !more && chat.session.next == Next::Film && film.cast.iter().all(|m| m.stem.is_some());
         chat.session.next = if more { Next::Film } else { Next::Nothing };
         if cast_done {
-            chat.note("The cast is drawn. Look them over, then press Draw the first frames.");
+            chat.note("The cast is drawn. Look them over; Draw the first frames if you want shots to start from a picture, or send it to the Video tab.");
         }
         return;
     }
@@ -426,17 +384,27 @@ pub fn board_advance(chat: &mut Chat, shot_seconds: f32, draw: bool) {
     if was == Phase::Board {
         let secs = (n as f32 * shot_seconds).round();
         chat.note(format!(
-            "The storyboard is ready: {n} shot{}, about {secs} s of video. Say go, or press Film.",
+            "The storyboard is ready: {n} shot{}, about {secs} s of video. Press Send to Video tab, then Generate clip there.",
             if n == 1 { "" } else { "s" }
         ));
     }
 }
 
-/// The Story panel's main button pressed: *Draw the cast* while a member
-/// lacks a picture, else *Draw the first frames*.
+/// A draw pressed in the Story panel without saying which (a first frame
+/// clicked to draw it again): the cast while a member lacks a picture, else
+/// the first frames.
 pub fn board_press(chat: &mut Chat, shot_seconds: f32) {
+    let frames = chat.film.as_ref().is_some_and(|f| cast_step(f).is_none());
+    board_press_for(chat, shot_seconds, frames);
+}
+
+/// *Draw the cast* (`frames` false), or *Draw the first frames* (true),
+/// which draws any of the cast still missing first, since the frames are
+/// drawn with their pictures. Both are optional: a board is sent to the
+/// Video tab with whatever it has.
+pub fn board_press_for(chat: &mut Chat, shot_seconds: f32, frames: bool) {
     if let Some(f) = chat.film.as_mut() {
-        f.frames = cast_step(f).is_none();
+        f.frames = frames;
     }
     board_advance(chat, shot_seconds, true);
 }
@@ -690,12 +658,6 @@ pub struct ReplyJson {
     pub best: Option<u32>,
     #[serde(default)]
     pub negative: Option<String>,
-    /// Take: an answer per check, and the shot's words rewritten for a
-    /// retake ("" to keep them).
-    #[serde(default)]
-    pub answers: Option<Vec<bool>>,
-    #[serde(default)]
-    pub better_text: Option<String>,
     /// Story: the film's title, its look, the image model its pictures are
     /// drawn with, cast and shots.
     #[serde(default)]
@@ -873,7 +835,7 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
         names.truncate(crate::config::MAX_REFERENCES);
         let k = shots.len();
         let names_all: Vec<String> = cast.iter().map(|m| m.name.clone()).collect();
-        let (lines, who) = super::h3prompt::clean_lines(&names_all, &s.lines);
+        let (lines, who) = crate::h3prompt::clean_lines(&names_all, &s.lines);
         for w in who {
             if !unknown.iter().any(|u| u.eq_ignore_ascii_case(&w)) {
                 unknown.push(w);
@@ -930,17 +892,16 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
         references: video.references,
         image_model: image,
         sheets,
-        watch: false,
         frames: false,
-        retakes: old.as_ref().map_or(super::knobs::DEFAULT_RETAKES, |f| f.retakes),
-        clip: None,
         phase: Phase::Board,
-        shot: 0,
     });
     board_advance(chat, video.shot_seconds(), false);
     if let Some(f) = chat.film.as_ref().filter(|f| f.phase == Phase::Board) {
         let press = if cast_step(f).is_some() { "Draw the cast" } else { "Draw the first frames" };
-        notes.push(format!("The storyboard is written. Read the cast in the Story panel, change what you like, then press {press}."));
+        notes.push(format!(
+            "The storyboard is written. Read it in the Story panel and change what you like; {press} if you want its \
+             pictures, or send it to the Video tab as it is."
+        ));
     }
 }
 
@@ -955,34 +916,6 @@ fn pick_image_model(chat: &Chat, picked: Option<&str>, old: Option<&Film>, t: &T
         .map(str::to_string)
         .or_else(|| old.map(|f| f.image_model.clone()).filter(|n| installed(n)))
         .unwrap_or_else(|| chat.settings.get("template").and_then(|v| v.as_str()).unwrap_or("").to_string())
-}
-
-/// A take judged: a retake on a new seed when a check failed and the shot
-/// has retakes left (`Film.retakes`), with the agent's better words if it
-/// wrote some. `true`
-/// when the film moves on instead, which the caller does after recording
-/// the reply, so the clip comes after it in the chat.
-fn take(chat: &mut Chat, r: &ReplyJson, notes: &mut Vec<String>) -> bool {
-    let Some(f) = chat.film.as_mut() else { return false };
-    let (k, retakes) = (f.shot, f.retakes);
-    let want = take_checks(f, k).len();
-    let Some(s) = f.shots.get_mut(k) else { return false };
-    let mut answers: Vec<bool> = r.answers.clone().unwrap_or_default().into_iter().take(want).collect();
-    // An answer the grammar didn't deliver is no pass.
-    answers.resize(want, false);
-    s.checks = answers;
-    if s.checks.iter().all(|b| *b) || s.takes > retakes {
-        return true;
-    }
-    let better = plain(r.better_text.as_deref().unwrap_or(""));
-    if !better.is_empty() && better != s.text {
-        notes.push(format!("Shot {} again, as: {better}", k + 1));
-        s.text = better;
-    } else {
-        notes.push(format!("Shot {} again, on a new seed.", k + 1));
-    }
-    chat.session.next = Next::Shoot;
-    false
 }
 
 /// A small model writes Markdown whatever it is told; in a look or a prompt
@@ -1189,7 +1122,6 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
     let mut keepers = Vec::new();
     let mut action_id = None;
     let mut table = false;
-    let mut film_on = false;
     match mode {
         Mode::Plan if chat.session.sweep.is_some() => {
             chat.session.checks = plan_checks(&r);
@@ -1309,13 +1241,6 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
                         None => Next::Nothing,
                     }
                 }
-                Some("go") => match go(chat, t.vision, t.rules.film_retakes) {
-                    Ok(()) => Next::Shoot,
-                    Err(why) => {
-                        notes_out.push(format!("Not filming: {why}."));
-                        Next::Nothing
-                    }
-                },
                 // The storyboard is a turn of its own (`Mode::Story`), whose
                 // schema is the board: the chat's would be twice as long.
                 Some("film") if t.films() => {
@@ -1331,7 +1256,7 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
             };
         }
         Mode::Describe | Mode::Verdict => chat.session.next = Next::Nothing,
-        Mode::Take => film_on = take(chat, &r, &mut notes_out),
+        Mode::Take => chat.session.next = Next::Nothing,
         Mode::Story => {
             chat.session.next = Next::Nothing;
             chat.session.mode = Mode::Chat;
@@ -1361,9 +1286,6 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
     if table {
         let t = sweep_table(chat);
         chat.note(t);
-    }
-    if film_on {
-        next_shot(chat);
     }
     // A new round is begun by the worker (it draws the seed), so a reply only
     // says "a round next"; the round itself starts when the leg goes on.
@@ -1506,6 +1428,7 @@ mod tests {
             label: "a video model",
             chains: true,
             references: h3,
+            sounds: h3,
             width: 832,
             height: 480,
             frames: 121,
@@ -1723,7 +1646,7 @@ mod tests {
         let cut = (1..f.shots.len()).find(|&k| f.shots[k].cut).unwrap();
         edit_board(&mut c, &BoardEdit { shot: Some(cut), no_keyframe: Some(true), ..Default::default() }).unwrap();
         let f = c.film.as_ref().unwrap();
-        let spec = shot_spec(f, cut, 7);
+        let (spec, _) = shot_spec(f, cut);
         assert!(spec.cut && spec.keyframe.is_none(), "a cut from its words");
         // Asked for again, it is drawn.
         edit_board(&mut c, &BoardEdit { shot: Some(0), no_keyframe: Some(false), ..Default::default() }).unwrap();
@@ -1760,31 +1683,38 @@ mod tests {
         assert!((0..f.shots.len()).all(|k| !f.keyframe_missing(k)));
     }
 
-    fn take_reply(c: &mut Chat, answers: Value, better: &str) {
-        let t = tk(c);
-        apply_reply(c, Mode::Take, reply(json!({"notes": "", "answers": answers, "better_text": better, "reply": ""})), &t, &Locks::default(), vec![], Default::default());
+    /// The video model of [`film_tk`].
+    fn video(h3: bool) -> super::super::toolkit::VideoView {
+        film_tk(&film_chat(), h3).video.unwrap()
+    }
+
+    fn spec(c: &Chat, k: usize) -> crate::pipeline::ShotSpec {
+        shot_spec(c.film.as_ref().unwrap(), k).0
     }
 
     #[test]
-    fn a_wan_film_cuts_from_its_keyframes_and_an_h3_one_from_its_cast() {
+    fn a_row_carries_both_its_keyframe_and_its_cast_for_any_model() {
         let c = ready(false);
-        let f = c.film.as_ref().unwrap();
-        let s1 = shot_spec(f, 1, 7);
+        let s1 = spec(&c, 1);
         assert!(!s1.cut && s1.keyframe.is_none() && s1.references.is_empty(), "a continue starts from the last frame");
-        let s2 = shot_spec(f, 2, 7);
-        assert!(s2.cut && s2.keyframe.as_deref() == Some("p2-s0") && s2.references.is_empty());
-        assert!(shot_spec(f, 0, 7).keyframe.is_none(), "shot 1's keyframe is the clip's source");
+        let s2 = spec(&c, 2);
+        assert!(s2.cut && s2.keyframe.as_deref() == Some("p2-s0"), "Wan cuts from its keyframe");
+        assert_eq!(s2.references, ["p1-s0"], "kept for H3, should the Video tab switch");
+        let (s0, key) = shot_spec(c.film.as_ref().unwrap(), 0);
+        assert!(s0.keyframe.is_none() && key.as_deref() == Some("p0-s0"), "shot 1's keyframe is the clip's first frame");
         let c = ready(true);
-        let f = c.film.as_ref().unwrap();
-        assert_eq!(shot_spec(f, 0, 7).references, ["mara-photo"], "shot 1 follows its cast");
-        let s2 = shot_spec(f, 2, 7);
+        assert_eq!(spec(&c, 0).references, ["mara-photo"], "shot 1 follows its cast");
+        let s2 = spec(&c, 2);
         assert!(s2.cut && s2.keyframe.is_none() && s2.references == ["p1-s0"]);
+        assert_eq!(s2.words.subjects[0].name, "Leo", "named, so the prompt says who");
     }
 
     #[test]
-    fn an_h3_shot_is_sent_as_its_guide_lays_it_out_and_a_wan_one_as_its_words() {
+    fn an_h3_shot_carries_what_is_said_and_heard_and_a_wan_one_its_words() {
         let c = ready(false);
-        assert_eq!(shot_spec(c.film.as_ref().unwrap(), 1, 7).text, "She steps into the rain.", "Wan: the words, `every` sent apart");
+        let s1 = spec(&c, 1);
+        assert_eq!(s1.text, "She steps into the rain.");
+        assert!(s1.words.lines.is_empty() && s1.words.subjects.is_empty(), "a continue follows no one's picture");
 
         let mut c = film_chat();
         let t = film_tk(&c, true);
@@ -1801,69 +1731,57 @@ mod tests {
         assert_eq!(f.shots[0].lines.len(), 1, "Bob isn't in the cast");
         assert_eq!((f.shots[0].lines[0].who.as_str(), f.shots[0].lines[0].words.as_str()), ("Mara", "Who's there?"));
         assert_eq!(f.shots[0].sound, "Rain on the porch.");
-        // Shot 1 follows Mara's picture: Ref2VA's sections, Mara as <Subject 1>.
-        let s0 = shot_spec(f, 0, 7);
-        assert!(s0.text.starts_with("subject_definitions:
-<Subject 1> is Mara in <Picture 1>"), "{}", s0.text);
-        assert!(s0.text.contains("<Subject 1> (S1) says: <d>[English] Who's there?</d>"), "{}", s0.text);
-        assert!(s0.text.ends_with("overall_soundscape:
-Rain on the porch.
-
-non_diegetic_music:
-N/A"), "{}", s0.text);
-        // Shot 2 goes on from shot 1's last frame: the first-frame line first.
-        let s1 = shot_spec(f, 1, 7);
-        assert!(s1.text.starts_with("For the target video, at 0.00 seconds"), "{}", s1.text);
-        assert!(s1.text.contains("[Shot 1] cinematic, warm light. She steps into the rain. Mara (S1) says in an off-screen voiceover"));
+        let s0 = spec(&c, 0);
+        assert_eq!(s0.words.sound, "Rain on the porch.");
+        assert_eq!(s0.words.subjects, [crate::videos::Subject { name: "Mara".into(), look: f.cast[0].look.clone() }]);
+        assert!(spec(&c, 1).words.lines[0].voiceover);
 
         // A board rewritten keeps what it says, and the panel can change it.
         story(&mut c, &t, b.clone());
         edit_board(&mut c, &BoardEdit { shot: Some(0), music: Some("Slow piano.".into()), ..Default::default() }).unwrap();
-        assert!(shot_spec(c.film.as_ref().unwrap(), 0, 7).text.ends_with("non_diegetic_music:
-Slow piano."));
+        assert_eq!(spec(&c, 0).words.music, "Slow piano.");
         let bad = BoardEdit { shot: Some(0), lines: Some(vec![Line { who: "Bob".into(), words: "Hi".into(), ..Default::default() }]), ..Default::default() };
         assert!(edit_board(&mut c, &bad).is_err());
 
         // Mara's voice goes with the shot that follows her picture, bound to
-        // her ID, and not with a continue; a rewritten board keeps it.
+        // her, and not with a continue; a rewritten board keeps it.
         edit_board(&mut c, &BoardEdit { member: Some(0), voice: Some(Some("100-1-sound".into())), ..Default::default() }).unwrap();
         story(&mut c, &t, b);
-        let f = c.film.as_ref().unwrap();
-        let s0 = shot_spec(f, 0, 7);
-        assert_eq!(s0.audio, ["100-1-sound"]);
-        assert!(s0.text.contains("<Audio 1> is the voice-timbre reference for <Subject 1> (S1)."), "{}", s0.text);
-        assert!(shot_spec(f, 1, 7).audio.is_empty(), "a continue can't take references");
+        let s0 = spec(&c, 0);
+        assert_eq!((s0.audio.as_slice(), s0.words.voices.as_slice()), (&["100-1-sound".to_string()][..], &["Mara".to_string()][..]));
+        assert!(spec(&c, 1).audio.is_empty(), "a continue can't take references");
         assert!(edit_board(&mut c, &BoardEdit { member: Some(0), voice: Some(Some("../x".into())), ..Default::default() }).is_err());
     }
 
     #[test]
-    fn each_shot_is_looked_at_and_a_failed_one_is_filmed_once_more() {
-        let mut c = ready(false);
-        assert!(can_go(c.film.as_ref().unwrap()));
-        go(&mut c, true, 1).unwrap();
-        assert_eq!(next_step(&c), Step::Shot(0));
-        shot_done(&mut c, 0, 11, "clip1");
-        assert_eq!(next_step(&c), Step::Turn(Mode::Take));
-        assert_eq!(take_checks(c.film.as_ref().unwrap(), 0).len(), 2, "the words, and Mara's likeness");
-        take_reply(&mut c, json!([true, true]), "");
-        assert_eq!(next_step(&c), Step::Shot(1));
-        shot_done(&mut c, 1, 12, "clip1");
-        assert_eq!(take_checks(c.film.as_ref().unwrap(), 1).len(), 3, "a continue is checked for carrying on");
-        take_reply(&mut c, json!([false, true, true]), "She steps out into **heavy** rain.");
-        assert_eq!(next_step(&c), Step::Shot(1), "a retake");
-        assert_eq!(c.film.as_ref().unwrap().shots[1].text, "She steps out into heavy rain.");
-        shot_done(&mut c, 1, 13, "clip1");
-        take_reply(&mut c, json!([false]), "");
-        assert_eq!(next_step(&c), Step::Shot(2), "once only: it goes on");
-        shot_done(&mut c, 2, 14, "clip1");
-        take_reply(&mut c, json!([true, true]), "");
-        assert_eq!(next_step(&c), Step::End);
-        let f = c.film.as_ref().unwrap();
-        assert_eq!(f.phase, Phase::Done);
-        assert_eq!(f.shots[1].takes, 2);
-        assert!(c.messages.iter().any(|m| matches!(m, Msg::Clip { id, .. } if id == "clip1")));
-        assert!(matches!(c.messages.last(), Some(Msg::Note { text, .. }) if text.contains("shot 2 (2 takes)")));
-        assert!(go(&mut c, true, 1).is_err(), "a film is shot once");
+    fn a_board_is_sent_as_rows_for_the_video_tabs_model_saying_what_it_leaves_out() {
+        // Drawn for Wan: shot 1's keyframe is the first frame, a cut's its key.
+        let c = ready(false);
+        let v = send_shots(c.film.as_ref().unwrap(), &video(false)).unwrap();
+        assert_eq!(v["source"], json!("p0-s0"));
+        assert_eq!(v["shots"][2]["key"], json!("p2-s0"));
+        assert_eq!(v["shots"][0]["seed"], json!(-1));
+        assert_eq!(v["note"], json!(""));
+        // Drawn for H3 with sound, sent to Wan: no first frames, and the
+        // sound kept in the row for a switch to H3, with a note.
+        let mut c = film_chat();
+        let t = film_tk(&c, true);
+        let mut b = board();
+        b["shots"][0]["sound"] = json!("Rain.");
+        story(&mut c, &t, b);
+        draw_all(&mut c);
+        let v = send_shots(c.film.as_ref().unwrap(), &video(false)).unwrap();
+        assert_eq!(v["source"], json!(null));
+        assert_eq!(v["shots"][0]["sound"], json!("Rain."));
+        let note = v["note"].as_str().unwrap();
+        assert!(note.contains("no first frame: they start from their words") && note.contains("films no sound"), "{note}");
+        // Nothing drawn yet: sent anyway, its shots from their words.
+        let mut c = film_chat();
+        let t = film_tk(&c, true);
+        story(&mut c, &t, board());
+        let v = send_shots(c.film.as_ref().unwrap(), &video(true)).unwrap();
+        assert_eq!(v["shots"][0]["refs"], json!(["mara-photo"]), "the person's own picture is there already");
+        assert!(v["note"].as_str().unwrap().contains("Leo has no picture yet"), "{v}");
     }
 
     #[test]
@@ -1903,50 +1821,17 @@ Slow piano."));
     }
 
     #[test]
-    fn the_retakes_are_settings() {
-        // None: a failing shot is kept, and the note says why.
-        let mut c = ready(false);
-        go(&mut c, true, 0).unwrap();
-        shot_done(&mut c, 0, 11, "clip1");
-        take_reply(&mut c, json!([false, true]), "");
-        assert_eq!(next_step(&c), Step::Shot(1));
-        // Two: filmed three times in all.
-        let mut c = ready(false);
-        go(&mut c, true, 2).unwrap();
-        for seed in [11, 12] {
-            shot_done(&mut c, 0, seed, "clip1");
-            take_reply(&mut c, json!([false, true]), "");
-            assert_eq!(next_step(&c), Step::Shot(0), "take {seed} is retaken");
-        }
-        shot_done(&mut c, 0, 13, "clip1");
-        take_reply(&mut c, json!([false, true]), "");
-        assert_eq!(next_step(&c), Step::Shot(1));
-        assert_eq!(c.film.as_ref().unwrap().shots[0].takes, 3);
-    }
-
-    #[test]
-    fn an_agent_that_cant_see_films_every_shot_and_says_none_was_checked() {
-        let mut c = ready(true);
-        go(&mut c, false, 1).unwrap();
-        for k in 0..3 {
-            assert_eq!(next_step(&c), Step::Shot(k));
-            shot_done(&mut c, k, 1, "clip1");
-        }
+    fn a_board_an_older_build_was_filming_reads_as_ready_and_stays_editable() {
+        let mut v = serde_json::to_value(ready(false)).unwrap();
+        v["film"]["phase"] = json!("shooting");
+        v["film"]["shot"] = json!(1);
+        v["film"]["clip"] = json!("clip1");
+        v["session"]["next"] = json!("take");
+        let mut c: Chat = serde_json::from_value(v).unwrap();
+        assert_eq!(c.film.as_ref().unwrap().phase, Phase::Ready);
         assert_eq!(next_step(&c), Step::End);
-        assert!(matches!(c.messages.last(), Some(Msg::Note { text, .. }) if text.contains("No shot was checked")));
-    }
-
-    #[test]
-    fn a_stopped_film_goes_on_from_its_shot() {
-        let mut c = ready(false);
-        go(&mut c, true, 1).unwrap();
-        shot_done(&mut c, 0, 11, "clip1");
-        take_reply(&mut c, json!([true, true]), "");
-        c.session.next = Next::Nothing; // stopped
-        assert!(can_go(c.film.as_ref().unwrap()));
-        go(&mut c, true, 1).unwrap();
-        assert_eq!(next_step(&c), Step::Shot(1));
-        assert_eq!(c.film.as_ref().unwrap().clip.as_deref(), Some("clip1"));
+        edit_board(&mut c, &BoardEdit { shot: Some(1), text: Some("She runs.".into()), ..Default::default() }).unwrap();
+        assert_eq!(c.film.as_ref().unwrap().shots[1].text, "She runs.");
     }
 
     #[test]

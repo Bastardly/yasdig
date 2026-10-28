@@ -15,38 +15,47 @@ What changed in each release of yasdig. Each release's executables are on the
   attached picture matched ("find the best prompt for this"), runs a **session**: it
   writes yes/no checks, draws a round, judges every picture against them, adjusts a
   setting or two and goes again — as many rounds of as many pictures as you say.
-- **A video shot can cut to a picture**: a *Cut* in the Shots panel can *Start from a
-  picture* — a keyframe from your outputs — on TI2V-5B, A14B and H3. That is how a Wan
-  clip changes scene; H3 cuts can still follow references instead.
+- **A video shot can cut to an image**: a *Cut* in the Shots panel can *Start from
+  image* — a keyframe from your outputs, or an upload — on TI2V-5B, A14B and H3. That is
+  how a Wan clip changes scene; H3 cuts can still follow references instead. Shot 1's
+  *Start from image*, under its prompt, is the clip's first frame, which used to be in
+  the Generation panel. The Shots panel can be dragged wider as well as taller.
 - **Sounds for MiniMax H3**: a shot that can follow references can follow up to three
   sounds too (*Sounds…*), a voice to speak in or a sound to match, named in its prompt
   as `<Audio 1>`. Upload any sound the browser plays; it is kept in Outputs as a WAV,
   where its tile plays it. Get models also has H3's **Ref2VA** file, the weights
   MiniMax made for following references.
-- **A short movie from a story**: ask the agent for a film of a story, an idea, or the
-  people in your pictures ("this is Mara"), and it writes a storyboard — the cast with how
-  each looks, and the shots. The Story panel shows the board: every name, look, picture
-  and shot is yours to change, *Draw the cast* draws a picture of each in the cast and,
-  once you have looked them over, *Draw the first frames* the pictures its cuts start
-  from on Wan, saved to Outputs. Redraw someone and the first frames they are in are
-  drawn again on the next press. The agent picks the
+- **H3 shots say what is spoken, heard and scored**: on MiniMax H3 each row of the Shots
+  panel also has *Who is in it*, *Spoken* (who says which line, or a voiceover with
+  closed lips), *Sound* and *Music* — none unless you write one. yasdig writes them into
+  the prompt layout MiniMax's own guide sets out, so H3 no longer invents a narrator or
+  a score, and says who stays silent: after the last line the speaker closes their lips
+  and nothing more is said, and a shot with no lines says no one speaks, since H3 filled
+  the unspoken end of a shot with a sentence of its own. A reference picture can be
+  named (who it shows) and a sound made someone's voice, which H3 then speaks their
+  lines in. A row with none of these filled is sent as typed.
+- **A storyboard for a short movie**: ask the agent for a film of a story, an idea, or
+  the people in your pictures ("this is Mara"), and it writes a storyboard for the Video
+  tab's model — the cast with how each looks, and the shots. The Story panel shows the
+  board: every name, look, picture and shot is yours to change. Pictures are optional:
+  *Draw the cast*, under the cast, draws a picture of each, and *Draw the first frames*
+  the pictures its cuts start from on Wan, saved to Outputs. Redraw someone and
+  the first frames they are in are drawn again on the next press. The agent picks the
   model that draws them; on one that follows reference pictures (the Kleins) each
   character first gets a turnaround sheet — front, three-quarter, side and back in one
-  picture — and every later picture of them follows it. Then it waits for your
-  go: *Film* shoots it shot by shot on the Video tab's model (or the one picked in the panel's *Filmed with*), looks at each shot (is it
-  what the shot says, do the people look like their pictures, does it follow on) and
-  films a failing one again — once, or as often as Settings → Agent says. The film is an ordinary clip in the Video tab, where
-  *Redo from shot k* works on it. "Make shot 2 at night" rewrites it, keeping the pictures that still fit. A shot that goes on from the one before can only keep who that shot showed, so one that brings someone in — or back — is made a cut, which starts from their picture.
-  On MiniMax H3, which films sound, each shot also says what is spoken (who says
-  which line, or a voiceover with closed lips), what is heard and whether a score
-  plays — none unless you ask — and yasdig writes them into the prompt layout
-  MiniMax's own guide sets out, so H3 no longer invents a narrator or music. The
-  prompt also says who stays silent: after the last line the speaker closes their
-  lips and nothing more is said, and a shot with no lines says no one speaks, since
-  H3 filled the unspoken end of a shot with a sentence of its own. On H3 a character
-  can also be given a **voice** (*Voice* on their card: a sound from Outputs, or an
-  upload), which H3 speaks their lines in on the shots that start fresh from the cast.
-  Settings → Agent's *Make movies* turns it off.
+  picture — and every later picture of them follows it. *Send to Video tab*, there
+  whatever has been drawn, puts the shots in the Video tab's Shots panel as a new clip — first frames, the cast's
+  pictures as references, what is said, heard and scored. Each row keeps all of it and
+  the Video tab sends what its model takes — references and voices on H3, first frames
+  on Wan — so switching model afterwards loses nothing. Change what you like and press
+  Generate clip. The agent doesn't make the clip itself, and says so.
+  "Make shot 2 at night" or "Leo says something kinder" changes the board, keeping the
+  pictures and words that still fit, and it can be sent again. A shot that goes on from
+  the one before can only keep who that shot showed, so one that brings someone in — or
+  back — is made a cut, which starts from their picture. On H3 each shot also says what
+  is spoken, heard and scored, and a character can be given a **voice** (*Voice* on
+  their card: a sound from Outputs, or an upload), which goes with their lines on the
+  shots that start fresh from the cast. Settings → Agent's *Make movies* turns it off.
 - **Comparisons**: ask "which CFG works best?" or "which model draws hands better?" and it
   draws one round per value on the same seeds, judges them, counts per value the
   pictures that passed every check, answers from the counts, and sets the winner with an

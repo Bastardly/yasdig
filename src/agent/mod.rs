@@ -11,7 +11,6 @@
 
 pub mod chat;
 pub mod context;
-pub mod h3prompt;
 pub mod knobs;
 pub mod routes;
 pub mod schema;
@@ -148,39 +147,6 @@ fn stage(cfg: &Config, store: &ChatStore, chat_id: &str, imgs: &[ImageRef], side
     Ok(out)
 }
 
-/// Files a turn sees that aren't the chat's pictures — a shot's frames —
-/// staged after them the same way.
-fn stage_files(cfg: &Config, chat_id: &str, files: &[PathBuf], side: u32, out: &mut Staged) -> Result<()> {
-    let dir = crate::pipeline::scratch_dir(&cfg.base_dir.join("work"));
-    let at = out.0.len();
-    for (k, f) in files.iter().enumerate() {
-        let png = shrink_png(&std::fs::read(f).with_context(|| format!("reading {}", f.display()))?, side)?;
-        let p = dir.join(format!("agent-{chat_id}-{}.png", at + k));
-        std::fs::write(&p, png)?;
-        out.0.push(p);
-    }
-    Ok(())
-}
-
-/// The frames a take is judged on: the last of the shot before when this
-/// one goes on from it, then this one's first, middle and last.
-fn take_frames(cfg: &Config, f: &chat::Film) -> Result<Vec<PathBuf>> {
-    let id = f.clip.as_deref().ok_or_else(|| anyhow!("the film has no clip yet"))?;
-    let videos = crate::videos::VideoStore::new(&cfg.base_dir.join("work"), &cfg.user_dir());
-    let clip = videos.load(id)?;
-    let k = f.shot;
-    let seg = clip.segments.get(k).ok_or_else(|| anyhow!("the clip has no shot {}", k + 1))?;
-    let end = clip.segments.get(k + 1).map_or(clip.frames, |s| s.start).max(seg.start + 1);
-    let mut out = Vec::new();
-    if k > 0 && !seg.cut && seg.start > 0 {
-        out.push(videos.frame_path(id, seg.start - 1));
-    }
-    for n in [seg.start, (seg.start + end - 1) / 2, end - 1] {
-        out.push(videos.frame_path(id, n));
-    }
-    Ok(out)
-}
-
 /// The bytes of a picture a message is about to attach: a work item's or an
 /// output's, at full size, for [`keep_picture`].
 pub fn attach_bytes(cfg: &Config, kind: &str, id: &str) -> Result<Vec<u8>> {
@@ -259,11 +225,6 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
             queue.relabel(job, label("finishing a keeper"));
             escalate(engine, &store, &chat, action)
         }
-        Step::Shot(k) => {
-            let n = chat.film.as_ref().map_or(0, |f| f.shots.len());
-            queue.relabel(job, label(&format!("filming shot {} of {n}", k + 1)));
-            shoot(engine, &store, &chat, k)
-        }
         Step::CastPicture(_) | Step::CastSheet(_) | Step::Keyframe(_) => {
             queue.relabel(job, label(&board_label(&chat, step_now)));
             board_picture(engine, &store, &chat, step_now)
@@ -339,21 +300,9 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
     // newest message attached.
     let reference: Vec<ImageRef> = match mode {
         Mode::Plan | Mode::Critique => chat.session.reference.clone(),
-        // A take: the cast as they should look.
-        Mode::Take => chat
-            .film
-            .as_ref()
-            .map(|f| session::take_cast(f, f.shot).iter().filter_map(|m| m.picture.clone()).collect())
-            .unwrap_or_default(),
         _ => Vec::new(),
     };
-    // And the shot's frames, from the clip.
-    let frames = match (mode, &chat.film) {
-        (Mode::Take, Some(f)) => take_frames(&cfg, f)?,
-        _ => Vec::new(),
-    };
-    let take_checks = chat.film.as_ref().map(|f| session::take_checks(f, f.shot)).unwrap_or_default();
-    let checks: &[String] = if mode == Mode::Take { &take_checks } else { &chat.session.checks };
+    let checks: &[String] = &chat.session.checks;
     let own: Vec<ImageRef> = match mode {
         Mode::Critique => chat
             .messages
@@ -376,7 +325,7 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
         Mode::Plan | Mode::Verdict | Mode::Take => Vec::new(),
     };
     let images: Vec<ImageRef> = reference.iter().cloned().chain(own.iter().cloned()).collect();
-    if (!images.is_empty() || !frames.is_empty()) && !model.vision() {
+    if !images.is_empty() && !model.vision() {
         bail!(
             "{} has no vision projector, so it can't see pictures — pick one that can beside the message box",
             model.label
@@ -391,7 +340,6 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
     let shown = match mode {
         Mode::Plan => session::judgeable(chat).map_or(0, |(_, size)| size),
         Mode::Verdict => sweep.map_or(0, |s| s.values.len() as u32),
-        Mode::Take => frames.len() as u32,
         _ => own.len() as u32,
     };
     let mut tk = tk;
@@ -404,8 +352,7 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
     let mut side = tune.image_side;
     let mut history_cap = usize::MAX;
     let reply = loop {
-        let mut staged = stage(&cfg, store, &chat.id, &images, side)?;
-        stage_files(&cfg, &chat.id, &frames, side, &mut staged)?;
+        let staged = stage(&cfg, store, &chat.id, &images, side)?;
         let base = context::Turn {
             mode,
             images: staged.0.clone(),
@@ -513,71 +460,6 @@ fn board_label(chat: &chat::Chat, step: Step) -> String {
 /// The film's video model as the board describes it: its size and length.
 fn film_video(cfg: &Config, film: &chat::Film) -> Option<toolkit::VideoView> {
     cfg.video_models().into_iter().find(|m| m.name == film.video_model).map(|m| toolkit::VideoView::of(&m))
-}
-
-/// Film shot `k`: shot 1 makes the clip — a retake of it a new one, the
-/// take it replaces deleted — and a later one extends it, or redoes itself
-/// (`extend_clip` keeps the shots before). On the Video tab's model with its
-/// saved defaults, and its Turbo LoRA when installed, as the tab's switch is
-/// on by default; the agent picks no size, steps or length.
-fn shoot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: usize) -> Result<()> {
-    let cfg = engine.cfg().clone();
-    let f = chat.film.as_ref().ok_or_else(|| anyhow!("the chat has no storyboard"))?;
-    let seed = (rand_seed() & 0x7fff_ffff) as i64;
-    let spec = session::shot_spec(f, k, seed);
-    // H3's shot carries the look inside its prompt (`h3prompt`).
-    let every = (!f.every.is_empty() && !f.references).then(|| f.every.clone());
-    let r = match (k, &f.clip) {
-        (0, old) => {
-            let mut req = crate::pipeline::VideoRequest { model: f.video_model.clone(), shots: vec![spec], every, ..Default::default() };
-            if !f.references {
-                req.source = f.shots[0].key_stem.clone();
-            }
-            with_video_turbo(&cfg, &mut req);
-            let r = engine.video(&req)?;
-            if let Some(old) = old.as_ref().filter(|o| **o != r.clip.id) {
-                let videos = crate::videos::VideoStore::new(&cfg.base_dir.join("work"), &cfg.user_dir());
-                if let Err(e) = videos.delete(Shelf::Work, old) {
-                    eprintln!("[yasdig] agent: could not delete the take {old} was replaced by {}: {e:#}", r.clip.id);
-                }
-            }
-            r
-        }
-        (_, Some(id)) => engine.extend_clip(&crate::pipeline::ExtendClipRequest {
-            id: id.clone(),
-            keep: k,
-            shots: vec![spec],
-            every,
-            negative: None,
-        })?,
-        (_, None) => bail!("shot {} has no clip to go on from", k + 1),
-    };
-    // A retake that failed leaves the clip shorter, with the reason.
-    if r.clip.segments.len() <= k {
-        bail!("{}", r.note.unwrap_or_else(|| format!("shot {} wasn't filmed", k + 1)));
-    }
-    store.update(&chat.id, |c| {
-        session::shot_done(c, k, seed, &r.clip.id);
-        if let Some(n) = &r.note {
-            c.note(n.clone());
-        }
-        Ok(())
-    })
-}
-
-/// The video model's catalog Turbo LoRA, when installed, at the steps and
-/// CFG it was distilled to.
-fn with_video_turbo(cfg: &Config, req: &mut crate::pipeline::VideoRequest) {
-    let Some(family) = cfg.video_models().into_iter().find(|m| m.name == req.model).map(|m| m.family) else { return };
-    let turbo = Catalog::get().lora.iter().find(|l| {
-        l.family == crate::catalog::Family::Video(family)
-            && std::fs::metadata(cfg.lora_dir().join(&l.dest)).is_ok_and(|m| m.is_file() && m.len() == l.bytes)
-    });
-    if let Some(l) = turbo {
-        req.loras = Some(vec![crate::config::VideoLora { name: l.dest.clone(), strength: 1.0, expert: Default::default() }]);
-        req.steps = Some(l.turbo.steps);
-        req.cfg_scale = Some(l.turbo.cfg_scale);
-    }
 }
 
 /// How long one of the film's shots runs, at most, in seconds.

@@ -1,4 +1,5 @@
 import { esc } from './dom.js';
+import { linesText } from './lines.js';
 
 // ---- A chat as HTML ---------------------------------------------------------
 //
@@ -211,7 +212,7 @@ export function sessionHtml(chat) {
 // `locked` while the agent works on the chat.
 
 const KIND = { character: 'Character', place: 'Place', thing: 'Thing' };
-const PHASE = { board: 'Drawing its pictures', ready: 'Ready to film', shooting: 'Filming', done: 'Filmed' };
+const PHASE = { board: 'Drawing its pictures', ready: 'Ready for the Video tab' };
 
 const thumb = (chat, ref, alt) => `<img src="${img(chat, ref.kind === 'attach' ? 'att' : 'img', ref.file)}" alt="${esc(alt)}">`;
 
@@ -268,16 +269,9 @@ export function keyMissing(f, s, k) {
   return !s.key_stem || (Array.isArray(s.key_cast) && s.key_cast.join('\n') !== castMarks(f, s).join('\n'));
 }
 
-// Where a shot is in the filming: its takes and the last one's checks.
+// A shot whose first frame is stale: drawn with a cast picture since changed.
 function shotState(f, s, k) {
-  if (['board', 'ready'].includes(f.phase) && s.key_stem && keyMissing(f, s, k)) {
-    return '<span class="sub">Its cast changed: drawn again</span>';
-  }
-  if (!['shooting', 'done'].includes(f.phase)) return '';
-  const marks = s.checks?.length ? ` <span class="chatchecks inline" title="The agent's checks">${
-    s.checks.map((c) => (c ? '✓' : '✗')).join('')}</span>` : '';
-  if (s.takes) return `<span class="sub">${s.takes === 1 ? 'Filmed' : `Filmed, ${s.takes} takes`}</span>${marks}`;
-  return f.phase === 'shooting' && k === f.shot ? '<span class="sub">Next</span>' : '';
+  return s.key_stem && keyMissing(f, s, k) ? '<span class="sub">Its cast changed: drawn again</span>' : '';
 }
 
 // A shot's first frame: a click draws it again (after a confirm) while
@@ -322,28 +316,6 @@ function soundFields(s, k, lock) {
         placeholder="Music only the audience hears — empty is none" aria-label="Music in shot ${k + 1}"${lock}>`;
 }
 
-// A shot's lines as the panel edits them, one each: `Who: words`, with
-// `(voiceover)` and a language other than English in brackets after the name.
-export function linesText(lines = []) {
-  return lines.map((l) => {
-    const tags = [l.voiceover ? 'voiceover' : '', l.language && l.language !== 'English' ? l.language : ''].filter(Boolean);
-    return `${l.who}${tags.length ? ` (${tags.join(', ')})` : ''}: ${l.words}`;
-  }).join('\n');
-}
-
-// The panel's text back into lines. A line with no `Who:` keeps an empty
-// speaker, which the server refuses with the reason.
-export function parseLines(text) {
-  return text.split('\n').map((row) => row.trim()).filter(Boolean).map((row) => {
-    const m = /^([^:()]+?)\s*(?:\(([^)]*)\))?\s*:\s*(.*)$/.exec(row);
-    if (!m) return { who: '', words: row, language: '', voiceover: false };
-    const tags = (m[2] ?? '').split(',').map((t) => t.trim()).filter(Boolean);
-    const voiceover = tags.some((t) => t.toLowerCase() === 'voiceover');
-    const language = tags.find((t) => t.toLowerCase() !== 'voiceover') ?? '';
-    return { who: m[1].trim(), words: m[3].trim(), language, voiceover };
-  });
-}
-
 // The cast's pictures in a row, named, for the storyboard's card.
 function castPics(chat) {
   // A character's turnaround says more than its front picture.
@@ -352,61 +324,52 @@ function castPics(chat) {
     thumb(chat, m.sheet ?? m.picture, m.name)}<span class="chatpicno">${esc(m.name)}</span></figure>`).join('')}</div>` : '';
 }
 
-// The Story panel's main action: what the board still lacks, drawn on a
-// press (`/chats/film {draw: true}`), so the looks can be read and changed
-// first. `null` when nothing is missing.
-// The panel's main action, `{ label, body }` for `/chats/film`, or null:
-// draw what is missing, then film it, or go on filming after a stop.
+// The Story panel's main action, `{ label, body }` for `/chats/film`, or
+// null without a board: its shots sent to the Video tab (`{send: true}`),
+// where the clip is made — whenever the board changes, with whatever
+// pictures it has. Drawing them is the panel's other buttons, and optional.
 export function mainAction(film) {
-  const draw = drawLabel(film);
-  if (draw) return { label: draw, body: { draw: true } };
-  if (film?.phase === 'ready') return { label: 'Film', body: { go: true } };
-  if (film?.phase === 'shooting' && film.shot < film.shots.length) return { label: 'Go on filming', body: { go: true } };
-  return null;
+  return film ? { label: 'Send to Video tab', body: { send: true } } : null;
 }
 
-export function drawLabel(film) {
-  if (!film || !['board', 'ready'].includes(film.phase)) return null;
+// *Draw the cast*, under the cast, while one of them has no picture (or a
+// character on a references model no turnaround); null once they all do.
+export function castLabel(film) {
+  if (!film) return null;
   const done = (m) => m.stem && (!wantsSheet(film, m) || m.sheet_stem);
-  if (!film.cast.every(done)) return film.cast.some(done) ? 'Draw the rest of the cast' : 'Draw the cast';
-  return film.shots.some((s, k) => keyMissing(film, s, k)) ? 'Draw the first frames' : null;
+  if (film.cast.every(done)) return null;
+  return film.cast.some(done) ? 'Draw the rest of the cast' : 'Draw the cast';
+}
+
+// *Draw the first frames*, above Send, while a shot that starts from one
+// has none or a stale one. It draws any of the cast still missing first.
+export function framesLabel(film) {
+  return film?.shots.some((s, k) => keyMissing(film, s, k)) ? 'Draw the first frames' : null;
 }
 
 //   models  the toolkit's runnable models, for the board's image model
-//   videos  the installed video models that film shot after shot
-export function storyHtml(chat, { busy = false, off = null, models = [], videos = [] } = {}) {
+export function storyHtml(chat, { busy = false, off = null, models = [] } = {}) {
   const f = chat.film;
   if (!f && off) return `<p class="sub">No film can be made in this chat now: ${esc(off)}.</p>`;
   if (!f) {
-    return '<p class="sub">No film yet. Tell the agent a story, an idea or who is in it, and ask for a film: it writes a storyboard, draws the cast and the pictures the shots start from, and waits for your go. It films on the Video tab’s model.</p>';
+    return '<p class="sub">No film yet. Tell the agent a story, an idea or who is in it, and ask for a film: it writes a storyboard for the Video tab’s model, and draws the cast and the pictures the shots start from when you press for them. Send to Video tab puts the shots there, where you generate the clip.</p>';
   }
-  const editable = !busy && ['board', 'ready'].includes(f.phase);
+  const editable = !busy;
   const lock = editable ? '' : ' disabled';
   const secs = f.shots.length;
   return `<p>${f.title ? `<b>${esc(f.title)}</b> · ` : ''}<span class="sub">${esc(PHASE[f.phase] ?? f.phase)} · ${
-      secs} shot${secs === 1 ? '' : 's'} on ${esc(f.video_model)}</span></p>
+      secs} shot${secs === 1 ? '' : 's'} for ${esc(f.video_model)}</span></p>
     <label class="grouphead">Every shot</label>
     <textarea rows="2" data-film-every aria-label="Every shot"${lock}>${esc(f.every)}</textarea>
-    ${filmModel(f, videos, lock)}
     ${pictureModel(f, models, lock, chat.settings?.template)}
     <label class="grouphead">Cast</label>
     ${f.cast.length ? `<div class="storycast">${f.cast.map((m, k) => memberCard(chat, m, k, lock)).join('')}</div>`
       : '<p class="sub">No one the shots must keep the same.</p>'}
+    ${castLabel(f) && editable ? `<div class="btnrow"><button type="button" class="btn" data-film-drawcast
+      title="A picture of each in the cast, from their look: what the first frames are drawn with, and on H3 what the shots follow. Optional">${
+      esc(castLabel(f))}</button></div>` : ''}
     <label class="grouphead">Shots</label>
     <ol class="storyshots">${f.shots.map((s, k) => shotRow(chat, s, k, lock)).join('')}</ol>`;
-}
-
-// The video model the shots are filmed on: the Video tab's when the board
-// was written, changeable until filming starts. H3's cuts follow the cast's
-// pictures; Wan's start from keyframes, so a switch to Wan may add some.
-function filmModel(f, videos, lock) {
-  if (!videos.length) return '';
-  const opts = videos.map((v) => `<option value="${esc(v.name)}"${v.name === f.video_model ? ' selected' : ''}>${
-    esc(v.name)} · ${esc(v.label)}</option>`);
-  if (!videos.some((v) => v.name === f.video_model)) opts.unshift(`<option selected>${esc(f.video_model)} (not installed)</option>`);
-  return `<label class="grouphead" for="astoryvideo">Filmed with</label>
-    <select id="astoryvideo" data-film-video${lock}>${opts.join('')}</select>
-    <p class="sub">${f.references ? 'A cut follows the cast’s pictures.' : 'Shot 1 and every cut start from a keyframe drawn with the cast.'}</p>`;
 }
 
 // The model the cast and keyframes are drawn with. One that follows
@@ -443,8 +406,6 @@ export function stateText(chat) {
     return f.cast.some((m) => !m.stem) ? 'Drawing the cast' : 'Drawing the first frames';
   }
   if (s.state === 'running' && s.next === 'turn' && s.mode === 'story') return 'Writing the storyboard';
-  if (s.state === 'running' && f && s.next === 'shoot') return `Filming shot ${f.shot + 1} of ${f.shots.length}`;
-  if (s.state === 'running' && f && s.next === 'take') return `Watching shot ${f.shot + 1}`;
   const round = s.goal ? ` · round ${sessionRound(s)} of ${sessionLimit(s)}` : '';
   return {
     idle: '', queued: 'Waiting for the GPU', running: `Working${round}`,

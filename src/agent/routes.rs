@@ -2,7 +2,7 @@
 //! write and answers on the connection thread; that one queues a leg on the job queue and answer `{job}` at once — the reply arrives
 //! in the chat, which the page re-reads as its `rev` moves.
 
-use super::chat::{Chat, ChatStore, ImageRef, Mode, Msg, Next, Phase, State};
+use super::chat::{Chat, ChatStore, ImageRef, Mode, Msg, Next, State};
 use super::{knobs, session, toolkit};
 use crate::config::Config;
 use crate::http::Connection;
@@ -315,21 +315,38 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         voice: Option<Option<String>>,
         #[serde(default)]
         every: Option<String>,
-        /// Draw what the board is missing (*Draw the cast*).
+        /// Draw what the board is missing: with `frames` false the cast
+        /// (*Draw the cast*), true the first frames too (*Draw the first
+        /// frames*), absent whichever is next.
         #[serde(default)]
         draw: bool,
+        #[serde(default)]
+        frames: Option<bool>,
         /// The image model the board's pictures are drawn with.
         #[serde(default)]
         image_model: Option<String>,
-        /// The video model it is shot on.
+        /// *Send to Video tab*: the board as Shots rows, for the Video
+        /// tab's model `video_model` (else the board's).
+        #[serde(default)]
+        send: bool,
         #[serde(default)]
         video_model: Option<String>,
-        /// Film it (*Film*), or go on filming after a stop.
-        #[serde(default)]
-        go: bool,
     }
     let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
     let store = super::store(cfg);
+    if dto.send {
+        let Some(f) = store.load(&dto.id).ok().and_then(|c| c.film) else {
+            return err(conn, 404, "this chat has no storyboard");
+        };
+        let name = dto.video_model.as_deref().unwrap_or(&f.video_model);
+        let Some(to) = cfg.video_models().iter().find(|m| m.name == name && m.exists).map(toolkit::VideoView::of) else {
+            return err(conn, 409, &format!("'{name}' isn't an installed video model: pick one on the Video tab"));
+        };
+        return match session::send_shots(&f, &to) {
+            Ok(v) => conn.respond(200, "application/json", v.to_string().as_bytes()),
+            Err(e) => err(conn, 409, &e),
+        };
+    }
     // A picked picture is copied into the chat before the write, as a
     // message's are.
     let kept = match dto.picture.as_ref() {
@@ -354,48 +371,15 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
             return err(conn, 400, &format!("no saved sound '{stem}': choose or upload one"));
         }
     }
-    // At the model it is about to be shot on, when that changes.
-    let shot_seconds = store.load(&dto.id).ok().and_then(|c| c.film).map_or(0.0, |mut f| {
-        if let Some(v) = &dto.video_model {
-            f.video_model = v.clone();
-        }
-        super::shot_seconds(cfg, &f)
-    });
+    let shot_seconds = store.load(&dto.id).ok().and_then(|c| c.film).map_or(0.0, |f| super::shot_seconds(cfg, &f));
     let models = toolkit::runnable(cfg, &cfg.registry());
-    // Each shot is looked at when the chat's agent can see.
-    let watch = dto.go
-        && store.load(&dto.id).ok().and_then(|c| super::agent_for(cfg, c.agent.as_deref()).ok()).is_some_and(|m| m.vision());
-    let retakes = crate::settings::Settings::load_or_default(&cfg.user_dir()).agent.film_retakes;
     let r = store.update(&dto.id, |c| {
         if c.session.busy() {
             anyhow::bail!("the agent is working on this chat — wait, or stop it first");
         }
-        if dto.go {
-            session::go(c, watch, retakes).map_err(|e| anyhow::anyhow!(e))?;
-            c.session.state = State::Queued;
-            c.session.job = None;
-            c.session.error = None;
-            return Ok(Some(c.clone()));
-        }
         let f = c.film.as_mut().ok_or_else(|| anyhow::anyhow!("this chat has no storyboard"))?;
-        if !matches!(f.phase, Phase::Board | Phase::Ready) {
-            anyhow::bail!("this film is being shot or is done; ask the agent for a new storyboard to change it");
-        }
         if let Some(e) = &dto.every {
             f.every = e.trim().to_string();
-        }
-        // Its cuts follow the cast on H3 and start from keyframes on Wan, so
-        // the switch may leave keyframes to draw (or ones no longer needed,
-        // which stay).
-        if let Some(name) = &dto.video_model {
-            let v = toolkit::resolve(cfg, &Chat { video: Some(name.clone()), ..c.clone() })
-                .video
-                .filter(|v| v.chains)
-                .ok_or_else(|| anyhow::anyhow!("'{name}' isn't an installed video model that can film shot after shot"))?;
-            let f = c.film.as_mut().expect("checked above");
-            f.video_model = v.name.clone();
-            f.references = v.references;
-            c.video = Some(v.name);
         }
         // A new model draws what is missing from here on; what is drawn stays.
         let image_model = match &dto.image_model {
@@ -424,7 +408,10 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         };
         session::edit_board(c, &edit).map_err(|e| anyhow::anyhow!(e))?;
         if dto.draw {
-            session::board_press(c, shot_seconds);
+            match dto.frames {
+                Some(frames) => session::board_press_for(c, shot_seconds, frames),
+                None => session::board_press(c, shot_seconds),
+            }
         } else {
             session::board_advance(c, shot_seconds, false);
         }

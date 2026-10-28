@@ -551,6 +551,14 @@ needs a Vulkan device and nothing else.
   its audio VAE (`sounds: true` on `/video-models`); 15 s in all. Shot 1's starting picture is `source`, never a `keyframe`. Every shot is conditioned on `"{every}. {its own text}"` — never on
   another shot's text — and `every`'s variables roll once, off shot 1's seed. An empty
   shot is refused by its number.
+  On MiniMax H3 a shot may also say `cast` (names), `lines` (`[{who, words, language?,
+  voiceover?}]`, `who` a name or `narrator`), `sound`, `music`, `subjects` (`[{name,
+  look?}]`, who each of `references` shows, in order) and `voices` (whose voice each of
+  `audio` is, `""` no one's, in order). With any of them filled the shot is conditioned on
+  MiniMax's prompt layout instead, `every` inside it: speech as `<d>[Language] …</d>`
+  with a speaker ID per name by first line across the clip (kept on an extend), who
+  stays silent, `N/A` for no sound or music, and on a shot with references or sounds
+  each `<Subject N>` and `<Audio N>` defined. Recorded on the clip's segments.
   `parts` picks the model's separate files, by name under the models dir as `/video-models`
   lists them; `null` leaves out an optional one (H3's audio VAE, VACE's CLIP-Vision), and
   an absent key keeps the model's own.
@@ -628,12 +636,12 @@ the chat, whose `rev` moves on every write.
   state, thumb}]`, newest change first; Current lists starred ones too.
 - `POST /chats/new` — `{ template, agent?, video? }`: a chat on that model, whose rounds
   start from its saved defaults (and its catalog Turbo LoRA when installed). `agent`
-  absent is Settings' default; `video` is the Video tab's model, which a film is shot on.
+  absent is Settings' default; `video` is the Video tab's model, which a storyboard is written for.
   Answers `{ chat, toolkit }`.
 - `GET /chats/{id}` — `{ chat, toolkit }`: the chat as stored, and the knob table
   resolved for it under Settings → Agent — each knob's `allowed`, limits, `locked` reason
   and value, the passes, the models it could pick, `locks`, the film's `video` model
-  `{name, family, label, chains, references, width, height, frames, fps}` and
+  `{name, family, label, chains, references, sounds, width, height, frames, fps}` and
   `film_off`, why no film can be made in it (`null` when one can).
 - `GET /chats/{id}/live` — the reply being written while a turn runs: `{ seq, text,
   phase, step, steps }`, or `{ seq: null }`.
@@ -646,7 +654,7 @@ the chat, whose `rev` moves on every write.
   turn follows in the same job; its pictures wait for `/chats/film {draw: true}`). `video` is the Video tab's model now. At most four pictures, copied into the
   chat. `409` while the agent is working on the chat.
 - `POST /chats/film` — `{ id, every?, member?, name?, look?, picture?, shot?, text?,
-  cast?, cut?, lines?, sound?, music?, voice?, redraw_keyframe?, no_keyframe?, draw?, image_model?, video_model?, go? }`: an edit of the storyboard before it is filmed — the look every shot
+  cast?, cut?, lines?, sound?, music?, voice?, redraw_keyframe?, no_keyframe?, draw?, image_model? }`: an edit of the storyboard — the look every shot
   shares, cast member `member`'s name, look or picture (`{kind: "output", id}`, or `null`
   to have it drawn again), shot `shot`'s words, cast (names) or cut. A reworded shot's
   keyframe is dropped, as is one sent with `redraw_keyframe: true` (a click on it in the
@@ -657,12 +665,19 @@ the chat, whose `rev` moves on every write.
   `member`'s voice (a sound output's stem, or `null` for none) — sent with each shot they
   speak in that starts fresh from the cast's pictures, as H3's voice-timbre reference;
   `image_model` is the installed model the pictures still missing are
-  drawn with (one that takes references gives characters a turnaround sheet). `video_model` is the installed video model it is shot on (the Video tab's when the board was written); on one whose cuts start from keyframes, the switch may leave keyframes to draw. `draw: true` (the Story panel's *Draw the cast*, then *Draw the first frames*) queues
-  a leg that draws what the cast is missing or, with the cast whole, the first frames
-  missing or drawn with a cast picture since changed; `go: true` (*Film*) one that films it — shot 1 a new
-  clip in the Video tab's Current, each later shot an extend of it, each looked at by the
-  agent when it can see and filmed once more if a check fails — or goes on after a stop. `409` while the
-  agent is working on the chat, or once the film is being shot.
+  drawn with (one that takes references gives characters a turnaround sheet). `draw: true` queues
+  a leg that draws what the cast is missing — with `frames: true` (*Draw the first
+  frames*) then the first frames missing or drawn with a cast picture since changed;
+  `frames: false` is *Draw the cast*, absent the cast while it lacks one, else the
+  frames. Both are optional. `409` while the agent is working on the chat.
+  `{ id, send: true, video_model? }` (*Send to Video tab*) changes nothing and answers the
+  board as Shots rows, each holding everything any model takes (the page sends a model's
+  part, `sentRow` in `shots.js`); `video_model` (the Video tab's; absent is the board's)
+  only words the note:
+  `{ every, source, shots: [{text, seed, frames, cut, refs, audio, key, cast, lines,
+  sound, music, subjects, voices}], note }` — `source` shot 1's first frame, `note` what
+  that model won't use, and pictures not drawn yet (those shots start from their
+  words).
 - `POST /agent/undo` — `{ chat, change }`: put an applied change's settings back, if they
   still hold what it set (else `409`). Recorded as a change of yours.
 - `POST /agent/stop` — `{ chat }`: end the chat's leg, killing a reply or a render in flight.

@@ -94,7 +94,7 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
             "\n\nThis session is a comparison: yasdig draws one round per value with the same seeds, \
              and you judge. Change nothing; answer what is asked.",
         );
-    } else if matches!(turn.mode, Mode::Story | Mode::Take) {
+    } else if turn.mode == Mode::Story {
         if schema::board_models(t).is_some() {
             let names: Vec<String> = t
                 .models
@@ -111,7 +111,7 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
         }
         if let Some(v) = &t.video {
             s.push_str(&format!(
-                "\n\nThe film is shot with {}, a {} video model: {}×{}, each shot at most {:.1} s ({} frames at {} fps).",
+                "\n\nThe film is for {}, a {} video model: {}×{}, each shot at most {:.1} s ({} frames at {} fps).",
                 v.name,
                 v.label,
                 v.width,
@@ -197,11 +197,14 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                     ));
                 } else {
                     s.push_str(
-                        "\n- \"film\": make a short movie from the person's story, idea or pictures: a storyboard \
-                         of its cast and shots, their pictures drawn, then it waits for the person's go. \"Make a \
-                         film of this story\", \"a short movie about a lighthouse keeper\". With a storyboard \
-                         already, \"film\" rewrites it: \"make shot 2 at night\", \"add a dog\". The \
-                         storyboard is written next, so `reply` only says in a sentence that you are writing it.",
+                        "\n- \"film\": write a storyboard for a short movie from the person's story, idea or \
+                         pictures: its cast and shots, whose pictures are drawn when the person presses for them. \
+                         \"Make a film of this story\", \"a short movie about a lighthouse keeper\". With a \
+                         storyboard already, \"film\" changes it: \"make shot 2 at night\", \"add a dog\", \
+                         \"Leo says something kinder\". The storyboard is written next, so `reply` only says in a \
+                         sentence that you are writing it.\n\
+                         You can't make the video clip itself: the person sends the storyboard to the Video tab and \
+                         generates it there. Asked to film, render or shoot it, say so in `reply`, with \"talk\".",
                     );
                 }
                 if t.offered_knobs().any(|k| super::knobs::COMPARABLE.contains(&k.key)) {
@@ -396,7 +399,8 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
             if let Some(f) = turn.film {
                 text.push_str(&format!(
                     "\nThe storyboard now:\n{}\nWrite it again whole with the person's change. Keep every name, \
-                     look and shot they didn't ask to change, word for word.",
+                     look, shot and line they didn't ask to change, word for word: asked to change one thing, \
+                     change only that.",
                     board_text(f)
                 ));
             }
@@ -430,41 +434,7 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
             }
             push(&mut out, Role::User, vec![Part::Text { text }]);
         }
-        Mode::Take => {
-            let Some(f) = turn.film else { return out };
-            let k = f.shot;
-            let Some(shot) = f.shots.get(k) else { return out };
-            let mut parts = vec![Part::Text {
-                text: format!("Shot {} of {}, take {}: \"{}\"", k + 1, f.shots.len(), shot.takes.max(1), shot.text),
-            }];
-            let cast = super::session::take_cast(f, k);
-            for (m, p) in cast.iter().zip(refs) {
-                parts.push(Part::Text { text: format!("{}, as they should look:", m.name) });
-                parts.push(Part::Image { path: p.clone() });
-            }
-            let mut frames = own.iter();
-            if k > 0 && !shot.cut {
-                if let Some(p) = frames.next() {
-                    parts.push(Part::Text { text: "The last frame of the shot before:".into() });
-                    parts.push(Part::Image { path: p.clone() });
-                }
-            }
-            for (label, p) in ["The new shot's first frame:", "Its middle frame:", "Its last frame:"].iter().zip(frames) {
-                parts.push(Part::Text { text: label.to_string() });
-                parts.push(Part::Image { path: p.clone() });
-            }
-            let checks: Vec<String> = turn.checks.iter().enumerate().map(|(i, c)| format!("{}. {c}", i + 1)).collect();
-            parts.push(Part::Text {
-                text: format!(
-                    "Answer each check, in order, true or false:\n{}\nIf one fails because of how the shot is \
-                     worded, write `better_text`: the shot's words rewritten so a retake gets it right, about the \
-                     same thing. Else \"\".",
-                    checks.join("\n")
-                ),
-            });
-            push(&mut out, Role::User, parts);
-        }
-        Mode::Chat | Mode::Describe => {}
+        Mode::Chat | Mode::Describe | Mode::Take => {}
     }
     // The reply must follow the person's side.
     if out.last().is_some_and(|m| m.role != Role::User) {

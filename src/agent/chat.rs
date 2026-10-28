@@ -95,7 +95,8 @@ pub enum Mode {
     Verdict,
     /// A storyboard written, or rewritten whole: the film's cast and shots.
     Story,
-    /// A look at a shot just filmed: the server's checks answered.
+    /// A look at a shot just filmed. Never started now (the Video tab
+    /// films a board); kept so older chats read.
     Take,
 }
 
@@ -130,30 +131,13 @@ pub struct Film {
     /// turnaround sheet and a front picture drawn from it.
     #[serde(default)]
     pub sheets: bool,
-    /// The clip, once shooting has begun.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clip: Option<String>,
     #[serde(default)]
     pub phase: Phase,
-    /// The shot being filmed, from 0.
-    #[serde(default)]
-    pub shot: usize,
-    /// Each shot is looked at after it is filmed: the agent model sees.
-    #[serde(default)]
-    pub watch: bool,
     /// The press being drawn may draw keyframes too: *Draw the first
     /// frames*. *Draw the cast* stops at the cast, so a member can be redrawn
     /// without drawing every frame they are in each time.
     #[serde(default)]
     pub frames: bool,
-    /// How many times a shot failing a check is filmed again: Settings →
-    /// Agent's as it was at go.
-    #[serde(default = "one_retake")]
-    pub retakes: u32,
-}
-
-fn one_retake() -> u32 {
-    super::knobs::DEFAULT_RETAKES
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,10 +146,10 @@ pub enum Phase {
     /// Its pictures are being drawn.
     #[default]
     Board,
-    /// Every picture is there; waiting for the person's go.
+    /// Every picture is there: it may be sent to the Video tab. An older
+    /// board the agent was filming, or had filmed, reads as one.
+    #[serde(alias = "shooting", alias = "done")]
     Ready,
-    Shooting,
-    Done,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,17 +201,7 @@ impl Member {
 }
 
 /// A line spoken in a shot: by a member (by name) or the narrator.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct Line {
-    pub who: String,
-    pub words: String,
-    /// The words' language, as H3's `<d>[English] …</d>` names it; empty is English.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub language: String,
-    /// Heard over the shot, the speaker's lips closed.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub voiceover: bool,
-}
+pub use crate::videos::Line;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FilmShot {
@@ -259,15 +233,6 @@ pub struct FilmShot {
     pub sound: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub music: String,
-    /// 0 until it is filmed.
-    #[serde(default)]
-    pub seed: i64,
-    /// Times it was filmed.
-    #[serde(default)]
-    pub takes: u32,
-    /// The last take's answers to its checks (`session::take_checks`).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub checks: Vec<bool>,
 }
 
 impl Film {
@@ -525,10 +490,8 @@ pub enum Next {
     Escalate,
     /// Draw the film's next missing picture: a cast member's, then a keyframe.
     Film,
-    /// Film the film's current shot.
-    Shoot,
-    /// Look at the shot just filmed.
-    Take,
+    /// An older chat filming its board, or looking at a shot, stops there.
+    #[serde(alias = "shoot", alias = "take")]
     Nothing,
 }
 

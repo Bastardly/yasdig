@@ -21,4 +21,4 @@ The shots:
 
 `every`: the look of the whole film in a few words — "cinematic, 35 mm film, warm evening light". Not a story, no names.
 
-`reply`: tell the person in two sentences what the film is and how many shots, and that its pictures are drawn next.
+`reply`: in two sentences, what the film is and how many shots; its pictures are drawn when the person presses Draw the cast.

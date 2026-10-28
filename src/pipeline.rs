@@ -538,6 +538,9 @@ pub struct ShotSpec {
     /// `work/output/` sound stems (`.wav`), one `--ref-audio` each: H3's
     /// Ref2VA, so only where `references` may be.
     pub audio: Vec<String>,
+    /// What is said, heard and scored, who is in it, who the references and
+    /// sounds are: H3's prompt layout, when any is filled.
+    pub words: crate::videos::ShotWords,
 }
 
 /// H3's rule for its reference sounds, from MiniMax's model card: at most
@@ -2173,7 +2176,7 @@ impl Engine {
         };
         let mut shots = req.shots.clone();
         shots[0].seed = seed;
-        let mut segments = plan_shots(&vars, &m, &shots, &every, 0, init.is_some())?;
+        let mut segments = plan_shots(&vars, &m, &shots, &every, &[], init.is_some())?;
         self.check_sounds(&segments)?;
         let n = segments.len();
 
@@ -2411,7 +2414,7 @@ impl Engine {
         };
         // Everything checked before a frame is cut: a refused row must not
         // cost the shots it would have replaced.
-        let planned = plan_shots(&vars, &m, &req.shots, &every, req.keep, clip.source.is_some())?;
+        let planned = plan_shots(&vars, &m, &req.shots, &every, &clip.segments[..req.keep.min(clip.segments.len())], clip.source.is_some())?;
         self.check_sounds(&planned)?;
         if !planned.is_empty() {
             let missing = m.missing();
@@ -4509,7 +4512,7 @@ fn edit_size(w: u32, h: u32, base: u32) -> (u32, u32) {
     (snap64(((w as f32) * k).round() as u32), snap64(((h as f32) * k).round() as u32))
 }
 
-/// The Shots panel's rows from shot `first` on, checked and rolled into
+/// The Shots panel's rows after the clip's shots `before`, checked and rolled into
 /// what is recorded once drawn — before minutes of render, so a row that
 /// can't run is refused while nothing has. `has_init`: shot 1 has a
 /// first frame, which references can't sit beside.
@@ -4518,9 +4521,10 @@ fn plan_shots(
     m: &VideoModel,
     shots: &[ShotSpec],
     every: &str,
-    first: usize,
+    before: &[Segment],
     has_init: bool,
 ) -> Result<Vec<Segment>> {
+    let first = before.len();
     if first + shots.len() > MAX_SHOTS {
         bail!("a long clip has at most {MAX_SHOTS} shots; this one has {}", first + shots.len());
     }
@@ -4605,9 +4609,35 @@ fn plan_shots(
                 bail!("'{bad}' is not an output sound");
             }
         }
+        if shot.words.lines.iter().any(|l| l.who.trim().is_empty() && !l.words.trim().is_empty()) {
+            bail!("shot {}: say who speaks each line — \"Mara: Hello\", or \"narrator: …\" for a voice nobody on screen has", k + 1);
+        }
+        if shot.words.subjects.len() > shot.references.len() || shot.words.voices.len() > shot.audio.len() {
+            bail!("shot {}: a name for a reference or a sound that isn't there", k + 1);
+        }
         let seed = if shot.seed < 0 { random_seed().wrapping_add(k as i64) } else { shot.seed };
+        let rolled = variables::expand(&text, vars, seed)?;
+        // H3's prompt layout, from the shot's fields: its speakers' IDs by
+        // first line across the clip, so a voice keeps its `(S1)` on an
+        // Extend. `every` goes inside it.
+        let conditioned = if m.family == crate::config::VideoFamily::MinimaxH3 && shot.words.any() {
+            let ids = crate::h3prompt::speakers(
+                before.iter().map(|s| &s.words.lines).chain(shots.iter().map(|s| &s.words.lines)).flatten(),
+            );
+            let w = &shot.words;
+            let view = crate::h3prompt::Shot { text: &rolled, cast: &w.cast, lines: &w.lines, sound: &w.sound, music: &w.music };
+            let from_frame = if k == 0 { has_init } else { !cut || keyframe.is_some() };
+            // Sent with the references and sounds they name, in order.
+            let mut subjects = w.subjects.clone();
+            subjects.resize(shot.references.len(), Default::default());
+            let mut voices = w.voices.clone();
+            voices.resize(shot.audio.len(), String::new());
+            crate::h3prompt::compose(every, &view, &ids, &subjects, &voices, from_frame)
+        } else {
+            shot_prompt(every, &rolled)
+        };
         out.push(Segment {
-            conditioned: shot_prompt(every, &variables::expand(&text, vars, seed)?),
+            conditioned,
             text,
             seed,
             start: 0,
@@ -4616,6 +4646,7 @@ fn plan_shots(
             references: shot.references.clone(),
             keyframe: keyframe.map(str::to_string),
             audio: shot.audio.clone(),
+            words: shot.words.clone(),
         });
     }
     Ok(out)
@@ -4727,15 +4758,15 @@ mod tests {
         let vars = Default::default();
         let m = video("wan22_ti2v_5b");
         let shots = [shot("a crab walks", 7, None), shot("it lifts a claw", 40, Some(50))];
-        let segs = plan_shots(&vars, &m, &shots, "a beach", 0, false).unwrap();
+        let segs = plan_shots(&vars, &m, &shots, "a beach", &[], false).unwrap();
         assert_eq!(segs.iter().map(|s| (s.seed, s.frames)).collect::<Vec<_>>(), [(7, 33), (40, 49)]);
         assert_eq!(segs[1].conditioned, "a beach. it lifts a claw");
         assert!(segs.iter().all(|s| !s.cut));
         // A random seed is rolled, and recorded as the number it was.
-        let segs = plan_shots(&vars, &m, &[shot("x", -1, None)], "", 0, false).unwrap();
+        let segs = plan_shots(&vars, &m, &[shot("x", -1, None)], "", &[], false).unwrap();
         assert!(segs[0].seed >= 0);
         // An empty row is refused by number, not skipped (the rows would shift).
-        let e = plan_shots(&vars, &m, &[shot("x", 1, None), shot(" ", 1, None)], "", 0, false).unwrap_err();
+        let e = plan_shots(&vars, &m, &[shot("x", 1, None), shot(" ", 1, None)], "", &[], false).unwrap_err();
         assert!(e.to_string().contains("shot 2 is empty"), "{e}");
     }
 
@@ -4753,21 +4784,69 @@ mod tests {
             s
         };
         let wan = video("wan22_ti2v_5b");
-        let segs = plan_shots(&vars, &wan, &[cut(shot("x", 1, None))], "", 1, false).unwrap();
+        let segs = plan_shots(&vars, &wan, &[cut(shot("x", 1, None))], "", &[crate::videos::Segment::default()], false).unwrap();
         assert!(segs[0].cut && segs[0].keyframe.is_none(), "a cut from its words, as shot 1 without a first frame");
-        let e = plan_shots(&vars, &wan, &[refs(cut(shot("x", 1, None)))], "", 1, false).unwrap_err();
+        let e = plan_shots(&vars, &wan, &[refs(cut(shot("x", 1, None)))], "", &[crate::videos::Segment::default()], false).unwrap_err();
         assert!(e.to_string().contains("need MiniMax H3"), "{e}");
 
         let h3 = video("minimax_h3");
-        let segs = plan_shots(&vars, &h3, &[refs(cut(shot("the dwarf returns", 1, None)))], "", 1, false).unwrap();
+        let segs = plan_shots(&vars, &h3, &[refs(cut(shot("the dwarf returns", 1, None)))], "", &[crate::videos::Segment::default()], false).unwrap();
         assert!(segs[0].cut && segs[0].references.len() == 1);
         assert_eq!(segs[0].frames, 39, "H3 rounds up to 17k+5");
-        let e = plan_shots(&vars, &h3, &[refs(shot("x", 1, None))], "", 1, false).unwrap_err();
+        let e = plan_shots(&vars, &h3, &[refs(shot("x", 1, None))], "", &[crate::videos::Segment::default()], false).unwrap_err();
         assert!(e.to_string().contains("need a cut"), "{e}");
-        let e = plan_shots(&vars, &h3, &[refs(shot("x", 1, None))], "", 0, true).unwrap_err();
+        let e = plan_shots(&vars, &h3, &[refs(shot("x", 1, None))], "", &[], true).unwrap_err();
         assert!(e.to_string().contains("first frame"), "{e}");
-        let first = plan_shots(&vars, &h3, &[cut(shot("x", 1, None))], "", 0, false).unwrap();
+        let first = plan_shots(&vars, &h3, &[cut(shot("x", 1, None))], "", &[], false).unwrap();
         assert!(!first[0].cut);
+    }
+
+    /// An H3 shot with what is said or heard filled is sent in its guide's
+    /// layout, with *Every shot* inside and a speaker's ID kept across an
+    /// Extend; one typed as prose, and any Wan shot, as typed.
+    #[test]
+    fn an_h3_shot_with_its_fields_is_sent_in_the_guides_layout() {
+        use crate::videos::{Line, Segment, ShotWords, Subject};
+        let vars = Default::default();
+        let h3 = video("minimax_h3");
+        let line = |who: &str, words: &str| Line { who: who.into(), words: words.into(), ..Default::default() };
+        let mut a = shot("Mara opens the door.", 1, None);
+        a.words = ShotWords { lines: vec![line("Mara", "Hello")], cast: vec!["Mara".into(), "Leo".into()], ..Default::default() };
+        let mut b = shot("Leo answers.", 2, None);
+        b.words = ShotWords { lines: vec![line("Leo", "Hi"), line("Mara", "Come in")], ..Default::default() };
+        let segs = plan_shots(&vars, &h3, &[a.clone(), b], "rain light", &[], false).unwrap();
+        assert_eq!(
+            segs[0].conditioned,
+            "integrated_multimodal_description: [Shot 1] rain light. Mara opens the door. Mara (S1) says: <d>[English] Hello.</d> \
+             Then Mara closes their lips. Leo stays silent throughout, lips closed. Nothing more is said for the rest of the shot.\n\n\
+             overall_soundscape: N/A\n\nnon_diegetic_music: N/A"
+        );
+        assert!(segs[1].conditioned.starts_with("For the target video, at 0.00 seconds"), "a continue starts from a frame");
+        assert!(segs[1].conditioned.contains("Leo (S2) says: <d>[English] Hi.</d> Mara (S1) says"), "{}", segs[1].conditioned);
+        assert_eq!(segs[0].words, a.words, "recorded, for the row's done mark");
+        // An Extend: Leo spoke first in the clip, so he stays S1.
+        let before = [Segment { words: ShotWords { lines: vec![line("Leo", "Who?")], ..Default::default() }, ..Default::default() }];
+        let mut c = shot("Mara waves.", 3, None);
+        c.words.lines = vec![line("Mara", "Bye")];
+        let segs = plan_shots(&vars, &h3, &[c], "", &before, false).unwrap();
+        assert!(segs[0].conditioned.contains("Mara (S2) says"), "{}", segs[0].conditioned);
+        // A cut following a named picture defines its subject.
+        let mut d = shot("Leo reads.", 4, None);
+        d.cut = true;
+        d.references = vec!["100-0-leo".into()];
+        d.words.subjects = vec![Subject { name: "Leo".into(), look: String::new() }];
+        let segs = plan_shots(&vars, &h3, &[d.clone()], "", &before, false).unwrap();
+        assert!(segs[0].conditioned.starts_with("subject_definitions:\n<Subject 1> is Leo in <Picture 1>.\n"), "{}", segs[0].conditioned);
+        d.words.subjects.push(Subject::default());
+        assert!(plan_shots(&vars, &h3, &[d], "", &before, false).is_err(), "a name for a picture that isn't there");
+        let mut e = shot("x", 5, None);
+        e.words.lines = vec![line("", "Who said that?")];
+        assert!(plan_shots(&vars, &h3, &[e], "", &[], false).unwrap_err().to_string().contains("who speaks"));
+        // Prose, and Wan: as typed.
+        let segs = plan_shots(&vars, &h3, &[shot("a crab walks", 1, None)], "a beach", &[], false).unwrap();
+        assert_eq!(segs[0].conditioned, "a beach. a crab walks");
+        let segs = plan_shots(&vars, &video("wan22_ti2v_5b"), &[a], "a beach", &[], false).unwrap();
+        assert_eq!(segs[0].conditioned, "a beach. Mara opens the door.");
     }
 
     /// Sounds go where references go — H3 with its audio VAE, a cut or shot
@@ -4780,23 +4859,23 @@ mod tests {
             s.cut = true;
             s
         };
-        let e = plan_shots(&vars, &video("wan22_ti2v_5b"), &[sound(shot("x", 1, None), 1)], "", 1, false).unwrap_err();
+        let e = plan_shots(&vars, &video("wan22_ti2v_5b"), &[sound(shot("x", 1, None), 1)], "", &[crate::videos::Segment::default()], false).unwrap_err();
         assert!(e.to_string().contains("need MiniMax H3"), "{e}");
         let mut h3 = video("minimax_h3");
-        let e = plan_shots(&vars, &h3, &[sound(shot("x", 1, None), 1)], "", 1, false).unwrap_err();
+        let e = plan_shots(&vars, &h3, &[sound(shot("x", 1, None), 1)], "", &[crate::videos::Segment::default()], false).unwrap_err();
         assert!(e.to_string().contains("audio VAE"), "{e}");
         h3.audio_vae = Some("a.safetensors".into());
-        let segs = plan_shots(&vars, &h3, &[sound(shot("x", 1, None), 3)], "", 1, false).unwrap();
+        let segs = plan_shots(&vars, &h3, &[sound(shot("x", 1, None), 3)], "", &[crate::videos::Segment::default()], false).unwrap();
         assert_eq!(segs[0].audio.len(), 3);
-        let e = plan_shots(&vars, &h3, &[sound(shot("x", 1, None), 4)], "", 1, false).unwrap_err();
+        let e = plan_shots(&vars, &h3, &[sound(shot("x", 1, None), 4)], "", &[crate::videos::Segment::default()], false).unwrap_err();
         assert!(e.to_string().contains("at most 3"), "{e}");
         let mut on = sound(shot("x", 1, None), 1);
         on.cut = false;
-        assert!(plan_shots(&vars, &h3, &[on], "", 1, false).unwrap_err().to_string().contains("need a cut"));
+        assert!(plan_shots(&vars, &h3, &[on], "", &[crate::videos::Segment::default()], false).unwrap_err().to_string().contains("need a cut"));
         let mut keyed = sound(shot("x", 1, None), 1);
         keyed.keyframe = Some("100-7-s0".into());
-        assert!(plan_shots(&vars, &h3, &[keyed], "", 1, false).unwrap_err().to_string().contains("not both"));
-        let e = plan_shots(&vars, &h3, &[sound(shot("x", 1, None), 1)], "", 0, true).unwrap_err();
+        assert!(plan_shots(&vars, &h3, &[keyed], "", &[crate::videos::Segment::default()], false).unwrap_err().to_string().contains("not both"));
+        let e = plan_shots(&vars, &h3, &[sound(shot("x", 1, None), 1)], "", &[], true).unwrap_err();
         assert!(e.to_string().contains("first frame"), "{e}");
     }
 
@@ -4813,24 +4892,24 @@ mod tests {
             s
         };
         let wan = video("wan22_ti2v_5b");
-        let segs = plan_shots(&vars, &wan, &[key(shot("the hall at night", 1, None), true)], "", 1, false).unwrap();
+        let segs = plan_shots(&vars, &wan, &[key(shot("the hall at night", 1, None), true)], "", &[crate::videos::Segment::default()], false).unwrap();
         assert!(segs[0].cut);
         assert_eq!(segs[0].keyframe.as_deref(), Some("100-7-s0"));
-        let e = plan_shots(&vars, &wan, &[key(shot("x", 1, None), false)], "", 1, false).unwrap_err();
+        let e = plan_shots(&vars, &wan, &[key(shot("x", 1, None), false)], "", &[crate::videos::Segment::default()], false).unwrap_err();
         assert!(e.to_string().contains("is a cut"), "{e}");
-        let e = plan_shots(&vars, &wan, &[key(shot("x", 1, None), true)], "", 0, false).unwrap_err();
+        let e = plan_shots(&vars, &wan, &[key(shot("x", 1, None), true)], "", &[], false).unwrap_err();
         assert!(e.to_string().contains("shot 1"), "{e}");
 
         let h3 = video("minimax_h3");
-        assert!(plan_shots(&vars, &h3, &[key(shot("x", 1, None), true)], "", 1, false).is_ok());
+        assert!(plan_shots(&vars, &h3, &[key(shot("x", 1, None), true)], "", &[crate::videos::Segment::default()], false).is_ok());
         let mut both = key(shot("x", 1, None), true);
         both.references = vec!["100-8-s0".into()];
-        let e = plan_shots(&vars, &h3, &[both], "", 1, false).unwrap_err();
+        let e = plan_shots(&vars, &h3, &[both], "", &[crate::videos::Segment::default()], false).unwrap_err();
         assert!(e.to_string().contains("not both"), "{e}");
 
         let mut bad = key(shot("x", 1, None), true);
         bad.keyframe = Some("../x".into());
-        assert!(plan_shots(&vars, &wan, &[bad], "", 1, false).is_err());
+        assert!(plan_shots(&vars, &wan, &[bad], "", &[crate::videos::Segment::default()], false).is_err());
     }
 
     /// The sides are drawn left and right first, so a later strip spans their

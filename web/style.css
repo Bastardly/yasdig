@@ -867,6 +867,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .soundlen { font-size: var(--fs-sm); color: var(--text-dim); }
 .soundslist { list-style: none; margin: var(--sp-3) 0; padding: 0; display: grid; gap: var(--sp-2); }
 .soundslist li { display: flex; align-items: center; gap: var(--sp-2); }
+.soundslist li { flex-wrap: wrap; }
+.soundslist li input { flex: 1 1 12em; }
+.refwho { width: 100%; margin-top: var(--sp-2); }
 #lbclose, #cbclose {
   z-index: 1002;
   position: absolute; top: 10px; right: 14px;

@@ -69,22 +69,27 @@ export function askForSound(onDone, onErr) {
 // ---- The Sounds dialog -------------------------------------------------------
 //
 // `#soundsdlg`, borrowed by a Video tab shot as `#refsdlg` is: up to three
-// sounds, in the order H3 numbers them `<Audio 1>`… `onDone(stems)` on Done.
+// sounds, in the order H3 numbers them `<Audio 1>`…, each maybe the voice of
+// someone the shot's lines name. `onDone(stems, voices)` on Done.
 const MAX = 3;
 let picked = [];
+let voices = [];
 let done = null;
 
 function drawSounds() {
   $('soundslist').innerHTML = picked.map((s, i) => `
     <li><b>&lt;Audio ${i + 1}&gt;</b> <span class="sub">${esc(s)}</span>
       <button type="button" class="btn" data-play="${esc(s)}">Play</button>
-      <button type="button" class="btn" data-drop="${i}">Remove</button></li>`).join('')
+      <button type="button" class="btn" data-drop="${i}">Remove</button>
+      <input type="text" data-voice="${i}" value="${esc(voices[i] ?? '')}" placeholder="Voice of — a name the lines use"
+        aria-label="Whose voice sound ${i + 1} is"></li>`).join('')
     || '<li class="sub">No sounds yet.</li>';
   $('soundschoose').hidden = $('soundsupload').hidden = picked.length >= MAX;
 }
 
-export function editSounds(stems, onDone, note) {
+export function editSounds(stems, onDone, note, voiceOf = []) {
   picked = [...stems];
+  voices = picked.map((_, i) => voiceOf[i] ?? '');
   done = onDone;
   $('soundsnote').textContent = note;
   $('soundserr').textContent = '';
@@ -97,10 +102,17 @@ export function initSounds() {
     const play = e.target.closest('[data-play]');
     if (play) { playSound(play.dataset.play); return; }
     const drop = e.target.closest('[data-drop]');
-    if (drop) { picked.splice(Number(drop.dataset.drop), 1); drawSounds(); }
+    if (drop) {
+      picked.splice(Number(drop.dataset.drop), 1);
+      voices.splice(Number(drop.dataset.drop), 1);
+      drawSounds();
+    }
+  });
+  $('soundslist').addEventListener('input', (e) => {
+    if (e.target.dataset.voice != null) voices[Number(e.target.dataset.voice)] = e.target.value;
   });
   const add = (stem) => {
-    if (!picked.includes(stem) && picked.length < MAX) picked.push(stem);
+    if (!picked.includes(stem) && picked.length < MAX) { picked.push(stem); voices.push(''); }
     drawSounds();
   };
   $('soundschoose').addEventListener('click', () => chooseSound(add));
@@ -113,7 +125,7 @@ export function initSounds() {
   });
   $('soundsdone').addEventListener('click', () => {
     $('soundsdlg').close();
-    done?.(picked);
+    done?.(picked, voices.map((v) => v.trim()));
     done = null;
   });
   // Escape is a cancel: nothing changes.

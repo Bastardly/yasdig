@@ -737,8 +737,8 @@ The Video tab makes clips with Wan 2.2 (TI2V-5B, the I2V-A14B pair), Wan 2.1 VAC
 and dense models, and MiniMax H3 (with sound). Get models has cards for the first two
 and H3. It is laid out like the Image tab: the size with a swap button (snapped to what
 the model runs), LoRAs picked from `models/loras/` (only the ones for the model's size;
-on the A14B pair each says which expert it patches), a first frame from your outputs or
-an upload, and *Save as defaults for this model*. While a clip renders the status card
+on the A14B pair each says which expert it patches), and *Save as defaults for this
+model*. While a clip renders the status card
 loops a blurry preview of it, and you can open other clips and set up the next one.
 
 **Turbo (MiniMax H3).** The H3 card also fetches an 8-step DMD LoRA made for the
@@ -751,6 +751,8 @@ would load and change nothing) is listed greyed out, with the reason.
 longer clip is made a shot at a time, in the **Shots** panel: **Every shot** first,
 then the **Negative prompt**, then the shots. Each shot has its own **Seed** (-1 picks
 one), **Frames** (rounded to what the model allows) and **Prompt**, and is one render;
+shot 1's **Start from image** (from your outputs, an upload, a drop or a paste) is the
+clip's first frame, and without one the model runs as plain text-to-video;
 each after the first goes on from the previous shot's last frame. A shot is conditioned
 on **its own words**, so a line spoken in shot 1 is spoken once. What every shot should
 share — the characters, the place, the look — goes in **Every shot**, which is put in
@@ -774,22 +776,40 @@ since they no longer cover it.
 **Continue or cut.** One frame is all that carries across a seam, so a face that
 leaves the picture and comes back is drawn anew and may not match. A shot can be a
 **Cut** instead of *Continue*: it starts fresh, a new camera shot, and doesn't join the
-frame before. A cut can **start from a picture** (*Start from a picture…*, from your
-outputs): a keyframe you drew on the Image tab, which is how a TI2V-5B or A14B clip
+frame before. A cut can **start from an image** (*Start from image…*, from your
+outputs, or *Upload…*): a keyframe you drew on the Image tab, which is how a TI2V-5B or A14B clip
 changes scene. With MiniMax H3 a cut may instead follow up to four **reference
 pictures** (a face, a costume, a place) from your outputs or an upload — say in its
-prompt who is who. Not both on one shot: sd.cpp can't give H3 references and a
-starting frame at once. Shot 1 can take references too when no first frame is picked.
-Other models have no references.
+prompt who is who, or name each in the References dialog. Not both on one shot: sd.cpp
+can't give H3 references and a starting frame at once, which is also why a continue
+takes none. Shot 1 can take references too when it has no image to start from. Other
+models have no references. The Shots panel can be dragged wider as well as taller.
 
 **Sounds.** Where an H3 shot may take references it may also take **sounds**, when the
 model has its audio VAE: *Sounds…* picks up to three from your outputs or uploads one —
 a voice to speak in, a sound to match — 15 seconds in all, each at least 2 (MiniMax's
 limits). Name them in the shot's prompt as `<Audio 1>`, `<Audio 2>`: "the woman speaks
 in the voice of `<Audio 1>`". Any sound the browser can play uploads; it is kept as a
-32 kHz stereo WAV, cut to 15 seconds. H3 comes as two files with the same shape, so
+32 kHz stereo WAV, cut to 15 seconds. A sound can be named as someone's **voice** in
+the Sounds dialog, by the name its speaker has in *Spoken* (below). H3 comes as two files with the same shape, so
 yasdig can't tell them apart: Get models has both, and the **Ref2VA** one is the one
 MiniMax made for following references — pick it for shots that do.
+
+**What is said, heard and scored (MiniMax H3).** With its audio VAE, an H3 shot also
+has **Who is in it**, **Spoken** — one line each, `Mara: Who's there?`, with
+`(voiceover)` after the name for a voice heard over the shot with closed lips, and a
+language other than English the same way, `Leo (Danish): Hej.` — **Sound** (empty is
+silence) and **Music** (only the audience hears it; empty is none). yasdig writes these
+into the prompt layout MiniMax's own guide sets out, and says who stays silent, so H3
+doesn't invent a narrator, a score or a closing sentence. A shot with none of them
+filled is sent as typed.
+
+**From a storyboard.** The Agent tab can write a storyboard for a short film and draw
+its cast and first frames; its *Send to Video tab* puts the shots here as a new clip —
+first frames, references, voices and lines filled in — for you to change and generate.
+Each shot keeps both its first frame and its references: on H3 it follows the
+references and voices, on Wan it starts from the first frame, so you can switch model
+after sending.
 
 **Current and Favorites.** Every clip is kept in `work/videos/` and listed on the
 **Current** panel, the Image tab's way: click once to show it, again to open the clip
