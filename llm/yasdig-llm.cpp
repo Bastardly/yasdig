@@ -66,7 +66,8 @@ namespace {
 
 constexpr int PROTOCOL = 1;
 
-enum Exit { OK = 0, INTERNAL = 1, BAD_REQUEST = 2, LOAD = 3, CONTEXT = 4, OOM = 5 };
+// TOO_LONG, not CONTEXT: windows.h has a CONTEXT (the thread register record).
+enum Exit { OK = 0, INTERNAL = 1, BAD_REQUEST = 2, LOAD = 3, TOO_LONG = 4, OOM = 5 };
 
 void record(const char * tag, const std::string & body) {
     std::string line = std::string(tag) + " " + body + "\n";
@@ -348,7 +349,7 @@ int main(int argc, char ** argv) {
         const size_t  n_chunks = mtmd_input_chunks_size(chunks.ptr.get());
         const int32_t need     = (int32_t) mtmd_helper_get_n_pos(chunks.ptr.get()) + params.n_predict;
         if (need > n_ctx) {
-            fail(CONTEXT, "context", "the conversation does not fit the context", { { "need", need }, { "have", n_ctx } });
+            fail(TOO_LONG, "context", "the conversation does not fit the context", { { "need", need }, { "have", n_ctx } });
         }
         for (size_t i = 0; i < n_chunks; i++) {
             record("P", "read " + std::to_string(i) + " " + std::to_string(n_chunks));
@@ -365,7 +366,7 @@ int main(int argc, char ** argv) {
         llama_tokens  toks = common_tokenize(vocab, prompt, true, true);
         const int32_t need = (int32_t) toks.size() + params.n_predict;
         if (need > n_ctx) {
-            fail(CONTEXT, "context", "the conversation does not fit the context", { { "need", need }, { "have", n_ctx } });
+            fail(TOO_LONG, "context", "the conversation does not fit the context", { { "need", need }, { "have", n_ctx } });
         }
         const size_t steps = (toks.size() + params.n_batch - 1) / params.n_batch;
         for (size_t i = 0, k = 0; i < toks.size(); i += params.n_batch, k++) {
