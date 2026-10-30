@@ -214,11 +214,23 @@ jobs:
           Compress-Archive -Path pkg\yasdig -DestinationPath yasdig-windows-x86_64.zip
           Get-Item yasdig-windows-x86_64.zip
 
+      # A tag's artifact is the zip itself, which `publish` attaches. A master
+      # build's is the folder: upload-artifact zips what it is given, so the
+      # zip would arrive inside a zip — this way the download *is* the
+      # release's zip, `yasdig\` at its root.
       - uses: actions/upload-artifact@v4
+        if: github.ref_type == 'tag'
         with:
           name: yasdig-windows-x86_64
           path: yasdig-windows-x86_64.zip
-          retention-days: ${{ github.ref_type == 'tag' && 90 || 14 }}
+          retention-days: 90
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type != 'tag'
+        with:
+          name: yasdig-windows-x86_64
+          path: pkg
+          retention-days: 14
 
       # After the upload, so a master build is there to try even when a test
       # fails — a release still waits on this job, test included.
