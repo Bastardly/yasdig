@@ -392,7 +392,7 @@ impl Reader {
             if gpu_oom {
                 bail!(out_of_memory(label, "gpu"));
             }
-            let code = x.code.map_or("a signal".to_string(), |c| format!("code {c}"));
+            let code = x.code.map_or("a signal".to_string(), sd::exit_code_text);
             bail!("the agent ({label}) exited with {code}\n{}", logs());
         }
         let Some(stats) = self.done else {

@@ -24,6 +24,8 @@
 //   C {"content":…,"reasoning":…}  the reply, the template's own parse of it
 //   D {"n_prompt":…, …}            done; stats
 //   E {"kind":…, "msg":…}          failure; exit code says the same
+//                                  (kind "crash" on Windows: the exception and
+//                                  the module it happened in, then the OS's code)
 //
 // Exit codes: 0 done, 1 internal, 2 bad request, 3 load failed, 4 context too
 // small, 5 out of memory (125 is the sandbox launcher's, never ours).
@@ -43,9 +45,20 @@
 #include <chrono>
 #include <clocale>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <vector>
+
+#if defined(_WIN32)
+#    ifndef WIN32_LEAN_AND_MEAN
+#        define WIN32_LEAN_AND_MEAN
+#    endif
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
+#endif
 
 using json = nlohmann::ordered_json;
 
@@ -90,6 +103,59 @@ size_t utf8_complete(const std::string & s) {
     return n;
 }
 
+// llama.cpp's own log is written by a worker thread, so a crash loses every
+// line still queued: a Windows divide-by-zero (2026-10-30) left stderr empty.
+// This one writes each line before returning, so the last says how far it got.
+void log_now(ggml_log_level level, const char * text, void *) {
+    static ggml_log_level last = GGML_LOG_LEVEL_INFO;
+    if (level != GGML_LOG_LEVEL_CONT) {
+        last = level;
+    }
+    if (last == GGML_LOG_LEVEL_DEBUG) {
+        return;
+    }
+    fputs(text, stderr);
+    fflush(stderr);
+}
+
+#if defined(_WIN32)
+const char * exception_name(DWORD code) {
+    switch (code) {
+        case EXCEPTION_ACCESS_VIOLATION:      return "access violation";
+        case EXCEPTION_INT_DIVIDE_BY_ZERO:    return "integer divide by zero";
+        case EXCEPTION_ILLEGAL_INSTRUCTION:   return "illegal instruction";
+        case EXCEPTION_STACK_OVERFLOW:        return "stack overflow";
+        case EXCEPTION_IN_PAGE_ERROR:         return "in-page error";
+        case EXCEPTION_PRIV_INSTRUCTION:      return "privileged instruction";
+        default:                              return "exception";
+    }
+}
+
+// An unhandled exception becomes an `E` record naming it and the module it was
+// raised in (file name only: a path would carry the user's folders), so the
+// page says *where* — the driver, llama.cpp, or the Vulkan driver's DLL. The
+// process then ends with the exception's own code, as it would have.
+LONG WINAPI on_crash(EXCEPTION_POINTERS * e) {
+    const EXCEPTION_RECORD * r = e->ExceptionRecord;
+    char      path[MAX_PATH]   = "unknown module";
+    uintptr_t offset           = 0;
+    HMODULE   m                = nullptr;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR) r->ExceptionAddress, &m) &&
+        GetModuleFileNameA(m, path, MAX_PATH)) {
+        offset = (uintptr_t) r->ExceptionAddress - (uintptr_t) m;
+    }
+    const char * slash = strrchr(path, '\\');
+    const char * file  = slash ? slash + 1 : path;
+    char         msg[MAX_PATH + 128];
+    snprintf(msg, sizeof msg, "crashed: %s (0x%08lX) in %s+0x%llx", exception_name(r->ExceptionCode),
+             (unsigned long) r->ExceptionCode, file, (unsigned long long) offset);
+    fflush(stderr);
+    record("E", json{ { "kind", "crash" }, { "msg", msg } }.dump());
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
 struct LoadProgress {
     int last = -1;
 };
@@ -108,6 +174,9 @@ bool on_load(float progress, void * user) {
 
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
+#if defined(_WIN32)
+    SetUnhandledExceptionFilter(on_crash);
+#endif
 
     std::string request_path;
     for (int i = 1; i < argc; i++) {
@@ -141,6 +210,7 @@ int main(int argc, char ** argv) {
     }
 
     common_init();
+    llama_log_set(log_now, nullptr);  // after common_init, which sets its own
     ggml_backend_load_all();
 
     common_params params;
@@ -184,6 +254,7 @@ int main(int argc, char ** argv) {
 
     mtmd::context_ptr vision;
     if (!params.mmproj.path.empty()) {
+        mtmd_helper_log_set(log_now, nullptr);
         mtmd_context_params mp = mtmd_context_params_default();
         mp.use_gpu             = true;
         mp.print_timings       = false;

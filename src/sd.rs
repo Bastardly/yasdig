@@ -915,6 +915,7 @@ impl<'a> SdRunner<'a> {
                 }
                 .into());
             }
+            let status = status.code().map_or(status.to_string(), exit_code_text);
             bail!(
                 "sd-cli {label} exited with {status}\n--- stderr ---\n{}\n--- stdout (last {TAIL_LINES} lines) ---\n{}",
                 joined(&err_tail),
@@ -1308,6 +1309,30 @@ fn path_str(p: &Path) -> String {
 }
 
 /// The kept tail as one block, for an error message.
+/// What a Windows exit code says when it is an exception's (an NTSTATUS, read
+/// as `i32`): a crash shows as `-1073741676` otherwise. Only the codes a crash
+/// in a native child ends with.
+pub(crate) fn windows_exception(code: i32) -> Option<&'static str> {
+    Some(match code as u32 {
+        0xC000_0005 => "access violation",
+        0xC000_0094 => "integer divide by zero",
+        0xC000_001D => "illegal instruction",
+        0xC000_00FD => "stack overflow",
+        0xC000_0409 => "stack buffer overrun or fast fail",
+        0xC000_0135 => "a DLL it needs was not found",
+        0xC000_0374 => "heap corruption",
+        _ => return None,
+    })
+}
+
+/// An exit code as the message shows it, an exception's named.
+pub(crate) fn exit_code_text(code: i32) -> String {
+    match windows_exception(code) {
+        Some(name) => format!("code {code} (0x{:08X}, {name})", code as u32),
+        None => format!("code {code}"),
+    }
+}
+
 pub(crate) fn joined(lines: &VecDeque<String>) -> String {
     lines
         .iter()
@@ -2051,6 +2076,15 @@ pub(crate) fn drain(stream: impl Read, mut on_progress: impl FnMut(&str)) -> Vec
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_windows_crash_code_is_named() {
+        assert_eq!(
+            super::exit_code_text(-1073741676),
+            "code -1073741676 (0xC0000094, integer divide by zero)"
+        );
+        assert_eq!(super::exit_code_text(4), "code 4");
+    }
+
     use super::*;
 
     /// `base` joined with `rest` the way the code joins them — `\` on Windows,
