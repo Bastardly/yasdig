@@ -24,9 +24,8 @@ rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
 rustup override set stable-x86_64-pc-windows-gnu           # for this checkout only
 ```
 
-Then build from any terminal with UCRT64 first on `PATH`
-(`$env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"`, or add it in System settings).
-`build.rs` picks Ninja and links sd-cli statically there, so it needs no MSYS2 DLLs at
+Then build from any terminal; `build.rs` finds MSYS2 at `C:\msys64\ucrt64` by itself
+(set `MSYS2_UCRT64` if it is elsewhere), picks Ninja and links sd-cli statically, so it needs no MSYS2 DLLs at
 run time (the sandbox couldn't reach them). Releases are still built with MSVC
 (`release.yml`); this route is for a build on your own machine.
 

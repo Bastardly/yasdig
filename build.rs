@@ -142,6 +142,28 @@ fn native(n: &Native, manifest: &Path, release: bool) {
     }
 }
 
+/// `cmake`, and on MinGW with MSYS2's UCRT64 `bin` (`MSYS2_UCRT64`, else the
+/// installer's default) put first on its `PATH`: cmake, ninja, gcc and glslc
+/// all live there, and an ordinary terminal doesn't have it. Rust needs none
+/// of it — the GNU toolchain links with its own bundled linker.
+fn cmake(mingw: bool) -> Command {
+    println!("cargo::rerun-if-env-changed=MSYS2_UCRT64");
+    let mut c;
+    let ucrt = PathBuf::from(
+        std::env::var_os("MSYS2_UCRT64").unwrap_or_else(|| r"C:\msys64\ucrt64".into()),
+    )
+    .join("bin");
+    if mingw && ucrt.is_dir() {
+        let mut path = vec![ucrt.clone()];
+        path.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+        c = Command::new(ucrt.join("cmake.exe"));
+        c.env("PATH", std::env::join_paths(path).unwrap_or_default());
+    } else {
+        c = Command::new("cmake");
+    }
+    c
+}
+
 /// Configure once, then build the one target. A no-op build is a couple of
 /// seconds; the first is several minutes, most of it ggml-vulkan's shaders.
 fn build(n: &Native, src: &Path, build: &Path) -> Result<PathBuf, String> {
@@ -152,8 +174,9 @@ fn build(n: &Native, src: &Path, build: &Path) -> Result<PathBuf, String> {
     // configure leaves a CMakeCache.txt behind, and trusting it turned one
     // missing package into a build that failed with "no Makefile" forever.
     let configured = build.join(".yasdig-configured");
+    let mingw = windows && !msvc;
     if !configured.is_file() {
-        let mut cfg = Command::new("cmake");
+        let mut cfg = cmake(mingw);
         cfg.arg("-S").arg(src).arg("-B").arg(build).args([
             "-DCMAKE_BUILD_TYPE=Release",
             "-DGGML_NATIVE=OFF",
@@ -182,7 +205,7 @@ fn build(n: &Native, src: &Path, build: &Path) -> Result<PathBuf, String> {
     }
 
     let jobs = std::thread::available_parallelism().map_or(4, |n| n.get());
-    let mut b = Command::new("cmake");
+    let mut b = cmake(mingw);
     b.arg("--build").arg(build).args(["--config", "Release", "--target", n.name]);
     b.arg("--parallel").arg(jobs.to_string());
     run(b, "building", n.what)?;
