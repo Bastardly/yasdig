@@ -178,6 +178,11 @@ int main(int argc, char ** argv) {
 #if defined(_WIN32)
     SetUnhandledExceptionFilter(on_crash);
 #endif
+    // As mtmd-cli does, first: on Windows ggml_time_us divides by the
+    // QueryPerformanceFrequency this stores, and the model load times itself
+    // before any ggml_init would have — an integer divide by zero. Linux's
+    // clock_gettime needs no init, which is why only Windows crashed.
+    ggml_time_init();
 
     std::string request_path;
     for (int i = 1; i < argc; i++) {
