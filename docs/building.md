@@ -12,6 +12,24 @@ sudo dnf install cmake gcc-c++ glslc vulkan-loader-devel \
                  spirv-headers-devel spirv-tools-devel glslang-devel
 ```
 
+**On Windows**, without Visual Studio: MSYS2's UCRT64 toolchain (GCC, CMake, Ninja,
+the Vulkan headers and `glslc`) and Rust's GNU toolchain. In PowerShell:
+
+```powershell
+winget install --id MSYS2.MSYS2 -e
+$env:MSYSTEM = 'UCRT64'
+C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm"   # closes itself; run it again
+C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm && pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,vulkan-devel,shaderc,spirv-headers,spirv-tools,glslang}"
+rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
+rustup override set stable-x86_64-pc-windows-gnu           # for this checkout only
+```
+
+Then build from any terminal with UCRT64 first on `PATH`
+(`$env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"`, or add it in System settings).
+`build.rs` picks Ninja and links sd-cli statically there, so it needs no MSYS2 DLLs at
+run time (the sandbox couldn't reach them). Releases are still built with MSVC
+(`release.yml`); this route is for a build on your own machine.
+
 Then, once, put stable-diffusion.cpp **inside** this repo, where `build.rs` looks for
 it (the folder is gitignored):
 
