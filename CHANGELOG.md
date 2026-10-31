@@ -3,7 +3,7 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
-## Unreleased
+## 0.5.5 — 2026-10-31
 
 ### New
 
@@ -93,6 +93,9 @@ What changed in each release of yasdig. Each release's executables are on the
 - The Wan 2.2 TI2V-5B GGUF from Get models read as "could not be read": one of its
   tensors has five dimensions, which the header reader refused. It now folds them as
   sd.cpp does.
+- A source checkout on Windows found no sd-cli: `models.toml` names it without `.exe`.
+- Building from source on Windows no longer needs Visual Studio: MSYS2's MinGW works
+  too (`docs/building.md`).
 
 ## 0.5.4 — 2026-10-24
 
