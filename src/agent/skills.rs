@@ -35,6 +35,7 @@ const BUILTIN: &[(&str, &str)] = &[
     ("verdict.md", include_str!("skills/verdict.md")),
     ("tags.md", include_str!("skills/tags.md")),
     ("sentences.md", include_str!("skills/sentences.md")),
+    ("elements.md", include_str!("skills/elements.md")),
     ("qwen-image.md", include_str!("skills/qwen-image.md")),
     ("moss.md", include_str!("skills/moss.md")),
     ("film.md", include_str!("skills/film.md")),
@@ -190,6 +191,19 @@ mod tests {
             let (_, used, _) = select(&all, &[f.as_str()], Mode::Chat);
             assert!(used.len() >= 3, "{} gets only {used:?}", f.label());
         }
+    }
+
+    /// Sentence models get the elements-then-scene layout; tag models don't,
+    /// and a story turn on an H3 film, already the fullest, keeps its own two.
+    #[test]
+    fn elements_go_to_sentence_models_and_the_story_budget_holds() {
+        let (all, _) = load(Path::new("/nonexistent"));
+        let has = |fams: &[&str], mode, id: &str| select(&all, fams, mode).1.iter().any(|u| u == id);
+        assert!(has(&["flux"], Mode::Chat, "elements"));
+        assert!(has(&["moss_image"], Mode::Plan, "elements"));
+        assert!(!has(&["sdxl"], Mode::Chat, "elements"));
+        let (_, used, dropped) = select(&all, &["flux", "minimax_h3"], Mode::Story);
+        assert!(used.contains(&"film".to_string()) && used.contains(&"h3".to_string()), "{used:?}, dropped {dropped:?}");
     }
 
     #[test]

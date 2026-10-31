@@ -544,14 +544,8 @@ fn board_picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, step
             } else {
                 Vec::new()
             };
-            let mut prompt = with_look(&shot.text, &film.every);
-            for n in &shot.cast {
-                if let Some(m) = film.member(n).filter(|m| !m.look.is_empty()) {
-                    prompt.push_str(&format!(" {}: {}", m.name, m.look));
-                }
-            }
             let pic = Pic {
-                prompt,
+                prompt: keyframe_prompt(film, shot),
                 size: board_size(&cfg, &settings, v.width as f64 / v.height.max(1) as f64),
                 refs,
                 file: format!("k{ms}-{k}.png"),
@@ -578,6 +572,28 @@ const FRONT: &str = "The person in the reference picture, alone, seen from the f
                      light grey background.";
 
 /// A prompt with the film's look after it.
+/// A shot's first frame as elements, then the scene: a paragraph per cast
+/// member in it, then what happens. Sentence models (Flux, Qwen, MOSS) keep
+/// several people apart far better this way than with the looks run on after
+/// the action, and each paragraph is one thing for the person to edit.
+fn keyframe_prompt(film: &chat::Film, shot: &chat::FilmShot) -> String {
+    let mut parts: Vec<String> = shot
+        .cast
+        .iter()
+        .filter_map(|n| film.member(n))
+        .filter(|m| !m.look.trim().is_empty())
+        .map(|m| {
+            let look = m.look.trim();
+            let (l, n) = (look.to_lowercase(), m.name.to_lowercase());
+            let named = l.starts_with(&n) || l.starts_with(&format!("the {n}"));
+            if named { look.to_string() } else { format!("{}: {look}", m.name) }
+        })
+        .collect();
+    parts.push(with_look(&shot.text, &film.every));
+    parts.retain(|p| !p.is_empty());
+    parts.join("\n\n")
+}
+
 fn with_look(text: &str, every: &str) -> String {
     match (text.trim(), every.trim()) {
         (t, "") => t.to_string(),
@@ -855,5 +871,35 @@ mod tests {
         assert_eq!(req.template, "sdxl");
         assert_eq!((req.steps, req.cfg_scale, req.width, req.height), (None, None, None, None));
         assert!(req.loras.is_none(), "no LoRA list: the profile's, and Turbo's to add");
+    }
+
+    /// A first frame is each cast member's look on its own, then the shot.
+    #[test]
+    fn a_keyframe_prompt_is_the_cast_then_the_scene() {
+        use super::chat::{Film, FilmShot, Member};
+        let m = |name: &str, look: &str| Member { name: name.into(), look: look.into(), ..Default::default() };
+        let film = Film {
+            every: "cinematic, warm light".into(),
+            cast: vec![
+                m("Larry", "Larry is a construction worker in a yellow hard hat."),
+                m("Lars", "A thin man with square glasses."),
+                m("office", "The office is a site office with open blinds."),
+                m("Ghost", ""),
+            ],
+            ..Default::default()
+        };
+        let shot = |cast: &[&str]| FilmShot {
+            text: "Lars shouts at Larry.".into(),
+            cast: cast.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::keyframe_prompt(&film, &shot(&["Lars", "Larry", "office", "Ghost"])),
+            "Lars: A thin man with square glasses.\n\n\
+             Larry is a construction worker in a yellow hard hat.\n\n\
+             The office is a site office with open blinds.\n\n\
+             Lars shouts at Larry. cinematic, warm light"
+        );
+        assert_eq!(super::keyframe_prompt(&film, &shot(&[])), "Lars shouts at Larry. cinematic, warm light");
     }
 }

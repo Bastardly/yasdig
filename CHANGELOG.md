@@ -3,6 +3,15 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### Changed
+
+- The Assistant writes a prompt with several people as one paragraph per person and
+  place, then one for the scene, with a blank line between them. Flux, Krea, Qwen and
+  MOSS keep people apart far better that way, and each paragraph is one thing to edit.
+  A film's first frames are put together the same way.
+
 ## 0.5.5 — 2026-10-31
 
 ### New
