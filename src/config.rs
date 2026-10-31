@@ -135,6 +135,16 @@ fn default_models_dir() -> String {
     "models".to_string()
 }
 
+/// `models.toml` names `…/bin/sd-cli` for every OS; on Windows the file is
+/// `sd-cli.exe`, and `exists()` doesn't add the suffix the way a spawn does.
+/// A path that already has an extension, or names a file as written, is kept.
+fn with_exe(path: PathBuf) -> PathBuf {
+    if std::env::consts::EXE_SUFFIX.is_empty() || path.extension().is_some() || path.is_file() {
+        return path;
+    }
+    path.with_extension(&std::env::consts::EXE_SUFFIX[1..])
+}
+
 
 /// A tuned preset for one checkpoint: which file it is, and what is different
 /// about it.
@@ -2568,7 +2578,7 @@ impl Config {
     /// disagree about.
     pub fn sd_binary(&self) -> PathBuf {
         match &self.sd.binary {
-            Some(b) => self.resolve(b),
+            Some(b) => with_exe(self.resolve(b)),
             None => crate::bundle::SD.path(&self.base_dir),
         }
     }
@@ -2577,7 +2587,7 @@ impl Config {
     /// single decision as [`Config::sd_binary`].
     pub fn llm_binary(&self) -> PathBuf {
         match &self.llm.binary {
-            Some(b) => self.resolve(b),
+            Some(b) => with_exe(self.resolve(b)),
             None => crate::bundle::LLM.path(&self.base_dir),
         }
     }

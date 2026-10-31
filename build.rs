@@ -166,6 +166,16 @@ fn build(n: &Native, src: &Path, build: &Path) -> Result<PathBuf, String> {
                 "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded",
                 "-DCMAKE_CXX_FLAGS=/EHsc /bigobj",
             ]);
+        } else if windows {
+            // MinGW (MSYS2's UCRT64): CMake's default generator on Windows is
+            // Visual Studio's, and a static link keeps libstdc++/winpthread
+            // DLLs out — the AppContainer can't reach C:\msys64 to load them.
+            cfg.args([
+                "-G",
+                "Ninja",
+                "-DCMAKE_EXE_LINKER_FLAGS=-static",
+                "-DCMAKE_CXX_FLAGS=-Wa,-mbig-obj",
+            ]);
         }
         run(cfg, "configuring", n.what)?;
         std::fs::write(&configured, "").map_err(|e| e.to_string())?;
