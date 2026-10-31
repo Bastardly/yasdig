@@ -3,14 +3,18 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
-## Unreleased
+## 0.5.6 — 2026-10-31
 
 ### Changed
 
 - The Assistant writes a prompt with several people as one paragraph per person and
   place, then one for the scene, with a blank line between them. Flux, Krea, Qwen and
   MOSS keep people apart far better that way, and each paragraph is one thing to edit.
-  A film's first frames are put together the same way.
+  Each person gets the details a picture needs (eyes, hair, skin, clothes and their
+  colours) that fit the scene — a soldier in a trench is muddy — and a creature its
+  colour and its size against the others. What you wrote always wins. A film's first
+  frames are put together the same way. A bigger agent model follows this best:
+  Ministral 14B did it every time, the 4B models often don't.
 
 ## 0.5.5 — 2026-10-31
 
