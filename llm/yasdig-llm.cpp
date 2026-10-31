@@ -2,7 +2,7 @@
 //
 // yasdig's agent runs a model the way it runs sd-cli: one subprocess per turn,
 // inside the same sandbox, with nothing kept between turns. llama.cpp's own tools
-// don't fit that shape (checked at v0.7.0): `llama-mtmd-cli` is one-shot only with
+// don't fit that shape (checked at v0.8.0): `llama-mtmd-cli` is one-shot only with
 // both `-p` and `--image` and can't be handed a conversation, and `llama-cli`
 // talks to an in-process llama-server over a loopback TCP port, which the sandbox
 // refuses. So this is mtmd-cli's evaluation loop (tools/mtmd/mtmd-cli.cpp) with the

@@ -40,7 +40,7 @@ For the Assistant, put llama.cpp beside it at the tag release builds use (also
 gitignored; without it the build works and has no agent):
 
 ```sh
-git clone --branch v0.7.0 https://github.com/ggml-org/llama.cpp
+git clone --branch v0.8.0 https://github.com/ggml-org/llama.cpp
 ```
 
 After that it is only:

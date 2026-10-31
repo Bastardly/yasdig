@@ -3,6 +3,16 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+This will be 0.6.0. The Assistant arrived in 0.5.5, which should have been 0.6.0
+for a change that size; the numbers move on from here rather than renaming
+releases people have downloaded.
+
+### Changed
+
+- The Assistant runs on llama.cpp v0.8.0.
+
 ## 0.5.6 — 2026-10-31
 
 ### Changed

@@ -51,10 +51,10 @@ env:
   # (see CLAUDE.md), so a newer commit is a change to test, not a free upgrade.
   SD_CPP_REF: b13a48219d5cdf408edcb93da6cd69b612ed03d3
   # The llama.cpp commit the agent's driver (`llm/yasdig-llm.cpp`) is built
-  # against: tag v0.7.0. The driver calls llama.cpp's own chat-template and
+  # against: tag v0.8.0. The driver calls llama.cpp's own chat-template and
   # multimodal helpers, whose signatures move between releases, so this is
   # bumped like SD_CPP_REF — on purpose, with the driver checked against it.
-  LLAMA_CPP_REF: 620d2225cc436ab0b001e3200e590e3b286ef9ab
+  LLAMA_CPP_REF: 8642541b255bfb5dc39cd351a178be09013a55d6
   VULKAN_VERSION: 1.4.328.1
   # SHA-256 of the two SDK downloads for VULKAN_VERSION, as LunarG publishes
   # them (sdk.lunarg.com/sdk/sha/<version>/<platform>/<file>.json) and checked

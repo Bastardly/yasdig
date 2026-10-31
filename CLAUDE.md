@@ -679,7 +679,7 @@ checked 2026-10-28: a chat's own copy of the tab's settings and board was what e
 handoff lost things between). A turn is one run of our driver on the job queue; nothing
 stays loaded.
 
-**The driver, not llama.cpp's CLIs** (checked at v0.7.0): `llama-mtmd-cli` is one-shot
+**The driver, not llama.cpp's CLIs** (checked at v0.8.0): `llama-mtmd-cli` is one-shot
 only with both `-p` and `--image` and takes no conversation; `llama-cli` talks to an
 in-process llama-server over loopback TCP, which seccomp and the AppContainer refuse.
 `yasdig-llm` is mtmd-cli's evaluation loop with the history from a **request file**
