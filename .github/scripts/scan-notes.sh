@@ -31,7 +31,7 @@ section=$(jq -r --arg repo "$repo" '
     else "**\(.malicious + .suspicious) of \(.engines)** engines flagged it" end;
   "## VirusTotal",
   "",
-  "Every release is scanned by [VirusTotal](https://www.virustotal.com) once it is published. Each report shows what every engine said, and stays live: engines update their verdicts over time.",
+  "The Linux download is scanned by [VirusTotal](https://www.virustotal.com) once a release is published. Each report shows what every engine said, and stays live: engines update their verdicts over time. The Windows download is not scanned: until it is signed, an engine or two flag it as an unknown program on every release, which says nothing about the file.",
   "",
   "| File | Result | Report |",
   "|---|---|---|",
@@ -43,7 +43,7 @@ section=$(jq -r --arg repo "$repo" '
   (.files[] | select(.kind == "archive") | "\(.sha256)  \(.name)"),
   "```",
   "",
-  "Check a download with `sha256sum -c SHA256SUMS` (Linux) or `certutil -hashfile <file> SHA256` (Windows), and where it was built with `gh attestation verify <file> --repo \($repo)`."
+  "`SHA256SUMS` lists both archives. Check a download with `sha256sum -c SHA256SUMS` (Linux) or `certutil -hashfile <file> SHA256` (Windows), and where it was built with `gh attestation verify <file> --repo \($repo)`."
 ' "$scan")
 
 comment="<!-- yasdig-scan $(jq -c . "$scan") -->"

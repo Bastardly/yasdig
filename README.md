@@ -130,11 +130,11 @@ Settings → **General**.
 **Checking a download.** YASDIG isn't signed with a paid certificate yet, so every
 release can be checked three other ways, and the download dialog on
 [yasdig.com](https://yasdig.com) shows all three:
-- **VirusTotal** scans each archive and the program inside it when a release is
-  published; the release page links the reports. Antivirus engines sometimes flag
-  new, unsigned open-source programs that are perfectly safe (a false positive). If
-  that happens to a release, the report stays public, and we report it to the vendor
-  as a false positive and say so on the release page.
+- **VirusTotal** scans the Linux archive and the program inside it when a release
+  is published; the release page links the reports, and the badge above is theirs.
+  The Windows build isn't scanned: until it is signed, an engine or two flag every
+  new unsigned Windows program as unknown, so its report would say nothing about
+  the file. The SHA-256 and the attestation below cover both.
 - **The SHA-256** of each archive is on the release page and in `SHA256SUMS`: compare
   it with `sha256sum <file>` (Linux) or `certutil -hashfile <file> SHA256` (Windows).
 - **GitHub vouches for the build**: `gh attestation verify <file> --repo

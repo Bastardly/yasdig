@@ -1,5 +1,8 @@
-# VirusTotal for a release: its two archives, and the program inside each, so
-# both what is downloaded and what runs have a report. The results go into the
+# VirusTotal for a release's Linux download: the archive, and the program
+# inside it, so both what is downloaded and what runs have a report. Windows
+# isn't scanned (since 2026-11-01): an unsigned exe draws a guess-flag from an
+# engine or two on every release, and without a certificate there is no way to
+# stop that, so its report said nothing about the file. The results go into the
 # release (`scan-notes.sh`: a visible section, and a JSON comment yasdig.com
 # reads), plus `scan.json`, `badge.json` (the README's badge) and, for a
 # release older than this, `SHA256SUMS`.
@@ -51,12 +54,12 @@ jobs:
           mkdir dl
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dl \
             -p 'yasdig-linux-x86_64.tar.gz' -p 'yasdig-windows-x86_64.zip'
-          mkdir -p prog/linux prog/windows
+          mkdir -p prog/linux
           tar -xzf dl/yasdig-linux-x86_64.tar.gz -C prog/linux yasdig/yasdig
-          unzip -q dl/yasdig-windows-x86_64.zip 'yasdig/yasdig.exe' -d prog/windows
-          ls -l dl prog/*/yasdig
+          ls -l dl prog/linux/yasdig
 
-      # Releases from before the checksums were part of `publish`.
+      # Releases from before the checksums were part of `publish` — the
+      # reason the Windows zip is still downloaded.
       - name: Checksums
         run: |
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -qx SHA256SUMS; then
@@ -69,8 +72,6 @@ jobs:
           VT_API_KEY: ${{ secrets.VT_API_KEY }}
         run: |
           bash .github/scripts/virustotal.sh \
-            archive:windows:dl/yasdig-windows-x86_64.zip \
-            program:windows:prog/windows/yasdig/yasdig.exe \
             archive:linux:dl/yasdig-linux-x86_64.tar.gz \
             program:linux:prog/linux/yasdig/yasdig \
             | jq -s --arg tag "$TAG" '{tag: $tag, files: .}' > scan.json
@@ -79,7 +80,7 @@ jobs:
       # The README's VirusTotal badge: shields.io's endpoint format, read from
       # the newest release (`releases/latest/download/badge.json`), so it
       # follows every release with nothing to edit. Green when no engine
-      # flagged any of the four files, amber when some did, grey while one is
+      # flagged either file, amber when some did, grey while one is
       # still being scanned.
       - name: Badge
         run: |

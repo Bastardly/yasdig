@@ -39,7 +39,8 @@
 </section>
 
 <!-- Before a download: how to start it, and what is known about the file —
-     its version and SHA-256, what VirusTotal's engines said, and that GitHub
+     its version and SHA-256, what VirusTotal's engines said (Linux only:
+     the unsigned Windows build isn't scanned), and that GitHub
      built it from the public source (`checked`). Opened by the script only
      once it has found the release; without it each button is the Releases-page
      link it always was. Windows also says what SmartScreen will show, so the
@@ -195,7 +196,11 @@ function checked(os, asset, rel, scan) {
   const done = (f) => f && f.status === 'completed';
   const flagged = mine.filter(done).reduce((n, f) => n + f.malicious + f.suspicious, 0);
   let vt;
-  if (done(archive) || done(program)) {
+  // Windows isn't scanned since 2026-11-01 (scan.yml); no line rather than a
+  // "not scanned yet" that never comes.
+  if (os === 'win' && !mine.length) {
+    vt = '';
+  } else if (done(archive) || done(program)) {
     const part = (f, what) => (done(f)
       ? `<a href="${esc(f.report)}">${f.malicious + f.suspicious} of ${f.engines}</a> engines flagged ${what}` : null);
     vt = `<p${flagged ? ' class="flagged"' : ''}><b>VirusTotal:</b> ${

@@ -96,12 +96,14 @@ site when `site/` changed):
    workflow's publish job finds the release and only uploads the archives to it,
    keeping title and notes. If it already ran, `gh release edit vX.Y.Z --notes-file`.
 4. Watch it (`gh run watch`); check both archives are on the release, and — about
-   20 minutes later — the *VirusTotal* section in its notes.
+   20 minutes later — the *VirusTotal* section (Linux only) in its notes.
 
 **Trust without a certificate**: `publish` also writes `SHA256SUMS` and a build
 provenance attestation (`actions/attest-build-provenance`); then the `scan` job
 (`.github/workflows/scan.yml`, reusable, also runnable by hand with a tag) uploads
-both archives and the program inside each to VirusTotal
+the **Linux** archive and the program inside it to VirusTotal — **Windows isn't
+scanned** (dropped 2026-11-01: an unsigned exe drew a 1/69 guess-flag every release
+and no certificate is in reach; old releases' notes keep theirs)
 (`.github/scripts/virustotal.sh`: bash, curl, jq; secret **`VT_API_KEY`**, Public API
 at 4 calls/min) and appends the result to the release notes
 (`scan-notes.sh`, between `<!-- yasdig-scan-begin/end -->`, replaced on a re-run, the
@@ -1280,7 +1282,8 @@ would break `setBusy`/the poll/`style.css`). `showTab` clears the pane it leaves
   Buttons repoint via `api.github.com/…/releases` (not `releases/latest`, which skips
   pre-releases); failure leaves the Releases link. **Both buttons open a dialog
   first** (`#win-dialog`, `#linux-dialog`, `askFirst`): how to start it, then a
-  *Checked* block (`checked()`): version, VirusTotal's verdicts, the SHA-256 with a
+  *Checked* block (`checked()`): version, VirusTotal's verdicts (Linux; the Windows
+  dialog has no line when the scan lists no Windows file), the SHA-256 with a
   copy button, and — when `api.github.com/…/attestations/<digest>` has one — the
   build attestation. Asset names
   (`yasdig-windows-x86_64.zip`, `yasdig-linux-x86_64.tar.gz`; the regexes still match

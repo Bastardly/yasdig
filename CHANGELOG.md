@@ -3,6 +3,14 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### Changed
+
+- Releases scan only the Linux download with VirusTotal. The unsigned Windows
+  program was flagged as unknown by an engine or two on every release, which said
+  nothing about the file; its SHA-256 and build attestation are still published.
+
 ## 0.6.0 — 2026-10-31
 
 The Assistant arrived in 0.5.5, which should have been 0.6.0
