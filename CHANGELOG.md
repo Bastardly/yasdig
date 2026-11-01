@@ -10,6 +10,8 @@ What changed in each release of yasdig. Each release's executables are on the
 - Releases scan only the Linux download with VirusTotal. The unsigned Windows
   program was flagged as unknown by an engine or two on every release, which said
   nothing about the file; its SHA-256 and build attestation are still published.
+- Help no longer has a topic on the agent: the Assistant panels explain
+  themselves, and the guide covers Settings → Agent and custom skills.
 
 ## 0.6.0 — 2026-10-31
 
