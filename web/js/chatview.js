@@ -166,6 +166,13 @@ export function renderMessage(chat, m, i) {
         <img class="chatclip" src="/videos/${encodeURIComponent(m.id)}/thumb.png" alt="">
         <div class="btnrow"><button type="button" class="btn" data-open-clip="${esc(m.id)}">Open in the Video tab</button></div>
       </div></div>`;
+    case 'cast':
+      // A try for the cast member the chat is making: the cast editor has it.
+      return `<div class="chatmsg agent" data-n="${m.n}"><div class="chatcard">
+        <p class="chatcardhead">${esc(m.name)}<span class="sub"> · for your cast, try ${(m.try_n ?? 0) + 1}</span></p>
+        <div class="chatpics large">${picture(chat, m.image, { tools: false })}</div>
+        <div class="btnrow"><button type="button" class="btn" data-cast-open="${esc(m.id)}">Open in the cast editor</button></div>
+      </div></div>`;
     case 'note':
       return `<p class="chatnote${m.text.includes('\n') ? ' table' : ''}" data-n="${m.n}">${esc(m.text)}</p>`;
     default:
@@ -177,7 +184,16 @@ export function renderChat(chat, live = null) {
   const msgs = chat.messages.map((m, i) => renderMessage(chat, m, i)).join('');
   const writing = live?.text != null
     ? `<div class="chatmsg agent live"><p class="chattext">${replyHtml(liveReply(live.text)) || '…'}</p></div>` : '';
-  return msgs + writing;
+  return msgs + (writing || workingLine(chat));
+}
+
+// What the agent is doing, at the foot of the log where the person is
+// looking — the header's line was missed — while its job is queued or
+// running; gone once it ends. A reply being written shows itself instead.
+function workingLine(chat) {
+  if (!['queued', 'running'].includes(chat.session?.state)) return '';
+  const text = stateText(chat) || 'Working';
+  return `<p class="chatworking" role="status">${esc(text)}…</p>`;
 }
 
 // What to show of a reply still being written: it is JSON, and the person
@@ -377,6 +393,7 @@ export function stateText(chat) {
     return f.cast.some((m) => !m.stem) ? 'Drawing the cast' : 'Drawing the first frames';
   }
   if (s.state === 'running' && s.next === 'turn' && s.mode === 'story') return 'Writing the storyboard';
+  if (['queued', 'running'].includes(s.state) && s.next === 'cast') return `Creating ${chat.cast?.name || 'a cast member'}, please wait`;
   const round = s.goal ? ` · round ${sessionRound(s)} of ${sessionLimit(s)}` : '';
   return {
     idle: '', queued: 'Waiting for the GPU', running: `Working${round}`,

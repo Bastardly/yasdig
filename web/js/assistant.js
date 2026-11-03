@@ -5,6 +5,7 @@ import { choosePicture, upload } from './source-slot.js';
 import { renderChat, sessionHtml, stateText } from './chatview.js';
 import { flushBoard, follow as followBoard, showBoard } from './board.js';
 import { openGetModels } from './getmodels.js';
+import { openCastEditor } from './casteditor.js';
 import { wireHints } from './hints.js';
 
 // ---- The Assistant panel ------------------------------------------------------
@@ -181,6 +182,22 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
     drawPanels();
     drawList();
     follows(got.chat);
+    followCast(was, got.chat);
+  }
+
+  // A try the agent just drew for the cast: the editor opens on it, bound to
+  // the chat, so the person picks, saves or asks for a change. Only a try that
+  // arrived while the chat was open, never on coming back to one.
+  function followCast(was, chat) {
+    if (!was || was.id !== chat.id) return;
+    const seen = Math.max(-1, ...was.messages.map((m) => m.n));
+    const fresh = chat.messages.filter((m) => m.role === 'cast' && m.n > seen).pop();
+    if (fresh) openBoundEditor(chat, fresh.id);
+  }
+
+  function openBoundEditor(chat, id) {
+    const c = chat.cast?.id === id ? chat.cast : {};
+    openCastEditor(id, { name: c.name, kind: c.kind, look: c.look }, null, { chat: chat.id });
   }
 
   function draw(scroll, live = null) {
@@ -478,6 +495,8 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
       } else if (d.openClip) {
         // The Video tab opens it (`video.js`).
         document.dispatchEvent(new CustomEvent('yasdig:openclip', { detail: d.openClip }));
+      } else if (d.castOpen) {
+        openBoundEditor(data.chat, d.castOpen);
       } else if (d.openStory != null) {
         showBoard();
       } else if (d.openItem) {

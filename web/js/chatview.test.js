@@ -213,3 +213,19 @@ test("an H3 film's characters take a voice; a Wan film's don't", () => {
   assert.ok(html.includes('Voice: H3 picks one') && html.includes('data-film-voicepick="1"'));
   assert.ok(!castHtml(chat({ film: film({ cast }) })).includes('data-film-voicepick'));
 });
+
+test('a cast try is a card that opens the cast editor', () => {
+  const m = { role: 'cast', n: 3, id: 'c1', name: 'Elias', try_n: 1, image: { kind: 'cast', id: 'c1', file: 'k1-1.png' } };
+  const html = renderChat(chat({ messages: [m] }));
+  assert.ok(html.includes('Elias') && html.includes('try 2'));
+  assert.ok(html.includes('data-cast-open="c1"'));
+  assert.ok(html.includes('/chats/1-0/img/k1-1.png'));
+  assert.ok(!html.includes('data-open-item'), 'a try is not a work item to open');
+});
+
+test('the agent at work says so at the foot of the log, and only while it works', () => {
+  const working = chat({ cast: { id: 'c1', name: 'John' }, session: { state: 'running', next: 'cast', goal: '', checks: [], round: 0 } });
+  assert.ok(renderChat(working).endsWith('<p class="chatworking" role="status">Creating John, please wait…</p>'));
+  assert.ok(!renderChat(working, { text: '{"reply": "Hi' }).includes('chatworking'), 'a reply being written shows itself');
+  assert.ok(!renderChat(chat()).includes('chatworking'), 'idle');
+});

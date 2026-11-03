@@ -170,6 +170,10 @@ pub struct Rules {
     /// Video tab's.
     #[serde(default = "yes")]
     pub film: bool,
+    /// It may make cast members: a draft in the cast editor, drawn once per
+    /// ask. On by default: nothing is saved until the person presses Save.
+    #[serde(default = "yes")]
+    pub cast: bool,
 }
 
 fn yes() -> bool {
@@ -211,7 +215,7 @@ fn action_set<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeSet<String>, D::Er
 
 impl Default for Rules {
     fn default() -> Self {
-        Rules { agent: None, knobs: default_knobs(), actions: BTreeSet::new(), film: true }
+        Rules { agent: None, knobs: default_knobs(), actions: BTreeSet::new(), film: true, cast: true }
     }
 }
 

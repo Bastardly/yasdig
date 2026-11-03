@@ -225,6 +225,11 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
             queue.relabel(job, label("finishing a keeper"));
             escalate(engine, &store, &chat, action)
         }
+        Step::CastTry => {
+            let name = chat.cast.as_ref().map_or(String::new(), |c| c.name.clone());
+            queue.relabel(job, label(&format!("drawing {name} for the cast")));
+            cast_try(engine, &store, &chat)
+        }
         Step::CastPicture(_) | Step::CastSheet(_) | Step::Keyframe(_) => {
             queue.relabel(job, label(&board_label(&chat, step_now)));
             board_picture(engine, &store, &chat, step_now)
@@ -324,6 +329,16 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
             .unwrap_or_default(),
         Mode::Plan | Mode::Verdict | Mode::Take => Vec::new(),
     };
+    // Asked to change the cast member it is making, with nothing attached:
+    // it sees the newest try.
+    let bound = chat.cast.as_ref().filter(|c| !c.id.is_empty() && mode == Mode::Chat);
+    let try_shown: Option<ImageRef> = bound.filter(|_| own.is_empty() && model.vision()).and_then(|c| {
+        chat.messages.iter().rev().find_map(|m| match m {
+            Msg::Cast { id, image, .. } if *id == c.id => Some(image.clone()),
+            _ => None,
+        })
+    });
+    let own: Vec<ImageRef> = own.into_iter().chain(try_shown.clone()).collect();
     let images: Vec<ImageRef> = reference.iter().cloned().chain(own.iter().cloned()).collect();
     if !images.is_empty() && !model.vision() {
         bail!(
@@ -364,6 +379,8 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
             round: chat.session.round,
             history: history_cap,
             film: chat.film.as_ref(),
+            cast: chat.cast.as_ref(),
+            cast_shown: try_shown.is_some(),
         };
         let keep = context::fit_history(chat, &tk, &base, side, budget).min(history_cap);
         let turn = context::Turn { history: keep, ..base.clone() };
@@ -445,6 +462,61 @@ pub(crate) fn cast_member(cfg: &Config, store: &ChatStore, chat: &str, id: &str)
         cast_id: Some(id.to_string()),
         ..Default::default()
     })
+}
+
+/// A try of the cast member the chat is making, into its entry — a draft
+/// made by the first draw, or the saved entry it changes — and onto the
+/// chat as a card the person opens the cast editor from. Drawn with the
+/// entry's model, else the film's, else the chat's, else one that draws
+/// turnarounds; a character on one of those gets a turnaround.
+fn cast_try(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat) -> Result<()> {
+    use crate::cast::{CastStore, DrawRequest, Fields};
+    let cfg = engine.cfg().clone();
+    let want = chat.cast.clone().ok_or_else(|| anyhow!("the chat isn't making a cast member"))?;
+    let casts = CastStore::of(&cfg);
+    let entry = Some(want.id.as_str()).filter(|id| !id.is_empty()).and_then(|id| casts.load(id).ok());
+    let models = toolkit::runnable(&cfg, &cfg.registry());
+    let pick = |n: &str| models.iter().find(|m| m.name == n);
+    let film_model = chat.film.as_ref().map_or("", |f| f.image_model.as_str());
+    let template = chat.settings.get("template").and_then(serde_json::Value::as_str).unwrap_or("");
+    let model = entry
+        .as_ref()
+        .and_then(|e| pick(&e.image_model))
+        .or_else(|| pick(film_model))
+        .or_else(|| pick(template))
+        .or_else(|| models.iter().find(|m| m.references))
+        .or_else(|| models.first())
+        .ok_or_else(|| anyhow!("no image model to draw the cast member with: Get models has some"))?
+        .clone();
+    let fields = Fields { name: want.name.clone(), kind: want.kind, look: want.look.clone(), image_model: model.name.clone() };
+    let id = match &entry {
+        Some(e) => e.id.clone(),
+        None => casts.create(&fields)?.id,
+    };
+    // Bound before the draw, so a draw that fails or is stopped leaves the
+    // chat on its entry, not a second draft next time.
+    store.update(&chat.id, |c| {
+        if let Some(cc) = c.cast.as_mut().filter(|cc| cc.id == want.id) {
+            cc.id = id.clone();
+        }
+        Ok(())
+    })?;
+    let turnaround = want.kind == chat::MemberKind::Character && model.references;
+    crate::cast::draw(engine, &DrawRequest { id: id.clone(), fields, turnaround })?;
+    let e = casts.load(&id)?;
+    let t = e.tries.last().ok_or_else(|| anyhow!("the try didn't land"))?;
+    let png = std::fs::read(casts.try_path(&id, t.n, false)?)?;
+    let file = format!("k{}-{}.png", chat::now_ms(), t.n);
+    keep_picture(store, &chat.id, &file, &png)?;
+    let image = ImageRef { kind: "cast".into(), id: id.clone(), file, seed: Some(t.seed) };
+    let try_n = t.n;
+    store.update(&chat.id, |c| {
+        let n = c.next_n();
+        c.messages.push(Msg::Cast { n, ms: chat::now_ms(), id: id.clone(), name: want.name.clone(), try_n, image: image.clone() });
+        c.session.next = Next::Nothing;
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// After a story turn: the members it named from the saved cast

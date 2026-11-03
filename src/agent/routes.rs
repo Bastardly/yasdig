@@ -37,6 +37,7 @@ pub fn route(
         ("POST", "/chats/settings") => settings(conn, cfg, body),
         ("POST", "/chats/film") => film(conn, cfg, lanes, body),
         ("POST", "/chats/board") => board(conn, cfg, body),
+        ("POST", "/chats/cast") => chat_cast(conn, cfg, body),
         ("POST", "/agent/send") => send(conn, cfg, lanes, body),
         ("POST", "/agent/undo") => undo(conn, cfg, body),
         ("POST", "/agent/stop") => stop(conn, cfg, lanes, monitor, body),
@@ -351,6 +352,38 @@ fn settings(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
     });
     match r {
         Ok(_) => ok(conn, json!({ "ok": true })),
+        Err(e) => err(conn, 409, &format!("{e:#}")),
+    }
+}
+
+/// The person's edits in the cast editor bound to the chat: the member's
+/// words as the agent will next see them. Only onto the entry the chat is
+/// bound to (`cast`, its id); no `cast_rev` move, so the editor isn't
+/// opened again over the person's own typing.
+fn chat_cast(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Dto {
+        id: String,
+        cast: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        kind: super::chat::MemberKind,
+        #[serde(default)]
+        look: String,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let r = super::store(cfg).update(&dto.id, |c| {
+        let Some(cc) = c.cast.as_mut().filter(|cc| cc.id == dto.cast) else {
+            anyhow::bail!("this chat isn't making that cast member");
+        };
+        cc.name = dto.name.trim().to_string();
+        cc.kind = dto.kind;
+        cc.look = dto.look.trim().to_string();
+        Ok(())
+    });
+    match r {
+        Ok(()) => ok(conn, json!({ "ok": true })),
         Err(e) => err(conn, 409, &format!("{e:#}")),
     }
 }

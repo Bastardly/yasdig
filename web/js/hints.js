@@ -463,6 +463,11 @@ const HELP = [
         + 'writes its shots into the Video tab’s Shots panel and its cast into the '
         + 'Cast panel and, if you press for them, draws the cast and the pictures '
         + 'shots start from (saved to Outputs). You generate the clip there.' },
+  { ids: ['agentcast'],
+    text: 'Ticked, the agent may make a character, place or prop for your cast '
+        + 'when you ask for one: it writes the name and look and draws a try into '
+        + 'the cast editor, which opens on it. Nothing is kept until you press '
+        + 'Save; ask for a change and it draws another try.' },
   { ids: ['setembedpng'],
     text: 'Writes the prompt, negative prompt, model, seed, steps, sampler and CFG '
         + 'into each image you save to output, in the format A1111, Forge and Civitai '

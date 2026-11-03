@@ -2,7 +2,7 @@ import { $, esc, getJSON, post } from './dom.js';
 import { S } from './state.js';
 import { choosePicture, chooseSound, upload } from './source-slot.js';
 import { askForSound, playSound } from './sounds.js';
-import { soonJobs, stopKind } from './jobs.js';
+import { queueChanged, soonJobs, stopKind } from './jobs.js';
 import { onLook } from './viewer.js';
 
 // ---- The cast editor ----------------------------------------------------------
@@ -39,6 +39,9 @@ export function onCastChanged(fn) {
 const changed = () => { for (const fn of changedHooks) fn(); };
 
 const err = (msg) => { $('ceerr').textContent = msg ?? ''; };
+// A try is being drawn into the entry by someone else — the Assistant: the
+// editor waits for it, and closing leaves the draft where it is.
+const othersDrawing = () => !!cur?.entry?.drawing && !drawing;
 const kindNow = () => $('cekind').querySelector('.active')?.dataset.kind ?? 'character';
 const modelNow = () => models.find((m) => m.name === $('cemodel').value) ?? null;
 // The row shows on a character with a model that draws turnarounds; the
@@ -94,10 +97,14 @@ function drawPictures() {
       title="Try ${t.n + 1} · seed ${t.seed} · ${esc(t.model)}" class="${cur.pick?.try === t.n ? 'active' : ''}">
       <img src="/cast/${e.id}/tries/${t.n}.png" alt="Try ${t.n + 1}"></button>`)).join('');
   $('cedraw').textContent = drawing ? 'Stop' : (pic || tries.length ? 'Draw again' : 'Draw');
+  const wait = othersDrawing();
+  $('cewait').hidden = !wait;
+  if (wait) $('cewait').textContent = `Creating ${cur.entry.name || 'it'}, please wait…`;
+  $('cedraw').disabled = wait;
   // An entry is saved with its picture: nothing to save until one is drawn
   // (or chosen). And a draw lands in the entry's tries: saved meanwhile, it
   // would be a try nobody sees until the editor is opened again.
-  $('cesave').disabled = drawing || !pic;
+  $('cesave').disabled = drawing || wait || !pic;
 }
 
 function drawVoice() {
@@ -151,7 +158,11 @@ function defaultModel() {
 // `look`, and output stems it starts with — `picture`, `sheet` (with a
 // picture), `voice`). `onSaved(entry)` runs after a
 // save: the Image tab's cast row adds what was made from it.
-export async function openCastEditor(id = null, prefill = {}, onSaved = null) {
+// `opts.chat`: the Assistant chat making this member — its words win over
+// the entry's, its newest try is the one picked, and the person's edits to
+// the words are written back to it (`/chats/cast`), so the agent's next
+// turn changes what is on screen.
+export async function openCastEditor(id = null, prefill = {}, onSaved = null, opts = {}) {
   err('');
   $('ceprog').textContent = '';
   await loadModels();
@@ -164,19 +175,21 @@ export async function openCastEditor(id = null, prefill = {}, onSaved = null) {
       return;
     }
   }
-  cur = { id, entry, pick: null, voice: null, onSaved };
-  $('cename').value = entry?.name ?? prefill.name ?? '';
-  $('celook').value = entry?.look ?? prefill.look ?? '';
+  const chat = opts.chat ?? null;
+  cur = { id, entry, pick: null, voice: null, onSaved, chat };
+  const words = (k) => (chat ? prefill[k] ?? entry?.[k] : entry?.[k] ?? prefill[k]) ?? '';
+  $('cename').value = words('name');
+  $('celook').value = words('look');
   const model = entry?.image_model;
   $('cemodel').value = models.some((m) => m.name === model) ? model : defaultModel();
-  setKind(entry?.kind ?? prefill.kind ?? 'character');
+  setKind((chat ? prefill.kind ?? entry?.kind : entry?.kind ?? prefill.kind) ?? 'character');
   if (prefill.picture) {
     cur.pick = prefill.sheet ? { outputs: { picture: prefill.picture, sheet: prefill.sheet } } : { output: prefill.picture };
   }
   if (prefill.voice) cur.voice = { output: prefill.voice };
   // A reopened draft's last try is what it was left on.
   const tries = entry?.tries ?? [];
-  if (entry?.draft && tries.length) cur.pick = { try: tries[tries.length - 1].n };
+  if ((entry?.draft || chat) && tries.length) cur.pick = { try: tries[tries.length - 1].n };
   base = JSON.stringify({ f: fields(), pick: null, voice: null });
   drawForm();
   if (!$('castdlg').open) $('castdlg').showModal();
@@ -223,6 +236,37 @@ async function drawTry() {
   }
 }
 
+// The person's words, into the chat the editor is bound to: what the agent
+// changes on its next turn. Debounced, so typing is one write.
+let backTimer = null;
+function writeBack() {
+  if (!cur?.chat || !cur.id) return;
+  clearTimeout(backTimer);
+  const to = { id: cur.chat, cast: cur.id, ...fields() };
+  delete to.image_model;
+  backTimer = setTimeout(() => {
+    post('/chats/cast', to).catch(() => { /* the chat moved on to another member */ });
+  }, 500);
+}
+
+// The draw someone else was making: re-read the entry when the queue moves,
+// and once it has landed, show the newest try.
+async function refreshWhileDrawn() {
+  if (!$('castdlg').open || !othersDrawing()) return;
+  const mine = cur;
+  try {
+    const e = await getJSON(`/cast/${encodeURIComponent(mine.id)}`);
+    if (cur !== mine) return;
+    const landed = !e.drawing;
+    mine.entry = e;
+    if (landed && e.tries.length) mine.pick = { try: e.tries[e.tries.length - 1].n };
+    drawForm();
+    if (landed) changed();
+  } catch {
+    // Gone: the Cast tab's listing says so.
+  }
+}
+
 async function save() {
   err('');
   const body = { ...fields(), picture: cur.pick, voice: cur.voice };
@@ -232,7 +276,7 @@ async function save() {
   try {
     const e = await post('/cast/save', body);
     const done = cur.onSaved;
-    cur = { id: e.id, entry: e, pick: null, voice: null };
+    cur = { id: e.id, entry: e, pick: null, voice: null, chat: cur.chat };
     base = state();
     changed();
     $('castdlg').close();
@@ -264,7 +308,10 @@ async function discard() {
 }
 
 function close() {
-  if (!cur) {
+  if (!cur || othersDrawing()) {
+    // A draw into it is under way elsewhere: nothing here to drop.
+    cur = null;
+    stopAudio();
     $('castdlg').close();
     return;
   }
@@ -315,9 +362,13 @@ async function fromViewer() {
 export function initCastEditor() {
   $('cekind').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-kind]');
-    if (b) setKind(b.dataset.kind);
+    if (!b) return;
+    setKind(b.dataset.kind);
+    writeBack();
   });
+  for (const id of ['cename', 'celook']) $(id).addEventListener('input', writeBack);
   $('cemodel').addEventListener('change', drawForm);
+  queueChanged.subscribe(refreshWhileDrawn);
   $('cedraw').addEventListener('click', drawTry);
   $('cetries').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-try]');

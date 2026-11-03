@@ -49,6 +49,10 @@ pub struct Turn<'a> {
     pub history: usize,
     /// The chat's storyboard, when it has one.
     pub film: Option<&'a Film>,
+    /// The cast member the chat is making, and whether the turn's picture is
+    /// its newest try (shown when the person attached none).
+    pub cast: Option<&'a super::chat::ChatCast>,
+    pub cast_shown: bool,
 }
 
 /// A storyboard as text: what a chat turn is told the film is, and what a
@@ -277,6 +281,20 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
     if let Some(f) = turn.film.filter(|_| turn.mode == Mode::Chat) {
         s.push_str(&format!("\n\nThis chat's storyboard:\n{}", board_text(f)));
     }
+    if let Some(c) = turn.cast.filter(|_| turn.mode == Mode::Chat && t.casts()) {
+        let kind = match c.kind {
+            MemberKind::Character => "character",
+            MemberKind::Place => "place",
+            MemberKind::Thing => "thing",
+        };
+        s.push_str(&format!(
+            "\n\nThis chat is making a cast member: {} ({kind}). Look: {}{}\nTo change it, answer action \"cast\" \
+             with the whole member rewritten, keeping every word the person didn't ask to change.",
+            c.name,
+            c.look,
+            if turn.cast_shown { "\nThe picture shown is its newest try, not one the person attached." } else { "" }
+        ));
+    }
     s.push_str(&format!(
         "\n\nReply with one JSON object. Write `notes` first: your own short reasoning (under {} \
          characters), which you will see again next turn. `reply` is what the person reads.",
@@ -335,6 +353,13 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
             }
             Msg::Clip { id, .. } => {
                 let text = format!("[yasdig] The film is done: clip {id}, in the Video tab's Current.");
+                push(&mut out, Role::User, vec![Part::Text { text }]);
+            }
+            Msg::Cast { name, try_n, .. } => {
+                let text = format!(
+                    "[yasdig] Drew {name} for the cast (try {}), into the cast editor: the person saves it, or asks for changes.",
+                    try_n + 1
+                );
                 push(&mut out, Role::User, vec![Part::Text { text }]);
             }
         }
@@ -560,7 +585,20 @@ mod tests {
     }
 
     fn turn(mode: Mode, images: Vec<PathBuf>) -> Turn<'static> {
-        Turn { mode, images, reference: 0, sweep: false, skills: "SKILLS", checks: &[], goal: "a fox in a red hat", round: 2, history: usize::MAX, film: None }
+        Turn {
+            mode,
+            images,
+            reference: 0,
+            sweep: false,
+            skills: "SKILLS",
+            checks: &[],
+            goal: "a fox in a red hat",
+            round: 2,
+            history: usize::MAX,
+            film: None,
+            cast: None,
+            cast_shown: false,
+        }
     }
 
     #[test]

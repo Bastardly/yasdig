@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Characters a name may run to: it goes in prompts, and in a tile's caption.
-const MAX_NAME: usize = 60;
+pub const MAX_NAME: usize = 60;
 
 /// One lock over every record write: the worker adds a try while the
 /// connection thread may be saving or discarding the same entry.
@@ -116,6 +116,49 @@ pub struct View {
     pub picture: bool,
     pub sheet: bool,
     pub voice: bool,
+    /// A try is being drawn into it now (the editor's, or the agent's): the
+    /// editor waits, and closing it never discards the draft under the draw.
+    pub drawing: bool,
+}
+
+/// The entries a try is being drawn into, in memory: a draw that dies with
+/// the process takes its mark with it, so nothing is left stuck.
+static DRAWING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Marks `id` as being drawn for as long as it lives.
+struct Drawing(String);
+
+impl Drawing {
+    fn mark(id: &str) -> Drawing {
+        DRAWING.lock().unwrap_or_else(|e| e.into_inner()).push(id.to_string());
+        Drawing(id.to_string())
+    }
+}
+
+impl Drop for Drawing {
+    fn drop(&mut self) {
+        let mut v = DRAWING.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = v.iter().position(|x| *x == self.0) {
+            v.remove(i);
+        }
+    }
+}
+
+pub fn is_drawing(id: &str) -> bool {
+    DRAWING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|x| x == id)
+}
+
+/// Refuse to remove an entry a try is being drawn into: the draw would land
+/// in a folder that is gone. A draw just stopped takes a moment to end (the
+/// editor's Discard stops its own first), so this waits a little for it.
+fn not_drawing(id: &str) -> Result<()> {
+    for _ in 0..50 {
+        if !is_drawing(id) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    bail!("a try is being drawn into it — wait for it, or stop it in Jobs")
 }
 
 /// The fields the editor sends with a draw or a save.
@@ -204,7 +247,7 @@ impl CastStore {
 
     pub fn view(&self, entry: Entry) -> View {
         let has = |f: &str| self.dir(&entry.id).map(|d| d.join(f).is_file()).unwrap_or(false);
-        View { picture: has("picture.png"), sheet: has("sheet.png"), voice: has("voice.wav"), entry }
+        View { picture: has("picture.png"), sheet: has("sheet.png"), voice: has("voice.wav"), drawing: is_drawing(&entry.id), entry }
     }
 
     /// Write `e` whole: `.part`, then a rename, the `rev` moved.
@@ -405,6 +448,7 @@ impl CastStore {
     /// Close the editor without saving: a draft goes, a saved entry loses
     /// only its tries.
     pub fn discard(&self, id: &str) -> Result<()> {
+        not_drawing(id)?;
         let e = self.load(id)?;
         if e.draft {
             return self.delete(id);
@@ -416,6 +460,7 @@ impl CastStore {
 
     pub fn delete(&self, id: &str) -> Result<()> {
         let dir = self.dir(id)?;
+        not_drawing(id)?;
         let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => Ok(()),
@@ -550,6 +595,7 @@ pub fn draw(engine: &mut Engine, req: &DrawRequest) -> Result<String> {
     let cfg = engine.cfg().clone();
     let store = CastStore::of(&cfg);
     store.load(&req.id)?;
+    let _drawing = Drawing::mark(&req.id);
     let f = &req.fields;
     let model = f.image_model.trim();
     let profile = cfg
@@ -934,5 +980,19 @@ mod tests {
         // A picture alone afterwards drops the sheet, which was of the old one.
         store.save(&e.id, &fields("Mara"), Some(&Pick::Output(front)), None, &outputs).unwrap();
         assert!(!dir.join("sheet.png").exists());
+    }
+
+    #[test]
+    fn an_entry_being_drawn_says_so_and_stops_saying_so_when_the_draw_ends() {
+        let d = temp();
+        let store = CastStore::new(&d.join("user"));
+        let e = store.create(&fields("Carl")).unwrap();
+        assert!(!store.view(e.clone()).drawing);
+        {
+            let _mark = Drawing::mark(&e.id);
+            assert!(store.view(store.load(&e.id).unwrap()).drawing);
+        }
+        assert!(!is_drawing(&e.id), "however the draw ended");
+        store.discard(&e.id).unwrap();
     }
 }

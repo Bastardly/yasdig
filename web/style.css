@@ -1198,6 +1198,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chatnote { margin: 0; align-self: center; font-size: var(--fs-sm); color: var(--text-faint); text-align: center; white-space: pre-line; }
 /* A comparison's results keep their columns' lines. */
 .chatnote.table { align-self: stretch; text-align: left; }
+/* The agent at work, at the foot of the log: amber, since it is the one
+   thing to look at while it lasts (and gone when it ends). */
+.chatworking { margin: 0; align-self: flex-start; font-size: var(--fs-sm); color: var(--accent); }
 .chatfoot { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
 .chatnotes { font-size: var(--fs-sm); color: var(--text-dim); }
 .chatnotes > summary { cursor: pointer; color: var(--text-faint); }

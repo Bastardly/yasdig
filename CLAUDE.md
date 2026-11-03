@@ -582,7 +582,30 @@ shelf, and Close server's clear never reaches it.
   every cut), Remove → `removeCastFromShots` by name. Redrawn on `onRowsChange`
   (end of `syncShots`), only when its HTML moved.
 
-Page: the editor holds `cur = {id, entry, pick, voice}` and sends nothing but a draw
+**Made by the agent** (`action: "cast"`, `member {name, kind, look}`, gated by
+`Toolkit::casts`: `Rules.cast` and an image model):
+
+- **`set_cast` is pure; the entry is made by the draw** (`Next::Cast` →
+  `Step::CastTry` → `agent::cast_try`): `ChatCast.id` empty until the first draw
+  creates a draft, bound before drawing (a failed draw leaves no second draft).
+  Unbound, a `Toolkit.library` name match binds the saved entry. A discarded draft
+  is recreated by the next draw.
+- **A bound entry is kept for the same name only** (case aside): another name is
+  another member, or a request to make Carl was drawn over Elias.
+- **`View.drawing`** (`cast::DRAWING`, in memory, a guard in `draw`): the editor
+  waits ("Creating Elias, please wait…", `cewait`, re-read on `queueChanged`), and
+  closing it never discards the draft under the draw. `discard`/`delete` wait up to
+  5 s for a draw to end (the editor stops its own first), then refuse.
+- **The agent never saves**; a try is a `Msg::Cast` (image `kind: "cast"`, a copy in
+  `img/`) and the page opens the editor **bound** (`opts.chat`) on a try that arrives
+  while the chat is open (`followCast`), never on coming back. Bound, the chat's words
+  win over the entry's and the person's edits go back through `/chats/cast` (no
+  `cast_rev` move, so no reopen over typing).
+- **A change turn sees the newest try** when nothing is attached and the agent model
+  has vision (`try_shown`, `Turn.cast_shown`), and the member's words in the system
+  text.
+
+Page: the editor holds `cur = {id, entry, pick, voice, chat}` and sends nothing but a draw
 until Save; `pick` is `{try}`, `{output}`, `{outputs: {picture, sheet}}` or `null`
 (keep), the wire shape of `cast::Pick`. Refine & adjust's *Save as cast…* (`#lbcast`) goes through
 `/download-image` and `/upload`, so the entry copies an output in like any other.
@@ -1302,7 +1325,9 @@ role, never a value**: colour, type, space, radius and column caps are `:root` t
 a hex elsewhere means a missing token. Ink ramp and state colour are neutral (bone)
 because they sit beside a graded image. `--fold-title`/`--fold-on` for fold headings.
 **Amber (`.btn-run`) is the dock's main button only** (plus Hi-res above a result,
-and the thumbnails' favourite star as a glyph colour) — in Refine & adjust that is
+the thumbnails' favourite star as a glyph colour, and the Assistant's
+`.chatworking` line at the foot of a chat while its job runs — asked for: the header's
+grey state line was missed) — in Refine & adjust that is
 each panel footer's main action (History's is *Apply adjustments*) and, from the
 Image tab, the rail's *Save to output*;
 `.btn` neutral, `.btn-danger` red, `.btn-choice` for "where you are" sets.

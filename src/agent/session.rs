@@ -37,6 +37,8 @@ pub enum Step {
     CastSheet(usize),
     /// Shot `k`'s keyframe is drawn.
     Keyframe(usize),
+    /// A try of the cast member the chat is making (`Chat.cast`).
+    CastTry,
     End,
 }
 
@@ -56,6 +58,8 @@ pub fn next_step(chat: &Chat) -> Step {
             .find(|a| a.state == ActionState::Queued)
             .map_or(Step::End, |a| Step::Escalate(a.id)),
         Next::Film => chat.film.as_ref().and_then(draw_step).unwrap_or(Step::End),
+        Next::Cast if chat.cast.is_some() => Step::CastTry,
+        Next::Cast => Step::End,
     }
 }
 
@@ -408,6 +412,35 @@ pub struct BoardEdit {
     /// A member added whole: one from the saved cast (*Add from cast…*),
     /// its picture, sheet and voice already the person's.
     pub add: Option<Member>,
+}
+
+/// The agent's `cast` action: the member the chat is making, rewritten
+/// whole. It keeps drawing into the entry it is bound to while the name is
+/// the same; another name, or none bound, is a saved entry of that name
+/// (nothing is saved until the person presses Save), else a new draft made
+/// by the first draw.
+pub fn set_cast(chat: &mut Chat, member: Option<CastJson>, t: &Toolkit) -> Result<(), String> {
+    let m = member.ok_or("no member was written")?;
+    let name = plain(&m.name).split_whitespace().collect::<Vec<_>>().join(" ");
+    let look = plain(&m.look);
+    if name.is_empty() || look.is_empty() {
+        return Err("a cast member needs a name and a look".into());
+    }
+    let name: String = name.chars().take(crate::cast::MAX_NAME).collect();
+    let kind = match m.kind.as_str() {
+        "place" => MemberKind::Place,
+        "thing" => MemberKind::Thing,
+        _ => MemberKind::Character,
+    };
+    // The entry bound is kept for the same name only: another name is
+    // another member ("now make Carl"), never drawn over the first.
+    let id = match &chat.cast {
+        Some(c) if !c.id.is_empty() && c.name.eq_ignore_ascii_case(&name) => c.id.clone(),
+        _ => t.library.iter().find(|e| e.name.eq_ignore_ascii_case(&name)).map(|e| e.id.clone()).unwrap_or_default(),
+    };
+    chat.cast = Some(super::chat::ChatCast { id, name, kind, look });
+    chat.cast_rev += 1;
+    Ok(())
 }
 
 /// Apply a [`BoardEdit`] to a board still being written or ready, then make
@@ -850,6 +883,9 @@ pub struct ReplyJson {
     pub cast: Option<Vec<CastJson>>,
     #[serde(default)]
     pub shots: Option<Vec<ShotJson>>,
+    /// Chat, action "cast": the cast member to draw, whole.
+    #[serde(default)]
+    pub member: Option<CastJson>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1485,6 +1521,17 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
                     notes_out.push(format!("No film: {}.", t.film_off.as_deref().unwrap_or("")));
                     Next::Nothing
                 }
+                Some("cast") if t.casts() => match set_cast(chat, r.member.take(), t) {
+                    Ok(()) => Next::Cast,
+                    Err(e) => {
+                        notes_out.push(format!("Nothing drawn for the cast: {e}."));
+                        Next::Nothing
+                    }
+                },
+                Some("cast") => {
+                    notes_out.push("Making cast members is off in Settings → Agent, or no image model is installed.".into());
+                    Next::Nothing
+                }
                 // "describe" writes its prompt on the message, below.
                 _ => Next::Nothing,
             };
@@ -2011,6 +2058,50 @@ mod tests {
         assert_eq!((s0.audio.as_slice(), s0.words.voices.as_slice()), (&["100-1-sound".to_string()][..], &["Mara".to_string()][..]));
         assert!(spec(&c, 1).audio.is_empty(), "a continue can't take references");
         assert!(edit_board(&mut c, &BoardEdit { member: Some(0), voice: Some(Some("../x".into())), ..Default::default() }).is_err());
+    }
+
+    #[test]
+    fn a_cast_reply_binds_the_member_and_queues_one_draw() {
+        let mut c = Chat::new("1-0".into(), json!({"prompt": "x"}), None);
+        let mut t = build(&Rules::default(), &c.settings, &Locks::default(), vec![super::super::toolkit::ModelChoice {
+            name: "klein".into(),
+            family: "flux2_klein_4b",
+            label: "FLUX.2 Klein 4B",
+            references: true,
+            locks: Locks::default(),
+        }], Some(ImageFamily::Sdxl));
+        t.library = vec![super::super::toolkit::SavedCast { id: "c9".into(), name: "Elias".into(), ..Default::default() }];
+        let cast = |name: &str, look: &str| {
+            reply(json!({"notes": "", "action": "cast", "reply": "Drawn.",
+                "member": {"name": name, "kind": "character", "look": look}}))
+        };
+        c.messages.push(Msg::User { n: 0, ms: 0, text: "Make me Sally, a pilot.".into(), images: vec![] });
+        apply_reply(&mut c, Mode::Chat, cast("  Sally ", "Sally is a pilot in a leather jacket."), &t, &Locks::default(), vec![], Default::default());
+        assert_eq!(next_step(&c), Step::CastTry);
+        let bound = c.cast.clone().unwrap();
+        assert_eq!((bound.id.as_str(), bound.name.as_str(), c.cast_rev), ("", "Sally", 1), "a draft is made by the draw");
+        // Bound, a change keeps its entry (case aside)…
+        c.cast.as_mut().unwrap().id = "c1".into();
+        apply_reply(&mut c, Mode::Chat, cast("sally", "Sally is a pilot in a red jacket."), &t, &Locks::default(), vec![], Default::default());
+        assert_eq!(c.cast.as_ref().unwrap().id, "c1");
+        // …another name is another member, never drawn over Sally.
+        apply_reply(&mut c, Mode::Chat, cast("Carl", "Carl is a mechanic."), &t, &Locks::default(), vec![], Default::default());
+        assert_eq!(c.cast.as_ref().unwrap().id, "", "a new draft");
+        c.cast.as_mut().unwrap().id = "c1".into();
+        apply_reply(&mut c, Mode::Chat, cast("Elias", "Elias is a cowboy."), &t, &Locks::default(), vec![], Default::default());
+        assert_eq!(c.cast.as_ref().unwrap().id, "c9", "a saved one of that name");
+        // Unbound, a saved entry of that name is the one changed.
+        c.cast = None;
+        apply_reply(&mut c, Mode::Chat, cast("elias", "Elias is a cowboy."), &t, &Locks::default(), vec![], Default::default());
+        assert_eq!(c.cast.as_ref().unwrap().id, "c9");
+        // A member with no look is nothing to draw.
+        apply_reply(&mut c, Mode::Chat, cast("Bob", ""), &t, &Locks::default(), vec![], Default::default());
+        assert_eq!(next_step(&c), Step::End);
+        // Off in Settings: said, never drawn.
+        let off = tk_under(&c, &Rules { cast: false, ..Rules::default() });
+        apply_reply(&mut c, Mode::Chat, cast("Bob", "Bob is tall."), &off, &Locks::default(), vec![], Default::default());
+        assert_eq!(next_step(&c), Step::End);
+        assert!(matches!(c.messages.last(), Some(Msg::Note { text, .. }) if text.contains("Settings")));
     }
 
     #[test]

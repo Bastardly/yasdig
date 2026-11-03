@@ -699,6 +699,11 @@ the chat, whose `rev` moves on every write.
   key_stale}], note }` — each row holding everything any model takes (the cast's pictures
   and voices, then the person's own picks; the first frame, shot 1's too), `source` shot
   1's first frame, `note` what the Video tab's model won't use and what isn't drawn yet.
+- `POST /chats/cast` — `{ id, cast, name, kind, look }`: the person's edits in the cast
+  editor bound to the chat, onto the member it is making (`chat.cast`, whose `id` must be
+  `cast`); what the agent changes on its next turn. A chat's `cast` is `{id, name, kind,
+  look}` and `cast_rev` moves when the agent writes it; a try it draws is a message
+  `{role: "cast", n, ms, id, name, try_n, image}`.
 - `POST /chats/board` — `{ id, every?, shots?, video?, clip? }`: the Shots rows written back
   into the film (`shots` as `board` gives them; blank rows are no shots, and at least one
   must be left). A shot whose words, cast and cut are unchanged keeps its first frame; a

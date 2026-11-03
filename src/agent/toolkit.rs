@@ -181,6 +181,12 @@ impl Toolkit {
     pub fn films(&self) -> bool {
         self.film_off.is_none()
     }
+
+    /// It may make a cast member: allowed in Settings → Agent, and an image
+    /// model to draw it with.
+    pub fn casts(&self) -> bool {
+        self.rules.cast && !self.models.is_empty()
+    }
 }
 
 /// The models a chat could run: installed, whole, and not fill-only.
@@ -251,7 +257,9 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
         super::chat::Pane::Video => film_off(&rules, image, chat.video.as_deref(), video.as_ref()),
     };
     t.image_tab = chat.context == super::chat::Pane::Image;
-    if t.film_off.is_none() {
+    // A story turn reuses the saved cast; a `cast` action may change a
+    // saved entry it names.
+    if t.film_off.is_none() || t.casts() {
         t.library = crate::cast::CastStore::of(cfg)
             .list()
             .into_iter()

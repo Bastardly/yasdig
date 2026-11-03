@@ -28,6 +28,8 @@ use serde_json::{json, Map, Value};
 
 pub const NOTES_CHARS: u32 = 600;
 pub const REPLY_CHARS: u32 = 800;
+/// A cast member's look: a few sentences a stranger could draw from.
+const CAST_LOOK_CHARS: u32 = 700;
 pub const MAX_CHECKS: u32 = 6;
 pub const GOAL_CHARS: u32 = 300;
 
@@ -326,6 +328,19 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32, sweep: bool) -> 
                 film.insert("reply".into(), text(REPLY_CHARS));
                 branches.push(object(film));
             }
+            // A cast member: drawn into a draft in the cast editor, which the
+            // person saves. Rewritten whole on every ask.
+            if t.casts() {
+                let mut member = Map::new();
+                member.insert("name".into(), text(crate::cast::MAX_NAME as u32));
+                member.insert("kind".into(), json!({ "enum": ["character", "place", "thing"] }));
+                member.insert("look".into(), text(CAST_LOOK_CHARS));
+                let mut cast = props.clone();
+                cast.insert("action".into(), json!({ "const": "cast" }));
+                cast.insert("member".into(), object(member));
+                cast.insert("reply".into(), text(REPLY_CHARS));
+                branches.push(object(cast));
+            }
             if !vary.is_empty() {
                 let mut compare = props;
                 compare.insert("action".into(), json!({ "const": "compare" }));
@@ -370,6 +385,16 @@ mod tests {
     /// A chat reply's two shapes: talking, and drawing.
     fn branches(s: &Value) -> (&Value, &Value) {
         (&s["anyOf"][0], &s["anyOf"][1])
+    }
+
+    #[test]
+    fn a_cast_member_is_offered_only_when_allowed_and_written_whole() {
+        let t = toolkit(&Rules::default(), &Locks::default());
+        let s = output(Mode::Chat, &t, 0, 0, false);
+        let cast = s["anyOf"].as_array().unwrap().iter().find(|b| b["properties"]["action"]["const"] == "cast").expect("offered");
+        assert_eq!(keys(&cast["properties"]["member"]), ["name", "kind", "look"]);
+        let off = toolkit(&Rules { cast: false, ..Rules::default() }, &Locks::default());
+        assert!(!actions(&output(Mode::Chat, &off, 0, 0, false)).contains(&"cast".to_string()));
     }
 
     #[test]
@@ -470,12 +495,12 @@ mod tests {
     #[test]
     fn a_chat_reply_may_describe_only_what_it_sees_and_may_always_improve_or_compare() {
         let t = toolkit(&Rules::default(), &Locks::default());
-        assert_eq!(actions(&output(Mode::Chat, &t, 0, 0, false)), ["talk", "draw", "improve", "compare"]);
+        assert_eq!(actions(&output(Mode::Chat, &t, 0, 0, false)), ["talk", "draw", "improve", "cast", "compare"]);
         let seeing = output(Mode::Chat, &t, 1, 0, false);
-        assert_eq!(actions(&seeing), ["talk", "draw", "describe", "improve", "compare"]);
+        assert_eq!(actions(&seeing), ["talk", "draw", "describe", "improve", "cast", "compare"]);
         assert_eq!(keys(&seeing["anyOf"][2]), ["notes", "action", "prompt", "negative", "reply"]);
         assert_eq!(keys(&seeing["anyOf"][3]), ["notes", "action", "goal", "reply"]);
-        let compare = &seeing["anyOf"][4];
+        let compare = &seeing["anyOf"][5];
         assert_eq!(keys(compare), ["notes", "action", "change", "reason", "goal", "vary", "values", "count", "reply"]);
         // The default whitelist: prompt, negative, CFG, size, model — size isn't comparable.
         assert_eq!(compare["properties"]["vary"]["enum"], json!(["prompt", "negative", "cfg_scale", "model"]));
@@ -487,7 +512,7 @@ mod tests {
         let mut t = toolkit(&Rules::default(), &Locks::default());
         assert!(!actions(&output(Mode::Chat, &t, 0, 0, false)).contains(&"film".to_string()), "no video model");
         t.film_off = None;
-        assert_eq!(actions(&output(Mode::Chat, &t, 0, 0, false)), ["talk", "draw", "improve", "film", "compare"]);
+        assert_eq!(actions(&output(Mode::Chat, &t, 0, 0, false)), ["talk", "draw", "improve", "film", "cast", "compare"]);
         let s = output(Mode::Story, &t, 2, 0, false);
         assert_eq!(keys(&s), ["notes", "title", "every", "image_model", "cast", "shots", "reply"]);
         assert_eq!(s["properties"]["image_model"]["enum"], json!(["sdxl", "klein"]));
@@ -525,7 +550,7 @@ mod tests {
     fn nothing_comparable_offered_means_no_comparison() {
         let r = Rules { knobs: ["size".to_string()].into_iter().collect(), ..Default::default() };
         let t = toolkit(&r, &Locks::default());
-        assert_eq!(actions(&output(Mode::Chat, &t, 0, 0, false)), ["talk", "draw", "improve"]);
+        assert_eq!(actions(&output(Mode::Chat, &t, 0, 0, false)), ["talk", "draw", "improve", "cast"]);
     }
 
     #[test]

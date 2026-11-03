@@ -69,6 +69,14 @@ pub struct Chat {
     /// is the Image tab's, unless it has a film (`ChatStore::load`).
     #[serde(default)]
     pub context: Pane,
+    /// The cast member this chat is making (the agent's `cast` action): the
+    /// entry it draws into and the words it is drawn from. The person's
+    /// edits in the bound editor are written here too (`/chats/cast`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cast: Option<ChatCast>,
+    /// Moves when the agent writes `cast`, so the page opens the editor.
+    #[serde(default)]
+    pub cast_rev: u64,
     /// Where it was read from; never stored.
     #[serde(skip)]
     pub favorite: bool,
@@ -190,6 +198,18 @@ pub enum MemberKind {
     Character,
     Place,
     Thing,
+}
+
+/// The cast member a chat is making. `id` is empty until the first draw
+/// makes the entry (a draft), or names a saved entry being changed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ChatCast {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub kind: MemberKind,
+    pub look: String,
 }
 
 /// Someone or something that must look the same in every shot.
@@ -471,6 +491,18 @@ pub enum Msg {
         #[serde(default)]
         title: String,
     },
+    /// A try drawn for the cast member the chat is making: the cast
+    /// editor's try `try_n` of entry `id`, its picture kept in the chat.
+    Cast {
+        n: u32,
+        #[serde(default)]
+        ms: u64,
+        id: String,
+        name: String,
+        #[serde(default)]
+        try_n: u32,
+        image: ImageRef,
+    },
     /// A line from yasdig itself: stopped, a failure, a clamp.
     Note {
         n: u32,
@@ -483,7 +515,12 @@ pub enum Msg {
 impl Msg {
     pub fn n(&self) -> u32 {
         match self {
-            Msg::User { n, .. } | Msg::Agent { n, .. } | Msg::Batch { n, .. } | Msg::Clip { n, .. } | Msg::Note { n, .. } => *n,
+            Msg::User { n, .. }
+            | Msg::Agent { n, .. }
+            | Msg::Batch { n, .. }
+            | Msg::Clip { n, .. }
+            | Msg::Cast { n, .. }
+            | Msg::Note { n, .. } => *n,
         }
     }
 }
@@ -580,6 +617,8 @@ pub enum Next {
     Escalate,
     /// Draw the film's next missing picture: a cast member's, then a keyframe.
     Film,
+    /// Draw a try of the cast member the chat is making.
+    Cast,
     /// An older chat filming its board, or looking at a shot, stops there.
     #[serde(alias = "shoot", alias = "take")]
     Nothing,
@@ -683,6 +722,8 @@ impl Chat {
             video: None,
             film: None,
             context: Pane::Image,
+            cast: None,
+            cast_rev: 0,
             favorite: false,
         }
     }

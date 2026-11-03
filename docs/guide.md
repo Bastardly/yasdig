@@ -576,6 +576,14 @@ filled from them. And the Assistant knows your cast: a storyboard that has Elias
 uses your Elias — the name as you saved it, the look word for word, and the pictures
 and voice with them.
 
+**Made by the Assistant**: ask it for one — *"make me a character: Elias, a weathered
+cowboy"* — and it writes the name and look and draws a try. The cast editor opens on
+it, so you can draw again, pick, edit the words or save. Ask for a change (*"make his
+hat red"*) and it draws another try into the same entry; your own edits to the words in
+the editor are what it changes. Naming someone already in your cast changes that
+entry, still only when you press Save. The Assistant never saves. Settings → Agent →
+*Make cast members* turns it off.
+
 From any picture, **Save as cast…** in the Refine & adjust dialog's rail opens the
 editor with that picture, as you see it, ready to be named.
 

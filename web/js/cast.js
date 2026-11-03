@@ -36,7 +36,8 @@ export function castTile(e, height = 200) {
       esc((e.name || '?').trim().charAt(0).toUpperCase())}</span>`;
   return `<button type="button" class="casttile" data-id="${esc(e.id)}" title="${tip}">${pic}
     <span class="castcap"><b>${esc(e.name || 'Not named yet')}</b>
-    <span class="sub">${KIND_LABEL[e.kind] ?? e.kind}${e.draft ? ' · not saved' : ''}</span></span></button>`;
+    <span class="sub">${KIND_LABEL[e.kind] ?? e.kind}${e.draft ? ' · not saved' : ''}${
+      e.drawing ? ' · drawing…' : ''}</span></span></button>`;
 }
 
 const del = gridMarks({
