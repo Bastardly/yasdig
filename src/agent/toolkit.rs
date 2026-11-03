@@ -86,6 +86,19 @@ pub struct Toolkit {
     /// The whitelist it was built under, for `knobs::apply`.
     #[serde(skip)]
     pub rules: Rules,
+    /// The saved cast (`crate::cast`), for a Video chat's story turn: the
+    /// names it may reuse, each with its look.
+    #[serde(skip)]
+    pub library: Vec<SavedCast>,
+}
+
+/// A saved cast entry as a story turn is shown it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SavedCast {
+    pub id: String,
+    pub name: String,
+    pub kind: super::chat::MemberKind,
+    pub look: String,
 }
 
 /// A video model as a film needs it described: what its shots can do, and
@@ -238,6 +251,14 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
         super::chat::Pane::Video => film_off(&rules, image, chat.video.as_deref(), video.as_ref()),
     };
     t.image_tab = chat.context == super::chat::Pane::Image;
+    if t.film_off.is_none() {
+        t.library = crate::cast::CastStore::of(cfg)
+            .list()
+            .into_iter()
+            .filter(|v| !v.entry.draft && v.picture)
+            .map(|v| SavedCast { id: v.entry.id, name: v.entry.name.trim().to_string(), kind: v.entry.kind, look: v.entry.look })
+            .collect();
+    }
     t.video = video;
     t.videos = installed;
     t
@@ -348,6 +369,7 @@ pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelCh
         image_tab: false,
         vision: false,
         rules: rules.clone(),
+        library: Vec::new(),
     }
 }
 

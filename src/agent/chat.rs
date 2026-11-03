@@ -222,6 +222,11 @@ pub struct Member {
     /// reference for them. The person's pick; the agent never sets it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice: Option<String>,
+    /// The saved cast entry it is (`crate::cast`): added from it, or named
+    /// as one by a story turn. Its look is the entry's, and its picture,
+    /// sheet and voice are copied in from it ([`super::cast_member`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cast_id: Option<String>,
 }
 
 impl Member {

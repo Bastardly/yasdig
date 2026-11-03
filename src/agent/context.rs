@@ -82,6 +82,37 @@ pub fn board_text(f: &Film) -> String {
 }
 
 /// The system message: who the agent is, what it may change and how to reply.
+/// Saved cast entries a story turn is shown at most, and characters of a
+/// look: the list is context, not the story, and a long library would crowd
+/// out the board.
+const LIBRARY_MAX: usize = 24;
+const LIBRARY_LOOK_CHARS: usize = 240;
+
+/// The person's saved cast, for a story turn: names it reuses exactly, so
+/// `session::apply_story` finds the entry and its pictures come with it.
+fn library_text(library: &[super::toolkit::SavedCast]) -> Option<String> {
+    if library.is_empty() {
+        return None;
+    }
+    let mut s = String::from(
+        "\nThe person's saved cast. When the film has one of them, use the name exactly as written here and \
+         the look word for word: their pictures come with the name. Leave out the ones the story doesn't need.",
+    );
+    for e in library.iter().take(LIBRARY_MAX) {
+        let mut look: String = e.look.chars().take(LIBRARY_LOOK_CHARS).collect();
+        if look.len() < e.look.len() {
+            look.push('…');
+        }
+        let kind = match e.kind {
+            super::chat::MemberKind::Character => "character",
+            super::chat::MemberKind::Place => "place",
+            super::chat::MemberKind::Thing => "thing",
+        };
+        s.push_str(&format!("\n- {} ({kind}): {look}", e.name));
+    }
+    Some(s)
+}
+
 pub fn system(t: &Toolkit, turn: &Turn) -> String {
     let mut s = String::new();
     s.push_str(turn.skills);
@@ -406,6 +437,9 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
             let refs = t.video.as_ref().is_some_and(|v| v.references);
             let secs = t.video.as_ref().map_or(5.0, |v| v.shot_seconds());
             let mut text = String::from("Write the storyboard for a short film, as the person asked.");
+            if let Some(saved) = library_text(&t.library) {
+                text.push_str(&saved);
+            }
             if let Some(f) = turn.film {
                 text.push_str(&format!(
                     "\nThe storyboard now:\n{}\nWrite it again whole with the person's change. Keep every name, \
@@ -593,5 +627,19 @@ mod tests {
         assert!(labelled, "the reference comes first, named");
         let text: String = last.iter().filter_map(|p| match p { Part::Text { text } => Some(text.as_str()), _ => None }).collect();
         assert!(text.contains("the 2 picture(s) just drawn") && text.contains("Picture 2:") && !text.contains("Picture 3:"));
+    }
+
+    #[test]
+    fn a_story_turn_is_shown_the_saved_cast_trimmed() {
+        use super::super::toolkit::SavedCast;
+        assert_eq!(library_text(&[]), None);
+        let long = "Elias is a weathered cowboy. ".repeat(20);
+        let lib: Vec<SavedCast> = (0..30)
+            .map(|n| SavedCast { id: format!("c{n}"), name: format!("Name{n}"), look: long.clone(), ..Default::default() })
+            .collect();
+        let s = library_text(&lib).unwrap();
+        assert!(s.contains("- Name0 (character): Elias is"));
+        assert!(!s.contains("Name24"), "at most {LIBRARY_MAX}");
+        assert!(s.lines().all(|l| l.chars().count() < LIBRARY_LOOK_CHARS + 40), "a look is cut short");
     }
 }

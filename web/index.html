@@ -839,6 +839,8 @@
     <!-- An edit the server refused says why here, beside what was pressed.
          Drawing the cast is optional: a shot follows a member's words without. -->
     <div class="fpfoot"><div class="err" id="casterr"></div>
+      <button type="button" class="btn btn-run" id="castfrom" hidden
+        title="Bring someone from your saved cast into this film: their look, picture, turnaround and voice, never drawn again">Add from cast…</button>
       <button type="button" class="btn" id="castdraw" hidden
         title="A picture of each in the cast, from their look: what the first frames are drawn with, and on H3 what the shots follow. Optional">Draw the cast</button></div>
   </section>
@@ -1733,10 +1735,12 @@
   <div class="wihead">
     <b id="picktitle">Pick a picture</b>
     <!-- Either gallery: a favourite is a stem like any other, and the server
-         looks in both (`Store::find_output`). -->
+         looks in both (`Store::find_output`). Cast hands over an output copy
+         of an entry's picture or voice (`POST /cast/output`). -->
     <span class="wishelf">
       <button type="button" id="pickcurrent" class="btn btn-choice active">Current</button>
       <button type="button" id="pickfavorites" class="btn btn-choice">Favorites</button>
+      <button type="button" id="pickcast" class="btn btn-choice">Cast</button>
     </span>
     <button type="button" id="pickclose" class="btn">Close</button>
   </div>

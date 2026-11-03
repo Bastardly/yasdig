@@ -101,12 +101,28 @@ async function loadLibrary() {
   drawChips();
 }
 
-function openPicker() {
-  const left = library.filter((e) => !picks.some((p) => p.id === e.id));
+// What a pick in `#castpickdlg` does: the Image tab's row adds it; a film's
+// Cast panel adds it to the film (`chooseCastEntry`).
+let onEntry = (id) => add(id);
+
+function showPicker(left, already) {
   $('castpickgrid').innerHTML = left.map((e) => castTile(e, 140)).join('')
-    || `<p class="sub">${library.length ? 'Every cast member is in the prompt already.'
+    || `<p class="sub">${library.length ? already
       : 'No cast yet. New cast… makes one: a name, how they look, and a picture.'}</p>`;
   $('castpickdlg').showModal();
+}
+
+function openPicker() {
+  onEntry = (id) => add(id);
+  showPicker(library.filter((e) => !picks.some((p) => p.id === e.id)), 'Every cast member is in the prompt already.');
+}
+
+// The same dialog for anyone else who wants a saved entry: `onPick(id)`,
+// with the entries `leaveOut(entry)` names not offered.
+export async function chooseCastEntry(onPick, leaveOut = () => false, already = 'Every cast member is in already.') {
+  await loadLibrary();
+  onEntry = onPick;
+  showPicker(library.filter((e) => !leaveOut(e)), already);
 }
 
 // `opts.pictures()`: a Picture tick would be sent (a model that takes
@@ -124,14 +140,15 @@ export function initCastPicks(opts) {
     const b = e.target.closest('button[data-id]');
     if (!b) return;
     $('castpickdlg').close();
-    add(b.dataset.id);
+    onEntry(b.dataset.id);
   });
-  // A new one made from here goes straight into the prompt.
+  // A new one made from here goes straight to whoever opened the dialog.
   $('castpicknew').addEventListener('click', () => {
     $('castpickdlg').close();
+    const then = onEntry;
     openCastEditor(null, {}, async (saved) => {
       await loadLibrary();
-      add(saved.id);
+      then(saved.id);
     });
   });
   $('castchips').addEventListener('change', (e) => {

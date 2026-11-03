@@ -69,6 +69,10 @@ function shownPicture() {
     return { pic: `/cast/${e.id}/tries/${p.try}.png`, sheet: t?.sheet ? `/cast/${e.id}/tries/${p.try}-sheet.png` : null };
   }
   if (p?.output) return { pic: `/outputs/${encodeURIComponent(p.output)}/thumb.png`, sheet: null };
+  if (p?.outputs) {
+    return { pic: `/outputs/${encodeURIComponent(p.outputs.picture)}/thumb.png`,
+      sheet: `/outputs/${encodeURIComponent(p.outputs.sheet)}/thumb.png` };
+  }
   if (e?.picture) return { pic: `/cast/${e.id}/picture.png${v}`, sheet: e.sheet ? `/cast/${e.id}/sheet.png${v}` : null };
   return { pic: null, sheet: null };
 }
@@ -143,8 +147,9 @@ function defaultModel() {
   return has($('template')?.value) ? $('template').value : models[0]?.name ?? '';
 }
 
-// Open the editor: on entry `id`, or a new one (`prefill`: `kind`, `look`,
-// `picture` — an output stem it starts with). `onSaved(entry)` runs after a
+// Open the editor: on entry `id`, or a new one (`prefill`: `name`, `kind`,
+// `look`, and output stems it starts with — `picture`, `sheet` (with a
+// picture), `voice`). `onSaved(entry)` runs after a
 // save: the Image tab's cast row adds what was made from it.
 export async function openCastEditor(id = null, prefill = {}, onSaved = null) {
   err('');
@@ -165,7 +170,10 @@ export async function openCastEditor(id = null, prefill = {}, onSaved = null) {
   const model = entry?.image_model;
   $('cemodel').value = models.some((m) => m.name === model) ? model : defaultModel();
   setKind(entry?.kind ?? prefill.kind ?? 'character');
-  if (prefill.picture) cur.pick = { output: prefill.picture };
+  if (prefill.picture) {
+    cur.pick = prefill.sheet ? { outputs: { picture: prefill.picture, sheet: prefill.sheet } } : { output: prefill.picture };
+  }
+  if (prefill.voice) cur.voice = { output: prefill.voice };
   // A reopened draft's last try is what it was left on.
   const tries = entry?.tries ?? [];
   if (entry?.draft && tries.length) cur.pick = { try: tries[tries.length - 1].n };
@@ -320,7 +328,7 @@ export function initCastEditor() {
   $('cepick').addEventListener('click', () => choosePicture((stem) => {
     cur.pick = { output: stem };
     drawPictures();
-  }));
+  }, { cast: false }));
   $('ceupload').addEventListener('click', () => $('cefile').click());
   $('cefile').addEventListener('change', async () => {
     const f = $('cefile').files[0];
@@ -336,7 +344,7 @@ export function initCastEditor() {
   $('cevoicepick').addEventListener('click', () => chooseSound((stem) => {
     cur.voice = { output: stem };
     drawVoice();
-  }));
+  }, { cast: false }));
   $('cevoiceup').addEventListener('click', () => askForSound((s) => {
     cur.voice = { output: s.stem };
     drawVoice();

@@ -446,9 +446,19 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         /// The image model the board's pictures are drawn with.
         #[serde(default)]
         image_model: Option<String>,
+        /// A saved cast entry's id, added to the film's cast (*Add from cast…*).
+        #[serde(default)]
+        from_cast: Option<String>,
     }
     let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
     let store = super::store(cfg);
+    let add = match &dto.from_cast {
+        Some(id) => match super::cast_member(cfg, &store, &dto.id, id) {
+            Ok(m) => Some(m),
+            Err(e) => return err(conn, 400, &format!("{e:#}")),
+        },
+        None => None,
+    };
     // A picked picture is copied into the chat before the write, as a
     // message's are.
     let kept = match dto.picture.as_ref() {
@@ -507,6 +517,7 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
             sound: dto.sound.clone(),
             music: dto.music.clone(),
             voice: dto.voice.clone(),
+            add: add.clone(),
         };
         session::edit_board(c, &edit).map_err(|e| anyhow::anyhow!(e))?;
         if dto.draw {

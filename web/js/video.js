@@ -120,6 +120,10 @@ function setVTurbo(on) {
 
 const rowEls = () => [...$('vshots').querySelectorAll('.shotrow')];
 
+// Who redraws from the rows when they change (the unbound Cast panel).
+const rowWatchers = [];
+export const onRowsChange = (fn) => { rowWatchers.push(fn); };
+
 // The rows as the panel holds them now, blank ones too.
 export const rowsNow = () => rowEls().map(readRow);
 
@@ -154,6 +158,108 @@ function readRow(el) {
     subjects: JSON.parse(el.dataset.subjects || '[]'),
     voices: JSON.parse(el.dataset.voices || '[]'),
   };
+}
+
+// ---- The cast on the rows -------------------------------------------------------
+//
+// A saved cast member on a shot, without a film: their picture as a reference
+// named for them (with their look, for H3's subject lines), their voice as a
+// sound that is theirs, their name in Who is in it. The rows are the record;
+// the Cast panel (`board.js`, unbound) reads it back with `clipCast`.
+
+const MAX_SHOT_REFS = 4; // config::MAX_REFERENCES
+const MAX_SHOT_SOUNDS = 3; // pipeline::MAX_REF_AUDIO
+const same = (a, b) => (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
+const json = (el, k) => JSON.parse(el.dataset[k] || '[]');
+
+// `c`: `{stem, name, kind, look, voice}`. What didn't fit is said in the result.
+function castOnRow(el, c) {
+  const refs = json(el, 'refs');
+  const subjects = json(el, 'subjects');
+  const audio = json(el, 'audio');
+  const voices = json(el, 'voices');
+  let full = false;
+  if (c.stem && !refs.includes(c.stem)) {
+    if (refs.length < MAX_SHOT_REFS) {
+      refs.push(c.stem);
+      subjects[refs.length - 1] = { name: c.name, look: c.look ?? '' };
+    } else full = true;
+  }
+  if (c.voice && !audio.includes(c.voice)) {
+    if (audio.length < MAX_SHOT_SOUNDS) {
+      audio.push(c.voice);
+      voices[audio.length - 1] = c.name;
+    } else full = true;
+  } else if (c.voice) {
+    voices[audio.indexOf(c.voice)] = c.name;
+  }
+  el.dataset.refs = JSON.stringify(refs);
+  el.dataset.subjects = JSON.stringify(refs.map((_, k) => subjects[k] ?? { name: '', look: '' }));
+  el.dataset.audio = JSON.stringify(audio);
+  el.dataset.voices = JSON.stringify(audio.map((_, k) => voices[k] ?? ''));
+  const who = el.querySelector('.shotcast');
+  const names = who.value.split(',').map((x) => x.trim()).filter(Boolean);
+  if (!names.some((n) => same(n, c.name))) who.value = [...names, c.name].join(', ');
+  return full;
+}
+
+function rowsChanged() {
+  syncShots();
+  syncVideoSummaries();
+  keepDraft();
+  board?.edited();
+}
+
+// Who the rows' references name, in first-seen order: `{name, stem, shots,
+// voice}` — the clip's cast as the unbound Cast panel shows it.
+export function clipCast() {
+  const out = [];
+  rowEls().forEach((el, i) => {
+    const refs = json(el, 'refs');
+    const audio = json(el, 'audio');
+    const voices = json(el, 'voices');
+    json(el, 'subjects').forEach((sub, k) => {
+      if (!sub?.name?.trim() || !refs[k]) return;
+      let m = out.find((x) => same(x.name, sub.name));
+      if (!m) out.push(m = { name: sub.name.trim(), stem: refs[k], shots: [], voice: false });
+      if (!m.shots.includes(i)) m.shots.push(i);
+      if (voices.some((v, j) => same(v, sub.name) && audio[j])) m.voice = true;
+    });
+  });
+  return out;
+}
+
+// What the shown model does with a cast member: references (H3), sounds.
+export const videoTakes = () => takeOf(currentVideoModel());
+
+// A saved cast member onto every shot that starts fresh (shot 1 and each
+// cut): where references and sounds go. False when one had no room.
+export function addCastToShots(c) {
+  let full = false;
+  rowEls().forEach((el, i) => {
+    if (i === 0 || el.dataset.cut === '1') full = castOnRow(el, c) || full;
+  });
+  rowsChanged();
+  return !full;
+}
+
+// Everything of `name` off every shot: its references, its voice, its name.
+export function removeCastFromShots(name) {
+  for (const el of rowEls()) {
+    const refs = json(el, 'refs');
+    const subjects = json(el, 'subjects');
+    const audio = json(el, 'audio');
+    const voices = json(el, 'voices');
+    const keep = refs.map((_, k) => !same(subjects[k]?.name, name));
+    el.dataset.refs = JSON.stringify(refs.filter((_, k) => keep[k]));
+    el.dataset.subjects = JSON.stringify(subjects.filter((_, k) => keep[k]));
+    const keepA = audio.map((_, k) => !same(voices[k], name));
+    el.dataset.audio = JSON.stringify(audio.filter((_, k) => keepA[k]));
+    el.dataset.voices = JSON.stringify(voices.filter((_, k) => keepA[k]));
+    const who = el.querySelector('.shotcast');
+    who.value = who.value.split(',').map((x) => x.trim()).filter((n) => n && !same(n, name)).join(', ');
+  }
+  rowsChanged();
 }
 
 // The rows that are shots — a blank one is not — each with its row index,
@@ -437,6 +543,7 @@ function syncShots() {
   $('vframes').hidden = !frames;
   if (frames) $('vframes').textContent = frames;
   $('vextendfoot').hidden = $('vextend').hidden && $('vframes').hidden;
+  for (const fn of rowWatchers) fn();
   const n = st.pending.length;
   $('vextend').textContent = st.action === 'redo'
     ? (n ? `Redo from shot ${st.done + 1}` : `Cut from shot ${st.done + 1}`)
@@ -1238,11 +1345,13 @@ export function initVideo() {
       // picture stays.
       const was = JSON.parse(row.dataset.subjects || '[]');
       const had = JSON.parse(row.dataset.refs || '[]');
-      editRefs(had, (stems, names) => {
+      editRefs(had, (stems, names, cast = []) => {
         row.dataset.refs = JSON.stringify(stems);
         row.dataset.subjects = JSON.stringify(stems.map((stem, k) => ({
-          name: names[k] ?? '', look: was[had.indexOf(stem)]?.look ?? '',
+          name: names[k] ?? '', look: cast.find((c) => c.stem === stem)?.look ?? was[had.indexOf(stem)]?.look ?? '',
         })));
+        // A cast member picked here brings their voice and their name.
+        for (const c of cast) castOnRow(row, { ...c, name: names[stems.indexOf(c.stem)] || c.name });
         syncShots();
         syncVideoSummaries();
         keepDraft();

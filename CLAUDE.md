@@ -551,9 +551,40 @@ shelf, and Close server's clear never reaches it.
   delegated listener (summaries, loop, an Image chat's settings); `syncSummaries`
   calls `syncCastPicks` (Picture ticks shown only while `refsActive()` and no source).
 
+**In clips and films** (what can only name an output stem):
+
+- **`CastStore::output_stem` is a cache** (`Entry.stem`/`sheet_stem`/`voice_stem`,
+  `POST /cast/output`): reused while either gallery has it, re-imported when deleted,
+  dropped by `save` when the file it copies changes. The Image tab never goes through
+  it (paths), so Outputs fills only with what a clip or film used.
+- **The `#picker`'s Cast source** (`source-slot.js`) turns a pick into that stem, so
+  every slot takes a cast member unchanged; the cast editor's own Choose… leaves it
+  out (`{cast: false}`).
+- **A film member from the cast is the person's** (`agent::cast_member`: output
+  copies, pictures kept in the chat's `img/`, `kind: "output"`), so it is never
+  redrawn; `Member.cast_id` names the entry. *Add from cast…* is `/chats/film
+  {from_cast}` → `BoardEdit.add` (name unique in the film, `MAX_CAST`).
+- **A story turn reuses the cast by name**: `Toolkit.library` (saved entries with a
+  picture, Video chats only, `serde(skip)`) is listed in the turn (`library_text`,
+  capped); `apply_story` gives a name match (case aside) the entry's spelling, kind,
+  look and `cast_id`, and keeps an old drawn picture only for the same entry. The
+  files arrive after the turn (`adopt_cast`, end of `turn`), only where the member has
+  none. film.md is at the skill budget, so the instruction is in the turn's text.
+- *Save to cast…* on a member opens the editor prefilled (`picture`, `sheet`,
+  `voice` stems; `Pick::Outputs` keeps the turnaround).
+- **A Cast pick carries `extra`**: the picker calls `onPick(stem, {cast, voice})`
+  (`voice` a character's voice, also an output copy). `sourceSlot`'s `onCast`, the
+  References dialog's `castPicks` → `editRefs`' third `onDone` argument → `castOnRow`
+  (video.js) add the voice to the shot's sounds as that name's, and the name to *Who
+  is in it*; Sounds fills *Voice of*.
+- **Unbound, the Cast panel is the rows** (`clipCast`, read off references'
+  `subjects`; no state of its own): *Add from cast…* → `addCastToShots` (shot 1 and
+  every cut), Remove → `removeCastFromShots` by name. Redrawn on `onRowsChange`
+  (end of `syncShots`), only when its HTML moved.
+
 Page: the editor holds `cur = {id, entry, pick, voice}` and sends nothing but a draw
-until Save; `pick` is `{try}`, `{output}` or `null` (keep), the wire shape
-of `cast::Pick`. Refine & adjust's *Save as cast…* (`#lbcast`) goes through
+until Save; `pick` is `{try}`, `{output}`, `{outputs: {picture, sheet}}` or `null`
+(keep), the wire shape of `cast::Pick`. Refine & adjust's *Save as cast…* (`#lbcast`) goes through
 `/download-image` and `/upload`, so the entry copies an output in like any other.
 
 ## Favourites

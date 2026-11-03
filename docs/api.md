@@ -648,12 +648,18 @@ answers when its try is drawn.
   that takes references draws a 2:1 sheet first and the picture from it. Answers the
   entry.
 - `POST /cast/save` — `{id?, name, kind, look, image_model, picture?, voice?}`.
-  `picture`: `{"try": n}` or `{"output": "stem"}` (copied in); absent keeps the one
-  there. `voice`: `{"output": "stem"}` (a `.wav` output) or `"remove"`. Empties
+  `picture`: `{"try": n}`, `{"output": "stem"}`, or `{"outputs": {"picture": "stem",
+  "sheet": "stem"}}` (a picture with its turnaround — a film member's); outputs are
+  copied in; absent keeps the one there. `voice`: `{"output": "stem"}` (a `.wav` output) or `"remove"`. Empties
   `tries/` and clears `draft`. No `id` saves a new entry. Refused with a 400 when the
   name is empty, another saved entry has it (case aside), or it would have no picture.
 - `POST /cast/discard` — `{id}`: a draft is deleted, a saved entry loses its tries.
 - `POST /cast/delete` — `{ids: ["…"]}`: each entry's folder.
+- `POST /cast/output` — `{id, which}` (`picture`, `sheet` or `voice`) → `{stem}`: an
+  output copy of a saved entry's file, for what can only name an output (a film
+  member, a shot's references and sounds). Made once and reused while it is in either
+  gallery; deleted from Outputs, it is copied again under a new stem. 404 when the entry
+  has no such file.
 
 ### The agent
 
@@ -713,8 +719,10 @@ the chat, whose `rev` moves on every write.
   turn follows in the same job; its pictures wait for `/chats/film {draw: true}`). `video` is the Video tab's model now. At most four pictures, copied into the
   chat. `409` while the agent is working on the chat.
 - `POST /chats/film` — `{ id, every?, member?, name?, look?, picture?, shot?, text?,
-  cast?, cut?, lines?, sound?, music?, voice?, redraw_keyframe?, no_keyframe?, draw?, image_model? }`: an edit of the storyboard — the look every shot
-  shares, cast member `member`'s name, look or picture (`{kind: "output", id}`, or `null`
+  cast?, cut?, lines?, sound?, music?, voice?, redraw_keyframe?, no_keyframe?, draw?, image_model?, from_cast? }`: an edit of the storyboard — `from_cast`, a saved
+  cast entry's id, adds it as a member (its look, and its picture, sheet and voice as
+  the person's, never drawn again; refused when the film has its name or six members);
+  the look every shot shares, cast member `member`'s name, look or picture (`{kind: "output", id}`, or `null`
   to have it drawn again), shot `shot`'s words, cast (names) or cut. A reworded shot's
   keyframe is dropped, as is one sent with `redraw_keyframe: true` (a row's *Draw
   again*); `no_keyframe: true` starts shot `shot` from its words with none drawn

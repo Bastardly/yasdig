@@ -27,6 +27,8 @@ let model = null;
 // Image tab's set to put back.
 let borrower = null;
 let parked = [];
+// A borrower's picks from the cast, by stem: `{name, kind, look, voice}`.
+let castPicks = new Map();
 
 const slots = Array.from({ length: N }, (_, i) => sourceSlot({
   prefix: `ref${i + 1}`,
@@ -35,6 +37,12 @@ const slots = Array.from({ length: N }, (_, i) => sourceSlot({
   err: 'refserr',
   paste: false,
   onChange: () => { if (!borrower) { drawButton(); changed(); } },
+  // A cast member says who it shows.
+  onCast: (stem, extra) => {
+    if (!borrower) return;
+    castPicks.set(stem, { ...extra.cast, voice: extra.voice });
+    $(`ref${i + 1}who`).value = extra.cast.name;
+  },
 }));
 
 // The picks, in slot order, gaps closed: "image 1" is the first picked slot.
@@ -49,12 +57,14 @@ export function setReferences(stems) {
 }
 
 // The dialog over someone else's picks — a Video shot's: `stems` in the
-// slots, `onDone(stems, names)` when it closes. The default words are the
+// slots, `onDone(stems, names, cast)` when it closes, `cast` the picks made
+// from the cast still in a slot (`{stem, name, kind, look, voice}`). The default words are the
 // Image tab's; a borrower says what its pictures do. With `names` (one per
 // stem), each slot also asks who it shows, as an H3 shot's words name them.
 export function editRefs(stems, onDone, note, names = null) {
   parked = references();
   borrower = onDone;
+  castPicks = new Map();
   setReferences(stems);
   slots.forEach((_, i) => {
     $(`ref${i + 1}who`).hidden = !names;
@@ -73,7 +83,9 @@ function giveBack() {
   borrower = null;
   slots.forEach((_, i) => { $(`ref${i + 1}who`).hidden = true; });
   $('refsnote').textContent = IMAGE_NOTE;
-  done(kept.map(([stem]) => stem), kept.map(([, name]) => name));
+  const cast = kept.filter(([stem]) => castPicks.has(stem)).map(([stem]) => ({ stem, ...castPicks.get(stem) }));
+  castPicks = new Map();
+  done(kept.map(([stem]) => stem), kept.map(([, name]) => name), cast);
 }
 
 export const onRefsChange = (fn) => { listeners.push(fn); };

@@ -1,5 +1,6 @@
-import { $ } from './dom.js';
+import { $, esc, post } from './dom.js';
 import { fetchOutputs, outputGrid } from './outputs.js';
+import { castTile, fetchCast } from './cast.js';
 
 // "Start from": an image a generation begins with instead of noise. The Image
 // tab's source and the Video tab's first frame are both this, so it is written
@@ -18,6 +19,9 @@ import { fetchOutputs, outputGrid } from './outputs.js';
 //   name and answers with that stem. So an upload is also in the picker next
 //   time, and in the Outputs tab.
 // - A reopened work item puts back the stem it was made from.
+// - The picker's **Cast** source: a saved entry's picture (or voice) is
+//   handed over as an output copy (`POST /cast/output`, made once and
+//   reused), so every slot that takes a stem takes a cast member too.
 //
 // The markup is `index.html`'s — the ids are `${prefix}drop`, `thumb`, `name`,
 // `pick`, `upload`, `clear` and `file` — and this module only wires it, so the
@@ -74,16 +78,49 @@ let pickFor = null;
 let pickGallery = 'outputs';
 // Pictures, or — for a shot's sounds and a voice — sounds.
 let pickSounds = false;
+// The cast editor's own Choose… leaves the Cast source out.
+let pickCast = true;
 let pickerWired = false;
+
+// The Cast source: entries with a picture (or, for sounds, a voice). A pick
+// becomes an output stem before it reaches the slot.
+async function drawCastPicker(grid, sounds) {
+  const list = (await fetchCast()).filter((e) => !e.draft && (sounds ? e.voice : e.picture));
+  if (pickGallery !== 'cast' || sounds !== pickSounds) return;
+  grid.innerHTML = list.map((e) => castTile(e, 140)).join('')
+    || `<p class="sub">${sounds ? 'No cast member has a voice yet — give one a voice in the cast editor.'
+      : 'No cast yet — New cast… on the Cast tab makes one.'}</p>`;
+  grid.onclick = async (ev) => {
+    const b = ev.target.closest('button[data-id]');
+    if (!b) return;
+    const e = list.find((x) => x.id === b.dataset.id);
+    try {
+      const { stem } = await post('/cast/output', { id: e.id, which: sounds ? 'voice' : 'picture' });
+      // A character's picture brings its voice: a slot that can use one (a
+      // shot's references) adds it as their sound.
+      const voice = !sounds && e.voice && e.kind === 'character'
+        ? (await post('/cast/output', { id: e.id, which: 'voice' })).stem : null;
+      pickFor?.(stem, { cast: { id: e.id, name: e.name.trim(), kind: e.kind, look: e.look }, voice });
+      $('picker').close();
+    } catch (e) {
+      grid.insertAdjacentHTML('afterbegin', `<p class="err">${esc(e.message)}</p>`);
+    }
+  };
+}
 
 async function drawPicker() {
   const grid = $('pickgrid');
+  if (!pickCast && pickGallery === 'cast') pickGallery = 'outputs';
   const fav = pickGallery === 'favorite-outputs';
-  $('pickcurrent').classList.toggle('active', !fav);
+  $('pickcurrent').classList.toggle('active', pickGallery === 'outputs');
   $('pickfavorites').classList.toggle('active', fav);
+  $('pickcast').classList.toggle('active', pickGallery === 'cast');
+  $('pickcast').hidden = !pickCast;
   grid.innerHTML = '<p class="sub">Loading…</p>';
+  grid.onclick = null;
   const from = pickGallery;
   const sounds = pickSounds;
+  if (from === 'cast') return drawCastPicker(grid, sounds);
   // Pictures only, or sounds only: a saved clip is never either.
   const list = (await fetchOutputs(from)).filter((o) => !o.video && !!o.audio === sounds);
   if (from !== pickGallery || sounds !== pickSounds) return;
@@ -105,7 +142,7 @@ async function drawPicker() {
 function wirePicker() {
   if (pickerWired) return;
   pickerWired = true;
-  for (const [btn, g] of [['pickcurrent', 'outputs'], ['pickfavorites', 'favorite-outputs']]) {
+  for (const [btn, g] of [['pickcurrent', 'outputs'], ['pickfavorites', 'favorite-outputs'], ['pickcast', 'cast']]) {
     $(btn).addEventListener('click', () => { pickGallery = g; drawPicker(); });
   }
 }
@@ -113,23 +150,28 @@ function wirePicker() {
 // Every open goes through here and says which kind it wants: the kind is
 // module state, and a slot that left it as the last opener did showed only
 // sounds after a voice was chosen.
-function openPickerFor(onPick, sounds) {
+function openPickerFor(onPick, sounds, cast = true) {
   wirePicker();
   pickFor = onPick;
   pickSounds = sounds;
+  pickCast = cast;
   $('picktitle').textContent = sounds ? 'Pick a sound' : 'Pick a picture';
   $('picker').showModal();
   drawPicker();
 }
 
 // The picker for anyone else who wants a stem: the Assistant's composer.
-export function choosePicture(onPick) {
-  openPickerFor(onPick, false);
+// `onPick(stem, extra)`: `extra` is `{cast: {id, name, kind, look}, voice}`
+// for a pick from the Cast source (`voice` a character's voice, as an output
+// stem, or null), absent otherwise.
+// `{cast: false}` leaves the Cast source out (the cast editor's own).
+export function choosePicture(onPick, { cast = true } = {}) {
+  openPickerFor(onPick, false, cast);
 }
 
 // The same picker over the sounds (`sounds.js`).
-export function chooseSound(onPick) {
-  openPickerFor(onPick, true);
+export function chooseSound(onPick, { cast = true } = {}) {
+  openPickerFor(onPick, true, cast);
 }
 
 // `tab` is the tab's container id, for the paste guard; `none` is what the name
@@ -137,7 +179,9 @@ export function chooseSound(onPick) {
 // `onChange(stem | null)` runs after every change, including a clear.
 // `paste: false` leaves pasting to the caller — the References dialog has four
 // slots and routes a paste to the first empty one rather than all four.
-export function sourceSlot({ prefix, tab, none, err, onChange = () => {}, paste = true }) {
+// `onCast(stem, extra)` runs after a pick from the Cast source (`extra` as
+// `choosePicture` gives it).
+export function sourceSlot({ prefix, tab, none, err, onChange = () => {}, onCast = null, paste = true }) {
   const id = (part) => `${prefix}${part}`;
   let stem = null;
 
@@ -165,7 +209,10 @@ export function sourceSlot({ prefix, tab, none, err, onChange = () => {}, paste 
   // differs, because this one is a dialog rather than a panel.
   // The stem is all a slot keeps, whichever gallery it came from.
   function openPicker() {
-    openPickerFor(set, false);
+    openPickerFor((picked, extra) => {
+      set(picked);
+      if (extra?.cast) onCast?.(picked, extra);
+    }, false);
   }
 
   function init() {

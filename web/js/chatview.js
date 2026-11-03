@@ -252,6 +252,7 @@ function memberCard(chat, m, k, lock) {
         <button type="button" class="btn" data-film-upload="${k}" title="Use a picture from this computer"${lock}>Upload…</button>
         <button type="button" class="btn" data-film-redraw="${k}" title="Let the agent draw this one from its look"${lock}>${
           theirs ? 'Draw one' : 'Draw again'}</button>
+        <button type="button" class="btn" data-film-tocast="${k}" title="Keep ${esc(m.name)} in your cast, to use in other pictures, clips and films">Save to cast…</button>
       </div>${voiceRow(chat.film, m, k, lock)}
     </div>${sheet}</div>`;
 }

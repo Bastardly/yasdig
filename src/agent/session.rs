@@ -405,6 +405,9 @@ pub struct BoardEdit {
     pub music: Option<String>,
     /// Member `member`'s voice, a sound output's stem; `None` takes it away.
     pub voice: Option<Option<String>>,
+    /// A member added whole: one from the saved cast (*Add from cast…*),
+    /// its picture, sheet and voice already the person's.
+    pub add: Option<Member>,
 }
 
 /// Apply a [`BoardEdit`] to a board still being written or ready, then make
@@ -414,6 +417,15 @@ pub fn edit_board(c: &mut Chat, e: &BoardEdit) -> Result<(), String> {
     if let Some((name, sheets)) = &e.image_model {
         f.image_model = name.clone();
         f.sheets = *sheets;
+    }
+    if let Some(m) = &e.add {
+        if f.cast.iter().any(|c| c.name.eq_ignore_ascii_case(&m.name)) {
+            return Err(format!("{} is in this film's cast already", m.name));
+        }
+        if f.cast.len() >= MAX_CAST {
+            return Err(format!("a film has at most {MAX_CAST} in its cast"));
+        }
+        f.cast.push(m.clone());
     }
     if let Some(k) = e.member {
         let old = f.cast.get(k).map(|m| m.name.clone()).ok_or_else(|| format!("there is no cast member {}", k + 1))?;
@@ -966,6 +978,15 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
             prompt: plain(&c.prompt),
             ..Default::default()
         };
+        // One of the person's saved cast: its name as saved, its look word
+        // for word, and (copied in after the turn, `agent::adopt_cast`) its
+        // pictures and voice — so the words match the picture.
+        if let Some(e) = t.library.iter().find(|e| e.name.eq_ignore_ascii_case(&m.name)) {
+            m.name = e.name.clone();
+            m.kind = e.kind;
+            m.look = e.look.clone();
+            m.cast_id = Some(e.id.clone());
+        }
         let adopted = (c.picture as usize).checked_sub(1).and_then(|i| attached.get(i));
         if let Some(p) = adopted {
             // The person's picture: an output already is its own stem.
@@ -973,7 +994,8 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
             m.picture = Some(p.clone());
         } else if let Some(was) = old.as_ref().and_then(|f| f.member(&m.name)) {
             let theirs = was.picture.as_ref().is_some_and(|p| p.kind != "item");
-            if theirs || was.look == m.look {
+            // A saved entry's pictures win over one the film drew.
+            if theirs || (was.look == m.look && (m.cast_id.is_none() || was.cast_id == m.cast_id)) {
                 m.picture = was.picture.clone();
                 m.stem = was.stem.clone();
                 m.sheet = was.sheet.clone();
@@ -1710,6 +1732,32 @@ mod tests {
     }
 
     #[test]
+    fn a_story_names_the_saved_cast_and_takes_its_look() {
+        let mut c = film_chat();
+        let mut t = film_tk(&c, false);
+        t.library = vec![super::super::toolkit::SavedCast {
+            id: "c1".into(),
+            name: "Leo".into(),
+            kind: MemberKind::Character,
+            look: "Leo is a boy of eight in a yellow raincoat and green boots.".into(),
+        }];
+        let mut b = board();
+        b["cast"][1]["name"] = json!("leo");
+        story(&mut c, &t, b.clone());
+        let f = c.film.as_ref().unwrap();
+        let leo = &f.cast[1];
+        assert_eq!((leo.name.as_str(), leo.cast_id.as_deref()), ("Leo", Some("c1")), "spelt as saved");
+        assert_eq!(leo.look, t.library[0].look, "the saved look, so the words match the picture");
+        assert_eq!(f.shots[2].cast, ["Leo"]);
+        assert_eq!(f.cast[0].cast_id, None, "Mara isn't in the saved cast");
+        // Its pictures (copied in after the turn) survive a rewrite.
+        let pic = ImageRef { kind: "output".into(), id: "leo-saved".into(), file: "p1.png".into(), seed: None };
+        c.film.as_mut().unwrap().cast[1].picture = Some(pic.clone());
+        story(&mut c, &t, b);
+        assert_eq!(c.film.as_ref().unwrap().cast[1].picture, Some(pic));
+    }
+
+    #[test]
     fn a_continue_that_brings_someone_back_is_made_a_cut() {
         let mut c = film_chat();
         let t = film_tk(&c, false);
@@ -1963,6 +2011,37 @@ mod tests {
         assert_eq!((s0.audio.as_slice(), s0.words.voices.as_slice()), (&["100-1-sound".to_string()][..], &["Mara".to_string()][..]));
         assert!(spec(&c, 1).audio.is_empty(), "a continue can't take references");
         assert!(edit_board(&mut c, &BoardEdit { member: Some(0), voice: Some(Some("../x".into())), ..Default::default() }).is_err());
+    }
+
+    #[test]
+    fn a_member_from_the_saved_cast_is_added_whole_and_never_drawn() {
+        let mut c = ready(false);
+        let pic = |id: &str| ImageRef { kind: "output".into(), id: id.into(), file: format!("{id}.png"), seed: None };
+        let elias = Member {
+            name: "Elias".into(),
+            look: "Elias is a weathered cowboy.".into(),
+            picture: Some(pic("e-front")),
+            stem: Some("e-front".into()),
+            sheet: Some(pic("e-sheet")),
+            sheet_stem: Some("e-sheet".into()),
+            voice: Some("e-voice".into()),
+            ..Default::default()
+        };
+        let before = c.film.as_ref().unwrap().cast.len();
+        edit_board(&mut c, &BoardEdit { add: Some(elias.clone()), ..Default::default() }).unwrap();
+        let f = c.film.as_ref().unwrap();
+        assert_eq!(f.cast.len(), before + 1);
+        assert_eq!(f.cast[before], elias);
+        assert!(f.cast[before].theirs(), "the person's, so never drawn again");
+        // A name is a key in the film too.
+        let again = Member { name: "elias".into(), ..elias.clone() };
+        assert!(edit_board(&mut c, &BoardEdit { add: Some(again), ..Default::default() }).is_err());
+        while c.film.as_ref().unwrap().cast.len() < MAX_CAST {
+            let n = c.film.as_ref().unwrap().cast.len();
+            edit_board(&mut c, &BoardEdit { add: Some(Member { name: format!("M{n}"), ..Default::default() }), ..Default::default() }).unwrap();
+        }
+        let one_more = Member { name: "Sally".into(), ..Default::default() };
+        assert!(edit_board(&mut c, &BoardEdit { add: Some(one_more), ..Default::default() }).is_err());
     }
 
     #[test]

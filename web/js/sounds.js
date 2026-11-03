@@ -111,8 +111,10 @@ export function initSounds() {
   $('soundslist').addEventListener('input', (e) => {
     if (e.target.dataset.voice != null) voices[Number(e.target.dataset.voice)] = e.target.value;
   });
-  const add = (stem) => {
-    if (!picked.includes(stem) && picked.length < MAX) { picked.push(stem); voices.push(''); }
+  // A cast character's voice is theirs: *Voice of* says so at once.
+  const add = (stem, extra) => {
+    const who = extra?.cast?.kind === 'character' ? extra.cast.name : '';
+    if (!picked.includes(stem) && picked.length < MAX) { picked.push(stem); voices.push(who); }
     drawSounds();
   };
   $('soundschoose').addEventListener('click', () => chooseSound(add));

@@ -402,7 +402,99 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
         let locks = tk.locks.clone();
         session::apply_reply(c, mode, parsed, &tk, &locks, used.clone(), stats.clone());
         Ok(())
+    })?;
+    if mode == Mode::Story {
+        adopt_cast(&cfg, store, &chat.id)?;
+    }
+    Ok(())
+}
+
+/// A saved cast entry as a film member: its words, and its picture, sheet
+/// and voice as the person's (output copies, `cast::CastStore::output_stem`;
+/// the pictures copied into the chat as a picked one is), so the film never
+/// draws them again. *Add from cast…* and [`adopt_cast`].
+pub(crate) fn cast_member(cfg: &Config, store: &ChatStore, chat: &str, id: &str) -> Result<chat::Member> {
+    use crate::cast::{CastStore, Which};
+    let cast = CastStore::of(cfg);
+    let outputs = crate::workitems::Store::new(&cfg.base_dir.join("work"), &cfg.user_dir());
+    let e = cast.load(id)?;
+    if e.draft {
+        bail!("“{}” isn't saved yet", e.name);
+    }
+    let ms = chat::now_ms();
+    let keep = |which: Which, prefix: &str| -> Result<Option<chat::ImageRef>> {
+        let Some(stem) = cast.output_stem(id, which, &outputs)? else { return Ok(None) };
+        let bytes = std::fs::read(cast.dir(id)?.join(if which == Which::Sheet { "sheet.png" } else { "picture.png" }))?;
+        let file = format!("{prefix}{ms}-{id}.png");
+        let dir = store.dir(chat).join("img");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join(&file), shrink_png(&bytes, chat::PREVIEW_SIDE)?)?;
+        Ok(Some(chat::ImageRef { kind: "output".into(), id: stem, file, seed: None }))
+    };
+    let picture = keep(Which::Picture, "p")?;
+    let sheet = keep(Which::Sheet, "s")?;
+    Ok(chat::Member {
+        name: e.name.trim().to_string(),
+        kind: e.kind,
+        look: e.look.clone(),
+        stem: picture.as_ref().map(|p| p.id.clone()),
+        picture,
+        sheet_stem: sheet.as_ref().map(|p| p.id.clone()),
+        sheet,
+        voice: cast.output_stem(id, Which::Voice, &outputs)?,
+        cast_id: Some(id.to_string()),
+        ..Default::default()
     })
+}
+
+/// After a story turn: the members it named from the saved cast
+/// (`Member.cast_id`, set by `session::apply_story`) get the entry's
+/// picture, sheet and voice where they have none. An entry gone or
+/// unreadable leaves the member its words, said on the console.
+fn adopt_cast(cfg: &Config, store: &ChatStore, chat_id: &str) -> Result<()> {
+    let chat = store.load(chat_id)?;
+    let Some(film) = chat.film.as_ref() else { return Ok(()) };
+    let wanted: Vec<(String, String, bool)> = film
+        .cast
+        .iter()
+        .filter(|m| m.picture.is_none() || m.voice.is_none())
+        .filter_map(|m| m.cast_id.clone().map(|id| (m.name.clone(), id, m.picture.is_none())))
+        .collect();
+    for (name, id, pictures) in wanted {
+        // Only the voice missing: no pictures copied into the chat again.
+        let saved = if pictures {
+            cast_member(cfg, store, chat_id, &id)
+        } else {
+            let outputs = crate::workitems::Store::new(&cfg.base_dir.join("work"), &cfg.user_dir());
+            crate::cast::CastStore::of(cfg)
+                .output_stem(&id, crate::cast::Which::Voice, &outputs)
+                .map(|voice| chat::Member { voice, ..Default::default() })
+        };
+        let saved = match saved {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[yasdig] film member {name}: the saved cast entry couldn't be used: {e:#}");
+                continue;
+            }
+        };
+        store.update(chat_id, |c| {
+            let Some(m) = c.film.as_mut().and_then(|f| f.cast.iter_mut().find(|m| m.name == name && m.cast_id.as_deref() == Some(&id)))
+            else {
+                return Ok(());
+            };
+            if m.picture.is_none() {
+                m.picture = saved.picture.clone();
+                m.stem = saved.stem.clone();
+                m.sheet = saved.sheet.clone();
+                m.sheet_stem = saved.sheet_stem.clone();
+            }
+            if m.voice.is_none() {
+                m.voice = saved.voice.clone();
+            }
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
 
 /// Picture `k` of round `round`: the chat's settings through `/generate`'s

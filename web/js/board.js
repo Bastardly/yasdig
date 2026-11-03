@@ -1,9 +1,13 @@
-import { $, post } from './dom.js';
+import { $, esc, getJSON, post } from './dom.js';
 import { soonJobs } from './jobs.js';
 import { castHtml, castLabel, framesLabel, rowKeyHtml } from './chatview.js';
-import { drawShots, freshStage, rowsNow, setBoard, stageClipById } from './video.js';
+import {
+  addCastToShots, clipCast, drawShots, freshStage, onRowsChange, removeCastFromShots, rowsNow, setBoard, stageClipById, videoTakes,
+} from './video.js';
 import { choosePicture, chooseSound, upload } from './source-slot.js';
 import { askForSound, playSound } from './sounds.js';
+import { chooseCastEntry } from './castpicks.js';
+import { openCastEditor } from './casteditor.js';
 
 // ---- A film's storyboard, on the Video tab ------------------------------------------
 //
@@ -39,6 +43,8 @@ let pickFor = null; // the cast member an upload is for
 let warning = '';
 
 const film = () => got?.chat.film ?? null;
+// `session::MAX_CAST`: past it the server refuses an added member.
+const MAX_CAST = 6;
 const busy = () => ['queued', 'running'].includes(got?.chat.session.state);
 const chatId = () => got?.chat.id ?? null;
 const err = (msg) => { $('casterr').textContent = msg ?? ''; };
@@ -204,11 +210,45 @@ function drawLine() {
 
 // ---- The Cast panel -------------------------------------------------------------
 
+// No film: the clip's own cast — who the shots' references name — and *Add
+// from cast…*, which puts a saved member on the shots that start fresh
+// (`addCastToShots`). Only H3 follows references and voices.
+function clipCastHtml() {
+  const takes = videoTakes();
+  const list = clipCast();
+  const intro = '<p class="sub">No film here: the Assistant writes one when you ask it for a film. A clip’s cast is who its shots’ references show.</p>';
+  if (!takes.references) {
+    return `${intro}<p class="sub">This video model can’t follow reference pictures, so a cast member can’t go on its shots. Write their look into a shot’s prompt, or start a shot from their picture (Start from image… → Cast).</p>`;
+  }
+  const rows = list.map((m) => `<div class="storymember">
+      <div class="storypic"><img src="/outputs/${encodeURIComponent(m.stem)}/thumb.png" alt=""></div>
+      <div class="storyfields"><b>${esc(m.name)}</b>
+        <span class="sub">In shot${m.shots.length === 1 ? '' : 's'} ${m.shots.map((k) => k + 1).join(', ')}${
+          m.voice ? ' · with a voice' : ''}</span>
+        <div class="btnrow"><button type="button" class="btn" data-clip-uncast="${esc(m.name)}"
+          title="Take ${esc(m.name)} off every shot: their pictures, voice and name">Remove</button></div>
+      </div></div>`).join('');
+  return `${intro}${rows ? `<div class="storycast">${rows}</div>`
+    : '<p class="sub">No one yet. Add from cast… puts a saved member on the shots that start fresh, or pick one in a shot’s References.</p>'}`;
+}
+
 function drawCast() {
   const f = film();
+  if (!f) {
+    $('castdraw').hidden = true;
+    $('castfrom').hidden = !videoTakes().references;
+    const html = clipCastHtml();
+    if ($('castbody').dataset.html !== html) {
+      $('castbody').innerHTML = html;
+      $('castbody').dataset.html = html;
+    }
+    return;
+  }
+  delete $('castbody').dataset.html;
   const label = !busy() && castLabel(f);
   $('castdraw').hidden = !label;
   if (label) $('castdraw').textContent = label;
+  $('castfrom').hidden = !f || busy() || f.cast.length >= MAX_CAST;
   const body = $('castbody');
   if (typing(body)) {
     body.dataset.stale = '1';
@@ -216,6 +256,21 @@ function drawCast() {
   }
   delete body.dataset.stale;
   body.innerHTML = castHtml(got?.chat ?? null, { busy: busy(), off: got?.toolkit.film_off, models: got?.toolkit.models ?? [] });
+}
+
+// A saved member onto the shots, as its picture's and voice's output copies.
+async function addToClip(id) {
+  err('');
+  try {
+    const e = await getJSON(`/cast/${encodeURIComponent(id)}`);
+    const { stem } = await post('/cast/output', { id, which: 'picture' });
+    const voice = e.voice && e.kind === 'character' ? (await post('/cast/output', { id, which: 'voice' })).stem : null;
+    if (!addCastToShots({ stem, voice, name: e.name.trim(), kind: e.kind, look: e.look })) {
+      err(`Some shots had no room for ${e.name.trim()}: a shot follows at most 4 pictures and 3 sounds.`);
+    }
+  } catch (ex) {
+    err(String(ex.message || ex));
+  }
 }
 
 // One edit of the board (`/chats/film`): the cast, a draw press. Pending row
@@ -263,6 +318,10 @@ export function initBoard() {
     const b = e.target.closest('button');
     if (!b) return;
     const d = b.dataset;
+    if (d.clipUncast != null) {
+      removeCastFromShots(d.clipUncast);
+      return;
+    }
     const picture = (k) => (stem) => edit({ member: k, picture: { kind: 'output', id: stem } });
     if (d.filmPick != null) choosePicture(picture(Number(d.filmPick)));
     // Drawn on the same press, as a person pressing it means.
@@ -278,7 +337,30 @@ export function initBoard() {
       const k = Number(d.filmVoiceup);
       askForSound((s) => edit({ member: k, voice: s.stem }), err);
     } else if (d.filmNovoice != null) edit({ member: Number(d.filmNovoice), voice: null });
+    else if (d.filmTocast != null) {
+      // The editor starts from the member: its words, and its picture,
+      // turnaround and voice as outputs. Save is the person's, as always.
+      const m = film()?.cast[Number(d.filmTocast)];
+      if (!m) return;
+      openCastEditor(null, {
+        name: m.name, kind: m.kind, look: m.look,
+        picture: m.stem ?? undefined, sheet: (m.stem && m.sheet_stem) || undefined, voice: m.voice ?? undefined,
+      });
+    }
   });
+  $('castfrom').addEventListener('click', () => {
+    if (film()) {
+      const names = film().cast.map((m) => m.name.toLowerCase());
+      chooseCastEntry((id) => edit({ from_cast: id }), (e) => names.includes(e.name.trim().toLowerCase()),
+        'Everyone in your cast is in this film already.');
+      return;
+    }
+    const names = clipCast().map((m) => m.name.toLowerCase());
+    chooseCastEntry(addToClip, (e) => names.includes(e.name.trim().toLowerCase()),
+      'Everyone in your cast is on these shots already.');
+  });
+  onRowsChange(() => { if (!film()) drawCast(); });
+  drawCast();
   $('castfile').addEventListener('change', async () => {
     const f = $('castfile').files[0];
     $('castfile').value = '';

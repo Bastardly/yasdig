@@ -87,6 +87,25 @@ pub struct Entry {
     /// Moves on every write: the page's cache-buster for the pictures.
     #[serde(default)]
     pub rev: u64,
+    /// Output copies of the picture, the sheet and the voice, for what can
+    /// only name an output (a film member, a shot's references and sounds):
+    /// a cache, re-imported when the output is gone and dropped when the
+    /// file it copies changes ([`CastStore::output_stem`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stem: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet_stem: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_stem: Option<String>,
+}
+
+/// Which of an entry's files [`CastStore::output_stem`] hands over.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Which {
+    Picture,
+    Sheet,
+    Voice,
 }
 
 /// What the page is shown of an entry: the record, and which files it has.
@@ -120,6 +139,9 @@ pub enum Pick {
     Try(u32),
     /// A picture from Outputs (an upload is one too), copied in.
     Output(String),
+    /// A picture and the turnaround of it, both outputs (a film member's,
+    /// *Save to cast*), copied in.
+    Outputs { picture: String, sheet: String },
 }
 
 /// What the saved voice is.
@@ -282,13 +304,28 @@ impl CastStore {
                     }
                     e.seed = Some(t.seed);
                     e.image_model = t.model.clone();
+                    e.stem = None;
+                    e.sheet_stem = None;
                 }
-                Some(Pick::Output(stem)) => {
+                Some(p @ (Pick::Output(_) | Pick::Outputs { .. })) => {
+                    let (stem, sheet) = match p {
+                        Pick::Outputs { picture, sheet } => (picture, Some(sheet)),
+                        Pick::Output(stem) => (stem, None),
+                        Pick::Try(_) => unreachable!(),
+                    };
                     let src = outputs.find_output(stem).ok_or_else(|| anyhow!("output '{stem}' is gone"))?;
                     std::fs::copy(&src, dir.join("picture.png")).context("copying the picture in")?;
-                    // A sheet was of the picture it replaces.
-                    remove(&dir.join("sheet.png"))?;
+                    match sheet {
+                        Some(s) => {
+                            let src = outputs.find_output(s).ok_or_else(|| anyhow!("output '{s}' is gone"))?;
+                            std::fs::copy(&src, dir.join("sheet.png")).context("copying the turnaround in")?;
+                        }
+                        // A sheet was of the picture it replaces.
+                        None => remove(&dir.join("sheet.png"))?,
+                    }
                     e.seed = None;
+                    e.stem = None;
+                    e.sheet_stem = None;
                 }
             }
             match voice {
@@ -296,8 +333,12 @@ impl CastStore {
                 Some(VoicePick::Output(stem)) => {
                     let src = outputs.find_audio_output(stem).ok_or_else(|| anyhow!("sound '{stem}' is gone"))?;
                     std::fs::copy(&src, dir.join("voice.wav")).context("copying the voice in")?;
+                    e.voice_stem = None;
                 }
-                Some(VoicePick::Remove) => remove(&dir.join("voice.wav"))?,
+                Some(VoicePick::Remove) => {
+                    remove(&dir.join("voice.wav"))?;
+                    e.voice_stem = None;
+                }
             }
             // Every entry has a picture: it is what pictures of it follow,
             // and what the Cast tab shows.
@@ -312,6 +353,53 @@ impl CastStore {
             Ok(())
         })?;
         Ok(e)
+    }
+
+    /// An output stem holding a copy of a saved entry's picture, sheet or
+    /// voice, for the places that can only name an output (a film member,
+    /// a shot's references and `--ref-audio`). The copy is made once and
+    /// reused while it is still in either gallery; deleted, it is made again.
+    /// `None` when the entry has no such file.
+    pub fn output_stem(&self, id: &str, which: Which, outputs: &crate::workitems::Store) -> Result<Option<String>> {
+        let dir = self.dir(id)?;
+        let e = self.load(id)?;
+        if e.draft {
+            bail!("“{}” isn't saved yet", e.name);
+        }
+        let (file, cached) = match which {
+            Which::Picture => ("picture.png", &e.stem),
+            Which::Sheet => ("sheet.png", &e.sheet_stem),
+            Which::Voice => ("voice.wav", &e.voice_stem),
+        };
+        let src = dir.join(file);
+        if !src.is_file() {
+            return Ok(None);
+        }
+        let still = |s: &String| match which {
+            Which::Voice => outputs.find_audio_output(s).is_some(),
+            _ => outputs.find_output(s).is_some(),
+        };
+        if let Some(s) = cached.as_ref().filter(|s| still(s)) {
+            return Ok(Some(s.clone()));
+        }
+        let bytes = std::fs::read(&src).with_context(|| format!("reading {}", src.display()))?;
+        let stem = match which {
+            Which::Voice => outputs.import_audio(&bytes)?.0,
+            _ => {
+                let (w, h) = image::image_dimensions(&src).with_context(|| format!("reading {}", src.display()))?;
+                outputs.import(&bytes, w, h)?
+            }
+        };
+        let keep = stem.clone();
+        self.update(id, move |e| {
+            *match which {
+                Which::Picture => &mut e.stem,
+                Which::Sheet => &mut e.sheet_stem,
+                Which::Voice => &mut e.voice_stem,
+            } = Some(keep);
+            Ok(())
+        })?;
+        Ok(Some(stem))
     }
 
     /// Close the editor without saving: a draft goes, a saved entry loses
@@ -518,6 +606,7 @@ pub fn route(conn: &mut Connection, method: &str, path: &str, body: &[u8], cfg: 
         ("POST", "/cast/save") => save(conn, cfg, &store, body),
         ("POST", "/cast/discard") => discard(conn, &store, body),
         ("POST", "/cast/delete") => delete(conn, &store, body),
+        ("POST", "/cast/output") => output(conn, cfg, &store, body),
         ("GET", p) if p.starts_with("/cast/") => {
             let parts: Vec<&str> = p["/cast/".len()..].split('/').collect();
             match parts.as_slice() {
@@ -618,6 +707,21 @@ fn save(conn: &mut Connection, cfg: &Config, store: &CastStore, body: &[u8]) -> 
 #[derive(Deserialize)]
 struct IdDto {
     id: String,
+}
+
+fn output(conn: &mut Connection, cfg: &Config, store: &CastStore, body: &[u8]) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Dto {
+        id: String,
+        which: Which,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let outputs = crate::workitems::Store::new(&cfg.base_dir.join("work"), &cfg.user_dir());
+    match store.output_stem(&dto.id, dto.which, &outputs) {
+        Ok(Some(stem)) => ok(conn, json!({ "stem": stem })),
+        Ok(None) => err(conn, 404, "this cast member has no such file"),
+        Err(e) => err(conn, 400, &format!("{e:#}")),
+    }
 }
 
 fn discard(conn: &mut Connection, store: &CastStore, body: &[u8]) -> Result<()> {
@@ -786,5 +890,49 @@ mod tests {
         assert!(p.starts_with("Elias is a weathered cowboy. Alone"), "{p}");
         assert!(derived_prompt(MemberKind::Place, "Dark ruins").contains("nobody"));
         assert!(!derived_prompt(MemberKind::Thing, "").starts_with('.'));
+    }
+
+    #[test]
+    fn an_output_copy_is_made_once_and_again_when_it_is_gone() {
+        let d = temp();
+        let store = CastStore::new(&d.join("user"));
+        let outputs = crate::workitems::Store::new(&d.join("work"), &d.join("user"));
+        let e = store.create(&fields("Elias")).unwrap();
+        store.add_try(&e.id, &png(8, 12), Some(&png(16, 8)), 1, "m", "p").unwrap();
+        store.save(&e.id, &fields("Elias"), Some(&Pick::Try(0)), None, &outputs).unwrap();
+        let a = store.output_stem(&e.id, Which::Picture, &outputs).unwrap().unwrap();
+        assert_eq!(store.output_stem(&e.id, Which::Picture, &outputs).unwrap().as_deref(), Some(a.as_str()));
+        let sheet = store.output_stem(&e.id, Which::Sheet, &outputs).unwrap().unwrap();
+        assert_ne!(sheet, a);
+        assert_eq!(image::open(outputs.find_output(&sheet).unwrap()).unwrap().width(), 16);
+        assert_eq!(store.output_stem(&e.id, Which::Voice, &outputs).unwrap(), None);
+        // Deleted from Outputs: copied again, under a new stem.
+        std::fs::remove_file(outputs.find_output(&a).unwrap()).unwrap();
+        let b = store.output_stem(&e.id, Which::Picture, &outputs).unwrap().unwrap();
+        assert_ne!(a, b);
+        assert!(outputs.find_output(&b).is_some());
+        // A new picture drops the copy of the old one.
+        store.add_try(&e.id, &png(20, 20), None, 2, "m", "p").unwrap();
+        let saved = store.save(&e.id, &fields("Elias"), Some(&Pick::Try(1)), None, &outputs).unwrap();
+        assert_eq!((saved.stem, saved.sheet_stem), (None, None));
+        assert_eq!(store.output_stem(&e.id, Which::Sheet, &outputs).unwrap(), None);
+    }
+
+    #[test]
+    fn a_film_member_is_saved_with_its_turnaround() {
+        let d = temp();
+        let store = CastStore::new(&d.join("user"));
+        let outputs = crate::workitems::Store::new(&d.join("work"), &d.join("user"));
+        let front = outputs.import(&png(8, 12), 8, 12).unwrap();
+        let sheet = outputs.import(&png(16, 8), 16, 8).unwrap();
+        let pick: Pick = serde_json::from_value(json!({ "outputs": { "picture": front, "sheet": sheet } })).unwrap();
+        let e = store.create(&fields("Mara")).unwrap();
+        store.save(&e.id, &fields("Mara"), Some(&pick), None, &outputs).unwrap();
+        let dir = store.dir(&e.id).unwrap();
+        assert_eq!(image::open(dir.join("picture.png")).unwrap().width(), 8);
+        assert_eq!(image::open(dir.join("sheet.png")).unwrap().width(), 16);
+        // A picture alone afterwards drops the sheet, which was of the old one.
+        store.save(&e.id, &fields("Mara"), Some(&Pick::Output(front)), None, &outputs).unwrap();
+        assert!(!dir.join("sheet.png").exists());
     }
 }

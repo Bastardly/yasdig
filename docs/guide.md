@@ -556,6 +556,26 @@ been deleted from the cast since, the prompt that ran comes back instead, every 
 written out, and no chips. A PNG carries the cast by name, and dropping it here finds
 them in your cast by the same names.
 
+**In a clip**: every **Choose…** that picks a picture or a sound from Outputs — a
+shot's references and sounds, a first frame, the References dialog — has a **Cast**
+source beside Current and Favorites. Picking an entry hands over its picture (or, for
+sounds, its voice) as an output copy, made once and kept in Outputs. A character picked into a
+shot's References brings their voice too: it is added to the shot's Sounds as their
+voice, and their name goes in the picture's name and in *Who is in it*. A voice picked
+in Sounds from the cast gets *Voice of* filled in the same way.
+
+Without a film, the Video tab's **Cast** panel is the clip's cast: whoever the shots'
+references name. Its **Add from cast…** puts a saved member on every shot that starts
+fresh — shot 1 and each cut — as a reference, a voice and a name; **Remove** takes them
+off every shot. That works on MiniMax H3, the model that follows references.
+
+**In a film**: the Video tab's Cast panel has **Add from cast…**, which brings a saved
+entry into the Assistant's film with its look, picture, turnaround and voice — the film
+never draws them again. Each member has **Save to cast…**, which opens the cast editor
+filled from them. And the Assistant knows your cast: a storyboard that has Elias in it
+uses your Elias — the name as you saved it, the look word for word, and the pictures
+and voice with them.
+
 From any picture, **Save as cast…** in the Refine & adjust dialog's rail opens the
 editor with that picture, as you see it, ready to be named.
 
