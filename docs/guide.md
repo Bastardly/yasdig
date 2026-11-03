@@ -513,6 +513,38 @@ for an upload, the one picked on the Image tab). Hi-res stays on the Image tab; 
 start a real pass from a saved picture at a strength you choose, pick it in the
 **Image to image** panel.
 
+
+## Cast
+
+The **Cast** tab keeps someone or something under a name — a character, a place, a
+prop — so a picture or a clip can have them again. Each entry is a name, a **look**
+(how they look, in words), a picture, and for a character a turnaround sheet and a
+voice. They live in `user/cast/`, one folder each, which nothing sweeps: *Close
+server*'s clear never reaches them, so there is no Favorites shelf here.
+
+**New cast…** opens the cast editor. Give it a name and write the look starting with
+that name — *"Elias is a weathered cowboy in his late 40s, with a lean but strong
+build…"* — then **Draw**. On a model that follows reference pictures (the Kleins), a
+character gets a **turnaround sheet** first — front, three-quarter, side and back — and
+the picture is drawn from it, so the two are one person. **Draw again** adds another
+try to the strip under the picture rather than replacing it; click a try to pick it.
+**Save** keeps the picked one and drops the rest; **Discard** (or closing, which asks
+first) drops them all. **Choose…** and **Upload…** use a picture of your own instead.
+Save waits until there is a picture: an entry is always saved with one.
+
+The picture is drawn from the look, framed for the kind: a character alone and whole
+on a plain background, a place as a wide view with nobody in it, a prop on its own.
+
+In a prompt, write the name: *"Elias lights a cigar while looking at Sally."*
+Two saved entries never share a name, since that is how they are found.
+
+From any picture, **Save as cast…** in the Refine & adjust dialog's rail opens the
+editor with that picture, as you see it, ready to be named.
+
+The tab has the grids' **Click to open / Click to delete** toggle, and **All /
+Characters / Places / Props** filter it. Each try is a generation like any other, so
+it is also in the Image tab's Current grid.
+
 ## Refine
 
 A click on the picture — or a picture opened on the Outputs tab — opens **Refine &

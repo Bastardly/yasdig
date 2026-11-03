@@ -57,6 +57,9 @@ pub enum Kind {
     /// round, a pass — a step at a time, giving way between steps as a loop
     /// does, until the chat has nothing next.
     Agent,
+    /// One try in the cast editor: a picture, or a turnaround and the picture
+    /// drawn from it. One job, so a Stop kills it.
+    Cast,
 }
 
 impl Kind {

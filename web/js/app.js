@@ -18,6 +18,8 @@ import { initJobs, jobCount } from './jobs.js';
 import { initBusy } from './busy.js';
 import { initWorkItems, loadWorkItems, markGrid } from './workitems.js';
 import { initOutputs, loadOutputs } from './outputs.js';
+import { initCast, loadCast } from './cast.js';
+import { initCastEditor } from './casteditor.js';
 import { initVideo, layoutVideoTab } from './video.js';
 import { initAssistants, mountAssistant } from './assistant.js';
 import { initBoard } from './board.js';
@@ -57,6 +59,7 @@ function showTab(name) {
   }
   $('tab-image').hidden = name !== 'image';
   $('tab-outputs').hidden = name !== 'outputs';
+  $('tab-cast').hidden = name !== 'cast';
   $('tab-video').hidden = name !== 'video';
   $('tab-convert').hidden = name !== 'convert';
   $('tab-getmodels').hidden = name !== 'getmodels';
@@ -66,6 +69,8 @@ function showTab(name) {
   if (name === 'image') layoutImageTab();
   if (name === 'video') layoutVideoTab();
   if (name === 'settings') layoutSettingsTab();
+  // Re-read on entry: a storyboard or another browser tab may have added one.
+  if (name === 'cast') loadCast();
   // Nothing is playing on a tab nobody is looking at. A 24 fps canvas timer is
   // cheap but it is not free, and it would go on redrawing all night.
   if (name !== 'video') stopPlayback();
@@ -186,6 +191,9 @@ initImage();
 initRedraw();
 initWorkItems();
 initOutputs();
+initCast();
+// After initViewer(): Refine & adjust's *Save as cast* is its button.
+initCastEditor();
 initVideo();
 // After both tabs, whose panels they are: the Image tab's controls are an
 // Image chat's settings.

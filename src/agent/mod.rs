@@ -563,12 +563,12 @@ fn board_picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, step
 
 /// A character's turnaround: the angles the person asked for, one figure
 /// each, so every later picture has a side to follow.
-const SHEET: &str = "Character turnaround sheet: the same person shown four times side by side on one plain light grey \
+pub(crate) const SHEET: &str = "Character turnaround sheet: the same person shown four times side by side on one plain light grey \
                      background, full body and standing — front view, three-quarter view, side view in profile, back \
                      view. The same face, hair and clothes in every view, even light, no text.";
 
 /// A front picture drawn from that sheet.
-const FRONT: &str = "The person in the reference picture, alone, seen from the front, full body and standing, on a plain \
+pub(crate) const FRONT: &str = "The person in the reference picture, alone, seen from the front, full body and standing, on a plain \
                      light grey background.";
 
 /// A prompt with the film's look after it.
@@ -594,7 +594,7 @@ fn keyframe_prompt(film: &chat::Film, shot: &chat::FilmShot) -> String {
     parts.join("\n\n")
 }
 
-fn with_look(text: &str, every: &str) -> String {
+pub(crate) fn with_look(text: &str, every: &str) -> String {
     match (text.trim(), every.trim()) {
         (t, "") => t.to_string(),
         ("", e) => e.to_string(),
@@ -618,7 +618,7 @@ fn board_settings(chat: &chat::Chat, film: &chat::Film) -> serde_json::Value {
 /// A picture's size at `aspect` (width over height): the image model's own
 /// pixel count, so it draws at the size it knows. A clip fits a keyframe
 /// to its own size.
-fn board_size(cfg: &Config, settings: &serde_json::Value, aspect: f64) -> Option<(u32, u32)> {
+pub(crate) fn board_size(cfg: &Config, settings: &serde_json::Value, aspect: f64) -> Option<(u32, u32)> {
     let template = settings.get("template").and_then(|t| t.as_str()).unwrap_or("");
     let p = cfg.registry().get(template).cloned()?;
     let get = |k: &str, d: u32| settings.get(k).and_then(|v| v.as_u64()).map_or(d, |v| v as u32);
@@ -643,31 +643,7 @@ struct Pic {
 /// One picture on `settings`, kept in the chat and saved to Outputs.
 /// Returns it and its stem.
 fn draw(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, settings: &serde_json::Value, pic: &Pic) -> Result<(ImageRef, String)> {
-    let mut settings = settings.clone();
-    with_turbo(engine.cfg(), &mut settings);
-    // A new chat's settings are its model alone, with no prompt yet.
-    if let Some(o) = settings.as_object_mut() {
-        o.insert("prompt".into(), pic.prompt.clone().into());
-    }
-    let mut dto: crate::GenerateDto =
-        serde_json::from_value(settings).context("the chat's settings aren't a generate request")?;
-    dto.seed = Some((rand_seed() & 0x7fff_ffff) as i64);
-    dto.count = Some(1);
-    dto.looping = false;
-    dto.update_only = false;
-    dto.after = Default::default();
-    if let Some((w, h)) = pic.size {
-        dto.width = Some(w);
-        dto.height = Some(h);
-    }
-    if !pic.refs.is_empty() {
-        dto.references = Some(pic.refs.clone());
-    }
-    let (plan, _) = dto.run_plan();
-    let crate::Start::Generate(req) = plan.start else {
-        bail!("a storyboard picture is a generate");
-    };
-    let r = engine.run_in(&req, false, Slot::Agent)?;
+    let r = draw_one(engine, settings, &pic.prompt, pic.size, &pic.refs, Vec::new())?;
     let work_id = r.work_id.clone().ok_or_else(|| anyhow!("the picture wasn't archived"))?;
     let items = crate::workitems::Store::new(&engine.cfg().base_dir.join("work"), &engine.cfg().user_dir());
     let trace = crate::workitems::AgentTrace { chat: chat.id.clone(), title: chat.title.clone(), round: 0, reason: pic.reason.clone() };
@@ -678,6 +654,47 @@ fn draw(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, settings: &se
     let picture = ImageRef { kind: "item".into(), id: work_id.clone(), file: pic.file.clone(), seed: Some(r.seed) };
     let stem = picture_output(engine.cfg(), store, &chat.id, &picture)?;
     Ok((picture, stem))
+}
+
+/// One picture drawn on `settings` (a `/generate` body: a chat's, or a cast
+/// entry's model alone) at a new seed, in `Slot::Agent` so it never takes the
+/// Image tab's picture. `refs` are output stems, `ref_paths` files that aren't
+/// (`GenRequest::ref_paths`). The storyboard's pictures and the cast editor's
+/// tries both come through here.
+pub(crate) fn draw_one(
+    engine: &mut Engine,
+    settings: &serde_json::Value,
+    prompt: &str,
+    size: Option<(u32, u32)>,
+    refs: &[String],
+    ref_paths: Vec<PathBuf>,
+) -> Result<crate::pipeline::GenResult> {
+    let mut settings = settings.clone();
+    with_turbo(engine.cfg(), &mut settings);
+    // A new chat's settings are its model alone, with no prompt yet.
+    if let Some(o) = settings.as_object_mut() {
+        o.insert("prompt".into(), prompt.into());
+    }
+    let mut dto: crate::GenerateDto =
+        serde_json::from_value(settings).context("the settings aren't a generate request")?;
+    dto.seed = Some((rand_seed() & 0x7fff_ffff) as i64);
+    dto.count = Some(1);
+    dto.looping = false;
+    dto.update_only = false;
+    dto.after = Default::default();
+    if let Some((w, h)) = size {
+        dto.width = Some(w);
+        dto.height = Some(h);
+    }
+    if !refs.is_empty() {
+        dto.references = Some(refs.to_vec());
+    }
+    let (plan, _) = dto.run_plan();
+    let crate::Start::Generate(mut req) = plan.start else {
+        bail!("a picture drawn alone is a generate");
+    };
+    req.ref_paths = ref_paths;
+    engine.run_in(&req, false, Slot::Agent)
 }
 
 /// A chat's picture as an output, saved there if it isn't one: its stem.

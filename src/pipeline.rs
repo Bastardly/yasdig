@@ -398,6 +398,11 @@ pub struct GenRequest {
     /// A named sigma schedule (`config::SIGMA_PRESETS`), sent with a turbo
     /// LoRA; empty or absent is sd.cpp's own. See [`Profile::sigmas`].
     pub sigmas: Option<String>,
+    /// Reference pictures by path, staged ahead of `references`: files that
+    /// aren't outputs, such as a cast entry's turnaround sheet (`crate::cast`).
+    /// Never on the wire and never retained — `references` is what a sidecar
+    /// records — so only server-side callers set it.
+    pub ref_paths: Vec<PathBuf>,
 }
 
 /// One image-to-image generation: a source image the user supplied instead of a
@@ -1664,11 +1669,20 @@ impl Engine {
         // tokens like the image does, so a phone photo would be several images'
         // worth of memory and time. Resolved before the render, so a deleted
         // output fails now rather than after it.
+        if !req.ref_paths.is_empty() && !tpl.family.takes_references() {
+            bail!("'{}' can't follow a reference picture", tpl.name);
+        }
+        if req.ref_paths.len() + tpl.references.len() > crate::config::MAX_REFERENCES {
+            bail!("at most {} reference images", crate::config::MAX_REFERENCES);
+        }
+        let mut sources = req.ref_paths.clone();
+        for stem in &tpl.references {
+            sources.push(self.output_source(stem)?);
+        }
         let mut refs = Vec::new();
-        for (i, stem) in tpl.references.iter().enumerate() {
-            let src = self.output_source(stem)?;
+        for (i, src) in sources.iter().enumerate() {
             let dst = scratch.path(self.scratch.join(format!("{id}-0-ref{}.png", i + 1)));
-            stage_reference(&src, &dst, tpl.width.max(tpl.height))?;
+            stage_reference(src, &dst, tpl.width.max(tpl.height))?;
             refs.push(dst);
         }
 

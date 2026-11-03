@@ -620,6 +620,34 @@ needs a Vulkan device and nothing else.
 - `POST /videos/delete` — `{ "ids": ["…"] }`. Removes each clip's whole directory from
   `work/videos/`; a starred clip is out of its reach.
 
+### The cast
+
+Saved characters, places and props (`user/cast/{id}/`, `src/cast.rs`). Every route but
+`/cast/draw` reads or writes files and answers at once; a draw queues (kind `cast`) and
+answers when its try is drawn.
+
+- `GET /cast` — `[{id, name, kind, look, image_model, seed?, draft, tries:
+  [{n, seed, sheet, model, prompt}], rev, picture, sheet, voice}]`, saved entries by
+  name, then drafts. `kind` is `character`, `place` or `thing` (shown as *Prop*);
+  `picture`/`sheet`/`voice` say which files it has; `rev` moves on every write.
+- `GET /cast/{id}` — one entry, the same shape.
+- `GET /cast/{id}/picture.png`, `sheet.png`, `thumb.png`, `voice.wav`, and
+  `/cast/{id}/tries/{n}.png` (`{n}-sheet.png` beside a try drawn with a turnaround).
+- `POST /cast/new` — `{name, kind, look, image_model}`: a draft, its folder
+  made, so the tries of a new entry have somewhere to go.
+- `POST /cast/draw` — `{id, name, kind, look, image_model, turnaround}`: one
+  try into the entry's `tries/`, drawn from the look sent (the entry's own fields
+  change only on save). `turnaround` on a character with a model
+  that takes references draws a 2:1 sheet first and the picture from it. Answers the
+  entry.
+- `POST /cast/save` — `{id?, name, kind, look, image_model, picture?, voice?}`.
+  `picture`: `{"try": n}` or `{"output": "stem"}` (copied in); absent keeps the one
+  there. `voice`: `{"output": "stem"}` (a `.wav` output) or `"remove"`. Empties
+  `tries/` and clears `draft`. No `id` saves a new entry. Refused with a 400 when the
+  name is empty, another saved entry has it (case aside), or it would have no picture.
+- `POST /cast/discard` — `{id}`: a draft is deleted, a saved entry loses its tries.
+- `POST /cast/delete` — `{ids: ["…"]}`: each entry's folder.
+
 ### The agent
 
 The Assistant panels' chats (`work/chats/{id}/`, starred ones in `user/favorite_chats/`),

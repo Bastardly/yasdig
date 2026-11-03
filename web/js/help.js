@@ -306,6 +306,25 @@ export const TOPICS = [
       it uses the image itself as reference 1.</p>`,
   },
   {
+    id: 'cast',
+    title: 'Cast',
+    html: `
+      <h2>Cast</h2>
+      <p>The <b>Cast</b> tab keeps characters, places and props under a name, to have
+      them again in other pictures and clips. <b>New cast…</b> opens the editor:
+      a name, how they look in words, and a picture drawn from it.</p>
+      <p>Write the look starting with the name, then what a stranger would need to
+      draw it:</p>
+      <p><i>Name: Elias<br>"Elias is a weathered cowboy in his late 40s, with a lean
+      but strong build, a grey stubble and a sun-bleached leather hat."</i></p>
+      <p>Then use the name in a prompt: <i>"Elias lights a cigar while looking at
+      Sally."</i></p>
+      <p><b>Draw again</b> keeps every try in a strip; <b>Save</b> keeps the one you
+      picked. On a Klein a character gets a turnaround sheet first, and the picture is
+      drawn from it. <b>Save as cast…</b> in the Refine &amp; adjust dialog starts
+      an entry from the picture you are looking at.</p>`,
+  },
+  {
     id: 'redraw',
     title: 'Refine & adjust',
     html: `

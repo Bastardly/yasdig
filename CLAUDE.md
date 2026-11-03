@@ -487,6 +487,48 @@ traps are in its header (`Conv3XC` folded from training weights; SPAB's inplace 
 Page: `loadUpscalers` starts **before** `loadModels`' first `await` (Settings awaits
 `upscalersReady`). `upscalerOptions` excludes "(missing)" entries.
 
+## Cast
+
+`user/cast/{id}/` (`src/cast.rs`, `web/js/cast.js`, `web/js/casteditor.js`): named
+characters, places and props — a film's `Member` with a life of its own (`MemberKind`
+reused; the page labels `thing` *Prop*). `cast.json`, `picture.png`, `sheet.png`,
+`voice.wav`, `thumb.png`, `tries/`. Under `user/`: nothing sweeps it, so no Favorites
+shelf, and Close server's clear never reaches it.
+
+- **An entry copies in, never adopts.** A picture or voice from Outputs is copied into
+  its folder (`CastStore::save`); deleting either side never breaks the other.
+- **Tries are the only thing a draw writes.** `/cast/draw` adds `tries/{n}.png` on the
+  fields it is sent; the record's fields change only on `/cast/save`, which keeps the
+  picked try and empties `tries/`. A new entry is a `draft` folder from its first draw
+  (`/cast/new`), so tries survive a reload; `discard` deletes a draft, only empties a
+  saved one's tries. `next_try` never goes back, so a cached try URL never shows
+  another picture.
+- **A name is a key**: prompts and storyboards find an entry by it, so `save` refuses a
+  name another saved entry has (case aside). Drafts don't count.
+- **Every saved entry has a picture** (`save` refuses one without; the page's Save is
+  disabled until a try or a picture of the person's own is shown). The picture is
+  drawn from the look (`derived_prompt`) — there is no separate picture prompt, by the
+  user's call: it was the look said twice.
+- **`CastStore::dir` is the only id → path**, through `valid_id`; one `LOCK` over
+  record writes (the worker adds a try while the connection thread may save).
+- **Drawing is the film's code** (`agent::draw_one`, shared with the storyboard's
+  pictures; `SHEET`/`FRONT`/`board_size` are `pub(crate)`): a character on a
+  `takes_references` model draws the 2:1 sheet, then the picture with the sheet as a
+  reference **by path** (`GenRequest::ref_paths`, staged ahead of `references` and
+  counted against `MAX_REFERENCES`, never on the wire or retained). The sheet goes
+  through scratch, since sd-cli may only be handed paths under a sandbox root. Kept
+  from the work item's raw PNG, not `GenResult.png` (sharpened).
+- **Each try is a work item** in Current, like a storyboard picture (`run_in`,
+  `Slot::Agent`, so it never takes the Image tab's picture).
+- `Work::CastDraw` / `Kind::Cast` answer on their request (`enqueue_wait`); the editor's
+  Draw becomes Stop (`stopKind('cast')`), and Discard stops a draw before deleting its
+  folder.
+
+Page: the editor holds `cur = {id, entry, pick, voice}` and sends nothing but a draw
+until Save; `pick` is `{try}`, `{output}` or `null` (keep), the wire shape
+of `cast::Pick`. Refine & adjust's *Save as cast…* (`#lbcast`) goes through
+`/download-image` and `/upload`, so the entry copies an output in like any other.
+
 ## Favourites
 
 `user/favorite/` holds the same three files as `work/workitems/`, same ids, via
@@ -1186,9 +1228,10 @@ the stem** (one stem, one picture), keeps the mtime (grid order), rebuilds each 
 and leaves the sidecar; the page cache-busts the tile (`edited` in `outputs.js`).
 
 - **Deleting is `gridmark.js`**, shared with the work-item grid.
-  **Delete all = the same request with every id.** One of six `confirm()`s
-  (with Close server, Jobs Stop/Remove, the Outputs viewer's unsaved edit, redrawing a film's first frame, and
-  deleting the Assistant's chat — the panel has no click-to-delete grid).
+  **Delete all = the same request with every id.** One of seven `confirm()`s
+  (with Close server, Jobs Stop/Remove, the Outputs viewer's unsaved edit, redrawing a film's first frame,
+  deleting the Assistant's chat — the panel has no click-to-delete grid — and closing the cast editor
+  with tries unsaved).
 - **`outputGrid` is the one tile** (`height`, `empty`, `onPick`, optional `star`); height must match
   `.wigrid`.
 - **Arrow keys yield to a focused range input**; listener on `document`.
@@ -1240,6 +1283,7 @@ only `js/app.js`.
 | `redraw.js` | the dialog's passes: the Refine panel, Scale, the mask, Compare |
 | `refs.js` | References button and dialog (borrowed by a Video cut shot, `editRefs`) |
 | `outputs.js` | `fetchOutputs`, `outputGrid`, Outputs tab |
+| `cast.js` / `casteditor.js` | Cast tab, `castTile`; the cast editor (`openCastEditor`, `KIND_LABEL`) |
 | `video.js` / `player.js` | Video tab; canvas frame player, `renderClip` |
 | `shots.js` | which Shots rows the clip on the stage has (`shotState`) |
 | `clipview.js` / `export.js` | the clip dialog; Download's WebCodecs encode |

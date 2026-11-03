@@ -16,6 +16,7 @@
     <button type="button" class="btn btn-choice tab active" data-tab="image">Image</button>
     <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
     <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
+    <button type="button" class="btn btn-choice tab" data-tab="cast">Cast</button>
     <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
     <button type="button" class="btn btn-choice tab" data-tab="getmodels">Get models</button>
     <button type="button" class="btn btn-choice tab" data-tab="help">Help</button>
@@ -564,6 +565,35 @@
   </div>
   </div>
 
+  <!-- ==================== Cast ==================== -->
+  <!-- The cast library (cast.js): characters, places and props saved under a
+       name, to reuse in pictures, clips and storyboards. One shelf, under
+       user/cast/, which nothing sweeps — so no Favorites: everything here was
+       kept on purpose. A tile opens the cast editor. -->
+  <div class="layout" id="tab-cast" hidden>
+  <div class="card col-full">
+    <div class="wihead">
+      <b>Cast</b>
+      <span class="wishelf" id="ctkinds">
+        <button type="button" class="btn btn-choice active" data-kind="">All</button>
+        <button type="button" class="btn btn-choice" data-kind="character">Characters</button>
+        <button type="button" class="btn btn-choice" data-kind="place">Places</button>
+        <button type="button" class="btn btn-choice" data-kind="thing">Props</button>
+      </span>
+      <span class="wimodes">
+        <label><input type="radio" name="ctmode" value="open" checked> Click to open</label>
+        <label><input type="radio" name="ctmode" value="delete"> Click to delete</label>
+      </span>
+      <button type="button" id="ctrefresh" class="btn">Refresh</button>
+      <button type="button" id="ctnew" class="btn">New cast…</button>
+      <button id="ctdelete" class="btn btn-danger" hidden></button>
+    </div>
+    <div class="sub">user/cast/ — someone or something to keep the same from picture to picture. Use them by name in a prompt.</div>
+    <div id="cterr" class="err"></div>
+    <div id="ctgrid" class="wigrid castgrid"></div>
+  </div>
+  </div>
+
   <!-- ==================== Video ==================== -->
   <!-- The Video tab is a workspace like the Image tab: a rail (Stop and
        Generate clip at its foot), the clip playing on the stage, floating
@@ -1109,6 +1139,10 @@
            is what most visits end with; neutral. -->
       <button type="button" id="lbdownload" class="btn btn-block"
         title="Save the picture as you see it to your computer, at full size, with its settings in the PNG when Settings says so.">Download</button>
+      <!-- The picture as shown, as a new cast entry's picture (casteditor.js):
+           the editor opens on it, to be named and described. -->
+      <button type="button" id="lbcast" class="btn btn-block"
+        title="Keep someone or something in this picture as a cast entry, to reuse by name in other pictures and clips.">Save as cast…</button>
       <!-- The Image tab's keep-this-one, and the rail's main action there
            (amber): what is on screen into work/output/, look and all. Only
            generations are archived on their own. Shown from the start, since
@@ -1610,6 +1644,68 @@
       queued behind it after each image.</p>
     <ul id="jobslist" class="joblist"></ul>
     <div id="jobserr" class="err"></div>
+  </div>
+</dialog>
+<!-- The cast editor (casteditor.js): one entry, made or changed. Draw keeps
+     every try in the strip until Save keeps the one picked; Discard drops
+     them (and a new entry that was never saved). -->
+<dialog id="castdlg" aria-labelledby="cetitle">
+  <div class="jobsbox">
+    <div class="wihead">
+      <b id="cetitle">New cast</b>
+      <span id="cedraft" class="sub"></span>
+      <button type="button" id="ceclose" class="btn">Close</button>
+    </div>
+    <div class="cebody">
+      <div class="cepics">
+        <div class="cemain">
+          <img id="cepic" alt="" hidden>
+          <img class="livepreview" alt="" hidden>
+          <span id="cenopic" class="sub">No picture yet: draw one from its look, or choose one of yours.</span>
+        </div>
+        <img id="cesheet" class="cesheet" alt="" title="From every side: what pictures of them follow" hidden>
+        <div id="cetries" class="cetries"></div>
+        <div class="btnrow">
+          <button type="button" id="cedraw" class="btn">Draw</button>
+          <button type="button" id="cepick" class="btn" title="A picture from Outputs">Choose…</button>
+          <button type="button" id="ceupload" class="btn" title="A picture from this computer">Upload…</button>
+        </div>
+        <input type="file" id="cefile" accept="image/*" hidden>
+      </div>
+      <div class="cefields">
+        <label for="cename">Name</label>
+        <input type="text" id="cename" maxlength="60" placeholder="Elias" autocomplete="off">
+        <span class="grouphead">Kind</span>
+        <span class="wishelf" id="cekind">
+          <button type="button" class="btn btn-choice active" data-kind="character">Character</button>
+          <button type="button" class="btn btn-choice" data-kind="place">Place</button>
+          <button type="button" class="btn btn-choice" data-kind="thing">Prop</button>
+        </span>
+        <label for="celook">Look</label>
+        <textarea id="celook" rows="4" placeholder="Elias is a weathered cowboy in his late 40s, with a lean but strong build, a grey stubble and a sun-bleached leather hat."></textarea>
+        <p class="sub">Start with the name, then what a stranger would need to draw it: age, build, face, hair, clothes and their colours; for a place, what is in it and the light. The picture is drawn from this. In a prompt, use the name — “Elias lights a cigar while looking at Sally.”</p>
+        <label for="cemodel">Draw with</label>
+        <select id="cemodel"></select>
+        <label class="checks" id="ceturnrow" title="A sheet of them from the front, three-quarter, side and back, then the picture drawn from it: one person on every side"><input type="checkbox" id="ceturn" checked> Turnaround sheet first</label>
+        <div id="cevoicerow">
+          <span class="grouphead">Voice</span>
+          <div class="btnrow">
+            <span class="sub" id="cevoicetext">None</span>
+            <button type="button" id="cevoiceplay" class="btn" hidden>Play</button>
+            <button type="button" id="cevoicepick" class="btn" title="A sound from Outputs">Choose…</button>
+            <button type="button" id="cevoiceup" class="btn" title="A sound from this computer">Upload…</button>
+            <button type="button" id="cevoicenone" class="btn" hidden>Remove</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="ceprog" class="sub"></div>
+    <div id="ceerr" class="err"></div>
+    <div class="btnrow cefoot">
+      <span class="grow"></span>
+      <button type="button" id="cediscard" class="btn">Discard</button>
+      <button type="button" id="cesave" class="btn btn-run" title="Draw it first, or choose a picture of your own">Save</button>
+    </div>
   </div>
 </dialog>
 <dialog id="picker">

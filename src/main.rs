@@ -121,6 +121,7 @@ mod agents;
 mod area;
 mod avi;
 mod brush;
+mod cast;
 mod colorrange;
 mod bundle;
 mod config;
@@ -287,6 +288,9 @@ enum Work {
     ExtendClip(pipeline::ExtendClipRequest),
     /// One leg of an agent chat, a step per ticket (`agent::step`).
     Agent { chat: String },
+    /// One try in the cast editor (`cast::draw`): a picture, or a turnaround
+    /// sheet and the picture drawn from it.
+    CastDraw(cast::DrawRequest),
 }
 
 impl Work {
@@ -306,7 +310,8 @@ impl Work {
             | Work::Convert(_)
             | Work::EnlargeClip { .. }
             | Work::ExtendClip(_)
-            | Work::Agent { .. } => None,
+            | Work::Agent { .. }
+            | Work::CastDraw(_) => None,
         }
     }
 }
@@ -694,6 +699,7 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
                 .and_then(|r| json_body(&r)),
         ),
         Work::ExtendClip(req) => queue.finish(t.id, engine.extend_clip(&req).and_then(|r| json_body(&r))),
+        Work::CastDraw(req) => queue.finish(t.id, cast::draw(engine, &req)),
         Work::Agent { chat } => match agent::step(engine, queue, &chat, t.id) {
             Ok(true) => {
                 queue.image_done(t.id);
@@ -858,6 +864,10 @@ fn route(
         }
     }
 
+    // The Cast tab and its editor (`cast::route`).
+    if let Some(r) = cast::route(conn, &req.method, &req.path, &req.body, cfg, lanes) {
+        return r;
+    }
     // The Assistant panels' (`agent::routes`): chats, their pictures, a turn.
     if let Some(r) = agent::routes::route(conn, &req.method, &req.path, &req.body, cfg, lanes, monitor) {
         return r;
@@ -2499,6 +2509,7 @@ impl GenerateDto {
             parts: dto.parts,
             layout: dto.layout,
             sigmas: dto.sigmas,
+            ref_paths: Vec::new(),
         };
         (RunPlan { start: Start::Generate(req), after, escalate }, total)
     }

@@ -115,6 +115,7 @@
                             doing the same job on two tabs */
   --thumb-h-pick: 140px; /* the first-frame picker */
   --thumb-h-chosen: 120px; /* the one chosen image, above its buttons */
+  --thumb-h-try: 72px;   /* a try in the cast editor's strip */
   --star: 28px;          /* the favourite star's disc on a thumbnail */
   --chat-pic: 160px;     /* a picture in the conversation, its height */
   --story-pic: 144px;    /* a cast picture or a keyframe in the Story panel, its width */
@@ -587,6 +588,49 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 }
 #picker::backdrop { background: var(--scrim-soft); }
 #picker .wigrid img { height: var(--thumb-h-pick); }
+
+/* ============================ Cast ============================ */
+
+/* A cast tile: the picture, and the name and kind under it — a library is
+   found by name, so the caption is part of the tile, unlike a work item's. */
+.wigrid button.casttile { display: grid; justify-items: start; gap: var(--sp-1); line-height: var(--lh-body); padding: 0 0 var(--sp-1); background: none; color: var(--text); text-align: left; }
+.casttile .castcap { padding: 0 var(--sp-1); max-width: 100%; }
+.casttile .castcap b { display: block; font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.casttile .castcap .sub { font-size: var(--fs-micro); }
+/* One that is words only: its first letter where the picture would be. */
+.castletter {
+  display: grid; place-items: center; background: var(--ink-600); border-radius: var(--r-sm);
+  font-size: var(--fs-display); color: var(--text-dim);
+}
+
+/* The cast editor: the pictures beside the words, one column when narrow. */
+#castdlg {
+  width: min(920px, 94vw); max-height: 92vh; padding: 0; border: var(--line); border-radius: var(--r-lg);
+  background: var(--ink-700); color: var(--text);
+}
+#castdlg::backdrop { background: var(--scrim-soft); }
+.cebody { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--sp-4); margin-top: var(--sp-3); }
+@media (max-width: 899px) { .cebody { grid-template-columns: minmax(0, 1fr); } }
+/* The picture and the live preview of a draw share one cell. */
+.cemain {
+  display: grid; place-items: center; min-height: 240px;
+  background: var(--ink-800); border-radius: var(--r-md);
+}
+.cemain > * { grid-area: 1 / 1; }
+.cemain img { max-width: 100%; max-height: 46vh; display: block; border-radius: var(--r-sm); }
+.cemain .sub { padding: var(--sp-4); text-align: center; }
+.cesheet { display: block; width: 100%; margin-top: var(--sp-2); border-radius: var(--r-sm); }
+.cetries { display: flex; flex-wrap: wrap; gap: var(--gap-thumbs); margin-top: var(--sp-2); }
+.cetries button { line-height: 0; padding: 0; border: 2px solid transparent; border-radius: 6px; background: none; }
+.cetries button.active { border-color: var(--state); }
+.cetries img { height: var(--thumb-h-try); width: auto; display: block; border-radius: var(--r-sm); }
+.cefields > label, .cefields > .grouphead { display: block; margin-top: var(--sp-3); }
+.cefields > label:first-child { margin-top: 0; }
+.cefields input[type="text"], .cefields textarea, .cefields select { width: 100%; }
+.cefields .fold { margin-top: var(--sp-3); }
+.cefields .btnrow { align-items: center; flex-wrap: wrap; }
+.cefoot { margin-top: var(--sp-3); align-items: center; }
+.cefoot .grow { flex: 1; }
 
 /* The job queue. Narrow — a list of one-line rows — and the box inside it
    carries the padding, so a click on the dialog element itself can only be a
