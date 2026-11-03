@@ -3,6 +3,44 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## 0.7.0 — 2026-11-03
+
+### Added
+
+- **Cast**: characters, places and props saved under a name — Elias, Dark Ruins, the
+  Magic Sword — each with how they look in words, a picture, and for a character a
+  turnaround sheet and a voice. A new **Cast** tab lists them, filtered by kind; the
+  cast editor makes them. Write the look starting with the name and press **Draw**:
+  on a model that follows reference pictures (the Kleins) a character gets a turnaround
+  sheet first — front, three-quarter, side and back — and the picture is drawn from it,
+  so the two are one person. **Draw again** keeps every try in a strip; **Save** keeps
+  the one you picked. A picture of your own works too, and Refine & adjust has
+  **Save as cast…**. Kept in `user/cast/`, which *Close server* never clears.
+- **The cast in a picture**: the Image tab's Prompts panel has a **Cast** row. Pick
+  someone and name them in plain words — *"Elias lights a cigar while looking at
+  Sally"*. **Words** puts their look before your prompt, a paragraph each; **Picture**
+  makes their picture (or turnaround) a reference, on a model that takes them. A name
+  you write that is in your cast is offered. Reopening a picture puts the cast back, and
+  a PNG carries it by name.
+- **The cast in a clip**: every *Choose…* for a picture or a sound has a **Cast** source.
+  A character picked into a shot's References brings their voice as that shot's sound,
+  voicing them, and their name. Without a film, the Video tab's Cast panel is the clip's
+  cast: **Add from cast…** puts someone on every shot that starts fresh. MiniMax H3 is
+  the model that follows references and voices.
+- **The cast in a film**: a film's Cast panel has **Add from cast…** and, on each
+  member, **Save to cast…**. A storyboard the Assistant writes uses your cast by name —
+  the look word for word, the pictures and the voice with it, never drawn again.
+- **The Assistant makes cast members**: ask for one (*"make me a character: Elias, a
+  weathered cowboy"*) and it writes the name and look and draws a try, and the cast
+  editor opens on it. Ask for a change (*"make his hat red"*) and it draws another try;
+  your own edits to the words in the editor are what it changes. It never saves.
+  Settings → Agent → *Make cast members* turns it off.
+
+### Changed
+
+- What the Assistant is doing — waiting for the GPU, drawing, writing a storyboard —
+  shows in amber at the foot of the chat while it lasts.
+
 ## 0.6.1 — 2026-11-01
 
 ### Changed
