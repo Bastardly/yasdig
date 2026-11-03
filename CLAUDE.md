@@ -524,6 +524,33 @@ shelf, and Close server's clear never reaches it.
   Draw becomes Stop (`stopKind('cast')`), and Discard stops a draw before deleting its
   folder.
 
+**On the Image tab** (`web/js/castpicks.js`, the Prompts panel's Cast row):
+`Profile.cast: Vec<CastPick {id, name, words, picture}>`, request-only like
+`references`, on `GenRequest`/`Img2ImgRequest` and both DTOs.
+
+- **Composed on the server** (`cast::resolve` → `cast::compose`, in `Engine::run` and
+  `img2img` right after `variables::expand`): the words picks' looks
+  (`cast::look_paragraph`, shared with the storyboard's `keyframe_prompt`) lead the
+  rolled prompt, a paragraph each. `Pending.prompt`/the work item hold the composed
+  text, so passes and sidecars see what ran; `typed_prompt` (variables' mechanism —
+  it differs, so it is kept) is what goes back in the box.
+- **Picture picks are references by path** (a character's `sheet.png`, else
+  `picture.png`), staged ahead of `ref_paths` and `references`; `Profile::validate`
+  counts them into `MAX_REFERENCES` and refuses them off a references family.
+  `img2img` clears every picture flag (no references there); an agent model switch
+  (`knobs::write`) does too.
+- **`resolve` fills `name`** onto the retained picks. The PNG record carries picks
+  **without ids** (`EmbeddedProfile::of`); `pngmeta::read` finds each by name in
+  `Install.cast`. **One missing → none**: chips cleared and `typed_prompt` dropped, so
+  the box gets the composed prompt, every look written out. `applyWorkItem` does the
+  same when `setCastPicks` finds an id gone. Never chips beside a composed prompt (a
+  look twice) or a short prompt with no chips (a look lost).
+- **Names in the prompt are offered, never picked** (`castnames.js`, pure, tested):
+  whole word, case kept, so a member named "Rain" isn't found in "rain".
+- The row's chip changes fire a bubbling `change` on `#castchips` for the tab's
+  delegated listener (summaries, loop, an Image chat's settings); `syncSummaries`
+  calls `syncCastPicks` (Picture ticks shown only while `refsActive()` and no source).
+
 Page: the editor holds `cur = {id, entry, pick, voice}` and sends nothing but a draw
 until Save; `pick` is `{try}`, `{output}` or `null` (keep), the wire shape
 of `cast::Pick`. Refine & adjust's *Save as cast…* (`#lbcast`) goes through
@@ -1284,6 +1311,7 @@ only `js/app.js`.
 | `refs.js` | References button and dialog (borrowed by a Video cut shot, `editRefs`) |
 | `outputs.js` | `fetchOutputs`, `outputGrid`, Outputs tab |
 | `cast.js` / `casteditor.js` | Cast tab, `castTile`; the cast editor (`openCastEditor`, `KIND_LABEL`) |
+| `castpicks.js` / `castnames.js` | the Image tab's Cast row (`castPayload`, `setCastPicks`); which names a prompt uses, pure |
 | `video.js` / `player.js` | Video tab; canvas frame player, `renderClip` |
 | `shots.js` | which Shots rows the clip on the stage has (`shotState`) |
 | `clipview.js` / `export.js` | the clip dialog; Download's WebCodecs encode |

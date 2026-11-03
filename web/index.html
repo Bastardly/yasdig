@@ -124,6 +124,17 @@
         <input id="negative" placeholder="blurry, low quality">
       </prompt-box>
       <p class="sub" id="negnote" hidden>No negative prompt at CFG 1 — the model ignores it. Raise CFG to use one.</p>
+      <!-- The saved cast this prompt is about (castpicks.js): a chip each,
+           its look leading the prompt (Words) and its picture a reference
+           (Picture, on a model that takes them). The prompt names them as
+           plain words; a name it uses that isn't picked is offered. -->
+      <div class="castrow">
+        <span class="grouphead">Cast</span>
+        <div id="castchips" class="castchips"></div>
+        <p id="castsuggest" class="castsuggest" hidden></p>
+        <p id="castnote" class="err" hidden></p>
+        <button type="button" id="castadd" class="btn" title="Someone or something from the Cast tab: write their name in the prompt">Add cast…</button>
+      </div>
       <!-- Pictures the model looks at while it draws ("the person from image 1"),
            beside the prompt that names them. Shown only for a model that takes
            them — the server says which (`references` on /models). The picks
@@ -1707,6 +1718,16 @@
       <button type="button" id="cesave" class="btn btn-run" title="Draw it first, or choose a picture of your own">Save</button>
     </div>
   </div>
+</dialog>
+<!-- The Image tab's cast row's picker (castpicks.js): the saved cast not in
+     the prompt yet, and a way to make one. -->
+<dialog id="castpickdlg" aria-labelledby="castpicktitle">
+  <div class="wihead">
+    <b id="castpicktitle">Add from the cast</b>
+    <button type="button" id="castpicknew" class="btn">New cast…</button>
+    <button type="button" id="castpickclose" class="btn">Close</button>
+  </div>
+  <div id="castpickgrid" class="wigrid castgrid"></div>
 </dialog>
 <dialog id="picker">
   <div class="wihead">

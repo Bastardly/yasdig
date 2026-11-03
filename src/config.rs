@@ -291,6 +291,24 @@ pub fn memory_args(mode: &str, extra_args: &[String]) -> Vec<&'static str> {
 /// tokens like the image itself, so four is already several images' worth.
 pub const MAX_REFERENCES: usize = 4;
 
+/// A cast entry picked on the Image tab (`crate::cast`): its look leads the
+/// prompt (`words`), its picture is a reference (`picture`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CastPick {
+    /// The entry's folder. Empty in a PNG's record (an id on someone else's
+    /// disk names nothing here): `pngmeta::read` finds it again by `name`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// Its name when the picture was made, filled by the server
+    /// (`cast::resolve`), for the PNG record and for a reader of the sidecar.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    #[serde(default)]
+    pub words: bool,
+    #[serde(default)]
+    pub picture: bool,
+}
+
 /// Every `--scheduler` we pass on, from sd-cli's list
 /// (`src/stable-diffusion.cpp:123`), plus [`AUTO_SCHEDULER`]. Three of its
 /// seventeen are left out: `ltx2`, `logit_normal` and `llada_image` are the
@@ -625,6 +643,14 @@ pub struct Profile {
     /// on the profile so a sidecar names them and a reopen restores them. Only
     /// a family that takes them may carry any ([`ImageFamily::takes_references`]).
     pub references: Vec<String>,
+    /// Cast entries this generation was told about (`crate::cast`), in the
+    /// order their looks lead the prompt. Request-only like `references`, and
+    /// on the profile for their reason: a sidecar names them, a reopen puts
+    /// the chips back. Their looks are already in the stored prompt; a
+    /// picture pick is a reference (`txt2img` alone), so it counts against
+    /// [`MAX_REFERENCES`] with `references` and needs a family that takes them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cast: Vec<CastPick>,
     /// Where things go in the picture, for a family that reads a layout
     /// ([`ImageFamily::takes_layout`]): composed around the prompt per pass, at
     /// that pass's size (`crate::layout`). Request-only like `references`, and
@@ -946,8 +972,22 @@ impl Profile {
                 self.family.label()
             );
         }
-        if self.references.len() > MAX_REFERENCES {
-            bail!("'{}': at most {MAX_REFERENCES} reference images", self.name);
+        let cast_pictures = self.cast.iter().filter(|c| c.picture).count();
+        if cast_pictures > 0 && !self.family.takes_references() {
+            bail!(
+                "'{}': a {} model can't follow a cast picture — untick Picture, or pick a Flux.2 Klein model",
+                self.name,
+                self.family.label()
+            );
+        }
+        if self.references.len() + cast_pictures > MAX_REFERENCES {
+            bail!(
+                "'{}': at most {MAX_REFERENCES} reference images, cast pictures included",
+                self.name
+            );
+        }
+        if let Some(bad) = self.cast.iter().find(|c| !crate::workitems::valid_id(&c.id)) {
+            bail!("'{}': '{}' is not a cast entry", self.name, bad.id);
         }
         // The stem becomes a path (`output_source`), so it goes through the same
         // whitelist every other output stem does.

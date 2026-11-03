@@ -570,6 +570,7 @@ impl Settings {
             // Request-only too, and for the same reason: references are picked
             // per picture.
             references: Vec::new(),
+            cast: Vec::new(),
             // And the layout boxes, drawn per picture.
             layout: None,
             // And a turbo LoRA's schedule, which comes with the LoRA.

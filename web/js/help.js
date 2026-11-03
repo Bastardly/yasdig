@@ -317,8 +317,10 @@ export const TOPICS = [
       draw it:</p>
       <p><i>Name: Elias<br>"Elias is a weathered cowboy in his late 40s, with a lean
       but strong build, a grey stubble and a sun-bleached leather hat."</i></p>
-      <p>Then use the name in a prompt: <i>"Elias lights a cigar while looking at
-      Sally."</i></p>
+      <p>Then add them in the Prompts panel's <b>Cast</b> row and use the name in the
+      prompt: <i>"Elias lights a cigar while looking at Sally."</i> <b>Words</b> puts
+      their look before your prompt; <b>Picture</b> (Kleins only) makes their picture a
+      reference the model follows.</p>
       <p><b>Draw again</b> keeps every try in a strip; <b>Save</b> keeps the one you
       picked. On a Klein a character gets a turnaround sheet first, and the picture is
       drawn from it. <b>Save as cast…</b> in the Refine &amp; adjust dialog starts

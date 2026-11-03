@@ -470,6 +470,13 @@ pub fn write(settings: &mut Value, k: &Knob, v: &Value) {
                 ] {
                     obj.remove(key);
                 }
+                // The cast's looks are the prompt's and stay; its pictures
+                // were references for the old model, and go with them.
+                if let Some(cast) = obj.get_mut("cast").and_then(Value::as_array_mut) {
+                    for c in cast.iter_mut().filter_map(Value::as_object_mut) {
+                        c.insert("picture".into(), Value::Bool(false));
+                    }
+                }
             }
             obj.insert("template".into(), v.clone());
         }
@@ -490,6 +497,14 @@ mod tests {
 
     fn change(v: Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_model_switch_keeps_the_casts_words_but_not_its_pictures() {
+        let mut s = settings();
+        s["cast"] = json!([{"id": "c1", "words": true, "picture": true}]);
+        write(&mut s, knob("model").unwrap(), &json!("flux"));
+        assert_eq!(s["cast"], json!([{"id": "c1", "words": true, "picture": false}]));
     }
 
     #[test]

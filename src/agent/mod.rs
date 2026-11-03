@@ -577,21 +577,13 @@ pub(crate) const FRONT: &str = "The person in the reference picture, alone, seen
 /// several people apart far better this way than with the looks run on after
 /// the action, and each paragraph is one thing for the person to edit.
 fn keyframe_prompt(film: &chat::Film, shot: &chat::FilmShot) -> String {
-    let mut parts: Vec<String> = shot
+    let looks: Vec<String> = shot
         .cast
         .iter()
         .filter_map(|n| film.member(n))
-        .filter(|m| !m.look.trim().is_empty())
-        .map(|m| {
-            let look = m.look.trim();
-            let (l, n) = (look.to_lowercase(), m.name.to_lowercase());
-            let named = l.starts_with(&n) || l.starts_with(&format!("the {n}"));
-            if named { look.to_string() } else { format!("{}: {look}", m.name) }
-        })
+        .filter_map(|m| crate::cast::look_paragraph(&m.name, &m.look))
         .collect();
-    parts.push(with_look(&shot.text, &film.every));
-    parts.retain(|p| !p.is_empty());
-    parts.join("\n\n")
+    crate::cast::compose(&looks, &with_look(&shot.text, &film.every))
 }
 
 pub(crate) fn with_look(text: &str, every: &str) -> String {

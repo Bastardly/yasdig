@@ -89,6 +89,13 @@ needs a Vulkan device and nothing else.
   `references` — output stems, at most 4, for a model that takes reference images
   (Flux.2 and FLUX.3 Klein) — are named in the prompt as image 1, image 2; `[]` is none, and a
   model that doesn't take them refuses any.
+  `cast` — `[{ "id": "…", "words": true, "picture": false }]`, entries from
+  `GET /cast` in the order their looks lead: each `words` pick's look goes before the
+  prompt as a paragraph of its own (the image's stored `prompt` is that composed text,
+  `typed_prompt` the one sent), each `picture` pick's picture (a character's turnaround
+  when it has one) is a reference ahead of `references`, counted in the same 4 and only
+  on a model that takes them. Retained with the image; `/img2img` takes it too, words
+  only. A pick whose entry is gone or not saved is refused.
   The run itself: `count` images (default 1, at most 1000), or `"loop": true` to keep
   going until stopped; a pinned `seed` advances by one per image. There is one loop at
   a time: a `"loop": true` request while one is queued or running replaces its

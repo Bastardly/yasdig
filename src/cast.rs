@@ -383,6 +383,58 @@ pub fn derived_prompt(kind: MemberKind, look: &str) -> String {
     if look.is_empty() { frame.to_string() } else { format!("{look}. {frame}") }
 }
 
+/// A cast member's look as a paragraph of a prompt: the look as written when
+/// it starts with the name (it should), else `Name: look`, so the model is told
+/// who the name in the prompt is. `None` for an empty look. The storyboard's
+/// keyframes and the Image tab's cast both build prompts from these.
+pub fn look_paragraph(name: &str, look: &str) -> Option<String> {
+    let look = look.trim();
+    if look.is_empty() {
+        return None;
+    }
+    let (l, n) = (look.to_lowercase(), name.trim().to_lowercase());
+    let named = n.is_empty() || l.starts_with(&n) || l.starts_with(&format!("the {n}"));
+    Some(if named { look.to_string() } else { format!("{}: {look}", name.trim()) })
+}
+
+/// A prompt with the cast's looks before it, a paragraph each — the shape
+/// the storyboard's keyframes have, which sentence models keep several
+/// people apart in far better than looks run on after the action.
+pub fn compose(paragraphs: &[String], prompt: &str) -> String {
+    let mut parts: Vec<&str> = paragraphs.iter().map(String::as_str).collect();
+    parts.push(prompt);
+    parts.retain(|p| !p.trim().is_empty());
+    parts.join("\n\n")
+}
+
+/// What a generation's cast picks bring: their look paragraphs (the `words`
+/// picks), and the pictures to follow (the `picture` picks: a character's
+/// turnaround when it has one — every side, as the storyboard's keyframes
+/// follow — else its picture). A pick whose entry is gone is an error that
+/// says so, rather than a picture made without it.
+pub fn resolve(store: &CastStore, picks: &mut [crate::config::CastPick]) -> Result<(Vec<String>, Vec<PathBuf>)> {
+    let mut words = Vec::new();
+    let mut pictures = Vec::new();
+    for p in picks.iter_mut() {
+        let e = store
+            .load(&p.id)
+            .map_err(|_| anyhow!("a cast entry picked for this prompt is gone ('{}') — remove it from the Cast row", p.id))?;
+        if e.draft {
+            bail!("“{}” isn't saved yet: save it in the cast editor first", e.name);
+        }
+        p.name = e.name.clone();
+        if p.words {
+            words.extend(look_paragraph(&e.name, &e.look));
+        }
+        if p.picture {
+            let dir = store.dir(&e.id)?;
+            let pic = [dir.join("sheet.png"), dir.join("picture.png")].into_iter().find(|f| f.is_file());
+            pictures.push(pic.ok_or_else(|| anyhow!("“{}” has no picture to follow", e.name))?);
+        }
+    }
+    Ok((words, pictures))
+}
+
 /// The shape it is drawn at, width over height: a person standing is tall,
 /// a place wide.
 fn aspect(kind: MemberKind) -> f64 {
@@ -684,6 +736,39 @@ mod tests {
         let err = store.save(&e.id, &fields("Elias"), None, None, &outputs).unwrap_err();
         assert!(format!("{err:#}").contains("draw it first"), "{err:#}");
         assert!(store.load(&e.id).unwrap().draft);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_look_leads_the_prompt_named_once() {
+        assert_eq!(look_paragraph("Elias", "Elias is a cowboy.").unwrap(), "Elias is a cowboy.");
+        assert_eq!(look_paragraph("Elias", "A weathered cowboy.").unwrap(), "Elias: A weathered cowboy.");
+        assert_eq!(look_paragraph("Sword", "The sword is old.").unwrap(), "The sword is old.");
+        assert!(look_paragraph("Elias", "  ").is_none());
+        let p = compose(&["Elias is a cowboy.".into(), "Sally is a farmer.".into()], "Elias looks at Sally.");
+        assert_eq!(p, "Elias is a cowboy.\n\nSally is a farmer.\n\nElias looks at Sally.");
+        assert_eq!(compose(&[], "a cat"), "a cat");
+    }
+
+    #[test]
+    fn picks_bring_their_words_and_pictures_and_a_gone_one_says_so() {
+        use crate::config::CastPick;
+        let d = temp();
+        let store = CastStore::new(&d.join("user"));
+        let outputs = crate::workitems::Store::new(&d.join("work"), &d.join("user"));
+        let e = store.create(&fields("Elias")).unwrap();
+        store.add_try(&e.id, &png(8, 8), Some(&png(16, 8)), 1, "m", "p").unwrap();
+        store.save(&e.id, &fields("Elias"), Some(&Pick::Try(0)), None, &outputs).unwrap();
+        let pick = |words, picture| vec![CastPick { id: e.id.clone(), name: String::new(), words, picture }];
+        let mut picks = pick(true, true);
+        let (w, p) = resolve(&store, &mut picks).unwrap();
+        assert_eq!(w, vec!["Elias is a weathered cowboy.".to_string()]);
+        assert!(p[0].ends_with("sheet.png"), "a character's sheet shows every side");
+        assert_eq!(picks[0].name, "Elias", "the record names it");
+        let (w, p) = resolve(&store, &mut pick(false, false)).unwrap();
+        assert!(w.is_empty() && p.is_empty());
+        let mut gone = vec![CastPick { id: "c1".into(), name: String::new(), words: true, picture: false }];
+        assert!(format!("{:#}", resolve(&store, &mut gone).unwrap_err()).contains("gone"));
         std::fs::remove_dir_all(&d).ok();
     }
 

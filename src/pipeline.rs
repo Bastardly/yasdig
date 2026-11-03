@@ -386,6 +386,9 @@ pub struct GenRequest {
     /// same whole-list rule as `loras`: `Some([])` is "none", `None` keeps the
     /// profile's. See [`Profile::references`].
     pub references: Option<Vec<String>>,
+    /// Cast entries: their looks lead the prompt, their pictures are
+    /// references. The whole-list rule `references` has. See [`Profile::cast`].
+    pub cast: Option<Vec<crate::config::CastPick>>,
     /// The separate files picked in the *Models* fold, slot key to a name
     /// relative to the models dir. An absent slot keeps the model's; `null`
     /// empties it, which is only allowed on a bundled checkpoint (its own copy
@@ -459,6 +462,9 @@ pub struct Img2ImgRequest {
     pub parts: Option<BTreeMap<String, Option<String>>>,
     /// See [`GenRequest::layout`].
     pub layout: Option<crate::layout::Layout>,
+    /// Words only: a pass over a source takes no references. See
+    /// [`GenRequest::cast`].
+    pub cast: Option<Vec<crate::config::CastPick>>,
 }
 
 /// One clip to generate.
@@ -1600,6 +1606,9 @@ impl Engine {
         if let Some(v) = &req.references {
             profile.references = v.clone();
         }
+        if let Some(v) = &req.cast {
+            profile.cast = v.clone();
+        }
         profile.layout = req.layout.clone().filter(|l| !l.items.is_empty());
         // Absent keeps the model's own (a distilled file's schedule); the page
         // sends one only with a turbo LoRA.
@@ -1619,6 +1628,9 @@ impl Engine {
         // Resolved here for the same reason: a deleted model file would
         // otherwise fail only after the render it was going to enlarge.
         let upscaler = self.cfg.check_upscaler(&profile.upscaler)?;
+        // The cast picked, looked up now (a deleted entry fails before the
+        // render) and named on the profile for the record.
+        let (cast_words, cast_pictures) = crate::cast::resolve(&crate::cast::CastStore::of(&self.cfg), &mut profile.cast)?;
         let tpl = &profile;
 
         profile.require_files()?;
@@ -1634,7 +1646,11 @@ impl Engine {
         // The roll follows `seed`, so the promise the seed box makes still holds.
         // See [`crate::variables`].
         let vars = self.cfg.settings().variables;
-        let prompt = variables::expand(&req.prompt, &vars, seed)?;
+        // The cast's looks lead what was typed, and become part of what ran:
+        // the work item, every pass on the image and its sidecar read the
+        // composed prompt, while the typed one (below) puts the short
+        // sentence back in the box on a reopen, beside its chips.
+        let prompt = crate::cast::compose(&cast_words, &variables::expand(&req.prompt, &vars, seed)?);
         let negative = req
             .negative
             .as_deref()
@@ -1669,13 +1685,16 @@ impl Engine {
         // tokens like the image does, so a phone photo would be several images'
         // worth of memory and time. Resolved before the render, so a deleted
         // output fails now rather than after it.
+        // The cast's pictures first, then the files a caller staged, then the
+        // person's own references — the order the prompt's "image 1" counts.
         if !req.ref_paths.is_empty() && !tpl.family.takes_references() {
             bail!("'{}' can't follow a reference picture", tpl.name);
         }
-        if req.ref_paths.len() + tpl.references.len() > crate::config::MAX_REFERENCES {
-            bail!("at most {} reference images", crate::config::MAX_REFERENCES);
+        if cast_pictures.len() + req.ref_paths.len() + tpl.references.len() > crate::config::MAX_REFERENCES {
+            bail!("at most {} reference images, cast pictures included", crate::config::MAX_REFERENCES);
         }
-        let mut sources = req.ref_paths.clone();
+        let mut sources = cast_pictures;
+        sources.extend(req.ref_paths.iter().cloned());
         for stem in &tpl.references {
             sources.push(self.output_source(stem)?);
         }
@@ -1884,6 +1903,12 @@ impl Engine {
         if let Some(v) = &req.loras {
             profile.loras = v.clone();
         }
+        // Words only: a pass over a source takes no references (its start
+        // image is the picture it works from), so a picture tick is dropped
+        // rather than refused, as the page never sends one here.
+        if let Some(v) = &req.cast {
+            profile.cast = v.iter().map(|c| crate::config::CastPick { picture: false, ..c.clone() }).collect();
+        }
         profile.layout = req.layout.clone().filter(|l| !l.items.is_empty());
         if let Some(parts) = &req.parts {
             self.cfg.apply_parts(&mut profile, parts)?;
@@ -1898,9 +1923,11 @@ impl Engine {
 
         let stored = self.output_source(&req.source)?;
         let seed = if req.seed < 0 { random_seed() } else { req.seed };
-        // The same roll as a txt2img's, and for the same reasons — see `run`.
+        // The same roll as a txt2img's, and the same cast looks before it, for
+        // the same reasons — see `run`.
         let vars = self.cfg.settings().variables;
-        let prompt = variables::expand(&req.prompt, &vars, seed)?;
+        let (cast_words, _) = crate::cast::resolve(&crate::cast::CastStore::of(&self.cfg), &mut profile.cast)?;
+        let prompt = crate::cast::compose(&cast_words, &variables::expand(&req.prompt, &vars, seed)?);
         let negative = req
             .negative
             .as_deref()

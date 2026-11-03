@@ -80,6 +80,10 @@ pub struct EmbeddedProfile {
     /// of this machine's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layout: Option<crate::layout::Layout>,
+    /// The cast it was told about, by name and without ids (a folder on this
+    /// disk): `read` finds each again in the reader's cast by its name.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cast: Vec<crate::config::CastPick>,
 }
 
 impl EmbeddedProfile {
@@ -105,6 +109,12 @@ impl EmbeddedProfile {
         source_strength: p.source_strength,
         loras: p.loras.clone(),
         layout: p.layout.clone(),
+        cast: p
+            .cast
+            .iter()
+            .filter(|c| !c.name.is_empty())
+            .map(|c| crate::config::CastPick { id: String::new(), ..c.clone() })
+            .collect(),
     }
     }
 }
@@ -362,6 +372,8 @@ pub struct Install {
     pub loras: Vec<String>,
     /// Runnable upscaler names, relative to the upscaler folder.
     pub upscalers: Vec<String>,
+    /// The saved cast, `(id, name)`.
+    pub cast: Vec<(String, String)>,
 }
 
 /// The settings an A1111-style `parameters` text gives — each only when the
@@ -449,6 +461,25 @@ pub fn read(png: &[u8], install: &Install) -> Result<Loaded> {
         if let Some(e) = p.layout.as_ref().and_then(|l| l.validate().err()) {
             notes.push(format!("its layout boxes couldn't be read ({e}) — left out"));
             p.layout = None;
+        }
+        // A cast member is found again by name. If one isn't in this cast, the
+        // prompt that ran — every look written out — goes in the box instead of
+        // the typed one with chips, so no look is lost and none comes twice.
+        let found = |c: &crate::config::CastPick| {
+            install.cast.iter().find(|(_, n)| n.trim().eq_ignore_ascii_case(c.name.trim())).map(|(id, _)| id.clone())
+        };
+        let missing: Vec<String> = p.cast.iter().filter(|c| found(c).is_none()).map(|c| format!("“{}”", c.name)).collect();
+        if missing.is_empty() {
+            for c in &mut p.cast {
+                c.id = found(c).unwrap_or_default();
+            }
+        } else {
+            notes.push(format!(
+                "{} isn't in your cast — the prompt has every look written out instead",
+                missing.join(", ")
+            ));
+            p.cast.clear();
+            item.typed_prompt = None;
         }
         return Ok(Loaded { source: "yasdig", notes, item: Some(item), params: None });
     }
@@ -667,6 +698,7 @@ mod tests {
             models: vec!["sd_xl_base_1.0".into()],
             loras: vec!["sdxl/detail.safetensors".into()],
             upscalers: vec![],
+            cast: vec![("c1-1".into(), "Elias".into())],
         }
     }
 
@@ -722,10 +754,34 @@ mod tests {
         assert_eq!(got.item.unwrap(), Embedded::from_item(&item()));
 
         // Elsewhere, without the model or the LoRA: named, and the LoRA dropped.
-        let bare = Install { models: vec![], loras: vec![], upscalers: vec![] };
+        let bare = Install { models: vec![], loras: vec![], upscalers: vec![], cast: vec![] };
         let got = read(&out, &bare).unwrap();
         assert_eq!(got.notes.len(), 2, "{:?}", got.notes);
         assert!(got.item.unwrap().profile.loras.is_empty());
+    }
+
+    #[test]
+    fn the_cast_travels_by_name_and_comes_back_as_this_installs_entry() {
+        use crate::config::CastPick;
+        let mut it = item();
+        it.profile.cast = vec![
+            CastPick { id: "c9-9".into(), name: "Elias".into(), words: true, picture: true },
+            CastPick { id: "c8-8".into(), name: "Sally".into(), words: true, picture: false },
+        ];
+        let out = embed(&png(2, 2), &it).unwrap();
+        let all = String::from_utf8_lossy(&out).to_string();
+        assert!(!all.contains("c9-9"), "an id is a folder on this disk");
+        // Sally isn't here: the prompt that ran, looks and all, and no chips.
+        let got = read(&out, &install()).unwrap();
+        assert!(got.notes.iter().any(|n| n.contains("Sally")), "{:?}", got.notes);
+        let back = got.item.unwrap();
+        assert!(back.profile.cast.is_empty());
+        assert_eq!(back.typed_prompt, None);
+
+        it.profile.cast.truncate(1);
+        let got = read(&embed(&png(2, 2), &it).unwrap(), &install()).unwrap();
+        let cast = got.item.unwrap().profile.cast;
+        assert_eq!(cast, vec![CastPick { id: "c1-1".into(), name: "Elias".into(), words: true, picture: true }]);
     }
 
     /// Every name a record restores is matched against this install: a

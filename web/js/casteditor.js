@@ -22,7 +22,7 @@ export const KIND_LABEL = { character: 'Character', place: 'Place', thing: 'Prop
 
 const MODEL_KEY = 'yasdig.cast.model';
 
-let cur = null; // { id, entry, pick, voice } — the entry open, and the unsaved choices
+let cur = null; // { id, entry, pick, voice, onSaved } — the entry open, and the unsaved choices
 let base = ''; // what "unchanged" is, as JSON
 let models = [];
 let drawing = false;
@@ -144,8 +144,9 @@ function defaultModel() {
 }
 
 // Open the editor: on entry `id`, or a new one (`prefill`: `kind`, `look`,
-// `picture` — an output stem it starts with).
-export async function openCastEditor(id = null, prefill = {}) {
+// `picture` — an output stem it starts with). `onSaved(entry)` runs after a
+// save: the Image tab's cast row adds what was made from it.
+export async function openCastEditor(id = null, prefill = {}, onSaved = null) {
   err('');
   $('ceprog').textContent = '';
   await loadModels();
@@ -158,7 +159,7 @@ export async function openCastEditor(id = null, prefill = {}) {
       return;
     }
   }
-  cur = { id, entry, pick: null, voice: null };
+  cur = { id, entry, pick: null, voice: null, onSaved };
   $('cename').value = entry?.name ?? prefill.name ?? '';
   $('celook').value = entry?.look ?? prefill.look ?? '';
   const model = entry?.image_model;
@@ -222,10 +223,12 @@ async function save() {
   b.disabled = true;
   try {
     const e = await post('/cast/save', body);
+    const done = cur.onSaved;
     cur = { id: e.id, entry: e, pick: null, voice: null };
     base = state();
     changed();
     $('castdlg').close();
+    done?.(e);
   } catch (e) {
     err(String(e.message || e));
   } finally {

@@ -2424,6 +2424,9 @@ struct GenerateDto {
     /// them. Always sent for a family that takes them; `[]` is none.
     #[serde(default)]
     references: Option<Vec<String>>,
+    /// Cast entries picked on the Image tab (`GenRequest::cast`).
+    #[serde(default)]
+    cast: Option<Vec<config::CastPick>>,
     /// See `GenRequest::parts`. A `null` inside the map is kept as `None`
     /// — it means "empty this slot" — so no `double_option` is needed.
     #[serde(default)]
@@ -2506,6 +2509,7 @@ impl GenerateDto {
             clarity: dto.clarity,
             loras: dto.loras,
             references: dto.references,
+            cast: dto.cast,
             parts: dto.parts,
             layout: dto.layout,
             sigmas: dto.sigmas,
@@ -2669,6 +2673,9 @@ fn handle_img2img(
         /// MOSS-Image's layout boxes (`crate::layout`); absent or empty is none.
         #[serde(default)]
         layout: Option<layout::Layout>,
+        /// Cast entries, words only (`Img2ImgRequest::cast`).
+        #[serde(default)]
+        cast: Option<Vec<config::CastPick>>,
         /// How many images, and whether to keep going until stopped. One
         /// request is one queued run, whatever its length — see `crate::jobs`.
         #[serde(default)]
@@ -2745,6 +2752,7 @@ fn handle_img2img(
         loras: dto.loras,
         parts: dto.parts,
         layout: dto.layout,
+        cast: dto.cast,
     };
 
     let label = req.template.clone();
@@ -2825,6 +2833,12 @@ fn handle_png_settings(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -
         models: cfg.registry().into_keys().collect(),
         loras: cfg.list_loras().into_iter().filter(|l| l.usable).map(|l| l.name).collect(),
         upscalers: cfg.list_upscalers().into_iter().filter(|u| u.supported).map(|u| u.name).collect(),
+        cast: cast::CastStore::of(cfg)
+            .list()
+            .into_iter()
+            .filter(|v| !v.entry.draft)
+            .map(|v| (v.entry.id, v.entry.name))
+            .collect(),
     };
     match pngmeta::read(body, &install) {
         Ok(loaded) => conn.respond(200, "application/json", &serde_json::to_vec(&loaded)?),

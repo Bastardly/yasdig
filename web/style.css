@@ -116,6 +116,7 @@
   --thumb-h-pick: 140px; /* the first-frame picker */
   --thumb-h-chosen: 120px; /* the one chosen image, above its buttons */
   --thumb-h-try: 72px;   /* a try in the cast editor's strip */
+  --cast-chip-pic: 32px; /* a cast member's picture on its chip in the Prompts panel */
   --star: 28px;          /* the favourite star's disc on a thumbnail */
   --chat-pic: 160px;     /* a picture in the conversation, its height */
   --story-pic: 144px;    /* a cast picture or a keyframe in the Story panel, its width */
@@ -582,11 +583,11 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 @media (hover: none) { .wigrid .star { opacity: 1; } }
 
 /* The outputs picker. Same grid as the work items, in a dialog. */
-#picker {
+#picker, #castpickdlg {
   max-width: min(1100px, 92vw); max-height: 86vh; background: var(--ink-700);
   color: var(--text); border: var(--line); border-radius: var(--r-lg); padding: var(--sp-4);
 }
-#picker::backdrop { background: var(--scrim-soft); }
+#picker::backdrop, #castpickdlg::backdrop { background: var(--scrim-soft); }
 #picker .wigrid img { height: var(--thumb-h-pick); }
 
 /* ============================ Cast ============================ */
@@ -602,6 +603,20 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   display: grid; place-items: center; background: var(--ink-600); border-radius: var(--r-sm);
   font-size: var(--fs-display); color: var(--text-dim);
 }
+
+/* The Image tab's cast row: a chip per member the prompt is about. */
+.castrow { margin-top: var(--sp-3); }
+.castchips { display: grid; gap: var(--sp-1); margin: var(--sp-1) 0 var(--sp-2); }
+.castchip {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  padding: var(--sp-1) var(--sp-2); background: var(--ink-800); border-radius: var(--r-md);
+}
+.castchip img { height: var(--cast-chip-pic); width: auto; border-radius: var(--r-sm); }
+.castchip b { flex: 1; min-width: 4em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.castchip label { display: inline-flex; align-items: center; gap: var(--sp-1); margin: 0; font-size: var(--fs-sm); }
+.castchip input { width: auto; padding: 0; accent-color: var(--state); }
+.castchipx { padding: 0 var(--sp-2); }
+.castsuggest { margin: 0 0 var(--sp-2); display: flex; gap: var(--sp-1); flex-wrap: wrap; align-items: center; }
 
 /* The cast editor: the pictures beside the words, one column when narrow. */
 #castdlg {

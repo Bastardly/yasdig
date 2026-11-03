@@ -8,6 +8,7 @@ import { loraPicker, turboMemory } from './loras.js';
 import { sourceSlot } from './source-slot.js';
 import { wireHints } from './hints.js';
 import { onRefsChange, references, refsActive, syncRefs } from './refs.js';
+import { castNames, castPayload, initCastPicks, syncCastPicks } from './castpicks.js';
 import { openGetModels } from './getmodels.js';
 import { floatPanels } from './panels.js';
 import { partRows } from './parts.js';
@@ -330,9 +331,12 @@ function syncSummaries() {
 
   // Whole: the summary line cuts it to the width there is, and the title holds
   // all of it. References lead, in the accent: they change what is drawn.
-  say('sum-prompt', [refs ? `${refs} ref${refs > 1 ? 's' : ''}` : null, $('prompt').value.trim()]
-    .filter(Boolean).join(' · '));
-  $('sum-prompt').classList.toggle('on', refs > 0);
+  // The cast with them: it changes what is drawn as much.
+  const cast = castNames();
+  syncCastPicks();
+  say('sum-prompt', [refs ? `${refs} ref${refs > 1 ? 's' : ''}` : null, cast.length ? cast.join(', ') : null,
+    $('prompt').value.trim()].filter(Boolean).join(' · '));
+  $('sum-prompt').classList.toggle('on', refs > 0 || cast.length > 0);
 
   syncModelsSummary();
 
@@ -1147,6 +1151,8 @@ function genPayload({ fromNoise = false } = {}) {
   if (source) {
     return ['/img2img', {
       ...common,
+      // The cast's looks only: a pass over a source takes no references.
+      cast: castPayload(false),
       source,
       max_side: numOr('srcmaxside'),
       source_strength: numOr('srcstrength'),
@@ -1170,6 +1176,9 @@ function genPayload({ fromNoise = false } = {}) {
     // wait in the dialog for a model that does. A pass over a source doesn't
     // take them (its start image is already the picture it works from).
     ...(refsActive() ? { references: references() } : {}),
+    // Always, `[]` included: the cast row is the whole answer. A Picture tick
+    // goes only to a model that takes references, like the References.
+    cast: castPayload(refsActive()),
   }];
 }
 
@@ -1477,6 +1486,11 @@ export function initImage() {
     onChange: () => syncSummaries(),
   });
   onRefsChange(syncSummaries);
+  // Pictures share the References' four slots, and go only from noise.
+  initCastPicks({
+    pictures: () => refsActive() && !imageSource.get(),
+    references: () => (refsActive() && !imageSource.get() ? references().length : 0),
+  });
   initFolds();
   $('go').addEventListener('click', startRun);
   $('saveout').addEventListener('click', saveOutput);

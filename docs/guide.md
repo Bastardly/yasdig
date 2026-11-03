@@ -535,8 +535,26 @@ Save waits until there is a picture: an entry is always saved with one.
 The picture is drawn from the look, framed for the kind: a character alone and whole
 on a plain background, a place as a wide view with nobody in it, a prop on its own.
 
-In a prompt, write the name: *"Elias lights a cigar while looking at Sally."*
 Two saved entries never share a name, since that is how they are found.
+
+**In a picture**: the Image tab's Prompts panel has a **Cast** row under the prompts.
+**Add cast…** picks someone (or makes them), and the prompt names them in plain words —
+*"Elias lights a cigar while looking at Sally."* A name you write that is in your cast
+but not picked is offered under the row, as an **Add Elias** button. Each chip has two
+ticks:
+
+- **Words** — their look goes before your prompt, a paragraph each, so the model is
+  told who Elias is. The box keeps your short sentence; the work item's prompt is the
+  whole text that ran.
+- **Picture** — their picture is a reference the model follows (a character's
+  turnaround sheet when it has one, which shows every side). Only on a model that takes
+  references (the Kleins), only from noise, and it shares the four reference slots with
+  the References dialog.
+
+Reopening a picture puts the chips back beside the short prompt. If one of them has
+been deleted from the cast since, the prompt that ran comes back instead, every look
+written out, and no chips. A PNG carries the cast by name, and dropping it here finds
+them in your cast by the same names.
 
 From any picture, **Save as cast…** in the Refine & adjust dialog's rail opens the
 editor with that picture, as you see it, ready to be named.

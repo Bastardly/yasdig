@@ -3,7 +3,8 @@ import { S } from './state.js';
 import { holdTurbo, imageLoras, imageSource, models, render, setParts, setUpscaler, syncCfgPlaceholders,
          syncOutSize, syncParts, syncSeedLine } from './image.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
-import { setReferences } from './refs.js';
+import { setReferences, syncRefs } from './refs.js';
+import { setCastPicks, syncCastPicks } from './castpicks.js';
 import { setLayout } from './layout.js';
 
 // Two shelves of the same thing, each its own panel and grid: Current is
@@ -217,7 +218,12 @@ export function applyWorkItem(item) {
   // Generate reproduces this image and clearing the seed re-rolls it. A sidecar
   // written before variables existed has no typed copy, and neither has a prompt
   // with nothing in it to roll; both mean "the stored one is what was typed".
-  $('prompt').value = item.typed_prompt ?? item.prompt;
+  //
+  // Its cast chips go back beside it — unless one is no longer in the cast:
+  // then the prompt that ran, every look written out, and no chips, so no
+  // look is lost and none comes twice.
+  const castBack = setCastPicks(p.cast ?? []);
+  $('prompt').value = castBack ? (item.typed_prompt ?? item.prompt) : item.prompt;
   $('negative').value = item.typed_negative ?? item.negative ?? '';
   $('seed').value = item.seed;
   syncSeedLine();
@@ -226,6 +232,14 @@ export function applyWorkItem(item) {
   // defaults — the exact opposite of restoring this item.
   const known = models.some((m) => m.name === item.template);
   if (known) $('template').value = item.template;
+  // What the skipped `change` would have told the parts that follow the
+  // model: whether it takes references — the References button, and the
+  // cast chips' Picture ticks. Else they keep describing the model that was
+  // selected before, and a Klein item reopened over a Krea 2 hid both.
+  if (known) {
+    syncRefs(models.find((m) => m.name === item.template));
+    syncCastPicks();
+  }
   // Its LoRAs say whether Turbo was on, so no default may land over them.
   holdTurbo();
   // Its boxes, or none: a reopened image is drawn from what it was made with.
