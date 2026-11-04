@@ -277,6 +277,10 @@ Break silently:
 - **The page frame**: `.tabs` is sticky and `.powered` is a fixed footer; every
   `.workspace` has `isolation: isolate`, so its panels' z-indexes (up to 1000) stack
   inside it and never over the top bar. The dialogs are in the top layer.
+- **Shots is a sideways strip** (`.shotstrip`, a card per shot, `.fresh` on shot 1 and
+  each cut; the round amber + is `position: sticky` at the strip's right edge; Every
+  shot and the negative fold as `#vfold-every`, capped at `--shot-common-w`) and resizes
+  both ways — `fpboth` in markup is overwritten by `PANEL_DEFS`' `both`.
 - **Panels resize vertically** (`resize: vertical`); `panels.js` saves a dragged
   height (`p.h`, from a `ResizeObserver` on the inline height) and a header
   double-click clears it with the position.
@@ -1332,7 +1336,7 @@ role, never a value**: colour, type, space, radius and column caps are `:root` t
 a hex elsewhere means a missing token. Ink ramp and state colour are neutral (bone)
 because they sit beside a graded image. `--fold-title`/`--fold-on` for fold headings.
 **Amber (`.btn-run`) is the dock's main button only** (plus Hi-res above a result,
-the thumbnails' favourite star as a glyph colour, and the Assistant's
+the thumbnails' favourite star as a glyph colour, the Shots strip's round + (asked for), and the Assistant's
 `.chatworking` line at the foot of a chat while its job runs — asked for: the header's
 grey state line was missed) — in Refine & adjust that is
 each panel footer's main action (History's is *Apply adjustments*) and, from the

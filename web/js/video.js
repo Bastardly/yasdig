@@ -551,7 +551,9 @@ function addShot() {
   drawShots([...rowEls().map(readRow), {
     text: '', seed: last?.seed ?? -1, frames: last?.frames ?? currentVideoModel()?.frames ?? null,
   }]);
-  rowEls().at(-1)?.querySelector('textarea').focus();
+  const row = rowEls().at(-1);
+  row?.querySelector('textarea').focus({ preventScroll: true });
+  row?.scrollIntoView({ block: 'nearest', inline: 'end', behavior: 'smooth' });
   syncVideoSummaries();
 }
 
@@ -583,6 +585,9 @@ function syncShots() {
   const busy = !!clip && busyClips.has(clip.id);
   els.forEach((el, i) => {
     el.classList.toggle('done', doneRows.has(i));
+    // Shot 1 and every cut start something the shots after them go on from:
+    // a shade brighter, so where each run begins shows at a glance.
+    el.classList.toggle('fresh', i === 0 || (el.dataset.cut === '1' && keyOk));
     // What a folded row still says: the start of its prompt.
     el.querySelector('.shotsum').textContent = el.querySelector('textarea').value.trim();
     const cut = el.dataset.cut === '1' && i > 0;
@@ -709,6 +714,14 @@ function syncVideoSummaries() {
   $('vsum-prompt').textContent = (live.length > 1 ? `— ${live.length} shots` : '— 1 shot')
     + (m ? ` · ${rowsSeconds(m).toFixed(1)} s` : '')
     + (p ? ` · ${p.length > 60 ? p.slice(0, 60) + '…' : p}` : '');
+  // Never `.on`: the rail's dot reads every line in the panel, and these
+  // are settings, not a departure.
+  const every = $('veverytext').value.trim();
+  const neg = $('vnegative').value.trim();
+  const sumEvery = (every ? `— ${every.length > 50 ? every.slice(0, 50) + '…' : every}` : '— nothing')
+    + (neg ? ' · a negative' : ' · no negative');
+  $('vsum-every').textContent = sumEvery;
+  $('vsum-every').title = every;
   // A long clip is a departure from one clip a Generate: the rail's dot says so.
   $('vsum-prompt').classList.toggle('on', live.length > 1);
   const name = $('vmodel').value;
@@ -1342,7 +1355,7 @@ async function takeImage(row, file) {
 // and the first time Prompts and Generation are open, Current in the corner.
 let wsPanels = null;
 const PANEL_DEFS = [
-  { id: 'vid-prompt', el: 'vfold-prompt', open: true },
+  { id: 'vid-prompt', el: 'vfold-prompt', open: true, both: true },
   { id: 'vid-gen', el: 'vfold-gen', open: true },
   { id: 'vid-adv', el: 'vfold-adv' },
   { id: 'vid-info' },

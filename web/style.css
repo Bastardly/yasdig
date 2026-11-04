@@ -109,6 +109,8 @@
   --rail-w: 130px;       /* that dialog's rail of panel toggles */
   --ws-rail-w: 150px;    /* the Image and Video tabs' rail: longer labels */
   --ws-panel-w: 380px;   /* their panels: forms, wider than the dialog's */
+  --shot-w: 300px;       /* one shot's card in the Shots panel's strip */
+  --shot-common-w: 640px; /* Shots' Every shot and negative, however wide the panel */
   --foot-h: 28px;        /* the fixed page footer, and the dialog's foot line */
   --thumb-h: 200px;      /* work items, clips, and the img2img sources — one
                             size, because they are the same strip of pictures
@@ -416,9 +418,25 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* A long clip's shot: a heading line (its number, how it starts, done, ×),
    then its seed and length, its prompt, its references. A rule above each
    but the first is the separator between shots. */
-.shotrow { margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: var(--line); }
-.shotrow:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
-.shothead { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+/* Side by side: a card per shot, in a strip that scrolls sideways, so a long
+   clip reads left to right as it plays and the panel (resizable both ways)
+   shows as many as it is wide. A continue is inset; shot 1 and each cut,
+   which the shots after them go on from, are raised a shade (`.fresh`). */
+/* Every shot and the negative: folded once set, and no wider than a form. */
+.shotcommon { max-width: var(--shot-common-w); }
+.shotstrip { display: flex; align-items: flex-start; gap: var(--sp-2); overflow-x: auto; padding-bottom: var(--sp-2); }
+#vshots { display: flex; align-items: flex-start; gap: var(--sp-2); flex: none; }
+.shotrow {
+  flex: none; width: var(--shot-w); padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  background: var(--ink-800); border: var(--line); border-radius: var(--r-lg);
+}
+.shotrow.fresh { background: var(--ink-600); border-color: var(--ink-400); }
+/* Add shot: round, and held at the strip's right edge while it scrolls. */
+.shotadd {
+  position: sticky; right: 0; flex: none; width: 2.5rem; height: 2.5rem; padding: 0;
+  border-radius: 50%; font-size: var(--fs-display); line-height: 1; box-shadow: var(--shadow-pop);
+}
+.shothead { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; flex-wrap: wrap; }
 /* The heading folds the row, as a panel's header would: a bare button, its
    number the label, with a turning chevron. */
 .shotfold { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
@@ -1266,6 +1284,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    start and wider or taller by its corner (`both`); the cast fills as many
    columns as the width holds. */
 #panel-vid-cast { --fpanel-w: min(680px, 90vw); }
+/* Shots starts wide enough for two cards and may be dragged as narrow as any
+   workspace panel (`.fpboth`'s floor is its starting width). */
+#vfold-prompt { --fpanel-w: min(680px, 90vw); min-width: var(--ws-panel-w); }
 .storycast { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: var(--sp-3); }
 .storymember { display: flex; gap: var(--sp-2); align-items: flex-start; }
 .storypic { flex: 0 0 auto; width: var(--story-pic); line-height: 0; }

@@ -662,26 +662,36 @@
         <span class="sub" id="vboardtext"></span>
         <button type="button" class="btn" id="vboardback" hidden>Back to the storyboard</button>
       </div>
-      <label for="veverytext" data-help="vevery">Every shot</label>
-      <prompt-box>
-        <textarea id="veverytext" class="short" placeholder="who and where: a red-haired woman in a green coat, a rainy street at night, film grain"></textarea>
-      </prompt-box>
+      <!-- What every shot shares: set once, so it folds away and its line
+           says what it holds. Capped in width, since the panel widens for
+           the shot strip below and a sentence across 1900 px is unreadable. -->
+      <details class="fold shotcommon" id="vfold-every" open>
+        <summary>For every shot <span class="foldstate" id="vsum-every"></span></summary>
+        <label for="veverytext" data-help="vevery">Every shot</label>
+        <prompt-box>
+          <textarea id="veverytext" class="short" placeholder="who and where: a red-haired woman in a green coat, a rainy street at night, film grain"></textarea>
+        </prompt-box>
 
-      <label for="vnegative">Negative prompt</label>
-      <!-- Pre-filled from the model, which for Wan means Wan's own published
-           negative prompt — 400 characters of Chinese nobody should have to
-           retype. Emptying it deliberately means "no negative". -->
-      <prompt-box>
-        <textarea id="vnegative" class="short"></textarea>
-      </prompt-box>
+        <label for="vnegative">Negative prompt</label>
+        <!-- Pre-filled from the model, which for Wan means Wan's own published
+             negative prompt — 400 characters of Chinese nobody should have to
+             retype. Emptying it deliberately means "no negative". -->
+        <prompt-box>
+          <textarea id="vnegative" class="short"></textarea>
+        </prompt-box>
+      </details>
 
       <label class="grouphead" data-help="vshots">Shots</label>
       <!-- What the storyboard on the rows leaves out on this model (`board.js`). -->
       <p class="sub" id="vsentnote"></p>
-      <div id="vshots"></div>
+      <!-- The shots side by side, left to right as they play; the strip scrolls
+           sideways, and + stays at its right edge however far it has gone. -->
+      <div class="shotstrip">
+        <div id="vshots"></div>
+        <button type="button" id="vshotadd" class="btn btn-run shotadd" title="Add a shot after the last one" aria-label="Add shot">+</button>
+      </div>
       <!-- A shot's starting image from this computer: the row's Upload. -->
       <input type="file" id="vkeyfile" accept="image/*" hidden>
-      <button type="button" id="vshotadd" class="btn spaced">+ Add shot</button>
       <p class="sub" id="vshotnote"></p>
     </div>
     <div class="fpfoot" id="vextendfoot" hidden>
