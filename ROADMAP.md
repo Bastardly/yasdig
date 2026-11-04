@@ -15,6 +15,9 @@ Roadmap as it is currently planned. Changes can happen.
 - [ ] Improve assistant's skills in focusing on action when creating shots, and align clip length with that shot.
 - [ ] Add better Cut lingo as a collection of shots.
 - [ ] Redo clips with continuation (cuts) but keep separate cuts without redoing all shots.
+- [ ] Continue a cut by adding an extra shot.
+- [ ] Add cast from cut as default when creating a continuation.
+- [ ] Save video workflow  without generation.
 
 # v0.9.x - Models manager
 - [ ] Create an overview of installed models, to solve the issue of finding redundant models. 
