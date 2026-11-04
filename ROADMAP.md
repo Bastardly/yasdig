@@ -4,13 +4,17 @@ Roadmap as it is currently planned. Changes can happen.
 - [x] Characters, places and props saved under a name as reuseable "cast"
 - [x] Implement cast on image and video tab as manual additions
 - [x] Agent tools for creating and using casts
-- [ ] UI cleanup and alignment. How we use casts in images vs video.
+- [x] UI cleanup and alignment. How we use casts in images vs video.
+- [x] Save Metadata to output images
 
 # v0.8.x - Extended video support
 - [ ] LTX video support.
 - [ ] Add LTX video upscaler for all video clips.
+- [ ] Add H3 music model support
 - [ ] Video UI refinement (Not happy with it).
 - [ ] Improve assistant's skills in focusing on action when creating shots, and align clip length with that shot.
+- [ ] Add better Cut lingo as a collection of shots.
+- [ ] Redo clips with continuation (cuts) but keep separate cuts without redoing all shots.
 
 # v0.9.x - Models manager
 - [ ] Create an overview of installed models, to solve the issue of finding redundant models. 
@@ -26,6 +30,7 @@ Roadmap as it is currently planned. Changes can happen.
 
 # v0.11.0 - General UI refinement
 - [ ] Make a sweep of the entire UI and try to align UI elements to create a more streamlined experience.
+- [ ] Add isAlive check on the server. UI should reflect if backend is not running.
 
 
 # v0.x.x - Mac support (Future)
