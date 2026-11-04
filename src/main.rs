@@ -2810,6 +2810,29 @@ fn handle_upload(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Resu
     let (w, h) = (img.width(), img.height());
     drop(img);
 
+    // A PNG the page sent as it was keeps the settings it carries — a yasdig
+    // output, an A1111 one, Refine & adjust's Download on its way to the cast
+    // — so *Load settings* works on the import too. Unless Settings says no
+    // settings inside PNGs: then they are taken out on the way in.
+    let stripped;
+    let body = if cfg.settings().embed_png_settings {
+        body
+    } else {
+        match pngmeta::strip(body) {
+            Ok(b) => {
+                stripped = b;
+                &stripped[..]
+            }
+            Err(e) => {
+                return conn.respond(
+                    400,
+                    "application/json",
+                    error_json(&format!("that isn't a PNG this build can read: {e:#}")).as_bytes(),
+                )
+            }
+        }
+    };
+
     match store(cfg).import(body, w, h) {
         Ok(stem) => conn.respond(
             200,

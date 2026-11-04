@@ -358,6 +358,21 @@ pub fn embed(png: &[u8], item: &WorkItem) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// `png` without our two text chunks (or A1111's `parameters`, which is the
+/// same keyword): an upload taken in while `Settings::embed_png_settings` is
+/// off, so a picture that came in carrying settings doesn't keep them in
+/// Outputs against the person's choice. Everything else is copied as it was.
+pub fn strip(png: &[u8]) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(png.len());
+    out.extend_from_slice(SIGNATURE);
+    for (kind, data) in chunks(png)? {
+        if !is_ours(kind, data) {
+            out.extend(chunk(kind, data));
+        }
+    }
+    Ok(out)
+}
+
 /// Every text chunk, keyword → text.
 fn texts(png: &[u8]) -> Result<Vec<(String, String)>> {
     Ok(chunks(png)?.into_iter().filter_map(|(k, d)| read_text(k, d)).collect())
@@ -722,6 +737,17 @@ mod tests {
         // Saved again: replaced, not stacked.
         let twice = embed(&out, &item()).unwrap();
         assert_eq!(texts(&twice).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn stripping_takes_our_text_and_keeps_the_picture() {
+        let src = png(5, 3);
+        let out = strip(&embed(&src, &item()).unwrap()).unwrap();
+        assert!(texts(&out).unwrap().is_empty());
+        assert_eq!(
+            image::load_from_memory(&src).unwrap().to_rgba8(),
+            image::load_from_memory(&out).unwrap().to_rgba8()
+        );
     }
 
     #[test]

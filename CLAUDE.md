@@ -347,7 +347,10 @@ are instances too). `Engine::img2img` is `run` with a source instead of txt2img.
   aspect up to 6.7%). Inside the budget it's untouched so the caller can `fs::copy`.
 - **Uploads** (`POST /upload`) land in `work/output/` via `Store::import`, stem minted
   by `new_id`. Body is raw PNG bytes; `http.rs` `body_limit` is an exact path match;
-  over-limit answers 413. **PNG only in Rust** — the page re-encodes via `<canvas>`.
+  over-limit answers 413. **PNG only in Rust** — the page re-encodes via `<canvas>`,
+  except a PNG under the side and byte caps, sent as it is so its settings chunks
+  survive; `handle_upload` strips ours (`pngmeta::strip`) when
+  `embed_png_settings` is off.
 
 Page:
 
@@ -577,6 +580,10 @@ shelf, and Close server's clear never reaches it.
   References dialog's `castPicks` → `editRefs`' third `onDone` argument → `castOnRow`
   (video.js) add the voice to the shot's sounds as that name's, and the name to *Who
   is in it*; Sounds fills *Voice of*.
+- **A shot's *Who is in it* is chips** (`data-cast` on the row, `rowCast`/
+  `drawRowCast`; a name still in the box counts via `rowCast(el, true)`). Its
+  *Add cast…* (`addCastToRow`, `castEntry`) is `castOnRow` on a fresh shot, the name
+  alone on a continue; a chip's × is `removeCastFromShots(name, [row])`.
 - **Unbound, the Cast panel is the rows** (`clipCast`, read off references'
   `subjects`; no state of its own): *Add from cast…* → `addCastToShots` (shot 1 and
   every cut), Remove → `removeCastFromShots` by name. Redrawn on `onRowsChange`
@@ -726,7 +733,7 @@ video, upscalers); `finished` moving triggers `loadModels()` (and `loadVideoMode
   there), and ours are replaced on re-save rather than stacked. Only `tEXt` and
   uncompressed `iTXt` are read, which keeps it dependency-free.
 - **The page sends the original file's bytes**, not through `/upload`'s canvas
-  re-encode, which strips the chunks. A yasdig answer goes through `applyWorkItem`; an
+  re-encode (which strips the chunks from any PNG it redraws). A yasdig answer goes through `applyWorkItem`; an
   A1111 one through `applyParams`, which sets only the fields it names, model first
   (its `change` refills every box).
 

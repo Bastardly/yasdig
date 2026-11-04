@@ -90,11 +90,13 @@ function giveBack() {
 
 export const onRefsChange = (fn) => { listeners.push(fn); };
 
-// The Generation panel's button and the Refine & adjust dialog's
-// (`data-refs-open`, in Refine and Edit) all say how many are picked.
+// The Prompts panel's button (under its References heading) and the Refine
+// & adjust dialog's (`data-refs-open`, in Refine and Edit) all say how many
+// are picked.
 function drawButton() {
   const n = references().length;
-  for (const b of [$('refsopen'), ...document.querySelectorAll('[data-refs-open]')]) {
+  $('refsopen').textContent = n ? `Change (${n})…` : 'Choose…';
+  for (const b of document.querySelectorAll('[data-refs-open]')) {
     b.textContent = n ? `References (${n})` : 'References…';
   }
 }
@@ -109,7 +111,7 @@ export function openRefs() {
 // Shown for a model that takes references, hidden otherwise.
 export function syncRefs(m) {
   model = m;
-  $('refsopen').hidden = !refsActive();
+  $('refsrow').hidden = !refsActive();
   if (!refsActive() && !borrower && $('refsdlg').open) $('refsdlg').close();
   drawButton();
 }

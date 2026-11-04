@@ -133,21 +133,31 @@
         <div id="castchips" class="castchips"></div>
         <p id="castsuggest" class="castsuggest" hidden></p>
         <p id="castnote" class="err" hidden></p>
-        <button type="button" id="castadd" class="btn" title="Someone or something from the Cast tab: write their name in the prompt">Add cast…</button>
+        <div class="btnrow">
+          <button type="button" id="castadd" class="btn" title="Someone or something from the Cast tab: write their name in the prompt">Add cast…</button>
+        </div>
       </div>
       <!-- Pictures the model looks at while it draws ("the person from image 1"),
            beside the prompt that names them. Shown only for a model that takes
            them — the server says which (`references` on /models). The picks
            live in #refsdlg (refs.js). -->
-      <button type="button" id="refsopen" class="btn btn-block spaced" hidden>References…</button>
+      <div id="refsrow" class="castrow" hidden>
+        <span class="grouphead">References</span>
+        <div class="btnrow">
+          <button type="button" id="refsopen" class="btn" title="Up to four pictures the model follows while it draws">Choose…</button>
+        </div>
+      </div>
       <!-- A saved yasdig output, or an A1111/Forge/Civitai PNG, carries the
            settings that made it (`src/pngmeta.rs`). This button, or a PNG
            dropped on the prompt box, puts them back in the controls. -->
-      <div class="btnrow">
-        <button type="button" id="pngload" class="btn"
-          title="Fill the controls from a PNG made by yasdig, A1111, Forge or Civitai. You can also drop the PNG on the prompt box.">Load settings from a PNG…</button>
+      <div class="castrow">
+        <span class="grouphead">Settings from a PNG</span>
+        <div class="btnrow">
+          <button type="button" id="pngload" class="btn"
+            title="Fill the controls from a PNG made by yasdig, A1111, Forge or Civitai. You can also drop the PNG on the prompt box.">Upload…</button>
+        </div>
         <input type="file" id="pngfile" accept="image/png" hidden>
-    </div>
+      </div>
     <p class="sub" id="pngnote" hidden></p>
     </div>
   </section>

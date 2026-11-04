@@ -8,6 +8,7 @@ import { initClipView, openClipView } from './clipview.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
 import { shotState, rowMatches, sentRow, ALL } from './shots.js';
 import { editRefs } from './refs.js';
+import { chooseCastEntry } from './castpicks.js';
 import { editSounds } from './sounds.js';
 import { wireHints } from './hints.js';
 import { choosePicture, upload } from './source-slot.js';
@@ -151,7 +152,7 @@ function readRow(el) {
     audio: JSON.parse(el.dataset.audio || '[]'),
     key: el.dataset.key || null,
     folded: el.classList.contains('folded'),
-    cast: el.querySelector('.shotcast').value.split(',').map((x) => x.trim()).filter(Boolean),
+    cast: rowCast(el, true),
     lines: parseLines(el.querySelector('.shotlines').value),
     sound: el.querySelector('.shotsnd').value.trim(),
     music: el.querySelector('.shotmusic').value.trim(),
@@ -171,6 +172,50 @@ const MAX_SHOT_REFS = 4; // config::MAX_REFERENCES
 const MAX_SHOT_SOUNDS = 3; // pipeline::MAX_REF_AUDIO
 const same = (a, b) => (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
 const json = (el, k) => JSON.parse(el.dataset[k] || '[]');
+
+// Who is in a row: its chips (`data-cast`), and with `typed` also a name
+// still in the box, not yet a chip — so a draft or a press counts it.
+const splitNames = (v) => v.split(',').map((x) => x.trim()).filter(Boolean);
+function rowCast(el, typed = false) {
+  const names = json(el, 'cast');
+  if (typed) {
+    for (const n of splitNames(el.querySelector('.shotcastadd').value)) {
+      if (!names.some((x) => same(x, n))) names.push(n);
+    }
+  }
+  return names;
+}
+function setRowCast(el, names) {
+  el.dataset.cast = JSON.stringify(names);
+}
+
+// The typed names become chips; the box empties.
+function commitTypedCast(el) {
+  const box = el.querySelector('.shotcastadd');
+  if (!box.value.trim()) return false;
+  setRowCast(el, rowCast(el, true));
+  box.value = '';
+  return true;
+}
+
+// A chip per name: the picture is the row's reference named for them, when
+// it has one (a cast member added here, a storyboard's member).
+function drawRowCast(el) {
+  const refs = json(el, 'refs');
+  const subjects = json(el, 'subjects');
+  const html = rowCast(el).map((name) => {
+    const k = subjects.findIndex((sub, j) => refs[j] && same(sub?.name, name));
+    const pic = k >= 0 ? `<img src="/outputs/${encodeURIComponent(refs[k])}/thumb.png" alt="">` : '';
+    return `<div class="castchip" data-name="${esc(name)}">${pic}<b>${esc(name)}</b>
+      <button type="button" class="btn castchipx shotuncast" aria-label="Remove ${esc(name)}"
+        title="Take ${esc(name)} off this shot: their name, and the picture and voice added with them">×</button></div>`;
+  }).join('');
+  const box = el.querySelector('.shotchips');
+  if (box.dataset.html !== html) {
+    box.innerHTML = html;
+    box.dataset.html = html;
+  }
+}
 
 // `c`: `{stem, name, kind, look, voice}`. What didn't fit is said in the result.
 function castOnRow(el, c) {
@@ -197,9 +242,8 @@ function castOnRow(el, c) {
   el.dataset.subjects = JSON.stringify(refs.map((_, k) => subjects[k] ?? { name: '', look: '' }));
   el.dataset.audio = JSON.stringify(audio);
   el.dataset.voices = JSON.stringify(audio.map((_, k) => voices[k] ?? ''));
-  const who = el.querySelector('.shotcast');
-  const names = who.value.split(',').map((x) => x.trim()).filter(Boolean);
-  if (!names.some((n) => same(n, c.name))) who.value = [...names, c.name].join(', ');
+  const names = rowCast(el);
+  if (!names.some((n) => same(n, c.name))) setRowCast(el, [...names, c.name]);
   return full;
 }
 
@@ -229,6 +273,46 @@ export function clipCast() {
   return out;
 }
 
+// A saved entry as the rows hold it: its picture's and voice's output copies
+// (`/cast/output`), `{stem, voice, name, kind, look}`.
+export async function castEntry(id) {
+  const e = await getJSON(`/cast/${encodeURIComponent(id)}`);
+  const { stem } = await post('/cast/output', { id, which: 'picture' });
+  const voice = e.voice && e.kind === 'character' ? (await post('/cast/output', { id, which: 'voice' })).stem : null;
+  return { stem, voice, name: e.name.trim(), kind: e.kind, look: e.look };
+}
+
+// A shot's *Add cast…*: on a shot that starts fresh (shot 1, a cut) the
+// member's picture and voice too, as `castOnRow` puts them; a continue
+// takes no references, so there only the name.
+function addCastToRow(el) {
+  const names = rowCast(el, true);
+  chooseCastEntry(async (id) => {
+    const note = $('vshotnote');
+    try {
+      const c = await castEntry(id);
+      const i = rowEls().indexOf(el);
+      if (i < 0) return;
+      commitTypedCast(el);
+      if (i === 0 || el.dataset.cut === '1') {
+        if (castOnRow(el, c)) {
+          rowsChanged();
+          note.textContent = `Shot ${i + 1} had no room for all of ${c.name}: a shot follows at most 4 pictures and 3 sounds.`;
+          note.classList.add('err');
+          return;
+        }
+      } else if (!rowCast(el).some((n) => same(n, c.name))) {
+        setRowCast(el, [...rowCast(el), c.name]);
+      }
+      rowsChanged();
+    } catch (ex) {
+      rowsChanged();
+      note.textContent = String(ex.message || ex);
+      note.classList.add('err');
+    }
+  }, (e) => names.some((n) => same(n, e.name)), 'Everyone in the cast is in this shot already.');
+}
+
 // What the shown model does with a cast member: references (H3), sounds.
 export const videoTakes = () => takeOf(currentVideoModel());
 
@@ -243,9 +327,10 @@ export function addCastToShots(c) {
   return !full;
 }
 
-// Everything of `name` off every shot: its references, its voice, its name.
-export function removeCastFromShots(name) {
-  for (const el of rowEls()) {
+// Everything of `name` off every shot (or just `rows`): its references, its
+// voice, its name.
+export function removeCastFromShots(name, rows = rowEls()) {
+  for (const el of rows) {
     const refs = json(el, 'refs');
     const subjects = json(el, 'subjects');
     const audio = json(el, 'audio');
@@ -256,8 +341,7 @@ export function removeCastFromShots(name) {
     const keepA = audio.map((_, k) => !same(voices[k], name));
     el.dataset.audio = JSON.stringify(audio.filter((_, k) => keepA[k]));
     el.dataset.voices = JSON.stringify(voices.filter((_, k) => keepA[k]));
-    const who = el.querySelector('.shotcast');
-    who.value = who.value.split(',').map((x) => x.trim()).filter((n) => n && !same(n, name)).join(', ');
+    setRowCast(el, rowCast(el).filter((n) => !same(n, name)));
   }
   rowsChanged();
 }
@@ -328,7 +412,8 @@ export function drawShots(rows) {
     return `
     <div class="shotrow${folded ? ' folded' : ''}" data-cut="${r.cut ? 1 : 0}" data-refs="${esc(JSON.stringify(r.refs ?? []))}"
       data-subjects="${esc(JSON.stringify(r.subjects ?? []))}" data-audio="${esc(JSON.stringify(r.audio ?? []))}"
-      data-voices="${esc(JSON.stringify(r.voices ?? []))}" data-key="${esc(r.key ?? '')}">
+      data-voices="${esc(JSON.stringify(r.voices ?? []))}" data-key="${esc(r.key ?? '')}"
+      data-cast="${esc(JSON.stringify(r.cast ?? []))}">
       <div class="shothead">
         <button type="button" class="shotfold" aria-expanded="${!folded}" title="Fold or unfold this shot">
           <b>Shot ${k + 1}</b></button>
@@ -356,8 +441,12 @@ export function drawShots(rows) {
           placeholder="${k ? 'what happens next: an action, where the camera is' : 'the crab lifts a claw, slow camera push in'}">${esc(r.text ?? '')}</textarea></prompt-box>
         <div class="shotcastrow" hidden>
           <label data-help="vshotcast">Who is in it</label>
-          <input type="text" class="shotcast" value="${esc((r.cast ?? []).join(', '))}" placeholder="Mara, Leo"
-            aria-label="Who is in shot ${k + 1}">
+          <div class="castchips shotchips"></div>
+          <div class="withbtn">
+            <input type="text" class="shotcastadd" placeholder="Type a name, or Add cast…"
+              aria-label="Add someone to shot ${k + 1}">
+            <button type="button" class="btn shotcastpick" title="Someone from the Cast tab: on a shot that starts fresh, their picture and voice come too">Add cast…</button>
+          </div>
         </div>
         <div class="shotsoundrows" hidden>
           <label data-help="vshotlines">Spoken</label>
@@ -370,14 +459,17 @@ export function drawShots(rows) {
           <input type="text" class="shotmusic" value="${esc(r.music ?? '')}" placeholder="only the audience hears it — empty is none"
             aria-label="Music in shot ${k + 1}">
         </div>
+        <label class="shotkeylabel" hidden>Start from image</label>
         <div class="btnrow shotfrom">
-          <button type="button" class="btn shotkey" hidden title="The image this shot starts from">Start from image…</button>
-          <button type="button" class="btn shotkeyup" hidden title="An image from this computer">Upload…</button>
           <img class="shotkeythumb" alt="" hidden>
+          <button type="button" class="btn shotkey" hidden title="The image this shot starts from: from Outputs, Favorites or the cast">Choose…</button>
+          <button type="button" class="btn shotkeyup" hidden title="An image from this computer">Upload…</button>
           <button type="button" class="btn shotkeyclear" hidden>Clear</button>
+          <span class="shotboard"></span>
+        </div>
+        <div class="btnrow shotfollow">
           <button type="button" class="btn shotrefs" hidden>References…</button>
           <button type="button" class="btn shotsounds" hidden>Sounds…</button>
-          <span class="shotboard"></span>
         </div>
         <p class="sub shotwhy" hidden>A continue goes on from the last frame; references and sounds go on a cut.</p>
       </div>
@@ -520,10 +612,11 @@ function syncShots() {
     // Who is in it decides a storyboard's references and first frames on any
     // model; off a board, only H3 reads it.
     el.querySelector('.shotcastrow').hidden = !m?.sounds && !board;
+    drawRowCast(el);
     // Shot 1's image is the clip's first frame; a cut's is how Wan cuts.
     const keyBtn = el.querySelector('.shotkey');
     keyBtn.hidden = !fresh || (i > 0 && !keyOk) || followed > 0;
-    keyBtn.textContent = key ? 'Another image…' : 'Start from image…';
+    el.querySelector('.shotkeylabel').hidden = keyBtn.hidden;
     el.querySelector('.shotkeyup').hidden = keyBtn.hidden;
     const thumb = el.querySelector('.shotkeythumb');
     thumb.hidden = keyBtn.hidden || !key;
@@ -1340,6 +1433,12 @@ export function initVideo() {
       return;
     } else if (e.target.closest('.shotkeyclear')) {
       row.dataset.key = '';
+    } else if (e.target.closest('.shotcastpick')) {
+      addCastToRow(row);
+      return;
+    } else if (e.target.closest('.shotuncast')) {
+      removeCastFromShots(e.target.closest('.castchip').dataset.name, [row]);
+      return;
     } else if (e.target.closest('.shotrefs')) {
       // Each picture's name, its look kept from the storyboard while the
       // picture stays.
@@ -1377,8 +1476,15 @@ export function initVideo() {
   });
   $('vshots').addEventListener('change', (e) => {
     if (e.target.classList.contains('shotframes')) snapShotFrames();
+    // A typed name becomes a chip when the box is left (or Enter, below).
+    if (e.target.classList.contains('shotcastadd')) commitTypedCast(e.target.closest('.shotrow'));
     syncShots();
     syncVideoSummaries();
+  });
+  $('vshots').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !e.target.classList.contains('shotcastadd')) return;
+    e.preventDefault();
+    if (commitTypedCast(e.target.closest('.shotrow'))) rowsChanged();
   });
   // Every shot counts as much as the rows: what a done shot was drawn with.
   $('tab-video').addEventListener('input', syncShots);

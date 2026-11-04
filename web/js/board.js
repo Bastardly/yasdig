@@ -1,8 +1,8 @@
-import { $, esc, getJSON, post } from './dom.js';
+import { $, esc, post } from './dom.js';
 import { soonJobs } from './jobs.js';
 import { castHtml, castLabel, framesLabel, rowKeyHtml } from './chatview.js';
 import {
-  addCastToShots, clipCast, drawShots, freshStage, onRowsChange, removeCastFromShots, rowsNow, setBoard, stageClipById, videoTakes,
+  addCastToShots, castEntry, clipCast, drawShots, freshStage, onRowsChange, removeCastFromShots, rowsNow, setBoard, stageClipById, videoTakes,
 } from './video.js';
 import { choosePicture, chooseSound, upload } from './source-slot.js';
 import { askForSound, playSound } from './sounds.js';
@@ -218,7 +218,7 @@ function clipCastHtml() {
   const list = clipCast();
   const intro = '<p class="sub">No film here: the Assistant writes one when you ask it for a film. A clip’s cast is who its shots’ references show.</p>';
   if (!takes.references) {
-    return `${intro}<p class="sub">This video model can’t follow reference pictures, so a cast member can’t go on its shots. Write their look into a shot’s prompt, or start a shot from their picture (Start from image… → Cast).</p>`;
+    return `${intro}<p class="sub">This video model can’t follow reference pictures, so a cast member can’t go on its shots. Write their look into a shot’s prompt, or start a shot from their picture (Start from image → Choose… → Cast).</p>`;
   }
   const rows = list.map((m) => `<div class="storymember">
       <div class="storypic"><img src="/outputs/${encodeURIComponent(m.stem)}/thumb.png" alt=""></div>
@@ -262,11 +262,9 @@ function drawCast() {
 async function addToClip(id) {
   err('');
   try {
-    const e = await getJSON(`/cast/${encodeURIComponent(id)}`);
-    const { stem } = await post('/cast/output', { id, which: 'picture' });
-    const voice = e.voice && e.kind === 'character' ? (await post('/cast/output', { id, which: 'voice' })).stem : null;
-    if (!addCastToShots({ stem, voice, name: e.name.trim(), kind: e.kind, look: e.look })) {
-      err(`Some shots had no room for ${e.name.trim()}: a shot follows at most 4 pictures and 3 sounds.`);
+    const c = await castEntry(id);
+    if (!addCastToShots(c)) {
+      err(`Some shots had no room for ${c.name}: a shot follows at most 4 pictures and 3 sounds.`);
     }
   } catch (ex) {
     err(String(ex.message || ex));

@@ -32,6 +32,8 @@ import { castTile, fetchCast } from './cast.js';
 // chosen against the body limit in http.rs: a 4096² PNG is ~25 MB against a
 // 32 MB cap, while a 6000 px phone photo would not fit at all.
 const MAX_UPLOAD_SIDE = 4096;
+// http.rs's MAX_UPLOAD: a PNG over it is redrawn, which compresses it anew.
+const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
 
 // Whatever the browser can decode becomes a PNG on the way out.
 //
@@ -45,14 +47,20 @@ export async function upload(file) {
   if (!file || !file.type.startsWith('image/')) throw new Error('that is not an image');
   const bmp = await createImageBitmap(file);
   const scale = Math.min(1, MAX_UPLOAD_SIDE / Math.max(bmp.width, bmp.height));
-  const w = Math.max(1, Math.round(bmp.width * scale));
-  const h = Math.max(1, Math.round(bmp.height * scale));
-  const cv = document.createElement('canvas');
-  cv.width = w;
-  cv.height = h;
-  cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
+  // A PNG that needs no shrinking goes as it is: a redraw would strip the
+  // settings it carries (`pngmeta`), which the server keeps or takes out as
+  // Settings says.
+  let blob = file.type === 'image/png' && scale === 1 && file.size <= MAX_UPLOAD_BYTES ? file : null;
+  if (!blob) {
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    const cv = document.createElement('canvas');
+    cv.width = w;
+    cv.height = h;
+    cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    blob = await new Promise((ok) => cv.toBlob(ok, 'image/png'));
+  }
   bmp.close?.();
-  const blob = await new Promise((ok) => cv.toBlob(ok, 'image/png'));
   if (!blob) throw new Error('the browser could not encode that image');
 
   // Raw bytes, not JSON: /upload is the one route with a binary body, which is

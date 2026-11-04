@@ -186,7 +186,7 @@ yasdig also writes its own record beside it, holding the rest of the Image tab:
 the refine and hi-res settings, the prompt as you typed it before its
 `{variables}` rolled, and the LoRA picker. No file path is ever written.
 
-**Load settings from a PNG…** under the prompts, or dropping a PNG on the prompt box,
+**Settings from a PNG → Upload…** under the prompts, or dropping a PNG on the prompt box,
 puts them back. A yasdig PNG restores everything, so Generate makes the same
 picture again. A PNG from A1111, Forge or Civitai fills what it names and leaves
 every other box alone. A seed from another program gives a close picture rather than
@@ -854,7 +854,7 @@ since they no longer cover it.
 **Continue or cut.** One frame is all that carries across a seam, so a face that
 leaves the picture and comes back is drawn anew and may not match. A shot can be a
 **Cut** instead of *Continue*: it starts fresh, a new camera shot, and doesn't join the
-frame before. A cut can **start from an image** (*Start from image…*, from your
+frame before. A cut can **start from an image** (*Start from image*: *Choose…* from your
 outputs, or *Upload…*): a keyframe you drew on the Image tab, which is how a TI2V-5B or A14B clip
 changes scene. With MiniMax H3 a cut may instead follow up to four **reference
 pictures** (a face, a costume, a place) from your outputs or an upload — say in its
@@ -874,7 +874,9 @@ yasdig can't tell them apart: Get models has both, and the **Ref2VA** one is the
 MiniMax made for following references — pick it for shots that do.
 
 **What is said, heard and scored (MiniMax H3).** With its audio VAE, an H3 shot also
-has **Who is in it**, **Spoken** — one line each, `Mara: Who's there?`, with
+has **Who is in it** (a chip per name: type one, or *Add cast…* — on a shot that starts
+fresh that brings the member's picture as a reference and their voice as a sound),
+**Spoken** — one line each, `Mara: Who's there?`, with
 `(voiceover)` after the name for a voice heard over the shot with closed lips, and a
 language other than English the same way, `Leo (Danish): Hej.` — **Sound** (empty is
 silence) and **Music** (only the audience hears it; empty is none). yasdig writes these

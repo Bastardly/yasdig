@@ -181,9 +181,11 @@ const HELP = [
         + 'by far the most reliable way to control what the clip contains; without '
         + 'one the model runs as plain text-to-video.' },
   { ids: ['vshotcast'],
-    text: 'Who is in the shot, by the names Spoken uses, commas between. Anyone '
-        + 'here with no line is told to stay silent, lips closed: MiniMax H3 fills '
-        + 'time nobody accounted for with speech nobody wrote.' },
+    text: 'Who is in the shot, by the names Spoken uses: type a name, or Add cast… '
+        + 'for someone from the Cast tab — on a shot that starts fresh their picture '
+        + 'becomes a reference and their voice a sound. Anyone here with no line is '
+        + 'told to stay silent, lips closed: MiniMax H3 fills time nobody accounted '
+        + 'for with speech nobody wrote.' },
   { ids: ['vshotlines'],
     text: 'What is said, one line each: Mara: Who’s there? Put (voiceover) after '
         + 'the name for a voice heard over the shot with the speaker’s lips closed, '
@@ -474,7 +476,8 @@ const HELP = [
         + 'read — and the rest of the Image tab’s settings for yasdig. Dropping such a '
         + 'PNG on the prompt box loads them back. Turn it off if you share pictures '
         + 'and would rather your prompts did not travel with them. No file paths are '
-        + 'ever written.' },
+        + 'ever written. A PNG you upload keeps the settings it carries while this '
+        + 'is on; off, they are taken out.' },
   { ids: ['setvideosave'],
     text: 'What the clip dialog’s Save to output writes into the output folder. A '
         + 'video file is an .avi that any video player opens (with sound, for a model '
