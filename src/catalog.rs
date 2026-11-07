@@ -267,6 +267,11 @@ pub struct File {
     /// this `dest` at this length ([`Catalog::distilled`]) as a layer over the
     /// family's recipe.
     pub distilled: Option<Turbo>,
+    /// Earlier cards' files this one supersedes, relative to where `dest` is:
+    /// they still fit the slot, but don't count as having this file, so the
+    /// card offers it (LTX-2.5's bf16 encoder ignored prompts).
+    #[serde(default)]
+    pub replaces: Vec<String>,
 }
 
 impl Catalog {

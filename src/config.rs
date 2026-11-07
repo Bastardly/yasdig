@@ -2137,9 +2137,10 @@ impl VideoFamily {
             label: "Text encoder",
             fits: |r| matches!(r, Role::Llm(LlmKind::Gemma4Ltx { .. })),
             dir: "text_encoders",
-            // The Convert tab's q8_0 copy of the card's bf16 (`convert::output_path`):
-            // discovery prefers it beside the bf16, which drew stock scenes.
-            file: "gemma4-12b-with-proj-ltx-2.5-bf16-q8_0.gguf",
+            // The card's Q4_K_M (Rootport's, from Lightricks' bf16). Lightricks'
+            // bf16 drew stock scenes for prompts a q8_0 copy followed; a copy
+            // Convert made of it is still preferred over it (`video_components`).
+            file: "LTX-2.5-gemma4-12b-text-encoder-Q4_K_M.gguf",
             optional: false,
         };
         const LTX23_CONNECTORS: PartSlot = PartSlot {

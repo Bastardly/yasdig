@@ -66,7 +66,7 @@ function syncPartNote() {
   const bf16 = currentVideoModel()?.family === 'ltx_2_5' && /\.safetensors$/i.test(path);
   note.hidden = !bf16;
   note.textContent = bf16
-    ? 'This bf16 text encoder can ignore the prompt on LTX-2.5. Convert it to q8_0 on the '
+    ? 'This bf16 text encoder can ignore the prompt on LTX-2.5. Get models fetches a Q4_K_M copy, or convert this one to q8_0 on the '
       + 'Convert tab (about 15 GB, a few minutes); the copy is picked here from then on.'
     : '';
 }

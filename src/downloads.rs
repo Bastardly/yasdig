@@ -542,7 +542,8 @@ fn present(root: &Path, e: &Entry, f: &File, found: &[Found]) -> Option<PathBuf>
     if e.slot(f).is_none() && Catalog::get().has_several(e.family) {
         return None;
     }
-    found.iter().find(|x| e.fits(f, &x.path, &x.role)).map(|x| x.path.clone())
+    let replaced = |x: &Found| f.replaces.iter().any(|r| x.path == root.join(r));
+    found.iter().find(|x| !replaced(x) && e.fits(f, &x.path, &x.role)).map(|x| x.path.clone())
 }
 
 /// The files that may already fill an entry's parts: the image scan for an
@@ -822,6 +823,23 @@ mod tests {
         assert_eq!(llm.name.as_deref(), Some("te/my-qwen3-8b.gguf"));
         // An SD VAE is not a Flux.2 VAE, whatever it is called.
         assert_eq!(file_state(dir.as_path(), e, file(e, "vae"), &found, &st).state, "missing");
+    }
+
+    /// LTX-2.5's bf16 encoder fits the slot but is what the card's Q4_K_M
+    /// replaces, so the card still offers it; a copy Convert made counts.
+    #[test]
+    fn a_replaced_file_is_not_had() {
+        let dir = tmpdir("replaced");
+        let e = Catalog::get().video.iter().find(|e| e.id == "ltx-2.5-distilled-q4").unwrap();
+        let enc = |name: &str| Found {
+            path: dir.join("text_encoders").join(name),
+            role: Role::Llm(LlmKind::Gemma4Ltx { dim: 3840 }),
+        };
+        let st = State::default();
+        let bf16 = [enc("gemma4-12b-with-proj-ltx-2.5-bf16.safetensors")];
+        assert_eq!(file_state(dir.as_path(), e, file(e, "llm"), &bf16, &st).state, "missing");
+        let q8 = [enc("gemma4-12b-with-proj-ltx-2.5-bf16-q8_0.gguf")];
+        assert_eq!(file_state(dir.as_path(), e, file(e, "llm"), &q8, &st).state, "have");
     }
 
     /// MOSS-Image has two cards, INT8 and BF16: one installed is not the

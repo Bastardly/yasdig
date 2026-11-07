@@ -607,7 +607,7 @@ bytes = 605254808
 # checkpoints, 8 steps at CFG 1 on a fixed schedule — which their headers
 # can't tell from the dev files, so the settings ride on the file
 # (`distilled`, the schedule a `config::VIDEO_SIGMA_PRESETS` row). unsloth's
-# repos, ungated (Lightricks' own 2.5 repo is gated); the 2.3 upscaler is
+# repos, ungated (Lightricks' own 2.5 repo is gated), but 2.5's encoder; the 2.3 upscaler is
 # Lightricks' (ungated). Checked 2026-11-07: listing, then HEAD through the
 # redirect for every length. The parts of each card carry its release in
 # their metadata (`model_version`), so 2.3's never fill a 2.5 slot.
@@ -615,7 +615,7 @@ bytes = 605254808
 id = "ltx-2.5-distilled-q4"
 family = "ltx_2_5"
 label = "LTX-2.5 distilled (Q4_K_M GGUF)"
-note = "Video with sound, 8 steps at 24 fps, with a ×2 latent upscaler for Hi-res. About 42 GB of files: its Gemma 4 text encoder is 26 GB at bf16 and streams from the SSD. Its licence and its text encoder's restrict how they may be used; read them on the models' pages before downloading."
+note = "Video with sound, 8 steps at 24 fps, with a ×2 latent upscaler for Hi-res. About 26 GB of files. Its licence and its text encoder's restrict how they may be used; read them on the models' pages before downloading."
 
 [[video.file]]
 slot = "model"
@@ -626,9 +626,14 @@ distilled = { steps = 8, cfg_scale = 1.0, sigmas = "ltx-2-distilled" }
 
 [[video.file]]
 slot = "llm"
-url = "https://huggingface.co/unsloth/LTX-2.5-GGUF/resolve/main/text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"
-dest = "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"
-bytes = 26263858182
+# Not unsloth's bf16: on it 2.5 drew a man talking to camera for prompts a
+# quantized copy followed, same seed (2026-11-07). Rootport's Q4_K_M of that
+# same file (the card says so, with its SHA-256), the projection and tokenizer
+# inside, ungated; elix3r's GGUFs are gated. HEAD-checked 2026-11-07.
+url = "https://huggingface.co/Rootport/Nz-Gemma4-12B-LTX25/resolve/main/TextEncoder/LTX-2.5-gemma4-12b-text-encoder-Q4_K_M.gguf"
+dest = "text_encoders/LTX-2.5-gemma4-12b-text-encoder-Q4_K_M.gguf"
+bytes = 9231374624
+replaces = ["text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"]
 
 [[video.file]]
 slot = "vae"

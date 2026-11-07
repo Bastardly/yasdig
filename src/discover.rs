@@ -1795,13 +1795,17 @@ pub fn video_components(family: VideoFamily, found: &[Found], dir: &Path) -> Vec
         .map(|slot| {
             // The conventional file first when it is here: LTX-2.3's and
             // 2.5's upscalers fit either, and only the name the catalog gave
-            // each says which belongs to which.
+            // each says which belongs to which. Then a GGUF over a
+            // safetensors: the Convert tab writes its copy beside the source,
+            // and LTX-2.5's bf16 encoder ignored prompts its q8_0 copy followed.
             let fits = |f: &&Found| (slot.fits)(&f.role);
             let named = |f: &&Found| f.path.file_name().is_some_and(|n| n == slot.file);
+            let gguf = |f: &&Found| f.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gguf"));
             let path = found
                 .iter()
                 .filter(fits)
                 .find(named)
+                .or_else(|| found.iter().filter(fits).find(gguf))
                 .or_else(|| found.iter().find(fits))
                 .map(|f| f.path.clone());
             let path = match path {
@@ -2666,6 +2670,30 @@ mod tests {
         assert_eq!(c.llm, Some(dir.join("text_encoders/qwen_3_4b.safetensors")));
         // Bundled needs nothing, whatever the family.
         assert_eq!(image_components(ImageFamily::ZImage, true, &found, dir), None);
+    }
+
+    /// LTX-2.5's encoder: the card's file first; without it a GGUF (a copy
+    /// Convert made of the bf16) over the bf16 it was made from.
+    #[test]
+    fn a_part_prefers_the_cards_file_then_a_gguf() {
+        let dir = Path::new("/v");
+        let enc = |name: &str| Found {
+            path: dir.join("text_encoders").join(name),
+            role: Role::Llm(LlmKind::Gemma4Ltx { dim: 3840 }),
+        };
+        let llm = |found: &[Found]| {
+            video_components(VideoFamily::Ltx25, found, dir)
+                .into_iter()
+                .find(|(k, _)| *k == "llm")
+                .and_then(|(_, p)| p)
+                .unwrap()
+        };
+        let bf16 = "gemma4-12b-with-proj-ltx-2.5-bf16.safetensors";
+        let q8 = "gemma4-12b-with-proj-ltx-2.5-bf16-q8_0.gguf";
+        let card = "LTX-2.5-gemma4-12b-text-encoder-Q4_K_M.gguf";
+        assert_eq!(llm(&[enc(bf16), enc(q8)]), dir.join("text_encoders").join(q8));
+        assert_eq!(llm(&[enc(bf16), enc(q8), enc(card)]), dir.join("text_encoders").join(card));
+        assert_eq!(llm(&[enc(bf16)]), dir.join("text_encoders").join(bf16));
     }
 
     #[test]

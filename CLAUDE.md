@@ -701,6 +701,8 @@ binary); `doctor` warns when missing.
 - **Present = a scanned file fits the slot**, not "dest exists". A `dest` holding
   something else is `wrong`, never overwritten. State keyed by `dest`.
 - **After the rename the file is `identify`'d** against its slot; kept even if wrong.
+- **`File.replaces`**: an earlier card's file that still fits the slot but doesn't
+  count as had, so the card offers its successor (LTX-2.5's bf16 encoder).
 - **Own lane, never the job queue**; *Close server* calls `cancel_all`. Cancel keeps
   the `.part`.
 
@@ -1844,9 +1846,10 @@ from `family` goes on `VideoModelDto`.
     `text_embedding_projection` (`Gemma4Ltx`) — a stock Gemma 4 is `Unknown`.
     Frames `8k+1` down, sizes 32. **2.5's bf16 encoder ignores prompts**: it drew a
     man talking to camera where its q8_0 copy drew the prompt, same seed
-    (2026-11-07). Convert takes it through `-m` (`Slot::for_role`), and
-    `LTX25_LLM.file` names that copy (`convert::output_path`), so discovery
-    prefers it; `#vpartnote` says so while the bf16 is picked. LTX prompts go
+    (2026-11-07). The card fetches Rootport's Q4_K_M (`LTX25_LLM.file`);
+    Convert takes a bf16 through `-m` (`Slot::for_role`), and `video_components`
+    prefers a GGUF beside it after the named file; `#vpartnote` says so while
+    the bf16 is picked. LTX prompts go
     out in ASCII punctuation (`sd::ascii_punctuation`), a precaution only — it
     was blamed first, but the vocabularies agree on ’ and —. **The two upscalers are identical and unversioned**:
     `video_components` prefers the file named as the slot's `file`.
