@@ -343,6 +343,18 @@ impl Catalog {
             .as_ref()
     }
 
+    /// [`Catalog::distilled`] for a video model file: a `[[video]]` card's
+    /// `model` file at its own dest under the video dir and its own length.
+    pub fn video_distilled(&self, video_dir: &Path, path: &Path) -> Option<&Turbo> {
+        let len = std::fs::metadata(path).ok()?.len();
+        self.video
+            .iter()
+            .flat_map(|e| &e.file)
+            .find(|f| f.slot == "model" && f.bytes == len && video_dir.join(&f.dest) == path)?
+            .distilled
+            .as_ref()
+    }
+
     /// Whether `family` has more than one card — two precisions of one model,
     /// whose model files must then be told apart by name (`downloads::present`).
     pub fn has_several(&self, family: Family) -> bool {
@@ -440,6 +452,8 @@ fn video_model_fits(family: VideoFamily, slot: &str, path: &Path, role: &Role) -
         (VideoFamily::WanDense, DitKind::WanOther { .. }, "model") => true,
         (VideoFamily::WanDense, DitKind::Wan22A14b, "model") => half.is_none(),
         (VideoFamily::MinimaxH3, DitKind::MinimaxH3, "model") => true,
+        (VideoFamily::Ltx23, DitKind::Ltx(crate::discover::LtxVersion::V23), "model") => true,
+        (VideoFamily::Ltx25, DitKind::Ltx(crate::discover::LtxVersion::V25), "model") => true,
         _ => false,
     }
 }
@@ -482,7 +496,15 @@ fn parse(src: &str) -> Result<Catalog> {
             if f.bytes == 0 {
                 bail!("catalog: {}'s {} has no size", e.id, f.dest);
             }
-            if let Some(d) = &f.distilled {
+            if let (Some(d), Family::Video(fam)) = (&f.distilled, e.family) {
+                if f.slot != "model" {
+                    bail!("catalog: {}'s distilled settings belong on its model file", e.id);
+                }
+                let known = |s: &str| crate::config::VIDEO_SIGMA_PRESETS.iter().any(|(n, fs, ..)| *n == s && fs.contains(&fam));
+                if d.sigmas.as_deref().is_some_and(|s| !known(s)) {
+                    bail!("catalog: {}'s distilled sigmas is no {} preset", e.id, fam.label());
+                }
+            } else if let Some(d) = &f.distilled {
                 let fam = match e.family {
                     Family::Image(fam) if f.slot == "model" => fam,
                     _ => bail!("catalog: {}'s distilled settings belong on an image model file", e.id),

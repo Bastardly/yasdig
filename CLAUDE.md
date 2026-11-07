@@ -1807,6 +1807,25 @@ from `family` goes on `VideoModelDto`.
   - **H3 has its own VAE** (`VaeKind::MinimaxH3`, tested before the Wan VAE arm: its
     convolutional encoder has `conv2`) and `Role::AudioVae`. Recipe: CFG 1, `disk`
     memory (`FamilyRecipe::memory`; the 18 GB encoder is past the GTT).
+  - **LTX-2.3 and 2.5 are two families** (`VideoFamily::Ltx23`/`Ltx25`, `is_ltx`;
+    `discover::ltx`, ahead of every VAE arm: its audio VAE has the LDM layout, its
+    video VAE Wan's, its Gemma 4 reads as a Qwen3). DiT: `adaln_single` +
+    `audio_patchify_proj` (without the latter it is PixArt), 2.5 by
+    `keyframes_abs_pos_embedding`. **VAEs say their release only in metadata**
+    (`__metadata__.model_version`, `Tensors::version`); `None` fits both
+    (`LtxVersion::takes`). 2.5's diffusion-decoder VAE (`decoder.diff_blocks`) is
+    `Unsupported` naming the `-conv` file. 2.3's encoder is a stock Gemma 3 plus
+    `--embeddings-connectors`; 2.5's is Lightricks' Gemma 4 *with*
+    `text_embedding_projection` (`Gemma4Ltx`) — a stock Gemma 4 is `Unknown`.
+    Frames `8k+1` down, sizes 32. **The two upscalers are identical and unversioned**:
+    `video_components` prefers the file named as the slot's `file`.
+  - **LTX hi-res is in the one run** (`VideoModel.hires`, `--hires
+    --hires-upscalers-dir <parent> --hires-upscaler <stem>`: sd-cli refuses a path
+    or an extension there); `-W/-H` are the first pass's, the clip comes out ×2
+    (`finish` reads it off the frames; `plan_clip` doubles it). **The distilled files
+    are the catalog's** (`Catalog::video_distilled`, dest + length, in
+    `video_models_untuned`): steps/CFG and `VIDEO_SIGMA_PRESETS` (`--sigmas` +
+    `--hires-sigmas`). `--sigmas` goes only while `steps` is its length.
   - **Sound only survives in a container**: sd-cli drops audio with a `%03d` `-o`. A
     model with `audio_vae` generates into `clip.avi` (`VideoStore::prepare(id, true)`),
     `unpack` splits it into frames + `audio.wav`; the AVI is kept for download.

@@ -26,7 +26,7 @@ doesn't list.
 
 Put model files anywhere under `models/`. Every file is **identified by reading its
 header** — the tensor names inside it — so neither the file name nor the folder
-matters, and a file that isn't an image model (an LTX video model, a loose VAE) is
+matters, and a file that isn't an image model (a video model, a loose VAE) is
 left out of the model select and named by `doctor` instead. No config edit is needed
 to add a model.
 

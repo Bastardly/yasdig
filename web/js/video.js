@@ -51,7 +51,7 @@ function currentVideoModel() {
 // The model's separate files, the Image tab's rows from the same factory. An
 // optional part (H3's audio VAE, VACE's CLIP-Vision) can be left out.
 const videoParts = partRows({
-  el: 'vpartrows', prefix: 'vpart', none: 'None', onChange: () => syncReady(),
+  el: 'vpartrows', prefix: 'vpart', none: 'None', onChange: () => { syncReady(); syncHires(); },
 });
 
 // The clip's LoRAs: the Image tab's picker, offered what fits this video
@@ -788,6 +788,23 @@ function syncReady() {
   $('vgo').textContent = pending ? 'Queue another clip' : 'Generate clip';
 }
 
+// LTX's *Hi-res ×2*: only with a latent upscaler in its parts, and the
+// note says the size the clip comes out at.
+function syncHires() {
+  const m = currentVideoModel();
+  $('vhiresrow').hidden = !m?.ltx;
+  if (!m?.ltx) return;
+  const has = !!videoParts.picked().latent_upscaler;
+  $('vhires').disabled = !has;
+  if (!has) $('vhires').checked = false;
+  const w = numOr('vw'), h = numOr('vh');
+  $('vhiresnote').textContent = !has
+    ? 'Needs the latent upscaler (Get models has it on the LTX cards).'
+    : $('vhires').checked && w && h
+      ? `Drawn at ${w}×${h}, refined at ${w * 2}×${h * 2} — the clip's size.`
+      : 'Draws at this size, then enlarges ×2 and refines it in the same run.';
+}
+
 // Which rows hold something other than what discovery picked — said in the
 // Generation line, since a clip made with another VAE looks different.
 function partsDeparted() {
@@ -822,7 +839,7 @@ function syncVideoSummaries() {
   const picked = partsDeparted();
   const loras = videoLoras.get();
   $('vsum-gen').textContent = name
-    ? `— ${name} · ${$('vw').value}×${$('vh').value} · ${$('vsteps').value} steps`
+    ? `— ${name} · ${$('vw').value}×${$('vh').value}${!$('vhiresrow').hidden && $('vhires').checked ? ' · Hi-res ×2' : ''} · ${$('vsteps').value} steps`
       + (picked.length ? ` · own ${picked.join(', ')}` : '')
       + (loras.length ? ` · LoRA: ${loras.map((l) => l.name.split('/').pop().replace(/\.[^.]+$/, '')).join(', ')}` : '') : '';
   $('vsum-gen').classList.toggle('on', picked.length > 0 || loras.length > 0);
@@ -921,6 +938,8 @@ function syncVideo() {
   $('vsampler').value = m.sampler;
   $('vshift').value = m.flow_shift ?? '';
   $('vtiling').checked = !!m.vae_tiling;
+  $('vhires').checked = !!m.hires;
+  syncHires();
   $('vmemory').value = m.memory_mode ?? 'ram';
   // The second expert's knobs only exist for the pair.
   $('vmoe').hidden = !m.is_moe;
@@ -945,6 +964,7 @@ const VIDEO_KNOBS = [
   ['flow_shift', 'vshift', 'blank'], ['high_noise_steps', 'vhsteps', 'moe'],
   ['high_noise_cfg_scale', 'vhcfg', 'moe'], ['vae_tiling', 'vtiling', 'check'],
   ['memory', 'vmemory', 'text'], ['negative_prompt', 'vnegative', 'text'],
+  ['hires', 'vhires', 'ltx'],
 ];
 
 async function saveVideoDefaults(clear) {
@@ -963,6 +983,7 @@ async function saveVideoDefaults(clear) {
       continue;
     }
     if (kind === 'check') { values[key] = $(id).checked; continue; }
+    if (kind === 'ltx') { if (m.ltx) values[key] = $(id).checked; continue; }
     if (kind === 'text') { values[key] = $(id).value; continue; }
     if (kind === 'blank' && $(id).value.trim() === '') { values[key] = null; continue; }
     const n = parseFloat($(id).value);
@@ -1049,6 +1070,7 @@ function vidPayload(rows) {
     sampler: $('vsampler').value || null,
     vae_tiling: $('vtiling').checked,
     memory: $('vmemory').value || null,
+    hires: m && m.ltx ? $('vhires').checked : null,
     parts: videoParts.picked(),
     // Always sent, `[]` included: the picker is the whole answer.
     loras: videoLoras.get(),
@@ -1431,6 +1453,8 @@ function applyClip(c) {
   $('vsampler').value = v.sampler;
   $('vshift').value = v.flow_shift ?? '';
   $('vtiling').checked = !!v.vae_tiling;
+  $('vhires').checked = !!v.hires;
+  syncHires();
   // Memory is not restored, for the image tab's reason: it is how a run fits
   // on this machine now, not part of the clip.
   $('vmoe').hidden = !(currentVideoModel() || {}).is_moe;
@@ -1677,6 +1701,9 @@ export function initVideo() {
   });
   for (const id of ['vw', 'vh', 'vfps']) {
     $(id).addEventListener('input', syncVideoNote);
+  }
+  for (const id of ['vw', 'vh', 'vhires']) {
+    $(id).addEventListener(id === 'vhires' ? 'change' : 'input', syncHires);
   }
   for (const id of ['vw', 'vh']) {
     $(id).addEventListener('change', () => {

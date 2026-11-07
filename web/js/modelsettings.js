@@ -207,7 +207,7 @@ function drawVideo(list) {
 
 async function clearVideo(name) {
   const knobs = ['width', 'height', 'frames', 'fps', 'steps', 'cfg_scale', 'sampler', 'flow_shift',
-    'high_noise_steps', 'high_noise_cfg_scale', 'vae_tiling', 'memory', 'negative_prompt'];
+    'high_noise_steps', 'high_noise_cfg_scale', 'vae_tiling', 'memory', 'negative_prompt', 'hires'];
   const v = videoListing.find((x) => x.name === name);
   try {
     await post('/model-settings', {

@@ -375,6 +375,12 @@ const HELP = [
         + 'longer at the noisy end, which stabilises large motion and camera '
         + 'moves; lower keeps fine texture. Wan’s own recommendation is around 5 '
         + '— move it a step at a time.' },
+  { ids: ['vhires'],
+    text: 'LTX’s own two-stage render: the clip is drawn at the size above, '
+        + 'its latent enlarged ×2 by the latent upscaler, and a few more steps '
+        + 'refine it at twice the size — all in one run. Much cheaper than '
+        + 'drawing big from the start. If the refine runs out of memory, draw '
+        + 'smaller or stream from the SSD.' },
   { ids: ['vtiling'],
     text: 'Decode the frames in tiles instead of all at once. The VAE is the '
         + 'memory-hungry end of a clip, so this is the first thing to reach for '

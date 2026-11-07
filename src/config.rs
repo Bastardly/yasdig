@@ -1795,6 +1795,16 @@ pub enum VideoFamily {
     /// they load one after the other and stream from the SSD.
     #[serde(rename = "minimax_h3")]
     MinimaxH3,
+    /// LTX-2.3: video with sound from one 22B transformer, a Gemma 3 12B
+    /// encoder whose hidden states go through a separate text projection
+    /// (`--embeddings-connectors`), and its own video and audio VAEs.
+    #[serde(rename = "ltx_2_3")]
+    Ltx23,
+    /// LTX-2.5: 2.3's architecture with a learned keyframe position and no
+    /// FFN biases, conditioned by Lightricks' Gemma 4 12B with the text
+    /// projection inside — so one file fewer than 2.3.
+    #[serde(rename = "ltx_2_5")]
+    Ltx25,
 }
 
 impl VideoFamily {
@@ -1805,22 +1815,32 @@ impl VideoFamily {
     /// `match` in this impl is exhaustive, so a new variant cannot be added
     /// without at least being *considered* everywhere it matters. The LoRA
     /// listing reads it too, for the families a LoRA fits.
-    pub const ALL: [VideoFamily; 5] = [
+    pub const ALL: [VideoFamily; 7] = [
         VideoFamily::Wan22Ti2v5b,
         VideoFamily::Wan22A14b,
         VideoFamily::WanDense,
         VideoFamily::Wan21Vace,
         VideoFamily::MinimaxH3,
+        VideoFamily::Ltx23,
+        VideoFamily::Ltx25,
     ];
+
+    /// Either LTX-2 release: one architecture, so one set of rules for the
+    /// grid, the flags and the latent upscaler.
+    pub fn is_ltx(self) -> bool {
+        matches!(self, VideoFamily::Ltx23 | VideoFamily::Ltx25)
+    }
 
     /// Multiple both dimensions must be. sd.cpp computes it as
     /// `vae_scale_factor * diffusion_model_down_factor` (`align_image_size`,
     /// `src/pipeline/request.cpp`); every video DiT has a down factor of 2, so
     /// this is twice the VAE's spatial factor — 8 for `wan_2.1_vae`, 16 for the
     /// TI2V-5B and H3 VAEs (`get_scale_factor`, `src/model/vae/vae.hpp`).
+    /// LTX is the exception both ways: a 32× VAE and a transformer that
+    /// doesn't patchify (`get_diffusion_model_down_factor` is 1), so 32 too.
     pub fn size_multiple(self) -> u32 {
         match self {
-            VideoFamily::Wan22Ti2v5b | VideoFamily::MinimaxH3 => 32,
+            VideoFamily::Wan22Ti2v5b | VideoFamily::MinimaxH3 | VideoFamily::Ltx23 | VideoFamily::Ltx25 => 32,
             VideoFamily::Wan22A14b | VideoFamily::Wan21Vace | VideoFamily::WanDense => 16,
         }
     }
@@ -1840,13 +1860,15 @@ impl VideoFamily {
     /// integer division truncates, so 34 frames comes back 33: it rounds *down*
     /// to `4k+1`. H3 has its own branch, `while (frames % 17 != 5) ++frames`,
     /// which rounds *up* to `17k+5` off a floor of 5. Both in
-    /// `align_video_frames`, `src/pipeline/diffusion_engine.cpp`.
+    /// `align_video_frames`, `src/pipeline/diffusion_engine.cpp`. LTX is
+    /// Wan's shape at 8: `((f - 1) / 8) + 1` latent frames, so down to `8k+1`.
     pub fn align_frames(self, frames: u32) -> u32 {
         match self {
             VideoFamily::MinimaxH3 => {
                 let f = frames.max(5);
                 f + (5 + 17 - f % 17) % 17
             }
+            VideoFamily::Ltx23 | VideoFamily::Ltx25 => (frames.max(1) - 1) / 8 * 8 + 1,
             _ => (frames.max(1) - 1) / 4 * 4 + 1,
         }
     }
@@ -1866,6 +1888,12 @@ impl VideoFamily {
                 offset: 5,
                 min: 5,
                 round_up: true,
+            },
+            VideoFamily::Ltx23 | VideoFamily::Ltx25 => FrameGrid {
+                multiple: 8,
+                offset: 1,
+                min: 1,
+                round_up: false,
             },
             _ => FrameGrid {
                 multiple: 4,
@@ -1898,7 +1926,10 @@ impl VideoFamily {
     /// VACE, which reads `-i` as a reference image, nor the dense family, whose
     /// text-to-video checkpoints ignore it (`src/pipeline/video.cpp`).
     pub fn chains(self) -> bool {
-        matches!(self, VideoFamily::Wan22Ti2v5b | VideoFamily::Wan22A14b | VideoFamily::MinimaxH3)
+        matches!(
+            self,
+            VideoFamily::Wan22Ti2v5b | VideoFamily::Wan22A14b | VideoFamily::MinimaxH3 | VideoFamily::Ltx23 | VideoFamily::Ltx25
+        )
     }
 
     /// Whether a shot can follow reference pictures (`-r`): H3's Ref2VA
@@ -1933,6 +1964,8 @@ impl VideoFamily {
                 high_noise_steps: None,
                 flow_shift: Some(3.0),
                 memory: "ram",
+                negative: None,
+                hires_steps: None,
             },
             // The pair splits its schedule: 8 steps of high-noise then 10 of
             // low, at the lower CFG the MoE recipe wants.
@@ -1943,6 +1976,8 @@ impl VideoFamily {
                 high_noise_steps: Some(8),
                 flow_shift: Some(3.0),
                 memory: "ram",
+                negative: None,
+                hires_steps: None,
             },
             // A lone Wan transformer wants the full 20-step schedule, since
             // there is no second expert to hand the rest of it to.
@@ -1953,6 +1988,8 @@ impl VideoFamily {
                 high_noise_steps: None,
                 flow_shift: Some(3.0),
                 memory: "ram",
+                negative: None,
+                hires_steps: None,
             },
             // sd.cpp's `docs/minimax_h3.md`: every example runs at CFG 1 and
             // leaves the steps and the flow shift (12, audio 3) to sd.cpp.
@@ -1966,6 +2003,25 @@ impl VideoFamily {
                 high_noise_steps: None,
                 flow_shift: None,
                 memory: "disk",
+                negative: None,
+                hires_steps: None,
+            },
+            // sd.cpp's `docs/ltx2.md`: euler, CFG 6 on 2.3's dev and 3 on
+            // 2.5's, the ltx2 scheduler and its flow shift left to sd.cpp, and
+            // the negative every example passes. The hi-res refine's steps are
+            // the docs' too (4 and 6). The distilled files are told apart by
+            // the catalog (`File.distilled`), which lays 8 steps at CFG 1 and
+            // their fixed schedule over this. Streamed: 22B plus a 12B encoder
+            // is past the GTT, as H3 is.
+            VideoFamily::Ltx23 | VideoFamily::Ltx25 => FamilyRecipe {
+                fps: 24,
+                steps: 20,
+                cfg_scale: if self == VideoFamily::Ltx23 { 6.0 } else { 3.0 },
+                high_noise_steps: None,
+                flow_shift: None,
+                memory: "disk",
+                negative: Some(LTX_NEGATIVE),
+                hires_steps: Some(if self == VideoFamily::Ltx23 { 4 } else { 6 }),
             },
         }
     }
@@ -1978,6 +2034,8 @@ impl VideoFamily {
             VideoFamily::Wan21Vace => "Wan 2.1 VACE",
             VideoFamily::WanDense => "Wan",
             VideoFamily::MinimaxH3 => "MiniMax H3",
+            VideoFamily::Ltx23 => "LTX-2.3",
+            VideoFamily::Ltx25 => "LTX-2.5",
         }
     }
 
@@ -1990,7 +2048,7 @@ impl VideoFamily {
     /// ([`crate::discover::moe_sibling`]), and offering any other A14B file in
     /// its place would be offering the wrong half as often as the right one.
     pub fn slots(self) -> &'static [PartSlot] {
-        use crate::discover::{LlmKind, Role, VaeKind};
+        use crate::discover::{AudioVaeKind, LlmKind, LtxVersion, Role, VaeKind};
         const UMT5: PartSlot = PartSlot {
             key: "t5xxl",
             label: "Text encoder",
@@ -2043,9 +2101,88 @@ impl VideoFamily {
         const H3_AUDIO_VAE: PartSlot = PartSlot {
             key: "audio_vae",
             label: "Audio VAE",
-            fits: |r| matches!(r, Role::AudioVae),
+            fits: |r| matches!(r, Role::AudioVae(AudioVaeKind::MinimaxH3)),
             dir: "vae",
             file: "minimax_h3_audio_vae_fp32.safetensors",
+            optional: true,
+        };
+        // LTX's are unsloth's release names. A part that carries no version
+        // fits either release; one that does, only its own.
+        const LTX23_VAE: PartSlot = PartSlot {
+            key: "vae",
+            label: "VAE",
+            fits: |r| matches!(r, Role::Vae(VaeKind::Ltx(v)) if LtxVersion::V23.takes(*v)),
+            dir: "vae",
+            file: "ltx-2.3-22b-distilled_video_vae.safetensors",
+            optional: false,
+        };
+        const LTX25_VAE: PartSlot = PartSlot {
+            key: "vae",
+            label: "VAE",
+            fits: |r| matches!(r, Role::Vae(VaeKind::Ltx(v)) if LtxVersion::V25.takes(*v)),
+            dir: "vae",
+            file: "ltx-2.5-video-vae-conv-bf16.safetensors",
+            optional: false,
+        };
+        const LTX23_LLM: PartSlot = PartSlot {
+            key: "llm",
+            label: "Text encoder",
+            fits: |r| matches!(r, Role::Llm(LlmKind::Gemma3 { dim: 3840 })),
+            dir: "text_encoders",
+            file: "gemma-3-12b-it-Q4_K_M.gguf",
+            optional: false,
+        };
+        const LTX25_LLM: PartSlot = PartSlot {
+            key: "llm",
+            label: "Text encoder",
+            fits: |r| matches!(r, Role::Llm(LlmKind::Gemma4Ltx { .. })),
+            dir: "text_encoders",
+            file: "gemma4-12b-with-proj-ltx-2.5-bf16.safetensors",
+            optional: false,
+        };
+        const LTX23_CONNECTORS: PartSlot = PartSlot {
+            key: "embeddings_connectors",
+            label: "Text projection",
+            fits: |r| matches!(r, Role::EmbeddingsConnectors),
+            dir: "text_encoders",
+            file: "ltx-2.3-22b-distilled_embeddings_connectors.safetensors",
+            optional: false,
+        };
+        // Required, unlike H3's: LTX samples its soundtrack jointly with the
+        // picture, and sd.cpp's LTXAV pipeline decodes both.
+        const LTX23_AUDIO_VAE: PartSlot = PartSlot {
+            key: "audio_vae",
+            label: "Audio VAE",
+            fits: |r| matches!(r, Role::AudioVae(AudioVaeKind::Ltx(v)) if LtxVersion::V23.takes(*v)),
+            dir: "vae",
+            file: "ltx-2.3-22b-distilled_audio_vae.safetensors",
+            optional: false,
+        };
+        const LTX25_AUDIO_VAE: PartSlot = PartSlot {
+            key: "audio_vae",
+            label: "Audio VAE",
+            fits: |r| matches!(r, Role::AudioVae(AudioVaeKind::Ltx(v)) if LtxVersion::V25.takes(*v)),
+            dir: "vae",
+            file: "ltx-2.5-audio-vae-bf16.safetensors",
+            optional: false,
+        };
+        // The 2.3 and 2.5 upsamplers have the same tensors and no version:
+        // discovery prefers the file of this row's name, so each release
+        // finds its own when both are here.
+        const LTX23_UPSCALER: PartSlot = PartSlot {
+            key: "latent_upscaler",
+            label: "Latent upscaler (×2)",
+            fits: |r| matches!(r, Role::LatentUpscaler),
+            dir: "latent_upscale_models",
+            file: "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+            optional: true,
+        };
+        const LTX25_UPSCALER: PartSlot = PartSlot {
+            key: "latent_upscaler",
+            label: "Latent upscaler (×2)",
+            fits: |r| matches!(r, Role::LatentUpscaler),
+            dir: "latent_upscale_models",
+            file: "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
             optional: true,
         };
         match self {
@@ -2053,6 +2190,8 @@ impl VideoFamily {
             VideoFamily::Wan22A14b | VideoFamily::WanDense => &[WAN21_VAE, UMT5],
             VideoFamily::Wan21Vace => &[WAN21_VAE, UMT5, CLIP_VISION],
             VideoFamily::MinimaxH3 => &[H3_VAE, H3_LLM, H3_AUDIO_VAE],
+            VideoFamily::Ltx23 => &[LTX23_VAE, LTX23_LLM, LTX23_CONNECTORS, LTX23_AUDIO_VAE, LTX23_UPSCALER],
+            VideoFamily::Ltx25 => &[LTX25_VAE, LTX25_LLM, LTX25_AUDIO_VAE, LTX25_UPSCALER],
         }
     }
 
@@ -2065,8 +2204,37 @@ impl VideoFamily {
             VideoFamily::Wan21Vace => "wan21_vace",
             VideoFamily::WanDense => "wan_dense",
             VideoFamily::MinimaxH3 => "minimax_h3",
+            VideoFamily::Ltx23 => "ltx_2_3",
+            VideoFamily::Ltx25 => "ltx_2_5",
         }
     }
+}
+
+/// LTX-2's negative prompt, the one every example in sd.cpp's `docs/ltx2.md`
+/// passes.
+pub const LTX_NEGATIVE: &str = "worst quality, low quality, blurry, distorted, artifacts";
+
+/// Fixed sigma schedules for video models, by name: `(name, families, the
+/// first pass's `--sigmas`, the hi-res refine's `--hires-sigmas`)`. What a
+/// distilled checkpoint was distilled on, named by its catalog card
+/// (`File.distilled.sigmas`). LTX-2's are the reference pipeline's
+/// `DISTILLED_SIGMA_VALUES` and `STAGE_2_DISTILLED_SIGMA_VALUES`; the tail of
+/// the first is the refine schedule `docs/ltx2.md` shows for `--hires-sigmas`.
+pub const VIDEO_SIGMA_PRESETS: [(&str, &[VideoFamily], &str, &str); 1] = [(
+    "ltx-2-distilled",
+    &[VideoFamily::Ltx23, VideoFamily::Ltx25],
+    "1.0,0.99375,0.9875,0.98125,0.975,0.909375,0.725,0.421875,0.0",
+    "0.909375,0.725,0.421875,0.0",
+)];
+
+/// The `(sigmas, hires_sigmas)` of video preset `name`, if it is one.
+pub fn video_sigmas(name: &str) -> Option<(&'static str, &'static str)> {
+    VIDEO_SIGMA_PRESETS.iter().find(|(n, ..)| *n == name).map(|(_, _, a, b)| (*a, *b))
+}
+
+/// How many steps a comma-separated sigma list runs: one fewer than its values.
+pub fn sigma_steps(list: &str) -> u32 {
+    list.split(',').filter(|v| !v.trim().is_empty()).count().saturating_sub(1) as u32
 }
 
 /// `fs::canonicalize` without Windows' verbatim prefix. There, canonicalizing
@@ -2132,6 +2300,12 @@ pub struct FamilyRecipe {
     pub flow_shift: Option<f32>,
     /// Where a discovered model's weights live, one of [`MEMORY_MODES`].
     pub memory: &'static str,
+    /// The family's own negative prompt, or `None` for Wan's
+    /// ([`default_video_negative`]).
+    pub negative: Option<&'static str>,
+    /// Steps of the hi-res refine after the latent upscaler, for a family
+    /// that has one (LTX).
+    pub hires_steps: Option<u32>,
 }
 
 /// Legal frame counts, as `multiple * k + offset` no lower than `min`, rounded
@@ -2184,6 +2358,30 @@ pub struct VideoModel {
     /// CLIP-Vision tower, which Wan 2.1 I2V and FLF2V want and Wan 2.2 doesn't.
     #[serde(default)]
     pub clip_vision: Option<PathBuf>,
+    /// LTX-2.3's text projection (`--embeddings-connectors`).
+    #[serde(default)]
+    pub embeddings_connectors: Option<PathBuf>,
+    /// LTX-2's ×2 latent spatial upscaler (`--hires-upscaler`). Having one
+    /// doesn't run it: [`VideoModel::hires`] does.
+    #[serde(default)]
+    pub latent_upscaler: Option<PathBuf>,
+    /// Draw small, enlarge the latent ×2 with `latent_upscaler`, refine at
+    /// twice the size: sd.cpp's LTX hi-res, inside the one run. `width`/
+    /// `height` stay the first pass's size; the clip comes out at twice it.
+    #[serde(default)]
+    pub hires: bool,
+    /// Steps of that refine (`--hires-steps`). `None` leaves sd.cpp to trim
+    /// the main schedule by its denoising strength.
+    #[serde(default)]
+    pub hires_steps: Option<u32>,
+    /// A fixed schedule for the first pass (`--sigmas`), what a distilled
+    /// checkpoint was distilled on. Sent only while `steps` is its length:
+    /// change the steps and the scheduler's own schedule runs instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sigmas: Option<String>,
+    /// The refine's fixed schedule (`--hires-sigmas`), sent with `hires`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hires_sigmas: Option<String>,
     #[serde(default = "default_video_width")]
     pub width: u32,
     #[serde(default = "default_video_height")]
@@ -2366,6 +2564,12 @@ impl VideoModel {
             llm: None,
             audio_vae: None,
             clip_vision: None,
+            embeddings_connectors: None,
+            latent_upscaler: None,
+            hires: false,
+            hires_steps: r.hires_steps,
+            sigmas: None,
+            hires_sigmas: None,
             width: default_video_width(),
             height: default_video_height(),
             frames: default_video_frames(),
@@ -2378,7 +2582,7 @@ impl VideoModel {
             high_noise_cfg_scale: None,
             moe_boundary: None,
             vace_strength: None,
-            negative_prompt: default_video_negative(),
+            negative_prompt: r.negative.map_or_else(default_video_negative, str::to_string),
             loras: Vec::new(),
             lora_dir: None,
             picked_loras: Vec::new(),
@@ -2483,6 +2687,23 @@ impl VideoModel {
                 bail!("video '{n}': vace_strength is {s}, must be between 0 and 1");
             }
         }
+        if self.hires && !self.family.is_ltx() {
+            bail!("video '{n}': hi-res ×2 is LTX's latent upscaler; {} has none", self.family.label());
+        }
+        if self.hires && self.latent_upscaler.is_none() {
+            bail!(
+                "video '{n}': hi-res ×2 needs the latent upscaler — Get models → {} has it",
+                self.family.label()
+            );
+        }
+        for (field, list) in [("sigmas", &self.sigmas), ("hires_sigmas", &self.hires_sigmas)] {
+            if let Some(l) = list {
+                let ok = l.split(',').all(|v| v.trim().parse::<f32>().is_ok_and(f32::is_finite));
+                if !ok || sigma_steps(l) == 0 {
+                    bail!("video '{n}': {field} '{l}' is not a list of two or more numbers");
+                }
+            }
+        }
         Ok(())
     }
 
@@ -2496,6 +2717,8 @@ impl VideoModel {
             "llm" => self.llm.as_ref(),
             "audio_vae" => self.audio_vae.as_ref(),
             "clip_vision" => self.clip_vision.as_ref(),
+            "embeddings_connectors" => self.embeddings_connectors.as_ref(),
+            "latent_upscaler" => self.latent_upscaler.as_ref(),
             _ => None,
         }
     }
@@ -2508,6 +2731,8 @@ impl VideoModel {
             "llm" => self.llm = path,
             "audio_vae" => self.audio_vae = path,
             "clip_vision" => self.clip_vision = path,
+            "embeddings_connectors" => self.embeddings_connectors = path,
+            "latent_upscaler" => self.latent_upscaler = path,
             _ => {}
         }
     }
@@ -2523,6 +2748,8 @@ impl VideoModel {
             self.llm.as_ref(),
             self.audio_vae.as_ref(),
             self.clip_vision.as_ref(),
+            self.embeddings_connectors.as_ref(),
+            self.latent_upscaler.as_ref(),
         ]
         .into_iter()
         .flatten()
@@ -3039,12 +3266,25 @@ impl Config {
     pub fn video_models_untuned(&self) -> Vec<VideoModel> {
         let explicit: Vec<VideoModel> = self.video.iter().map(|m| self.resolve_model(m)).collect();
         let mut out = explicit.clone();
+        let catalog = crate::catalog::Catalog::get();
         for m in self.discover_video().models {
             let shadowed = explicit
                 .iter()
                 .any(|e| e.name == m.name || same_file(&e.diffusion_model, &m.diffusion_model));
             if !shadowed {
-                out.push(self.resolve_model(&m));
+                let mut m = self.resolve_model(&m);
+                // A distilled file its header can't tell from the dev one
+                // (LTX's): the catalog's settings for it over the recipe.
+                if let Some(d) = catalog.video_distilled(&self.video_dir(), &m.diffusion_model) {
+                    m.steps = d.steps;
+                    m.cfg_scale = d.cfg_scale;
+                    if let Some((first, refine)) = d.sigmas.as_deref().and_then(video_sigmas) {
+                        m.sigmas = Some(first.to_string());
+                        m.hires_sigmas = Some(refine.to_string());
+                        m.hires_steps = Some(sigma_steps(refine));
+                    }
+                }
+                out.push(m);
             }
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -3063,6 +3303,8 @@ impl Config {
             &mut m.llm,
             &mut m.audio_vae,
             &mut m.clip_vision,
+            &mut m.embeddings_connectors,
+            &mut m.latent_upscaler,
             &mut m.lora_dir,
         ]
         .into_iter()
@@ -4441,7 +4683,10 @@ lora_dir = "adapters"
     #[test]
     fn only_a_first_frame_family_chains() {
         let chains: Vec<_> = VideoFamily::ALL.iter().filter(|f| f.chains()).collect();
-        assert_eq!(chains, [&VideoFamily::Wan22Ti2v5b, &VideoFamily::Wan22A14b, &VideoFamily::MinimaxH3]);
+        assert_eq!(
+            chains,
+            [&VideoFamily::Wan22Ti2v5b, &VideoFamily::Wan22A14b, &VideoFamily::MinimaxH3, &VideoFamily::Ltx23, &VideoFamily::Ltx25]
+        );
     }
 
     #[test]

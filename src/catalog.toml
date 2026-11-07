@@ -602,6 +602,95 @@ url = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_a
 dest = "vae/minimax_h3_audio_vae_fp32.safetensors"
 bytes = 605254808
 
+# LTX-2 (Lightricks): video with sound from one 22B transformer. Two
+# releases, two families: their encoders differ. Both cards are the distilled
+# checkpoints, 8 steps at CFG 1 on a fixed schedule — which their headers
+# can't tell from the dev files, so the settings ride on the file
+# (`distilled`, the schedule a `config::VIDEO_SIGMA_PRESETS` row). unsloth's
+# repos, ungated (Lightricks' own 2.5 repo is gated); the 2.3 upscaler is
+# Lightricks' (ungated). Checked 2026-11-07: listing, then HEAD through the
+# redirect for every length. The parts of each card carry its release in
+# their metadata (`model_version`), so 2.3's never fill a 2.5 slot.
+[[video]]
+id = "ltx-2.5-distilled-q4"
+family = "ltx_2_5"
+label = "LTX-2.5 distilled (Q4_K_M GGUF)"
+note = "Video with sound, 8 steps at 24 fps, with a ×2 latent upscaler for Hi-res. About 42 GB of files: its Gemma 4 text encoder is 26 GB at bf16 and streams from the SSD. Its licence and its text encoder's restrict how they may be used; read them on the models' pages before downloading."
+
+[[video.file]]
+slot = "model"
+url = "https://huggingface.co/unsloth/LTX-2.5-GGUF/resolve/main/distilled/ltx-2.5-22b-distilled-Q4_K_M.gguf"
+dest = "diffusion_models/ltx-2.5-22b-distilled-Q4_K_M.gguf"
+bytes = 13584703872
+distilled = { steps = 8, cfg_scale = 1.0, sigmas = "ltx-2-distilled" }
+
+[[video.file]]
+slot = "llm"
+url = "https://huggingface.co/unsloth/LTX-2.5-GGUF/resolve/main/text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"
+dest = "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"
+bytes = 26263858182
+
+[[video.file]]
+slot = "vae"
+url = "https://huggingface.co/unsloth/LTX-2.5-GGUF/resolve/main/vae/ltx-2.5-video-vae-conv-bf16.safetensors"
+dest = "vae/ltx-2.5-video-vae-conv-bf16.safetensors"
+bytes = 1452269922
+
+[[video.file]]
+slot = "audio_vae"
+url = "https://huggingface.co/unsloth/LTX-2.5-GGUF/resolve/main/vae/ltx-2.5-audio-vae-bf16.safetensors"
+dest = "vae/ltx-2.5-audio-vae-bf16.safetensors"
+bytes = 364866540
+
+[[video.file]]
+slot = "latent_upscaler"
+url = "https://huggingface.co/unsloth/LTX-2.5-GGUF/resolve/main/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
+dest = "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
+bytes = 995778752
+
+[[video]]
+id = "ltx-2.3-distilled-q4"
+family = "ltx_2_3"
+label = "LTX-2.3 distilled (Q4_K_M GGUF)"
+note = "The release before 2.5: the same 22B video-with-sound model on a Gemma 3 text encoder, and about 27 GB of files — the lighter of the two. 8 steps at 24 fps, with a ×2 latent upscaler for Hi-res. Its licence and its text encoder's restrict how they may be used; read them on the models' pages before downloading."
+
+[[video.file]]
+slot = "model"
+url = "https://huggingface.co/unsloth/LTX-2.3-GGUF/resolve/main/distilled/ltx-2.3-22b-distilled-Q4_K_M.gguf"
+dest = "diffusion_models/ltx-2.3-22b-distilled-Q4_K_M.gguf"
+bytes = 14326856736
+distilled = { steps = 8, cfg_scale = 1.0, sigmas = "ltx-2-distilled" }
+
+[[video.file]]
+slot = "llm"
+url = "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf"
+dest = "text_encoders/gemma-3-12b-it-Q4_K_M.gguf"
+bytes = 7300778336
+
+[[video.file]]
+slot = "embeddings_connectors"
+url = "https://huggingface.co/unsloth/LTX-2.3-GGUF/resolve/main/text_encoders/ltx-2.3-22b-distilled_embeddings_connectors.safetensors"
+dest = "text_encoders/ltx-2.3-22b-distilled_embeddings_connectors.safetensors"
+bytes = 2312144712
+
+[[video.file]]
+slot = "vae"
+url = "https://huggingface.co/unsloth/LTX-2.3-GGUF/resolve/main/vae/ltx-2.3-22b-distilled_video_vae.safetensors"
+dest = "vae/ltx-2.3-22b-distilled_video_vae.safetensors"
+bytes = 1452256522
+
+[[video.file]]
+slot = "audio_vae"
+url = "https://huggingface.co/unsloth/LTX-2.3-GGUF/resolve/main/vae/ltx-2.3-22b-distilled_audio_vae.safetensors"
+dest = "vae/ltx-2.3-22b-distilled_audio_vae.safetensors"
+bytes = 364853140
+
+[[video.file]]
+slot = "latent_upscaler"
+url = "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+dest = "latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+bytes = 995743560
+
 # ---------------------------------------------------------------------------
 # Upscalers: the models an Output upscale or the Refine dialog's Upscale can
 # pick instead of FSR. Their own table, because nothing about them is a family:

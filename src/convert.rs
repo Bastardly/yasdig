@@ -201,10 +201,15 @@ impl Slot {
             // what a quantized one decodes to, nor has sd.cpp a converter path
             // for its audio VAE. A tokenizer is JSON.
             Role::Vae(VaeKind::MinimaxH3) => None,
+            // LTX-2's is a 3-D causal VAE sd.cpp has no measured converted
+            // form of either.
+            Role::Vae(VaeKind::Ltx(_)) => None,
             Role::Vae(_) | Role::ImageVae(_) => Some(Slot::Vae),
             Role::Umt5 | Role::T5xxl => Some(Slot::T5xxl),
             Role::ClipL | Role::ClipVision | Role::Lora(_) | Role::Unknown(_) => None,
-            Role::AudioVae | Role::Tokenizer(_) => None,
+            Role::AudioVae(_) | Role::Tokenizer(_) => None,
+            // LTX's are left as shipped until a converted one is measured.
+            Role::EmbeddingsConnectors | Role::LatentUpscaler => None,
             // Image models reach this list through the registry (`candidates`).
             // An `--llm` text encoder can't be converted at all: sd.cpp's
             // `convert_with_components` takes no such path.
@@ -634,6 +639,7 @@ mod tests {
                 .collect(),
             layout,
             arch: None,
+            version: None,
         }
     }
 

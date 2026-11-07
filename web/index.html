@@ -740,6 +740,12 @@
           <input id="vh" type="number" min="64">
         </div>
       </div>
+      <!-- LTX's latent upscaler (`VideoModel::hires`, video.js `syncHires`):
+           the size above is the first pass's, the clip comes out at twice it. -->
+      <div class="checks" id="vhiresrow" hidden>
+        <label><input type="checkbox" id="vhires"> Hi-res ×2</label>
+        <p class="sub" id="vhiresnote"></p>
+      </div>
       <!-- The length is each shot's own (the Shots panel); the rate is the
            clip's. -->
       <label for="vfps">fps</label>

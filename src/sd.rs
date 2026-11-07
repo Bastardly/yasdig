@@ -396,6 +396,7 @@ impl<'a> SdRunner<'a> {
             ("--llm", &m.llm),
             ("--audio-vae", &m.audio_vae),
             ("--clip_vision", &m.clip_vision),
+            ("--embeddings-connectors", &m.embeddings_connectors),
         ] {
             if let Some(p) = path {
                 cmd.args([flag, &path_str(p)]);
@@ -443,6 +444,27 @@ impl<'a> SdRunner<'a> {
         cmd.args(["--sampling-method", &m.sampler]);
         if let Some(shift) = m.flow_shift {
             cmd.args(["--flow-shift", &format!("{shift}")]);
+        }
+        // A distilled schedule only at its own length: sd.cpp would quietly
+        // set the steps to it, and the box would then say one count while
+        // another ran.
+        if let Some(sig) = m.sigmas.as_deref().filter(|s| crate::config::sigma_steps(s) == m.steps) {
+            cmd.args(["--sigmas", sig]);
+        }
+        // LTX's hi-res: sd-cli takes the upscaler as a name under a folder
+        // (`resolve_model_file_from_dir` refuses a path or an extension).
+        if let (true, Some(up)) = (m.hires && m.family.is_ltx(), &m.latent_upscaler) {
+            let dir = up.parent().unwrap_or(Path::new("."));
+            let name = up.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            cmd.arg("--hires");
+            cmd.args(["--hires-upscalers-dir", &path_str(dir)]);
+            cmd.args(["--hires-upscaler", &name]);
+            if let Some(n) = m.hires_steps {
+                cmd.args(["--hires-steps", &n.to_string()]);
+            }
+            if let Some(sig) = &m.hires_sigmas {
+                cmd.args(["--hires-sigmas", sig]);
+            }
         }
 
         // The second expert's half of the schedule. Only for the MoE pair —
@@ -3017,6 +3039,38 @@ lora_dir = "loras""#,
         // An old clip.json, written before picks existed, still reads.
         let old: crate::config::VideoLora = serde_json::from_str(r#"{"name":"a.safetensors","strength":1}"#).unwrap();
         assert_eq!(old.expert, Expert::Both);
+    }
+
+    /// LTX-2.3: the text projection is its own flag, the distilled schedule
+    /// goes only at its own length, and Hi-res names the upscaler by stem
+    /// under its folder (sd-cli refuses a path there).
+    #[test]
+    fn an_ltx_command_sends_its_projection_schedule_and_hires() {
+        let (cfg, mut m) = video_fixture("");
+        m.family = crate::config::VideoFamily::Ltx23;
+        m.high_noise_diffusion_model = None;
+        m.embeddings_connectors = Some(PathBuf::from("/m/te/conn.safetensors"));
+        m.latent_upscaler = Some(PathBuf::from("/m/up/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"));
+        m.sigmas = Some("1.0,0.5,0.0".into());
+        m.hires_sigmas = Some("0.9,0.4,0.0".into());
+        m.hires_steps = Some(2);
+        m.steps = 2;
+        let io = VideoIo { init: None, control: None, out: Path::new("o.avi"), refs: &[], audio: &[] };
+        let a = argv(&SdRunner::new(&cfg).video_cmd(&m, "cat", "", 1, &io));
+        assert_eq!(flag(&a, "--embeddings-connectors"), Some("/m/te/conn.safetensors"));
+        assert_eq!(flag(&a, "--sigmas"), Some("1.0,0.5,0.0"));
+        assert!(!a.iter().any(|x| x == "--hires"), "hi-res is the person's switch");
+        m.hires = true;
+        let a = argv(&SdRunner::new(&cfg).video_cmd(&m, "cat", "", 1, &io));
+        assert!(a.iter().any(|x| x == "--hires"));
+        assert_eq!(flag(&a, "--hires-upscalers-dir"), Some("/m/up"));
+        assert_eq!(flag(&a, "--hires-upscaler"), Some("ltx-2.3-spatial-upscaler-x2-1.1"));
+        assert_eq!(flag(&a, "--hires-steps"), Some("2"));
+        assert_eq!(flag(&a, "--hires-sigmas"), Some("0.9,0.4,0.0"));
+        // Another step count is the scheduler's own schedule.
+        m.steps = 20;
+        let a = argv(&SdRunner::new(&cfg).video_cmd(&m, "cat", "", 1, &io));
+        assert_eq!(flag(&a, "--sigmas"), None);
     }
 
     /// A VACE refine: frames in, frames out, and the input directory is what

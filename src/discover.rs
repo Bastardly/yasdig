@@ -92,6 +92,12 @@ pub struct Tensors {
     /// `blk.N.attn_q_norm` at the same 2560 width, and only this string — `qwen3vl`
     /// against `qwen3` — says which one sd.cpp's Krea 2 or Z-Image would get.
     pub arch: Option<String>,
+    /// A safetensors file's `__metadata__.model_version`, which Lightricks
+    /// write into every LTX-2 part ("2.3.0", "2.5.0"). The one witness for
+    /// which LTX release a VAE, audio VAE or encoder belongs to: 2.3's and
+    /// 2.5's have the same tensors at the same shapes. `None` elsewhere, and
+    /// for a repackaged file that dropped it.
+    pub version: Option<String>,
 }
 
 impl Tensors {
@@ -186,9 +192,18 @@ pub enum Role {
     ClipL,
     /// A CLIP-Vision tower, wanted by Wan 2.1 I2V and FLF2V.
     ClipVision,
-    /// MiniMax H3's audio VAE (`--audio-vae`), a BigVGAN-style decoder. Without
-    /// it H3 still runs and its clip is silent.
-    AudioVae,
+    /// An audio VAE (`--audio-vae`): MiniMax H3's BigVGAN-style decoder, or
+    /// LTX-2's audio VAE with its vocoder. Without one H3 still runs and its
+    /// clip is silent.
+    AudioVae(AudioVaeKind),
+    /// LTX-2.3's text projection (`--embeddings-connectors`): what turns its
+    /// Gemma 3's 49 layers of hidden states into the video and audio streams'
+    /// conditioning. LTX-2.5 carries the same tensors inside its encoder.
+    EmbeddingsConnectors,
+    /// LTX-2's ×2 latent spatial upsampler (`--hires-upscaler`), which sits
+    /// between a small first pass and a short refine at twice the size. The
+    /// 2.3 and 2.5 files are the same shape and carry no version.
+    LatentUpscaler,
     /// A Hugging Face `tokenizer.json` handed to sd-cli as `--tokenizer` — not a
     /// model at all, and the one part read as JSON rather than tensors. See
     /// [`read_tokenizer`].
@@ -243,6 +258,8 @@ pub enum LoraBase {
     Wan(Option<u64>),
     /// A MiniMax H3 LoRA (its `token_refiner`), video too.
     MinimaxH3,
+    /// An LTX-2 LoRA, 2.3 or 2.5 alike.
+    Ltx,
     /// No marker matched. Offered anyway: refusing a file that works because
     /// this couldn't read it is worse than the mismatch the check exists for.
     Unknown,
@@ -263,7 +280,7 @@ impl LoraBase {
                 matches!(family, ImageFamily::Flux3Klein | ImageFamily::Flux3KleinBase)
             }
             LoraBase::Image(f) => f == family,
-            LoraBase::Other(_) | LoraBase::Wan(_) | LoraBase::MinimaxH3 => false,
+            LoraBase::Other(_) | LoraBase::Wan(_) | LoraBase::MinimaxH3 | LoraBase::Ltx => false,
             LoraBase::Unknown => true,
         }
     }
@@ -276,7 +293,8 @@ impl LoraBase {
         use crate::config::VideoFamily as V;
         match self {
             LoraBase::MinimaxH3 => family == V::MinimaxH3,
-            LoraBase::Wan(None) => family != V::MinimaxH3,
+            LoraBase::Ltx => matches!(family, V::Ltx23 | V::Ltx25),
+            LoraBase::Wan(None) => !matches!(family, V::MinimaxH3 | V::Ltx23 | V::Ltx25),
             LoraBase::Wan(Some(3072)) => family == V::Wan22Ti2v5b,
             LoraBase::Wan(Some(5120)) => matches!(family, V::Wan22A14b | V::Wan21Vace | V::WanDense),
             LoraBase::Wan(Some(1536)) => matches!(family, V::Wan21Vace | V::WanDense),
@@ -295,6 +313,7 @@ impl LoraBase {
             LoraBase::Wan(Some(1536)) => "Wan 1.3B",
             LoraBase::Wan(_) => "Wan",
             LoraBase::MinimaxH3 => "MiniMax H3",
+            LoraBase::Ltx => "LTX-2",
             LoraBase::Unknown => "",
         }
     }
@@ -335,6 +354,13 @@ pub enum LlmKind {
     /// width of Klein 9B's Qwen3-8B, so the kind is what keeps each out of the
     /// other's slot.
     Qwen35 { dim: u64 },
+    /// Gemma 3, LTX-2.3's encoder (the 12B is 3840 wide). Stock: LTX-2.3's
+    /// projection is a file of its own ([`Role::EmbeddingsConnectors`]).
+    Gemma3 { dim: u64 },
+    /// Lightricks' Gemma 4 12B with LTX-2.5's text projection inside
+    /// (`text_embedding_projection.`) — LTX-2.5's encoder. A stock Gemma 4
+    /// lacks the projection and is no substitute (sd.cpp's `docs/ltx2.md`).
+    Gemma4Ltx { dim: u64 },
 }
 
 /// Which tokenizer a `tokenizer.json` is, by its vocabulary.
@@ -343,6 +369,47 @@ pub enum TokenizerKind {
     /// Qwen3.5's BPE, a vocabulary of 248 044 — what MOSS-Image requires,
     /// since sd.cpp's built-in Qwen tokenizer is Qwen3's 151 643.
     Qwen35,
+}
+
+/// Which LTX-2 release a file belongs to. The transformer says so in its
+/// tensors (2.5 alone has `keyframes_abs_pos_embedding`, 2.3 alone FFN
+/// biases); a VAE only in its metadata ([`Tensors::version`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LtxVersion {
+    V23,
+    V25,
+}
+
+impl LtxVersion {
+    /// Off a `model_version` string; `None` for anything that isn't one of
+    /// the two.
+    fn of(v: Option<&str>) -> Option<LtxVersion> {
+        match v? {
+            v if v.starts_with("2.3") => Some(LtxVersion::V23),
+            v if v.starts_with("2.5") => Some(LtxVersion::V25),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LtxVersion::V23 => "LTX-2.3",
+            LtxVersion::V25 => "LTX-2.5",
+        }
+    }
+
+    /// Whether a part read as `part` belongs to this release: the same one,
+    /// or a part that doesn't say (a repackage that dropped the metadata).
+    pub fn takes(self, part: Option<LtxVersion>) -> bool {
+        part.is_none_or(|p| p == self)
+    }
+}
+
+/// Whose audio VAE: the two have nothing in common but the flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioVaeKind {
+    MinimaxH3,
+    Ltx(Option<LtxVersion>),
 }
 
 /// The transformer architectures worth telling apart.
@@ -363,6 +430,8 @@ pub enum DitKind {
     WanOther { dim: u64 },
     /// MiniMax H3.
     MinimaxH3,
+    /// LTX-2: joint video and audio, 22B, 48 blocks.
+    Ltx(LtxVersion),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -378,6 +447,9 @@ pub enum VaeKind {
     /// and four image channels (RGBA). An image VAE that looks like a video
     /// one, so it is a kind here, beside the VAE it is shaped like.
     QwenImage21,
+    /// LTX-2's causal video VAE, 128 latent channels at 32× — the
+    /// convolutional one; 2.5's *diffusion* decoder is refused by name.
+    Ltx(Option<LtxVersion>),
 }
 
 impl Role {
@@ -392,7 +464,12 @@ impl Role {
             Role::T5xxl => "T5-XXL text encoder — Flux.1".into(),
             Role::ClipL => "CLIP-L text encoder — Flux.1".into(),
             Role::ClipVision => "CLIP-Vision tower (Wan 2.1 I2V/FLF2V)".into(),
-            Role::AudioVae => "MiniMax H3 audio VAE (video)".into(),
+            Role::AudioVae(AudioVaeKind::MinimaxH3) => "MiniMax H3 audio VAE (video)".into(),
+            Role::AudioVae(AudioVaeKind::Ltx(v)) => format!("{} audio VAE (video)", ltx_label(*v)),
+            Role::EmbeddingsConnectors => "LTX-2.3 text projection (embeddings connectors)".into(),
+            Role::LatentUpscaler => "LTX-2 ×2 latent spatial upscaler (video)".into(),
+            Role::Vae(VaeKind::Ltx(v)) => format!("{} video VAE", ltx_label(*v)),
+            Role::Dit(DitKind::Ltx(v)) => format!("{} video transformer", v.label()),
             Role::Tokenizer(TokenizerKind::Qwen35) => "Qwen3.5 tokenizer.json — MOSS-Image".into(),
             Role::Vae(VaeKind::MinimaxH3) => "MiniMax H3 video VAE".into(),
             Role::Vae(VaeKind::Wan21) => "wan_2.1 VAE — Krea 2, Qwen-Image, and every Wan except the TI2V-5B".into(),
@@ -430,6 +507,11 @@ impl Role {
             Role::Llm(LlmKind::Qwen25Vl { dim }) => format!("Qwen2.5-VL text encoder ({dim} wide)"),
             Role::Llm(LlmKind::Qwen35 { dim: 4096 }) => "Qwen3.5-9B text encoder — MOSS-Image".into(),
             Role::Llm(LlmKind::Qwen35 { dim }) => format!("Qwen3.5 text encoder ({dim} wide)"),
+            Role::Llm(LlmKind::Gemma3 { dim: 3840 }) => "Gemma 3 12B text encoder — LTX-2.3 (video)".into(),
+            Role::Llm(LlmKind::Gemma3 { dim }) => format!("Gemma 3 text encoder ({dim} wide)"),
+            Role::Llm(LlmKind::Gemma4Ltx { dim }) => {
+                format!("Gemma 4 text encoder with LTX-2.5's projection ({dim} wide) — LTX-2.5 (video)")
+            }
             Role::Unsupported(what) => format!("{what}, which this build doesn't run yet"),
             Role::Unknown(why) => why.clone(),
         }
@@ -481,6 +563,7 @@ pub fn read_tensors(path: &Path) -> Result<Tensors> {
                 .collect(),
             layout: Layout::PyTorch,
             arch: None,
+            version: None,
         })
     } else {
         read_safetensors(&mut f)
@@ -507,6 +590,11 @@ fn read_safetensors(f: &mut std::fs::File) -> Result<Tensors> {
     f.read_exact(&mut buf)?;
     let json: BTreeMap<String, serde_json::Value> =
         serde_json::from_slice(&buf).context("the header is not JSON")?;
+    let version = json
+        .get("__metadata__")
+        .and_then(|m| m.get("model_version"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let tensors = json
         .into_iter()
         .filter(|(k, _)| k != "__metadata__")
@@ -528,6 +616,7 @@ fn read_safetensors(f: &mut std::fs::File) -> Result<Tensors> {
         tensors,
         layout: Layout::PyTorch,
         arch: None,
+        version,
     })
 }
 
@@ -613,6 +702,7 @@ fn read_gguf(f: &mut std::fs::File) -> Result<Tensors> {
         tensors,
         layout: Layout::Ggml,
         arch,
+        version: None,
     })
 }
 
@@ -743,6 +833,13 @@ pub fn classify(t: &Tensors) -> Role {
         }
         return Role::Lora(base);
     }
+    // LTX-2, every part. Ahead of everything below, which several of them
+    // would otherwise pass: its audio VAE has the LDM layout
+    // (`decoder.conv_in`, `decoder.mid`) and its video VAE Wan's (`decoder.`
+    // and `conv2`), and its Gemma 4 encoder reads as a 3840-wide Qwen3.
+    if let Some(role) = ltx(t) {
+        return role;
+    }
     // Architectures sd.cpp names and this build doesn't run. Before everything
     // below, because two of them carry a generic marker a supported family
     // tests for: Hunyuan Video has Flux's `double_blocks`, and an SVD is a UNet.
@@ -806,7 +903,7 @@ pub fn classify(t: &Tensors) -> Role {
     // H3's audio VAE: a BigVGAN decoder (`activation_post`, its anti-aliased
     // activation) behind a latent projection. Read off Comfy-Org's release.
     if t.has("dec_in_proj.weight") && t.has("decoder.activation_post.") {
-        return Role::AudioVae;
+        return Role::AudioVae(AudioVaeKind::MinimaxH3);
     }
     // The Wan VAE. `decoder.` plus `conv2` is the shape of it, and the latent
     // width is what separates the two — 16 for 2.1, 48 for the TI2V-5B's — which
@@ -963,6 +1060,13 @@ fn has_dit_prefix(name: &str) -> bool {
 
 fn lora_base(t: &Tensors) -> LoraBase {
     let either = |dotted: &str, flat: &str| t.has(dotted) || t.has(flat);
+
+    // LTX-2's cross-modal attention and its gates' adaLN, which nothing else
+    // has; kohya's flattened spelling has no separator inside either. 2.3's
+    // and 2.5's LoRAs patch the same names, so one base fits both.
+    if t.has("audio_to_video_attn") || t.has("video_to_audio_attn") || t.has("av_ca_") {
+        return LoraBase::Ltx;
+    }
 
     // H3's text refiner, in its own names and diffusers' (`token_refiner.
     // refiner_blocks`). Whole as a path segment: Hunyuan Video's is
@@ -1177,12 +1281,76 @@ fn tensor<'a>(t: &'a Tensors, suffix: &str) -> Option<&'a TensorInfo> {
 /// Every one is a single tensor that nothing supported carries, so the order
 /// among them doesn't matter; what matters is that this runs before the
 /// supported families are tested — see the call site.
+/// LTX-2's parts, or `None`. The transformer is sd.cpp's own test (PixArt
+/// shares the timestep embedding and has no audio patchifier); the rest were
+/// read off Lightricks' and unsloth's releases.
+fn ltx(t: &Tensors) -> Option<Role> {
+    let version = LtxVersion::of(t.version.as_deref());
+    if t.has("adaln_single.emb.timestep_embedder.linear_1.bias") {
+        if !t.has("audio_patchify_proj.weight") {
+            return Some(Role::Unsupported("a PixArt transformer".into()));
+        }
+        // 2.5's learned keyframe position, which 2.3 never had.
+        let v = if t.has("keyframes_abs_pos_embedding") { LtxVersion::V25 } else { LtxVersion::V23 };
+        return Some(Role::Dit(DitKind::Ltx(v)));
+    }
+    if t.has("per_channel_statistics.") && t.has("decoder.") {
+        // 2.5's default VAE decodes by diffusion, which sd.cpp doesn't
+        // implement; its `-conv` sibling is the one that runs.
+        if t.has("decoder.diff_blocks.") {
+            return Some(Role::Unsupported(
+                "LTX-2.5's diffusion video decoder (use ltx-2.5-video-vae-conv-bf16.safetensors instead)".into(),
+            ));
+        }
+        if t.has("audio_vae.") {
+            return Some(Role::AudioVae(AudioVaeKind::Ltx(version)));
+        }
+        if t.has("decoder.up_blocks.") {
+            return Some(Role::Vae(VaeKind::Ltx(version)));
+        }
+    }
+    if t.has("upsampler.0.") && t.has("post_upsample_res_blocks.") && t.has("initial_conv.") {
+        return Some(Role::LatentUpscaler);
+    }
+    let lm = (t.has("embed_tokens.weight") && t.has("self_attn.q_")) || (t.has("token_embd.weight") && t.has(".attn_q"));
+    if t.has("text_embedding_projection.video_aggregate_embed") && !lm {
+        return Some(Role::EmbeddingsConnectors);
+    }
+    // Gemma: its architecture string in a GGUF; in a safetensors the norm
+    // around its feed-forward, which no Qwen has.
+    let gemma = matches!(t.arch.as_deref(), Some(a) if a.starts_with("gemma"))
+        || (lm && t.has("pre_feedforward_layernorm"));
+    if !gemma {
+        return None;
+    }
+    let dim = t
+        .tensors
+        .iter()
+        .find(|x| matches!(x.name.as_str(), "model.norm.weight" | "output_norm.weight" | "norm.weight"))
+        .and_then(|x| match x.shape.as_slice() {
+            [n] => Some(*n),
+            _ => None,
+        })
+        .unwrap_or(0);
+    let gemma4 = t.arch.as_deref() == Some("gemma4") || t.has("layer_scalar");
+    Some(match (t.arch.as_deref(), gemma4) {
+        (_, true) if t.has("text_embedding_projection.") => Role::Llm(LlmKind::Gemma4Ltx { dim }),
+        (_, true) => Role::Unknown(format!(
+            "a Gemma 4 language model ({dim} wide) without LTX-2.5's text projection — LTX-2.5 needs \
+             Lightricks' gemma4-12b-with-proj file"
+        )),
+        (Some("gemma3") | None, false) => Role::Llm(LlmKind::Gemma3 { dim }),
+        (Some(a), false) => Role::Unknown(format!("a '{a}' language model ({dim} wide), which no family here uses")),
+    })
+}
+
+fn ltx_label(v: Option<LtxVersion>) -> &'static str {
+    v.map_or("LTX-2", LtxVersion::label)
+}
+
 fn unsupported(t: &Tensors) -> Option<&'static str> {
     const MARKERS: &[(&str, &str)] = &[
-        // Video, but not a family the Video tab has yet. The LTX one is not
-        // hypothetical: an LTX-2.3 checkpoint in the models root was listed as an
-        // SDXL checkpoint before this existed.
-        ("adaln_single.emb.timestep_embedder.linear_1.bias", "an LTX-2 video transformer"),
+        // Video, but not a family the Video tab has yet.
         ("txt_in.individual_token_refiner.", "a Hunyuan Video transformer"),
         ("input_blocks.8.0.time_mixer.mix_factor", "a Stable Video Diffusion UNet"),
         // Image families not yet added.
@@ -1625,7 +1793,17 @@ pub fn video_components(family: VideoFamily, found: &[Found], dir: &Path) -> Vec
         .slots()
         .iter()
         .map(|slot| {
-            let path = found.iter().find(|f| (slot.fits)(&f.role)).map(|f| f.path.clone());
+            // The conventional file first when it is here: LTX-2.3's and
+            // 2.5's upscalers fit either, and only the name the catalog gave
+            // each says which belongs to which.
+            let fits = |f: &&Found| (slot.fits)(&f.role);
+            let named = |f: &&Found| f.path.file_name().is_some_and(|n| n == slot.file);
+            let path = found
+                .iter()
+                .filter(fits)
+                .find(named)
+                .or_else(|| found.iter().find(fits))
+                .map(|f| f.path.clone());
             let path = match path {
                 Some(p) => Some(p),
                 None if slot.optional => None,
@@ -1655,6 +1833,8 @@ fn model_for(f: &Found, kind: &DitKind, dir: &Path, found: &[Found]) -> Option<V
         DitKind::Wan22Ti2v5b => (VideoFamily::Wan22Ti2v5b, stem, None),
         DitKind::WanVace { .. } => (VideoFamily::Wan21Vace, stem, None),
         DitKind::MinimaxH3 => (VideoFamily::MinimaxH3, stem, None),
+        DitKind::Ltx(LtxVersion::V23) => (VideoFamily::Ltx23, stem, None),
+        DitKind::Ltx(LtxVersion::V25) => (VideoFamily::Ltx25, stem, None),
         DitKind::Wan22A14b => {
             let expert = |high: bool| {
                 found.iter().find(|o| {
@@ -1785,6 +1965,7 @@ fn describe(kind: &DitKind, path: &Path) -> String {
         DitKind::WanVace { dim } => format!("Wan VACE (width {dim}) — frames in, frames out"),
         DitKind::WanOther { dim } => format!("Wan transformer, width {dim} — dense"),
         DitKind::MinimaxH3 => "MiniMax H3".to_string(),
+        DitKind::Ltx(v) => format!("{} — video with sound", v.label()),
     }
 }
 
@@ -1804,6 +1985,7 @@ mod tests {
                 .collect(),
             layout: Layout::PyTorch,
             arch: None,
+            version: None,
         }
     }
 
@@ -1851,6 +2033,7 @@ mod tests {
             ],
             layout: Layout::Ggml,
             arch: None,
+            version: None,
         };
         assert_eq!(classify(&converted), Role::Vae(VaeKind::Wan21));
     }
@@ -2323,17 +2506,96 @@ mod tests {
         assert!(matches!(classify(&controls), Role::Unsupported(_)));
     }
 
-    /// The file that started this: an LTX checkpoint in the image root.
+    /// LTX-2's every part, off the names in unsloth's and Lightricks'
+    /// releases (read 2026-11-07). The transformer's `adaln_single` alone is
+    /// PixArt's too; its audio patchifier is what makes it LTX.
     #[test]
-    fn an_ltx_transformer_is_named_and_is_not_an_image_model() {
-        let ltx = t(&[
+    fn every_ltx_part_is_told_apart_and_by_release() {
+        let dit = |extra: &[&str]| {
+            let mut names = vec![
+                "adaln_single.emb.timestep_embedder.linear_1.bias".to_string(),
+                "audio_patchify_proj.weight".to_string(),
+                "transformer_blocks.0.attn2.to_k.weight".to_string(),
+            ];
+            names.extend(extra.iter().map(|s| s.to_string()));
+            let names: Vec<(&str, &[u64])> = names.iter().map(|n| (n.as_str(), &[4096u64][..])).collect();
+            classify(&t(&names))
+        };
+        assert_eq!(dit(&["transformer_blocks.0.ff.net.0.proj.bias"]), Role::Dit(DitKind::Ltx(LtxVersion::V23)));
+        assert_eq!(dit(&["keyframes_abs_pos_embedding"]), Role::Dit(DitKind::Ltx(LtxVersion::V25)));
+        // The file that started this, in the image root: never an SDXL.
+        let pixart = t(&[
             ("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias", &[4096]),
             ("model.diffusion_model.transformer_blocks.0.attn2.to_k.weight", &[4096, 4096]),
         ]);
-        match classify(&ltx) {
-            Role::Unsupported(what) => assert!(what.contains("LTX"), "{what}"),
-            other => panic!("{other:?}"),
-        }
+        assert!(matches!(classify(&pixart), Role::Unsupported(w) if w.contains("PixArt")));
+
+        let versioned = |names: &[&str], v: Option<&str>| {
+            let names: Vec<(&str, &[u64])> = names.iter().map(|n| (*n, &[128u64][..])).collect();
+            let mut t = t(&names);
+            t.version = v.map(str::to_string);
+            classify(&t)
+        };
+        let vae = [
+            "decoder.conv_in.conv.weight",
+            "decoder.up_blocks.0.res_blocks.0.conv2.conv.weight",
+            "encoder.down_blocks.0.res_blocks.0.conv1.conv.weight",
+            "per_channel_statistics.mean-of-means",
+        ];
+        assert_eq!(versioned(&vae, Some("2.3.0")), Role::Vae(VaeKind::Ltx(Some(LtxVersion::V23))));
+        assert_eq!(versioned(&vae, Some("2.5.0")), Role::Vae(VaeKind::Ltx(Some(LtxVersion::V25))));
+        assert_eq!(versioned(&vae, None), Role::Vae(VaeKind::Ltx(None)));
+        let diffusion_decoder = ["decoder.diff_blocks.0.attn.qkv.weight", "decoder.t_embedder.mlp.0.weight", "per_channel_statistics.mean-of-means"];
+        assert!(matches!(versioned(&diffusion_decoder, Some("2.5.0")), Role::Unsupported(w) if w.contains("conv")));
+        // The audio VAE has the LDM layout, and must not read as one.
+        let audio = [
+            "audio_vae.decoder.conv_in.weight",
+            "audio_vae.decoder.mid.block_1.conv1.weight",
+            "audio_vae.per_channel_statistics.mean-of-means",
+            "vocoder.conv_pre.weight",
+        ];
+        assert_eq!(versioned(&audio, Some("2.5.0")), Role::AudioVae(AudioVaeKind::Ltx(Some(LtxVersion::V25))));
+        let upscaler = ["initial_conv.weight", "res_blocks.0.conv1.weight", "upsampler.0.weight", "post_upsample_res_blocks.0.conv1.weight", "final_conv.weight"];
+        assert_eq!(versioned(&upscaler, None), Role::LatentUpscaler);
+        let connectors = ["text_embedding_projection.video_aggregate_embed.weight", "text_embedding_projection.audio_aggregate_embed.weight"];
+        assert_eq!(versioned(&connectors, None), Role::EmbeddingsConnectors);
+
+        // Gemma 3 by its GGUF architecture; Lightricks' Gemma 4 by its
+        // layer scalars and the projection inside; a stock Gemma 4 is
+        // named, never offered.
+        let mut gemma3 = t(&[("token_embd.weight", &[3840, 262208]), ("blk.0.attn_q.weight", &[3840, 4096]), ("output_norm.weight", &[3840])]);
+        gemma3.arch = Some("gemma3".into());
+        gemma3.layout = Layout::Ggml;
+        assert_eq!(classify(&gemma3), Role::Llm(LlmKind::Gemma3 { dim: 3840 }));
+        let gemma4 = |proj: bool| {
+            let mut names = vec![
+                ("model.embed_tokens.weight", &[262144u64, 3840][..]),
+                ("model.layers.0.self_attn.q_proj.weight", &[4096, 3840][..]),
+                ("model.layers.0.self_attn.q_norm.weight", &[256][..]),
+                ("model.layers.0.pre_feedforward_layernorm.weight", &[3840][..]),
+                ("model.layers.0.layer_scalar", &[1][..]),
+                ("model.norm.weight", &[3840][..]),
+            ];
+            if proj {
+                names.push(("text_embedding_projection.video_aggregate_embed.weight", &[4096, 188160][..]));
+            }
+            classify(&t(&names))
+        };
+        assert_eq!(gemma4(true), Role::Llm(LlmKind::Gemma4Ltx { dim: 3840 }));
+        assert!(matches!(gemma4(false), Role::Unknown(w) if w.contains("projection")));
+
+        // A release's slots take only its own parts, or one that doesn't say.
+        let fits = |f: VideoFamily, key: &str, r: &Role| f.slots().iter().any(|s| s.key == key && (s.fits)(r));
+        let v23 = Role::Vae(VaeKind::Ltx(Some(LtxVersion::V23)));
+        assert!(fits(VideoFamily::Ltx23, "vae", &v23) && !fits(VideoFamily::Ltx25, "vae", &v23));
+        assert!(fits(VideoFamily::Ltx25, "vae", &Role::Vae(VaeKind::Ltx(None))));
+        let h3_audio = Role::AudioVae(AudioVaeKind::MinimaxH3);
+        assert!(!fits(VideoFamily::Ltx25, "audio_vae", &h3_audio) && fits(VideoFamily::MinimaxH3, "audio_vae", &h3_audio));
+        assert!(!fits(VideoFamily::Ltx25, "llm", &Role::Llm(LlmKind::Gemma3 { dim: 3840 })));
+        assert!(!fits(VideoFamily::Ltx23, "llm", &Role::Llm(LlmKind::Gemma4Ltx { dim: 3840 })));
+        assert_eq!(VideoFamily::Ltx23.align_frames(34), 33);
+        assert_eq!(VideoFamily::Ltx25.align_frames(121), 121);
+        assert_eq!(VideoFamily::Ltx25.align_size(720), 736);
         // Hunyuan Video carries Flux's `double_blocks` and must not be read as a
         // Flux.
         let hunyuan = t(&[
@@ -2599,7 +2861,7 @@ mod tests {
             ("decoder.resblocks.0.convs2.0.weight", &[512, 512, 3]),
             ("encoder.block.0.weight", &[64, 1, 7]),
         ]);
-        assert_eq!(classify(&audio), Role::AudioVae);
+        assert_eq!(classify(&audio), Role::AudioVae(AudioVaeKind::MinimaxH3));
     }
 
     /// A tokenizer is found by what it holds, and any other JSON in a model

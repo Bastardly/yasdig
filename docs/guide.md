@@ -812,8 +812,8 @@ image you want to keep is one **Save to output** away (or tick **Save Output** i
 ## Video
 
 The Video tab makes clips with Wan 2.2 (TI2V-5B, the I2V-A14B pair), Wan 2.1 VACE
-and dense models, and MiniMax H3 (with sound). Get models has cards for the first two
-and H3. It is laid out like the Image tab: the size with a swap button (snapped to what
+and dense models, MiniMax H3 (with sound), and LTX-2.3 and LTX-2.5 (with sound). Get
+models has cards for the first two, H3 and both LTX releases. It is laid out like the Image tab: the size with a swap button (snapped to what
 the model runs), LoRAs picked from `models/loras/` (only the ones for the model's size;
 on the A14B pair each says which expert it patches), and *Save as defaults for this
 model*. While a clip renders the status card
@@ -824,6 +824,18 @@ pruned H3 files, and with it installed the Generation panel shows the Image tab'
 **Turbo** switch: 8 steps at CFG 1 instead of 20, with a little less detail. A LoRA
 for H3 whose tensor names sd.cpp can't place (larryvrh's original turbo is one: it
 would load and change nothing) is listed greyed out, with the reason.
+
+**LTX-2.3 and LTX-2.5.** One 22B model that makes the picture and its soundtrack
+together, at 24 fps; frame counts round to 8k+1 (33, 121, …) and sizes to multiples
+of 32. The cards fetch the *distilled* checkpoints, which run 8 steps at CFG 1 on a
+fixed schedule; set other steps and it runs the ordinary schedule instead. 2.3 uses
+a Gemma 3 text encoder plus a separate text projection file; 2.5 uses Lightricks'
+Gemma 4 with the projection inside (a stock Gemma 4 won't do, and is listed greyed
+out). 2.5's default video VAE decodes by diffusion, which sd.cpp doesn't run: use the
+`-conv` VAE the card fetches. **Hi-res ×2** (Generation panel, LTX only) draws at the
+size you set, enlarges the latent with LTX's latent upscaler and refines it at twice
+the size in the same run — far cheaper than drawing big from the start. 640×352 with
+Hi-res comes out at 1280×704.
 
 **A clip is shots.** A model of this size runs out of memory a few seconds in, so a
 longer clip is made a shot at a time, in the **Shots** panel: **Every shot** first,

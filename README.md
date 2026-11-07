@@ -165,8 +165,9 @@ Not sure where to start? The ones marked *Recommended* there and in the model li
 | MOSS-Image | layout and lettering; 50 steps at real CFG, so not fast | about 16 GB (INT8) / 21 GB (BF16) |
 | FLUX.1 Fill | powers **Extend**; not used for generating | about 18.5 GB |
 
-**Video.** Wan 2.2 (TI2V-5B and the I2V-A14B pair), Wan 2.1 VACE and dense models, and
-MiniMax H3 with sound — text or a first frame to video, LoRAs, a live preview, and
+**Video.** Wan 2.2 (TI2V-5B and the I2V-A14B pair), Wan 2.1 VACE and dense models,
+MiniMax H3 with sound, and LTX-2.3 and LTX-2.5 with sound (distilled, 8 steps, with
+LTX's own ×2 hi-res in the same run) — text or a first frame to video, LoRAs, a live preview, and
 long clips made a shot at a time from each shot's last frame. Clips enlarge (FSR, no
 flicker) and save to Outputs as video files.
 

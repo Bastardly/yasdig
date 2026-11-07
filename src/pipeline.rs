@@ -498,6 +498,8 @@ pub struct VideoRequest {
     pub vae_tiling: Option<bool>,
     /// Where the weights live; `None` keeps the model's.
     pub memory: Option<String>,
+    /// LTX's *Hi-res ×2* ([`VideoModel::hires`]); `None` keeps the model's.
+    pub hires: Option<bool>,
     /// The Video tab's *Models* rows: slot key to a file under the models dir,
     /// or `null` to leave an optional part out. Absent keys keep the model's.
     /// See [`Config::apply_video_parts`].
@@ -559,6 +561,9 @@ pub fn resolve_video(cfg: &Config, req: &VideoRequest) -> Result<VideoModel> {
     if let Some(v) = req.memory.as_deref().filter(|v| !v.is_empty()) {
         m.memory = Some(v.to_string());
     }
+    if let Some(v) = req.hires {
+        m.hires = v;
+    }
     if let Some(parts) = &req.parts {
         cfg.apply_video_parts(&mut m, parts)?;
         // `exists` was the model's own files; a pick replaces some.
@@ -613,7 +618,11 @@ pub fn plan_clip(cfg: &Config, items: &workitems::Store, videos: &VideoStore, re
         .iter()
         .chain(req.shots.iter().filter_map(|s| s.keyframe.as_ref()))
         .find_map(|stem| items.find_output(stem));
-    let (width, height, _) = m.aligned();
+    let (mut width, mut height, _) = m.aligned();
+    // LTX's hi-res comes out at twice the first pass's size.
+    if m.hires && m.family.is_ltx() && m.latent_upscaler.is_some() {
+        (width, height) = (width * 2, height * 2);
+    }
     let mut clip = Clip {
         id,
         created_ms: now_ms(),
@@ -4907,6 +4916,7 @@ mod tests {
             sampler: None,
             vae_tiling: None,
             memory: None,
+            hires: None,
             parts: None,
             loras: None,
             shots: vec![shot("a {animal} walks", -1, Some(30)), shot("it swims", 9, None)],

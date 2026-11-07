@@ -1298,6 +1298,8 @@ struct VideoModelDto {
     /// Whether a shot can follow reference sounds: references and an audio
     /// VAE to hear them with ([`pipeline::MAX_REF_AUDIO`]).
     sounds: bool,
+    /// LTX: the page offers *Hi-res ×2* (with a latent upscaler in its parts).
+    ltx: bool,
     /// The memory mode the model runs with, resolved — `memory` beside it is
     /// the raw entry, which an old `offload_to_cpu` key leaves unset.
     memory_mode: String,
@@ -1576,6 +1578,7 @@ fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> 
             tuned: saved.video.contains_key(&m.name) || saved.video_parts.contains_key(&m.name),
             parts: cfg.video_part_views(&m, &scan),
             family: m.family.as_str(),
+            ltx: m.family.is_ltx(),
             size_multiple: m.family.size_multiple(),
             frame_grid: m.family.frame_grid(),
             forced_fps: m.family.forced_fps(),
@@ -1675,6 +1678,8 @@ struct VideoDto {
     #[serde(default)]
     memory: Option<String>,
     #[serde(default)]
+    hires: Option<bool>,
+    #[serde(default)]
     parts: Option<std::collections::BTreeMap<String, Option<String>>>,
     #[serde(default)]
     loras: Option<Vec<config::VideoLora>>,
@@ -1700,6 +1705,7 @@ impl VideoDto {
             sampler: self.sampler,
             vae_tiling: self.vae_tiling,
             memory: self.memory,
+            hires: self.hires,
             parts: self.parts,
             loras: self.loras,
             shots: self.shots.into_iter().map(ShotDto::spec).collect(),

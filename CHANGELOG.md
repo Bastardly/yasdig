@@ -13,6 +13,10 @@ What changed in each release of yasdig. Each release's executables are on the
   **Generate clip** draws it into the same tile. Star it like any clip.
 - Shot edits you haven't drawn yet are kept with the clip on the server, not in the
   browser, so they survive a reload and show in another browser.
+- **LTX-2.3 and LTX-2.5 video**, with sound: Get models has a card for each (the
+  distilled checkpoints, 8 steps at CFG 1), and every part is recognised from its
+  file. The Generation panel's **Hi-res ×2** runs LTX's own latent upscaler: draw
+  small, refine at twice the size, in one run.
 - **The page says when the server is gone.** If yasdig stops answering (closed in
   another tab, crashed, or the computer slept), a red banner appears within a few
   seconds, also over an open dialog, and goes away by itself when yasdig is back.

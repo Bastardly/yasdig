@@ -737,6 +737,8 @@ pub struct VideoKnobs {
     pub memory: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub negative_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hires: Option<bool>,
 }
 
 impl VideoKnobs {
@@ -748,7 +750,7 @@ impl VideoKnobs {
         macro_rules! set_opt {
             ($($f:ident),*) => { $( if let Some(v) = &self.$f { m.$f = Some(v.clone()); } )* };
         }
-        set!(width, height, frames, fps, steps, cfg_scale, sampler, vae_tiling, negative_prompt);
+        set!(width, height, frames, fps, steps, cfg_scale, sampler, vae_tiling, negative_prompt, hires);
         set_opt!(flow_shift, high_noise_steps, high_noise_cfg_scale, memory);
     }
 }
@@ -797,9 +799,9 @@ pub fn update_video_model(
 }
 
 /// [`VideoKnobs`]' fields, the keys `update_video_model` accepts.
-pub const VIDEO_KNOBS: [&str; 13] = [
+pub const VIDEO_KNOBS: [&str; 14] = [
     "width", "height", "frames", "fps", "steps", "cfg_scale", "sampler", "flow_shift",
-    "high_noise_steps", "high_noise_cfg_scale", "vae_tiling", "memory", "negative_prompt",
+    "high_noise_steps", "high_noise_cfg_scale", "vae_tiling", "memory", "negative_prompt", "hires",
 ];
 
 impl ModelSettings {
