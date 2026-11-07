@@ -39,6 +39,8 @@ pub enum Step {
     Keyframe(usize),
     /// A try of the cast member the chat is making (`Chat.cast`).
     CastTry,
+    /// Shot `k`'s words are written out in full (`agent::enhance`).
+    Enhance(usize),
     End,
 }
 
@@ -60,6 +62,11 @@ pub fn next_step(chat: &Chat) -> Step {
         Next::Film => chat.film.as_ref().and_then(draw_step).unwrap_or(Step::End),
         Next::Cast if chat.cast.is_some() => Step::CastTry,
         Next::Cast => Step::End,
+        Next::Enhance => chat
+            .film
+            .as_ref()
+            .and_then(|f| f.shots.iter().position(|s| s.enhance))
+            .map_or(Step::End, Step::Enhance),
     }
 }
 
@@ -328,6 +335,10 @@ pub fn set_rows(c: &mut Chat, every: Option<&str>, rows: Option<&[RowIn]>) -> Re
             };
             let fresh = k == 0 || shot.cut;
             let was = f.shots.get(k);
+            // The text as enhanced, untouched: the story's words still stand behind it.
+            if let Some(w) = was.filter(|w| !w.brief.is_empty() && w.text == shot.text) {
+                shot.brief = w.brief.clone();
+            }
             let key = row.key.as_deref().filter(|s| !s.is_empty());
             if fresh {
                 match (key, was) {
@@ -1086,8 +1097,18 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
         if let Some(n) = recut(&shots, &mut shot, k) {
             recuts.push(n);
         }
+        let mut kept = false;
         if let Some(was) = old.as_ref().and_then(|f| f.shots.get(k)) {
-            if was.text == shot.text && was.cast == shot.cast && was.cut == shot.cut {
+            if was.words() == shot.text && was.cast == shot.cast && was.cut == shot.cut {
+                kept = true;
+                // Written out in full before, from these same words.
+                if !was.brief.is_empty() {
+                    shot.brief = was.brief.clone();
+                    shot.text = was.text.clone();
+                    if shot.sound.is_empty() {
+                        shot.sound = was.sound.clone();
+                    }
+                }
                 shot.keyframe = was.keyframe.clone();
                 shot.key_stem = was.key_stem.clone();
                 shot.key_cast = was.key_cast.clone();
@@ -1099,6 +1120,9 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
                 shot.audio = was.audio.clone();
             }
         }
+        // New words are written out in full after the turn; a shot the turn
+        // left as it was keeps its text, the person's included.
+        shot.enhance = !kept;
         shots.push(shot);
     }
     if !unknown.is_empty() {
@@ -1135,12 +1159,45 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
         clip: old.as_ref().and_then(|f| f.clip.clone()),
     });
     board_advance(chat, video.shot_seconds(), false);
+    // The story's shots are a line each; written out in full for the video
+    // model before the person sees the rows (`Step::Enhance`).
+    if chat.film.as_ref().is_some_and(|f| f.shots.iter().any(|s| s.enhance)) {
+        chat.session.next = Next::Enhance;
+    }
     if let Some(f) = chat.film.as_ref().filter(|f| f.phase == Phase::Board) {
         let press = if cast_step(f).is_some() { "Draw the cast" } else { "Draw the first frames" };
         notes.push(format!(
             "The storyboard is written: its shots are the Shots rows, its cast the Cast panel. Change what you like; \
              {press} if you want its pictures, or Generate clip as it is."
         ));
+    }
+}
+
+/// Shot `k`, enhanced from `text`: its words go to `brief`, the answer is
+/// its text (and H3's sound line where it had none). A shot that changed
+/// meanwhile keeps what it has. A failure stops the rest: the board is whole
+/// as the story wrote it.
+pub fn shot_enhanced(c: &mut Chat, k: usize, text: &str, r: Result<&super::enhance::Enhanced, &String>) {
+    let Some(f) = c.film.as_mut() else { return };
+    match r {
+        Ok(e) => {
+            if let Some(s) = f.shots.get_mut(k) {
+                if s.enhance && s.text == text {
+                    s.brief = text.to_string();
+                    s.text = e.prompt.clone();
+                    if s.sound.trim().is_empty() && !e.sound.is_empty() {
+                        s.sound = e.sound.clone();
+                    }
+                }
+                s.enhance = false;
+            }
+        }
+        Err(e) => {
+            for s in &mut f.shots {
+                s.enhance = false;
+            }
+            c.note(format!("The shots stay as the storyboard wrote them: writing them out in full failed ({e})."));
+        }
     }
 }
 
@@ -1719,8 +1776,55 @@ mod tests {
         t
     }
 
+    /// A story turn, its shots left as written (as when enhancing fails).
     fn story(c: &mut Chat, t: &Toolkit, v: Value) {
         apply_reply(c, Mode::Story, reply(v), t, &Locks::default(), vec![], Default::default());
+        if let Some(f) = c.film.as_mut() {
+            f.shots.iter_mut().for_each(|s| s.enhance = false);
+        }
+        if c.session.next == Next::Enhance {
+            c.session.next = Next::Nothing;
+        }
+    }
+
+    /// The story's new shots are written out in full one by one; the next
+    /// story turn sees and is matched on its own words, so an unchanged shot
+    /// keeps its long text, and the person's edit of a row is theirs.
+    #[test]
+    fn a_storys_new_shots_are_enhanced_and_kept_while_its_words_hold() {
+        let mut c = film_chat();
+        let t = film_tk(&c, false);
+        apply_reply(&mut c, Mode::Story, reply(board()), &t, &Locks::default(), vec![], Default::default());
+        assert_eq!(next_step(&c), Step::Enhance(0));
+        let long = |s: &str| super::super::enhance::Enhanced { prompt: format!("{s} In full."), sound: "Rain.".into() };
+        for k in 0..3 {
+            let text = c.film.as_ref().unwrap().shots[k].text.clone();
+            shot_enhanced(&mut c, k, &text, Ok(&long(&text)));
+        }
+        assert_eq!(next_step(&c), Step::End);
+        let f = c.film.as_ref().unwrap();
+        assert_eq!((f.shots[0].text.as_str(), f.shots[0].brief.as_str()), ("Mara opens the door. In full.", "Mara opens the door."));
+        assert_eq!(f.shots[0].sound, "Rain.", "a sound line where there was none");
+        assert!(super::super::context::board_text(f).contains("1. (first) Mara opens the door. [Mara]"), "the story sees its words");
+        // A rewrite that keeps shot 1's words keeps its long text; a new shot 3 is enhanced.
+        let mut b = board();
+        b["shots"][2]["text"] = json!("Leo runs.");
+        apply_reply(&mut c, Mode::Story, reply(b), &t, &Locks::default(), vec![], Default::default());
+        let f = c.film.as_ref().unwrap();
+        assert_eq!(f.shots[0].text, "Mara opens the door. In full.");
+        assert!(!f.shots[0].enhance && f.shots[2].enhance && f.shots[2].brief.is_empty());
+        assert_eq!(next_step(&c), Step::Enhance(2));
+        // A failure leaves the rest as written and says so.
+        shot_enhanced(&mut c, 2, "Leo runs.", Err(&"no agent".to_string()));
+        assert_eq!(next_step(&c), Step::End);
+        assert_eq!(c.film.as_ref().unwrap().shots[2].text, "Leo runs.");
+        // The rows sent back unchanged keep the story's words; an edited one is the person's.
+        let mut rows = rows_of(&c);
+        set_rows(&mut c, None, Some(&rows)).unwrap();
+        assert_eq!(c.film.as_ref().unwrap().shots[0].brief, "Mara opens the door.");
+        rows[0].text = "Mara slams the door.".into();
+        set_rows(&mut c, None, Some(&rows)).unwrap();
+        assert!(c.film.as_ref().unwrap().shots[0].brief.is_empty());
     }
 
     fn board() -> Value {

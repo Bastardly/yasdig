@@ -118,6 +118,14 @@
              you could change it was this file. -->
         <textarea id="prompt" placeholder="a lovely {animal} with {color} hair, cinematic lighting, sharp, in focus"></textarea>
       </prompt-box>
+      <!-- The agent's model writes the prompt out in full for this model
+           (enhance.js); Ctrl+Z in the box brings the words back. -->
+      <div class="btnrow enhancerow">
+        <button type="button" class="btn" id="enhance"
+          data-title="The agent's model writes these words out in full for the picked model: looks, place, light, framing. Ctrl+Z in the box undoes it."
+          title="The agent's model writes these words out in full for the picked model: looks, place, light, framing. Ctrl+Z in the box undoes it.">Enhance</button>
+        <span class="sub" id="enhanceerr" hidden></span>
+      </div>
 
       <label for="negative">Negative prompt (optional)</label>
       <prompt-box>

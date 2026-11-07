@@ -16,6 +16,7 @@ import { linesText, parseLines } from './lines.js';
 import { partRows } from './parts.js';
 import { loraPicker, turboMemory } from './loras.js';
 import { loadModelSettings } from './modelsettings.js';
+import { enhance } from './enhance.js';
 
 // ---- Video ------------------------------------------------------------------
 //
@@ -167,6 +168,49 @@ function readRow(el) {
 // named for them (with their look, for H3's subject lines), their voice as a
 // sound that is theirs, their name in Who is in it. The rows are the record;
 // the Cast panel (`board.js`, unbound) reads it back with `clipCast`.
+
+// ---- Enhance -----------------------------------------------------------------
+//
+// A shot written out in full by the agent's model for the Video tab's model
+// (`enhance.js`): with the clip's look, the shot before when it goes on from
+// it, its first frame, who is in it and their looks, its length, and what is
+// said and heard — LTX weaves speech into the paragraph, H3 keeps its fields
+// and gets a Sound line when it had none.
+const ENHANCE_TIP = "The agent's model writes this shot out in full for the picked video model: action, looks, place, camera and, on LTX, every sound. Ctrl+Z in the box undoes it.";
+function enhanceRow(row, btn) {
+  const m = currentVideoModel();
+  const els = rowEls();
+  const k = els.indexOf(row);
+  const r = readRow(row);
+  const fps = m?.forced_fps ?? (parseInt($('vfps').value, 10) || 0);
+  const frames = r.frames ?? (m ? alignFrames(m.frames, m.frame_grid) : null);
+  const note = row.querySelector('.shotenhanceerr');
+  const body = {
+    kind: 'video',
+    model: $('vmodel').value,
+    text: r.text,
+    every: $('veverytext').value,
+    before: k > 0 && !r.cut ? readRow(els[k - 1]).text : '',
+    cut: k > 0 && r.cut,
+    picture: sentRow(r, k, takeOf(m)).key || null,
+    seconds: fps && frames ? frames / fps : null,
+    cast: r.cast,
+    looks: (r.subjects ?? []).filter((x) => x.name && x.look).map((x) => [x.name, x.look]),
+    lines: r.lines,
+    sound: r.sound,
+    music: r.music,
+  };
+  enhance(btn, row.querySelector('textarea'), body, {
+    onError: (msg) => { note.textContent = msg; note.hidden = !msg; },
+    onDone: (a) => {
+      const snd = row.querySelector('.shotsnd');
+      if (a.sound && !snd.value.trim()) {
+        snd.value = a.sound;
+        snd.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    },
+  });
+}
 
 const MAX_SHOT_REFS = 4; // config::MAX_REFERENCES
 const MAX_SHOT_SOUNDS = 3; // pipeline::MAX_REF_AUDIO
@@ -439,6 +483,10 @@ export function drawShots(rows) {
         <label data-help="vprompt">Prompt</label>
         <prompt-box><textarea class="short" aria-label="Shot ${k + 1} prompt"
           placeholder="${k ? 'what happens next: an action, where the camera is' : 'the crab lifts a claw, slow camera push in'}">${esc(r.text ?? '')}</textarea></prompt-box>
+        <div class="btnrow shotenhancerow">
+          <button type="button" class="btn shotenhance" title="${ENHANCE_TIP}" data-title="${ENHANCE_TIP}">Enhance</button>
+          <span class="sub shotenhanceerr" hidden></span>
+        </div>
         <div class="shotcastrow" hidden>
           <label data-help="vshotcast">Who is in it</label>
           <div class="castchips shotchips"></div>
@@ -1576,6 +1624,9 @@ export function initVideo() {
       const rows = rowEls().map(readRow);
       rows.splice(i, 1);
       drawShots(rows);
+    } else if (e.target.closest('.shotenhance')) {
+      enhanceRow(row, e.target.closest('.shotenhance'));
+      return;
     } else if (e.target.closest('.shotreseed')) {
       row.querySelector('.shotseed').value = -1;
     } else if (e.target.closest('.shotroll')) {

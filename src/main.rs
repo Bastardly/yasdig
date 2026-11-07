@@ -296,6 +296,8 @@ enum Work {
     /// One try in the cast editor (`cast::draw`): a picture, or a turnaround
     /// sheet and the picture drawn from it.
     CastDraw(cast::DrawRequest),
+    /// A prompt rewritten in full (`agent::enhance`).
+    Enhance(Box<agent::enhance::Request>),
 }
 
 impl Work {
@@ -316,7 +318,8 @@ impl Work {
             | Work::EnlargeClip { .. }
             | Work::ExtendClip(_)
             | Work::Agent { .. }
-            | Work::CastDraw(_) => None,
+            | Work::CastDraw(_)
+            | Work::Enhance(_) => None,
         }
     }
 }
@@ -707,6 +710,10 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
         ),
         Work::ExtendClip(req) => queue.finish(t.id, engine.extend_clip(&req).and_then(|r| json_body(&r))),
         Work::CastDraw(req) => queue.finish(t.id, cast::draw(engine, &req)),
+        Work::Enhance(req) => {
+            let cfg = engine.cfg().clone();
+            queue.finish(t.id, agent::enhance::run(&cfg, engine.monitor(), &req).and_then(|r| json_body(&r)))
+        }
         Work::Agent { chat } => match agent::step(engine, queue, &chat, t.id) {
             Ok(true) => {
                 queue.image_done(t.id);

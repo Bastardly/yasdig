@@ -945,6 +945,18 @@ Break silently:
   dirty check never settles.
 - **Skills** (`agent::skills`): built-ins compiled in, `user/skills/*.md` re-read per
   turn, an `id` match replaces; `BUDGET` drops whole skills, lowest priority first.
+- **Enhance** (`agent::enhance`, `POST /enhance`, `Work::Enhance`, `Kind::Enhance`,
+  `web/js/enhance.js`): one schema-held call (`{prompt, sound?}`) per box, with the
+  family's `modes: [enhance]` guide (`skills::select_enhance`: `Skill.enhance` guides
+  plus the family's mode-free style notes; `select` never gives a chat turn one). The
+  page writes the answer with `insertText` (undo). H3 keeps names (its `<Subject N>`
+  match) and its fields; `sound` only fills an empty one. **A story's new or changed
+  shots are enhanced after the turn** (`FilmShot.enhance` → `Next::Enhance` →
+  `Step::Enhance`, `session::shot_enhanced`): the story's words move to
+  `FilmShot.brief`, which `board_text`, `apply_story`'s match (`words()`) and
+  `keyframe_prompt` use. `set_rows` keeps `brief` only while the row's text is the
+  enhanced one; an unchanged shot is never re-enhanced (the person's edit stands). A
+  failure clears every flag with a note; a Stop is a Stop.
 - **A film** (`Chat.film: Film`, `session::apply_story`): a chat turn's `film` action
   hands over to a `Mode::Story` turn (its own schema, `n_predict` 3072), whose board is
   **rewritten whole**, never patched; what survives is matched by the server — a member

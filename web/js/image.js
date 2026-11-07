@@ -14,6 +14,7 @@ import { floatPanels } from './panels.js';
 import { partRows } from './parts.js';
 import { showError, MEMORY_LABELS } from './memory.js';
 import { initLayout, layoutPayload, relayout, showPicture, syncLayout } from './layout.js';
+import { enhance } from './enhance.js';
 
 // The checkpoint list the server published. Exported because the work-item
 // grid looks a name up in it; only this module refills it.
@@ -1475,6 +1476,12 @@ function initPngSettings() {
 
 export function initImage() {
   initPngSettings();
+  $('enhance').addEventListener('click', () => {
+    const note = $('enhanceerr');
+    enhance($('enhance'), $('prompt'), { kind: 'image', model: $('template').value, text: $('prompt').value, cast: castNames() }, {
+      onError: (m) => { note.textContent = m; note.hidden = !m; },
+    });
+  });
   imageLoras.init();
   initLayout({
     // The frame is the next Generate's shape; a pass over a source takes the

@@ -302,6 +302,22 @@ pub struct FilmShot {
     pub references: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub audio: Vec<String>,
+    /// The story turn's own words for the shot, when `text` is them written
+    /// out in full (`agent::enhance`): what the next story turn is shown and
+    /// matched on, and what a keyframe is drawn from. Empty: `text` is the
+    /// words as written, by the agent or the person.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub brief: String,
+    /// Waiting to be written out in full (`Next::Enhance`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enhance: bool,
+}
+
+impl FilmShot {
+    /// The short words: the story's, or the text when nothing enhanced it.
+    pub fn words(&self) -> &str {
+        if self.brief.is_empty() { &self.text } else { &self.brief }
+    }
 }
 
 fn new_seed() -> i64 {
@@ -325,6 +341,8 @@ impl Default for FilmShot {
             frames: None,
             references: Vec::new(),
             audio: Vec::new(),
+            brief: String::new(),
+            enhance: false,
         }
     }
 }
@@ -619,6 +637,8 @@ pub enum Next {
     Film,
     /// Draw a try of the cast member the chat is making.
     Cast,
+    /// Write the storyboard's new shots out in full, one at a time.
+    Enhance,
     /// An older chat filming its board, or looking at a shot, stops there.
     #[serde(alias = "shoot", alias = "take")]
     Nothing,

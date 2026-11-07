@@ -39,6 +39,7 @@ pub fn route(
         ("POST", "/chats/board") => board(conn, cfg, body),
         ("POST", "/chats/cast") => chat_cast(conn, cfg, body),
         ("POST", "/agent/send") => send(conn, cfg, lanes, body),
+        ("POST", "/enhance") => enhance(conn, cfg, lanes, body),
         ("POST", "/agent/undo") => undo(conn, cfg, body),
         ("POST", "/agent/stop") => stop(conn, cfg, lanes, monitor, body),
         ("POST", "/agent/session") => answer_proposal(conn, cfg, lanes, body),
@@ -591,6 +592,23 @@ fn enqueue(lanes: &Lanes, store: &ChatStore, c: &Chat) -> Result<u64> {
         Ok(())
     })?;
     Ok(job)
+}
+
+/// *Enhance*: a prompt rewritten in full by the agent's model, on the queue
+/// (it holds the GPU) as a button press, answering `{prompt, sound?}`.
+fn enhance(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    let Some(req) = parse_json::<super::enhance::Request>(conn, body)? else { return Ok(()) };
+    if req.text.trim().is_empty() {
+        return err(conn, 400, "there is nothing to enhance — write a few words first");
+    }
+    if let Err(e) = super::enhance::target(cfg, &req) {
+        return err(conn, 400, &format!("{e:#}"));
+    }
+    if req.picture.as_deref().is_some_and(|p| !valid_id(p)) {
+        return err(conn, 400, "a bad picture name");
+    }
+    let label = if req.kind == "video" { "Enhance a shot" } else { "Enhance the prompt" };
+    crate::enqueue_wait(conn, lanes, jobs::Kind::Enhance, label.into(), Work::Enhance(Box::new(req)), true, 400)
 }
 
 fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Result<()> {

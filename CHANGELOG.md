@@ -7,6 +7,16 @@ What changed in each release of yasdig. Each release's executables are on the
 
 ### Added
 
+- **Enhance** beside the Image tab's prompt and on every Video shot: the agent's model
+  writes your few words out in full for the model you picked — looks, place, light and
+  framing for a picture; action, motion and camera for a shot, and on LTX every sound
+  (who speaks, in what voice, what is heard), which LTX otherwise guesses. On H3 the
+  Spoken, Sound and Music fields stay apart, and an empty Sound gets a line. Ctrl+Z in
+  the box puts your words back.
+- **The Assistant's storyboards are written out in full**: after it writes a film, each
+  new or changed shot is enhanced for the film's video model before the rows appear.
+  It keeps its own short words for the next rewrite, so a shot it didn't change keeps
+  its long text, and the first frames are still drawn from the short words.
 - **Save a clip without generating it.** The Video tab's **Save** keeps every shot,
   *Every shot*, the negative, the model, its parts, LoRAs and settings as a clip marked
   **Not generated** in Current. Open it any time; it saves itself as you change it, and

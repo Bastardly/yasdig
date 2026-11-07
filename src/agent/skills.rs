@@ -10,7 +10,7 @@
 //! ---
 //! id: sentences
 //! families: [flux, z_image]      # ImageFamily::as_str names; none = all
-//! modes: [chat, critique]        # chat, plan, critique, verdict; none = all
+//! modes: [chat, critique]        # chat, plan, critique, verdict, story, enhance; none = all
 //! priority: 50                   # higher is kept first under the budget
 //! ---
 //! ```
@@ -41,6 +41,10 @@ const BUILTIN: &[(&str, &str)] = &[
     ("film.md", include_str!("skills/film.md")),
     ("h3.md", include_str!("skills/h3.md")),
     ("cast.md", include_str!("skills/cast.md")),
+    ("enhance-image.md", include_str!("skills/enhance-image.md")),
+    ("enhance-wan.md", include_str!("skills/enhance-wan.md")),
+    ("enhance-ltx.md", include_str!("skills/enhance-ltx.md")),
+    ("enhance-h3.md", include_str!("skills/enhance-h3.md")),
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,12 +55,18 @@ pub struct Skill {
     pub priority: i32,
     pub body: String,
     pub builtin: bool,
+    /// An enhance guide (`modes: [enhance]`): given to *Enhance* alone,
+    /// never to a chat turn.
+    pub enhance: bool,
 }
 
 impl Skill {
+    fn fits(&self, families: &[&str]) -> bool {
+        self.families.is_empty() || families.iter().any(|f| self.families.iter().any(|x| x == f))
+    }
+
     fn applies(&self, families: &[&str], mode: Mode) -> bool {
-        (self.families.is_empty() || families.iter().any(|f| self.families.iter().any(|x| x == f)))
-            && (self.modes.is_empty() || self.modes.contains(&mode))
+        !self.enhance && self.fits(families) && (self.modes.is_empty() || self.modes.contains(&mode))
     }
 }
 
@@ -79,7 +89,8 @@ pub fn parse(src: &str, builtin: bool) -> Result<Skill> {
     let Some((head, body)) = rest.split_once("\n---") else {
         bail!("its front matter has no closing ---");
     };
-    let mut skill = Skill { id: String::new(), families: vec![], modes: vec![], priority: 50, body: String::new(), builtin };
+    let mut skill =
+        Skill { id: String::new(), families: vec![], modes: vec![], priority: 50, body: String::new(), builtin, enhance: false };
     for line in head.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
         if line.is_empty() {
@@ -99,7 +110,15 @@ pub fn parse(src: &str, builtin: bool) -> Result<Skill> {
                 }
             }
             "modes" => {
-                skill.modes = list(v)
+                let mut names = list(v);
+                if names.iter().any(|m| m == "enhance") {
+                    if names.len() > 1 {
+                        bail!("an `enhance` skill is for Enhance alone: give it no other mode");
+                    }
+                    skill.enhance = true;
+                    names.clear();
+                }
+                skill.modes = names
                     .iter()
                     .map(|m| match m.as_str() {
                         "chat" => Ok(Mode::Chat),
@@ -108,7 +127,7 @@ pub fn parse(src: &str, builtin: bool) -> Result<Skill> {
                         "describe" => Ok(Mode::Describe),
                         "verdict" => Ok(Mode::Verdict),
                         "story" => Ok(Mode::Story),
-                        other => bail!("'{other}' is not a mode (chat, plan, critique, verdict, story)"),
+                        other => bail!("'{other}' is not a mode (chat, plan, critique, verdict, story, enhance)"),
                     })
                     .collect::<Result<_>>()?
             }
@@ -175,6 +194,31 @@ pub fn select(skills: &[Skill], families: &[&str], mode: Mode) -> (String, Vec<S
     (text, used, dropped)
 }
 
+/// What *Enhance* is given for a family: its enhance guides, and the
+/// family's own prompt-style notes (a skill for named families that applies
+/// in every mode — tags, sentences, Qwen-Image's lettering).
+pub fn select_enhance(skills: &[Skill], family: &str) -> (String, Vec<String>, Vec<String>) {
+    let families = [family];
+    let mut picked: Vec<&Skill> = skills
+        .iter()
+        .filter(|s| s.fits(&families) && (s.enhance || (!s.families.is_empty() && s.modes.is_empty())))
+        .collect();
+    picked.sort_by(|a, b| b.enhance.cmp(&a.enhance).then(b.priority.cmp(&a.priority)).then(a.id.cmp(&b.id)));
+    let (mut text, mut used, mut dropped) = (String::new(), Vec::new(), Vec::new());
+    for s in picked {
+        if text.len() + s.body.len() + 2 > BUDGET {
+            dropped.push(s.id.clone());
+            continue;
+        }
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(&s.body);
+        used.push(s.id.clone());
+    }
+    (text, used, dropped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,7 +267,7 @@ mod tests {
 
     #[test]
     fn the_budget_drops_whole_skills_lowest_first() {
-        let big = |id: &str, p: i32| Skill { id: id.into(), families: vec![], modes: vec![], priority: p, body: "x".repeat(4000), builtin: true };
+        let big = |id: &str, p: i32| Skill { id: id.into(), families: vec![], modes: vec![], priority: p, body: "x".repeat(4000), builtin: true, enhance: false };
         let (text, used, dropped) = select(&[big("low", 1), big("high", 9)], &[], Mode::Chat);
         assert_eq!(used, ["high"]);
         assert_eq!(dropped, ["low"]);
@@ -248,5 +292,31 @@ mod tests {
         for v in VideoFamily::ALL {
             assert!(!ImageFamily::ALL.iter().any(|f| f.as_str() == v.as_str()), "{} is both", v.as_str());
         }
+    }
+
+    /// Every family that generates has an enhance guide, given with its own
+    /// style notes; a guide never reaches a chat turn, and a chat-only skill
+    /// never reaches Enhance.
+    #[test]
+    fn every_family_has_an_enhance_guide_kept_out_of_chat_turns() {
+        let (all, _) = load(Path::new("/nonexistent"));
+        let fams = ImageFamily::ALL
+            .iter()
+            .filter(|f| f.runnable() && !f.fill_only())
+            .map(|f| f.as_str())
+            .chain(VideoFamily::ALL.iter().map(|f| f.as_str()));
+        for f in fams {
+            let (_, used, dropped) = select_enhance(&all, f);
+            assert!(used.first().is_some_and(|u| u.starts_with("enhance-")), "{f} gets {used:?}");
+            assert!(dropped.is_empty(), "{f} drops {dropped:?}");
+            assert!(!used.iter().any(|u| ["general", "plan", "critique", "film", "h3", "elements"].contains(&u.as_str())), "{f}: {used:?}");
+            for mode in [Mode::Chat, Mode::Plan, Mode::Critique, Mode::Story] {
+                let (_, used, _) = select(&all, &[f], mode);
+                assert!(!used.iter().any(|u| u.starts_with("enhance-")), "{f} {mode:?}: {used:?}");
+            }
+        }
+        let (_, used, _) = select_enhance(&all, "sdxl");
+        assert!(used.contains(&"tags".to_string()), "{used:?}");
+        assert!(parse("---\nid: x\nmodes: [enhance, chat]\n---\nhi", false).is_err());
     }
 }

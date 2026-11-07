@@ -52,7 +52,7 @@ export const queueChanged = observable(null);
 // What the dialog calls each kind of job. The server's names are the keys.
 const KINDS = {
   generate: 'Generate', img2img: 'Image to image', refine: 'Refine', hires: 'Hi-res', redraw: 'Refine area', upscale: 'Upscale', edit: 'Edit', extend: 'Extend',
-  video: 'Video', enlarge: 'Enlarge frames', convert: 'Convert', agent: 'Agent', cast: 'Cast',
+  video: 'Video', enlarge: 'Enlarge frames', convert: 'Convert', agent: 'Agent', cast: 'Cast', enhance: 'Enhance',
 };
 const isRun = (j) => j.kind === 'generate' || j.kind === 'img2img';
 

@@ -215,6 +215,13 @@ the next Generate uses (in amber when it is pinned rather than -1), then **Save
 Output** and **Until stopped**, Stop and **Generate**; progress, the live preview and any error appear in a card at the lower
 left of the picture.
 
+**Enhance**, under the prompt, has the agent's model (see *The agent*; it needs one
+installed) write your words out in full for the model you picked: each subject's look,
+the place, the light, the framing, the medium — in tags for SD 1.x, SD 2.x and SDXL,
+in sentences for the rest. It keeps what you wrote, `{variables}` included, and adds
+what you left open. Ctrl+Z in the box puts your words back. Press it again while it
+works to stop it.
+
 Click the picture to open **Refine & adjust** — Hi-res, Refine, Edit, Extend, Scale,
 the sliders, and *Save to output* are all there (see *Refine*). The Video tab is laid
 out the same way.
@@ -852,6 +859,17 @@ motion can change direction there; write shots that agree. TI2V-5B, A14B and H3 
 it (the others don't take a first frame). Stop, or a failing shot, keeps the shots
 already made.
 
+**Enhance** under a shot's prompt writes it out in full for the Video tab's model,
+knowing the clip's *Every shot*, the shot before it, its first frame (when the agent's
+model can see), who is in it and their looks, and how long it runs. Video models fill
+whatever a prompt leaves open, and LTX makes the sound from the same words — "a man
+sings opera" can come back as a woman talking. So on LTX it writes one paragraph with
+the action, the camera and every sound: who speaks, word for word and in what voice,
+singing, the sounds of the place, music only when you asked. On Wan it writes picture
+and motion only. On H3 it writes what is seen, keeps names as they are (they are
+matched to the references), leaves Spoken, Sound and Music to their fields, and fills
+an empty Sound. Ctrl+Z puts your words back.
+
 **Cheap first, then good.** After a render every row shows the seed it was drawn with,
 and the rows on the clip on the stage are ticked green. Change one row's seed, length or
 words and **Redo from shot k** appears at the foot of the panel: it keeps the shots
@@ -914,6 +932,10 @@ first frames* draw them (optional), and a row's first frame can be drawn again, 
 or replaced with your own. Each row holds both its first frame and the cast's pictures:
 on H3 it follows the pictures and voices, on Wan it starts from the first frame, so
 switching model loses nothing — the agent may pick the model when it writes the board.
+Each new or changed shot is written out in full for the video model as soon as the
+storyboard is written (*Enhance*, above), one at a time, before the rows appear; the
+agent keeps its own short words for its next rewrite, and the first frames are drawn
+from those. If enhancing fails, the shots stay as the agent wrote them, with a note.
 Generate clip, Extend and Redo work as for any clip. Opening another clip leaves the
 storyboard; *Back to the storyboard* returns to it and its clip. While the agent works
 on the chat, the rows wait for it.
@@ -1045,14 +1067,20 @@ the chat's model wants its prompts written. Add your own as markdown files in
 ---
 id: my-style
 families: [sdxl]          # which models it is for; leave out for all
-modes: [chat, critique]   # chat, plan, critique, describe; leave out for all
+modes: [chat, critique]   # chat, plan, critique, describe, story, enhance; leave out for all
 priority: 60              # higher is kept first when there are too many
 ---
 Always add "film grain, 35mm" to photographic prompts.
 ```
 
 A skill with a built-in one's `id` (`general`, `plan`, `critique`, `describe`, `tags`,
-`sentences`, `qwen-image`, `moss`) replaces it. `doctor` says when one can't be read.
+`sentences`, `qwen-image`, `moss`, `film`, `h3`, `cast`) replaces it. `doctor` says when one can't be read.
+
+A skill with `modes: [enhance]` is an **Enhance** guide instead: given to Enhance
+alone (never to a chat reply), with the model's own style skill (`tags`, `sentences`,
+…) after it. The built-in ones are `enhance-image`, `enhance-wan`, `enhance-ltx` and
+`enhance-h3`; a file of yours with one of those ids replaces it, so you can change how
+long or how detailed the enhanced prompts are.
 
 ## Convert
 

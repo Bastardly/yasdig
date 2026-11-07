@@ -11,6 +11,7 @@
 
 pub mod chat;
 pub mod context;
+pub mod enhance;
 pub mod knobs;
 pub mod routes;
 pub mod schema;
@@ -229,6 +230,11 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
             let name = chat.cast.as_ref().map_or(String::new(), |c| c.name.clone());
             queue.relabel(job, label(&format!("drawing {name} for the cast")));
             cast_try(engine, &store, &chat)
+        }
+        Step::Enhance(k) => {
+            let n = chat.film.as_ref().map_or(0, |f| f.shots.len());
+            queue.relabel(job, label(&format!("writing shot {}/{n} in full", k + 1)));
+            enhance_shot(engine, &store, &chat, k)
         }
         Step::CastPicture(_) | Step::CastSheet(_) | Step::Keyframe(_) => {
             queue.relabel(job, label(&board_label(&chat, step_now)));
@@ -747,7 +753,54 @@ fn keyframe_prompt(film: &chat::Film, shot: &chat::FilmShot) -> String {
         .filter_map(|n| film.member(n))
         .filter_map(|m| crate::cast::look_paragraph(&m.name, &m.look))
         .collect();
-    crate::cast::compose(&looks, &with_look(&shot.text, &film.every))
+    // The story's short words: a paragraph written for the video model
+    // tells of motion and sound a still can't show.
+    crate::cast::compose(&looks, &with_look(shot.words(), &film.every))
+}
+
+/// A storyboard shot written out in full for the film's video model, from
+/// the story's words, the shot before, the cast's looks and the H3 fields.
+/// A failure leaves every shot as the story wrote it, with a note: the board
+/// is whole without it. A Stop is still a Stop.
+fn enhance_shot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: usize) -> Result<()> {
+    let cfg = engine.cfg().clone();
+    let film = chat.film.as_ref().ok_or_else(|| anyhow!("the chat has no storyboard"))?;
+    let shot = film.shots.get(k).ok_or_else(|| anyhow!("that shot is gone"))?;
+    let result = match cfg.video_models().into_iter().find(|m| m.name == film.video_model) {
+        None => Err(anyhow!("the film's video model '{}' isn't installed", film.video_model)),
+        Some(v) => {
+            let view = toolkit::VideoView::of(&v);
+            let req = enhance::Request {
+                kind: "video".into(),
+                model: v.name.clone(),
+                text: shot.text.clone(),
+                every: film.every.clone(),
+                before: if k > 0 && !shot.cut { film.shots[k - 1].text.clone() } else { String::new() },
+                cut: k > 0 && shot.cut,
+                picture: None,
+                seconds: Some(shot.frames.map_or(view.shot_seconds(), |f| f as f32 / view.fps.max(1) as f32)),
+                cast: shot.cast.clone(),
+                looks: shot.cast.iter().filter_map(|n| film.member(n)).map(|m| (m.name.clone(), m.look.clone())).collect(),
+                lines: shot.lines.clone(),
+                sound: shot.sound.clone(),
+                music: shot.music.clone(),
+                agent: chat.agent.clone(),
+            };
+            enhance::run(&cfg, engine.monitor(), &req)
+        }
+    };
+    if let Err(e) = &result {
+        if e.to_string().ends_with(crate::sd::CANCELLED) {
+            return result.map(|_| ());
+        }
+    }
+    let text = shot.text.clone();
+    let result = result.map_err(|e| format!("{e:#}"));
+    store.update(&chat.id, |c| {
+        session::shot_enhanced(c, k, &text, result.as_ref());
+        Ok(())
+    })?;
+    Ok(())
 }
 
 pub(crate) fn with_look(text: &str, every: &str) -> String {

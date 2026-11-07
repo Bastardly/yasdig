@@ -80,7 +80,7 @@ pub fn board_text(f: &Film) -> String {
     for (k, shot) in f.shots.iter().enumerate() {
         let how = if k == 0 { "first" } else if shot.cut { "cut" } else { "goes on" };
         let who = if shot.cast.is_empty() { String::new() } else { format!(" [{}]", shot.cast.join(", ")) };
-        s.push_str(&format!("\n{}. ({how}) {}{who}", k + 1, shot.text));
+        s.push_str(&format!("\n{}. ({how}) {}{who}", k + 1, shot.words()));
     }
     s
 }

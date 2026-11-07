@@ -60,6 +60,8 @@ pub enum Kind {
     /// One try in the cast editor: a picture, or a turnaround and the picture
     /// drawn from it. One job, so a Stop kills it.
     Cast,
+    /// A prompt rewritten by the agent's model (`agent::enhance`). One job.
+    Enhance,
 }
 
 impl Kind {
