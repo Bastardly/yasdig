@@ -1842,11 +1842,13 @@ from `family` goes on `VideoModelDto`.
     `Unsupported` naming the `-conv` file. 2.3's encoder is a stock Gemma 3 plus
     `--embeddings-connectors`; 2.5's is Lightricks' Gemma 4 *with*
     `text_embedding_projection` (`Gemma4Ltx`) — a stock Gemma 4 is `Unknown`.
-    Frames `8k+1` down, sizes 32. **LTX prompts go out in ASCII punctuation**
-    (`sd::ascii_punctuation` in `video_cmd`): sd.cpp tokenizes both releases with
-    its one built-in Gemma 3 vocabulary, and 2.5 (a Gemma 4) drew an unrelated
-    picture for a prompt with ’ and — that 2.3 followed (2026-11-07). Letters
-    outside ASCII are not folded and not yet checked. **The two upscalers are identical and unversioned**:
+    Frames `8k+1` down, sizes 32. **2.5's bf16 encoder ignores prompts**: it drew a
+    man talking to camera where its q8_0 copy drew the prompt, same seed
+    (2026-11-07). Convert takes it through `-m` (`Slot::for_role`), and
+    `LTX25_LLM.file` names that copy (`convert::output_path`), so discovery
+    prefers it; `#vpartnote` says so while the bf16 is picked. LTX prompts go
+    out in ASCII punctuation (`sd::ascii_punctuation`), a precaution only — it
+    was blamed first, but the vocabularies agree on ’ and —. **The two upscalers are identical and unversioned**:
     `video_components` prefers the file named as the slot's `file`.
   - **LTX hi-res is in the one run** (`VideoModel.hires`, `--hires
     --hires-upscalers-dir <parent> --hires-upscaler <stem>`: sd-cli refuses a path

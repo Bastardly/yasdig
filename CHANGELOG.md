@@ -29,7 +29,11 @@ What changed in each release of yasdig. Each release's executables are on the
   distilled checkpoints, 8 steps at CFG 1), and every part is recognised from its
   file. The Generation panel's **Hi-res ×2** runs LTX's own latent upscaler: draw
   small, refine at twice the size, in one run. Curly quotes, dashes and ellipses in
-  an LTX prompt are sent as plain ASCII: on LTX-2.5 they threw the picture off.
+  an LTX prompt are sent as plain ASCII.
+- **LTX-2.5's text encoder converts to q8_0** on the Convert tab, and the copy is
+  used from then on. On the bf16 file Get models downloads, 2.5 could ignore the
+  prompt and draw a man talking to camera; the q8_0 copy drew what was asked, same
+  seed. The Video tab says so while 2.5 runs on the bf16.
 - **Enlarge any clip with LTX**: the clip dialog's Enlarge has an **LTX** choice
   beside FSR once an LTX model is installed. Each shot is redrawn at twice its size
   from its own words, all its frames at once, so the new detail doesn't flicker —

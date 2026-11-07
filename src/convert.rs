@@ -35,7 +35,7 @@
 //! canonical prefix round-trips unchanged.
 
 use crate::config::Config;
-use crate::discover::{self, DitKind, ImageVaeKind, Role, Tensors, VaeKind};
+use crate::discover::{self, DitKind, ImageVaeKind, LlmKind, Role, Tensors, VaeKind};
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
@@ -210,9 +210,16 @@ impl Slot {
             Role::AudioVae(_) | Role::Tokenizer(_) => None,
             // LTX's are left as shipped until a converted one is measured.
             Role::EmbeddingsConnectors | Role::LatentUpscaler => None,
+            // LTX-2.5's Gemma 4 goes through `-m`: its tensors carry no prefix
+            // on disk and sd-cli loads `--llm` files under their own names, so
+            // the copy reads back as the same part. Converted because the
+            // shipped bf16 drew a stock scene (a man talking to camera) for
+            // prompts its q8_0 copy followed (2026-11-07, same seed); sd.cpp's
+            // tested setup is Q8_0 too.
+            Role::Llm(LlmKind::Gemma4Ltx { .. }) => Some(Slot::Checkpoint),
             // Image models reach this list through the registry (`candidates`).
-            // An `--llm` text encoder can't be converted at all: sd.cpp's
-            // `convert_with_components` takes no such path.
+            // Any other `--llm` text encoder isn't offered: its tensors would
+            // come back under a name discovery hasn't measured.
             Role::Image { .. } | Role::Llm(_) | Role::Unsupported(_) => None,
         }
     }
@@ -334,7 +341,9 @@ fn group_of(slot: Slot, image_side: bool) -> &'static str {
     match slot {
         Slot::Vae => GROUPS[2],
         Slot::T5xxl => GROUPS[3],
-        Slot::Checkpoint => GROUPS[0],
+        Slot::Checkpoint if image_side => GROUPS[0],
+        // LTX-2.5's encoder, the one video-side `-m`.
+        Slot::Checkpoint => GROUPS[3],
         Slot::Diffusion if image_side => GROUPS[0],
         Slot::Diffusion => GROUPS[1],
     }
@@ -501,6 +510,7 @@ fn describe(role: &Role) -> String {
         Role::ImageVae(ImageVaeKind::Flux2) => "Flux.2 VAE (Klein)".into(),
         Role::Umt5 => "umt5-xxl text encoder".into(),
         Role::T5xxl => "T5-XXL text encoder".into(),
+        Role::Llm(LlmKind::Gemma4Ltx { .. }) => "Gemma 4 text encoder (LTX-2.5)".into(),
         other => format!("{other:?}"),
     }
 }
@@ -614,7 +624,6 @@ mod tests {
 
     #[test]
     fn an_image_vae_converts_through_vae_and_an_llm_not_at_all() {
-        use crate::discover::LlmKind;
         for kind in [ImageVaeKind::Sd, ImageVaeKind::Flux, ImageVaeKind::Flux2] {
             assert_eq!(Slot::for_role(&Role::ImageVae(kind)), Some(Slot::Vae));
         }
@@ -625,6 +634,11 @@ mod tests {
         assert_eq!(group_of(Slot::Diffusion, true), "Image models");
         assert_eq!(group_of(Slot::Diffusion, false), "Video models");
         assert_eq!(group_of(Slot::T5xxl, false), "Text encoders");
+        assert_eq!(group_of(Slot::Checkpoint, false), "Text encoders");
+        assert_eq!(
+            Slot::for_role(&Role::Llm(LlmKind::Gemma4Ltx { dim: 3840 })),
+            Some(Slot::Checkpoint)
+        );
     }
 
     fn t(rows: &[(&str, &[u64], &str)], layout: Layout) -> Tensors {

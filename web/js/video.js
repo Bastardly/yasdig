@@ -52,8 +52,24 @@ function currentVideoModel() {
 // The model's separate files, the Image tab's rows from the same factory. An
 // optional part (H3's audio VAE, VACE's CLIP-Vision) can be left out.
 const videoParts = partRows({
-  el: 'vpartrows', prefix: 'vpart', none: 'None', onChange: () => { syncReady(); syncHires(); },
+  el: 'vpartrows', prefix: 'vpart', none: 'None', onChange: () => { syncReady(); syncHires(); syncPartNote(); },
 });
+
+// LTX-2.5 on the Get models card's bf16 encoder drew a stock scene (a man
+// talking to camera) for prompts its q8_0 copy followed, same seed
+// (2026-11-07). The Convert tab makes that copy beside it, and discovery
+// prefers it; until then, say so.
+function syncPartNote() {
+  const note = $('vpartnote');
+  const sel = $('vpart-llm');
+  const path = sel?.selectedOptions[0]?.dataset.path ?? '';
+  const bf16 = currentVideoModel()?.family === 'ltx_2_5' && /\.safetensors$/i.test(path);
+  note.hidden = !bf16;
+  note.textContent = bf16
+    ? 'This bf16 text encoder can ignore the prompt on LTX-2.5. Convert it to q8_0 on the '
+      + 'Convert tab (about 15 GB, a few minutes); the copy is picked here from then on.'
+    : '';
+}
 
 // The clip's LoRAs: the Image tab's picker, offered what fits this video
 // family (`/loras` lists video families too).
@@ -964,6 +980,7 @@ function syncVideo() {
   if (!m) return;
   $('vnegative').value = m.negative_prompt ?? '';
   videoParts.draw(m.parts);
+  syncPartNote();
   // Re-greys the LoRA rows for this family (and shows the expert choice on
   // the pair), then sets Turbo to this model's default. After the boxes
   // below are filled, since it overwrites steps and CFG.
@@ -1518,6 +1535,7 @@ function applyClip(c) {
   // paths by the slot names.
   videoParts.draw(currentVideoModel()?.parts);
   videoParts.set(c.video);
+  syncPartNote();
   syncReady();
   $('vw').value = v.width;
   $('vh').value = v.height;

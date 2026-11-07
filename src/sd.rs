@@ -415,11 +415,12 @@ impl<'a> SdRunner<'a> {
         for l in &m.picked_loras {
             p.push_str(&l.tags(m.family.is_moe()));
         }
-        // LTX-2.5 lost the picture to a curly apostrophe and an em dash
-        // (measured 2026-11-07: the same 135 words, the same seed, drew a man
-        // walking, and with ASCII punctuation the cat it described; 2.3 drew
-        // the cat either way). sd.cpp tokenizes both releases with its one
-        // built-in Gemma vocabulary, Gemma 3's, and 2.5's encoder is a Gemma 4.
+        // Typographic punctuation as ASCII, a precaution rather than a fix:
+        // sd.cpp tokenizes both releases with Gemma 3's vocabulary. It was
+        // blamed for 2.5 drawing a stock scene, but the tokenizer gives ’ and —
+        // the same ids in both, an ASCII prompt failed too, and the cause was
+        // the bf16 encoder (its q8_0 copy follows the prompt; see
+        // `convert::Slot::for_role`).
         let (p, negative) = if m.family.is_ltx() { (ascii_punctuation(&p), ascii_punctuation(negative)) } else { (p, negative.to_string()) };
         cmd.args(["-p", &p]);
         if !negative.is_empty() {
@@ -3103,8 +3104,7 @@ lora_dir = "loras""#,
         assert_eq!(flag(&a, "--sigmas"), None);
     }
 
-    /// LTX-2.5 drew another picture for a prompt with a curly apostrophe and
-    /// an em dash; LTX prompts go out in ASCII punctuation, letters kept.
+    /// LTX prompts go out in ASCII punctuation, letters kept.
     #[test]
     fn an_ltx_prompt_goes_out_in_ascii_punctuation() {
         assert_eq!(

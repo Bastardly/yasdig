@@ -838,7 +838,10 @@ of 32. The cards fetch the *distilled* checkpoints, which run 8 steps at CFG 1 o
 fixed schedule; set other steps and it runs the ordinary schedule instead. 2.3 uses
 a Gemma 3 text encoder plus a separate text projection file; 2.5 uses Lightricks'
 Gemma 4 with the projection inside (a stock Gemma 4 won't do, and is listed greyed
-out). 2.5's default video VAE decodes by diffusion, which sd.cpp doesn't run: use the
+out). **Convert 2.5's text encoder to q8_0** on the Convert tab after downloading
+it (about 15 GB, a few minutes): on the bf16 file 2.5 can ignore the prompt and
+draw a stock scene, and the converted copy beside it is used from then on. 2.5's
+default video VAE decodes by diffusion, which sd.cpp doesn't run: use the
 `-conv` VAE the card fetches. **Hi-res ×2** (Generation panel, LTX only) draws at the
 size you set, enlarges the latent with LTX's latent upscaler and refines it at twice
 the size in the same run — far cheaper than drawing big from the start. 640×352 with
