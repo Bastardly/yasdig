@@ -625,7 +625,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* A clip saved and not generated (`planTile` in video.js): its first picture,
    or a card of words at the same height, with a mark on it — so a strip of
    tiles says at a glance which ones have frames. */
-.wigrid .plantile button { position: relative; }
+/* `:not(.star)`: the star is a button in the tile too, and this rule is more
+   specific than its own `position: absolute`. */
+.wigrid .plantile button:not(.star) { position: relative; }
 .wigrid .plancard {
   display: flex; align-items: center; justify-content: center;
   height: var(--thumb-h); width: calc(var(--thumb-h) * 16 / 9); padding: var(--sp-3);
@@ -941,6 +943,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .vstage > .stagehint + #vcanvas { margin-top: 0; }
 /* A panel is narrower than the old column: the picker's smaller strip. */
 .workspace .wigrid img { height: var(--thumb-h-pick); }
+.workspace .wigrid .plancard { height: var(--thumb-h-pick); width: calc(var(--thumb-h-pick) * 16 / 9); }
 /* min-width:0 because a flex item's default min-width is its content: a 3072 px
    image would otherwise refuse to let its pane shrink and shove the panel off
    the left edge of the screen. */
