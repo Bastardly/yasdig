@@ -1169,11 +1169,26 @@ async function startClip() {
   }
   const stageAtStart = stageSeq;
   // A plan on the stage is saved as it stands, then drawn into.
-  const into = plan?.id ?? null;
+  let into = plan?.id ?? null;
+  let saved = null;
   if (into && busyClips.has(into)) return;
   if (into) await savePlan({ quiet: true });
   const body = { ...vidPayload(sent), id: into };
+  // Anything else is saved first, as a plan of its own drawn into, so the
+  // clip is in Current from the press — "Generating…" while it renders, its
+  // frames when done, and kept as not generated if it fails or is stopped.
+  // Not staged: the render lands on the stage as before.
+  if (!into) {
+    try {
+      saved = (await post('/videos/plan', body)).clip;
+      into = saved.id;
+      body.id = into;
+    } catch (e) {
+      console.warn('[yasdig] the clip could not be saved before generating; generating anyway', e);
+    }
+  }
   if (into) busyClips.add(into);
+  if (!plan && into) loadClips();
   began();
   try {
     const req = post('/video', body);
@@ -1192,17 +1207,28 @@ async function startClip() {
     loadClips();
   } catch (e) {
     const msg = String(e.message || e);
+    // Still on the stage, the clip saved for this press becomes the plan
+    // there, so Try again (or Generate) draws into it rather than saving a
+    // second one beside it.
+    if (saved && stageSeq === stageAtStart && !plan) {
+      plan = saved;
+      planSent = JSON.stringify(planBody());
+      drawPlanInfo();
+      markClips();
+    }
     // The marker SdRunner::run puts in a killed pass's error. A clip the user
     // stopped is not a failure, and reporting a stack of sd-cli stderr for it
     // would read as one.
     showError($('verr'), msg.includes('cancelled by request')
-      ? 'Stopped. Nothing was kept — the partial frames are swept.'
+      ? `Stopped. The partial frames are swept${into ? '; the clip stays in Current, not generated' : ''}.`
       : msg.includes('removed from the job queue')
         ? 'Removed from the queue before it started.'
         : msg, e.oom, { memory: 'vmemory', retry: startClip });
   } finally {
     if (into) busyClips.delete(into);
     ended();
+    // The tile stops saying Generating…, whichever way it ended.
+    loadClips();
   }
 }
 
@@ -1380,7 +1406,7 @@ function planTile(c) {
   return `<span class="tile plantile">
     <button type="button" data-id="${esc(c.id)}"
       title="${esc(c.prompt)}&#10;Saved, not generated · ${(c.segments ?? []).length} shot(s) · ${esc(c.model)}&#10;Click to open it; Generate draws it">
-      ${pic}<span class="planmark">Not generated</span></button>${star(c.favorite)}</span>`;
+      ${pic}<span class="planmark">${busyClips.has(c.id) ? 'Generating…' : 'Not generated'}</span></button>${star(c.favorite)}</span>`;
 }
 
 const grids = [

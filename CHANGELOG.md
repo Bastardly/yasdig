@@ -20,7 +20,9 @@ What changed in each release of yasdig. Each release's executables are on the
 - **Save a clip without generating it.** The Video tab's **Save** keeps every shot,
   *Every shot*, the negative, the model, its parts, LoRAs and settings as a clip marked
   **Not generated** in Current. Open it any time; it saves itself as you change it, and
-  **Generate clip** draws it into the same tile. Star it like any clip.
+  **Generate clip** draws it into the same tile. Star it like any clip. A new clip is
+  saved the same way the moment you press Generate, so it is in Current, marked
+  *Generating…*, while it renders.
 - Shot edits you haven't drawn yet are kept with the clip on the server, not in the
   browser, so they survive a reload and show in another browser.
 - **LTX-2.3 and LTX-2.5 video**, with sound: Get models has a card for each (the

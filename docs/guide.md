@@ -886,8 +886,11 @@ shot, *Every shot*, the negative, the model, its parts, LoRAs and settings — w
 drawing a frame. It waits in Current with a **Not generated** mark (its first picture,
 if a shot has one), opens like any clip, and saves itself as you change it; star it to
 keep it past *Delete all* and Close server's clear. **Generate clip** draws it into the
-same tile. Edits on a generated clip that you haven't drawn yet are kept with the clip
-too, so a reload or another browser shows them.
+same tile. Generate on a new clip does the same by itself: the clip is saved first, so
+it shows in Current at once, marked **Generating…**, and its tile becomes the clip when
+it is done; if it fails or you stop it, it stays there as **Not generated** and on the
+stage, so the next Generate draws into it. Edits on a generated clip that you haven't
+drawn yet are kept with the clip too, so a reload or another browser shows them.
 
 **Continue or cut.** One frame is all that carries across a seam, so a face that
 leaves the picture and comes back is drawn anew and may not match. A shot can be a
