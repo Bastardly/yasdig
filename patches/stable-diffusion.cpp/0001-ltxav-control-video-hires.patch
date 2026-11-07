@@ -1,0 +1,88 @@
+diff --git a/src/pipeline/generation.h b/src/pipeline/generation.h
+index 34aa000..0604412 100644
+--- a/src/pipeline/generation.h
++++ b/src/pipeline/generation.h
+@@ -33,6 +33,7 @@ namespace sd::pipeline {
+         int64_t video_conditioning_frame_count = 0;
+         int64_t video_target_frame_count       = 0;
+         int audio_length                       = 0;
++        bool from_control_video                = false;
+     };
+ 
+     struct ImageGenerationEmbeds {
+diff --git a/src/pipeline/video.cpp b/src/pipeline/video.cpp
+index 2fcff4c..bf8b980 100644
+--- a/src/pipeline/video.cpp
++++ b/src/pipeline/video.cpp
+@@ -731,8 +731,36 @@ namespace sd::pipeline {
+ 
+         if (sd_version_is_ltxav(sd->version)) {
+             if (sd_vid_gen_params->control_frames_size > 0) {
+-                LOG_ERROR("LTXAV control_frames are not implemented");
+-                return std::nullopt;
++                // A finished video stands in for the first pass, so that only the
++                // latent spatial upscale and its refine run: enlarging a video made
++                // elsewhere. Plain video-to-video at --strength is not implemented.
++                if (!request->hires.enabled) {
++                    LOG_ERROR("LTXAV control_frames are only supported with --hires: they are the low-resolution video the latent upscale refines");
++                    return std::nullopt;
++                }
++                if (!start_image.empty() || !end_image.empty()) {
++                    LOG_ERROR("LTXAV control_frames cannot be combined with an init or end image");
++                    return std::nullopt;
++                }
++                int64_t t1           = ggml_time_ms();
++                int64_t given        = sd_vid_gen_params->control_frames_size;
++                sd::Tensor<float> in = sd::zeros<float>({request->width, request->height, request->frames, 3, 1});
++                // Short of the 8k+1 frames: the last one is held.
++                for (int64_t i = 0; i < request->frames; ++i) {
++                    auto frame = sd_image_to_tensor(sd_vid_gen_params->control_frames[std::min(i, given - 1)],
++                                                    request->width,
++                                                    request->height);
++                    sd::ops::slice_assign(&in, 2, i, i + 1, frame.unsqueeze(2));
++                }
++                latents.init_latent = sd->encode_first_stage(in);
++                if (latents.init_latent.empty()) {
++                    LOG_ERROR("failed to encode LTXAV control video");
++                    return std::nullopt;
++                }
++                latents.from_control_video = true;
++                LOG_INFO("LTXAV control video: %" PRId64 " frames encoded as the first pass, taking %" PRId64 " ms",
++                         given,
++                         ggml_time_ms() - t1);
+             }
+ 
+             if (!start_image.empty() || !end_image.empty()) {
+@@ -1676,8 +1704,12 @@ namespace sd::pipeline {
+             return false;
+         }
+         LOG_VERBOSE("sample %dx%dx%d", W, H, T);
+-        int64_t sampling_start         = ggml_time_ms();
+-        sd::Tensor<float> final_latent = sd->sample(sd->diffusion_model,
++        int64_t sampling_start = ggml_time_ms();
++        sd::Tensor<float> final_latent;
++        if (latents.from_control_video) {
++            final_latent = x_t;
++        } else {
++        final_latent = sd->sample(sd->diffusion_model,
+                                                     true,
+                                                     x_t,
+                                                     std::move(noise),
+@@ -1703,13 +1735,16 @@ namespace sd::pipeline {
+                                                     request.cache_params,
+                                                     plan.high_noise_sample_steps <= 0,
+                                                     latents.video_positions);
++        }
+ 
+         int64_t sampling_end = ggml_time_ms();
+         if (final_latent.empty()) {
+             LOG_ERROR("sampling failed after %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
+             return false;
+         }
+-        LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
++        if (!latents.from_control_video) {
++            LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
++        }
+ 
+         if (latent_upscale_enabled) {
+             if (sd->get_cancel_flag() == SD_CANCEL_ALL) {

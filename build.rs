@@ -49,6 +49,9 @@ struct Native {
     cmake_src: &'static str,
     /// Our own sources beside the checkout, rerun on when they change.
     own: &'static [&'static str],
+    /// A folder of `git diff` patches applied to the checkout before it is
+    /// built, in name order; empty for none. See [`apply_patches`].
+    patches: &'static str,
     env: &'static str,
     cfg: &'static str,
     flags: &'static [&'static str],
@@ -63,6 +66,7 @@ const BUILDS: [Native; 2] = [
         clone: "stable-diffusion.cpp",
         cmake_src: "stable-diffusion.cpp",
         own: &[],
+        patches: "patches/stable-diffusion.cpp",
         env: "YASDIG_SD_CLI",
         cfg: "bundled_sd",
         flags: &["-DSD_VULKAN=ON", "-DSD_SERVER_BUILD_FRONTEND=OFF"],
@@ -74,6 +78,7 @@ const BUILDS: [Native; 2] = [
         clone: "llama.cpp",
         cmake_src: "llm",
         own: &["llm/CMakeLists.txt", "llm/yasdig-llm.cpp"],
+        patches: "",
         env: "YASDIG_LLM",
         cfg: "bundled_llm",
         // llm/CMakeLists.txt switches llama.cpp's server, tools and TLS off.
@@ -127,6 +132,15 @@ fn native(n: &Native, manifest: &Path, release: bool) {
             println!("cargo::warning=cross build: {} not built or embedded", n.name);
             return;
         }
+        if !n.patches.is_empty() {
+            let dir = manifest.join(n.patches);
+            println!("cargo::rerun-if-changed={}", dir.display());
+            if let Err(e) = apply_patches(&clone, &dir) {
+                // Never a warning: a binary built without the patch runs, and
+                // fails only at the feature that needed it.
+                panic!("{e}");
+            }
+        }
         match build(n, &manifest.join(n.cmake_src), &clone.join(BUILD_DIR)) {
             Ok(bin) => (bin, release),
             Err(e) if release => panic!("{e}"),
@@ -140,6 +154,45 @@ fn native(n: &Native, manifest: &Path, release: bool) {
     if embed {
         embed_binary(n, &bin);
     }
+}
+
+/// Apply every `*.patch` in `dir` to the checkout, in name order: applied
+/// when it applies, skipped when it is already in (its reverse applies), and
+/// an error otherwise — a patch that no longer fits the pinned commit is
+/// what a bump of `SD_CPP_REF` must deal with, never something to build past.
+fn apply_patches(clone: &Path, dir: &Path) -> Result<(), String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
+    let mut patches: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "patch"))
+        .collect();
+    patches.sort();
+    let git = |args: &[&str], patch: &Path| {
+        Command::new("git")
+            .arg("-C")
+            .arg(clone)
+            .args(args)
+            .arg(patch)
+            .output()
+            .map_err(|e| format!("running git for {}: {e}", patch.display()))
+    };
+    for p in &patches {
+        if git(&["apply", "--check"], p)?.status.success() {
+            let out = git(&["apply"], p)?;
+            if !out.status.success() {
+                return Err(format!("{} didn't apply: {}", p.display(), String::from_utf8_lossy(&out.stderr)));
+            }
+        } else if !git(&["apply", "--reverse", "--check"], p)?.status.success() {
+            return Err(format!(
+                "{} doesn't fit {} as checked out — rebase the patch onto the pinned commit",
+                p.display(),
+                clone.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// `cmake`, and on MinGW with MSYS2's UCRT64 `bin` (`MSYS2_UCRT64`, else the

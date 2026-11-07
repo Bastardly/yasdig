@@ -53,6 +53,12 @@ start). Debug builds never embed (link time); a failed sd.cpp build warns in deb
 errors in release. `YASDIG_SD_CLI=<path>` overrides. The repo's `models.toml` names
 `build-yasdig/bin/sd-cli`.
 
+**sd.cpp is patched**: `build.rs` applies `patches/stable-diffusion.cpp/*.patch`
+(`apply_patches`: applied, or skipped when its reverse applies, else a hard error —
+a bump of `SD_CPP_REF` must rebase them). Today one: LTXAV takes `--control-video`
+with `--hires` as the first pass (`latents.from_control_video`). Regenerate a patch
+with `git -C stable-diffusion.cpp diff -- <files>`.
+
 `build.rs` traps: it **reruns on `.git/logs/HEAD`, not the source tree** (hand edit to
 sd.cpp needs `touch build.rs`); **configure is stamped on success**
 (`.yasdig-configured`), not judged by `CMakeCache.txt`.
@@ -1662,7 +1668,14 @@ sharpness/clarity, no grade), stored as `postStart`; double-click one slider res
    `Display::open_in` copies them back *in* under fresh names.
 9. **Filter a clip's frames; never re-diffuse them.** `Engine::enlarge_clip` runs
    `Fsr::process` per frame (deterministic, no flicker). Per-frame `refine` would boil
-   in motion; refining a clip means a VACE `--control-video` pass. `work/videos/` is
+   in motion; refining a clip means a VACE `--control-video` pass. **The one
+   exception is LTX's enlarge** (`enlarge_clip_ltx`, `ClipVersion.ltx`): a shot's
+   frames as `--control-video` beside `--hires` are the first pass of one LTX run
+   (our sd.cpp patch), so the refine sees every frame at once and can't boil. Per
+   shot, on its `conditioned` words; frames padded *up* to 8k+1 (`ltx_frames`; the
+   patch holds the last), sides to 32 (`ltx_side`), cut and Lanczos'd back to 2×
+   after; a distilled model refines from the strength down its own grid
+   (`ltx_refine_sigmas`). The clip's sound stays; LTX's is dropped. `work/videos/` is
    written through (no scratch stage); `videos::ClipDir` sweeps a half-written dir
    unless `keep()` is reached.
 

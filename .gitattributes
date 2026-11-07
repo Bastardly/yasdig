@@ -1,0 +1,3 @@
+# The sd.cpp patches apply to an LF tree byte for byte (build.rs); never
+# let a Windows checkout convert them.
+patches/** -text

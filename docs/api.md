@@ -614,7 +614,10 @@ needs a Vulkan device and nothing else.
   FSR over every frame of the original into a new version inside the clip
   (`{id}/v{n}/`, served at `/videos/{id}/v{n}/frames/{k}.png`). Returns
   `{ "clip": {…}, "version": 1, "ms": 1820 }`. Filters only — it never re-diffuses,
-  for the reason under "Video" above.
+  for the reason under "Video" above. With `"ltx": { "model": "…", "strength": 0.45,
+  "steps": 8 }` it is instead LTX's latent ×2 and refine, a shot at a time over all
+  its frames at once (any clip, any family; `steps` only for a model without a fixed
+  refine schedule); the version records it as `ltx`. Stop kills it.
 - `POST /videos/extend` — `{ "id": "…", "keep": 2, "shots": [{ "prompt": "…", "seed": -1,
   "frames": 33 }], "every": "…", "negative": "…" }` changes the clip in place: its first
   `keep` shots are kept (at least 1 — changing shot 1 is a new clip), the rest cut, then

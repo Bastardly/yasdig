@@ -349,6 +349,20 @@ pub struct ClipVersion {
     pub clarity: f32,
     pub width: u32,
     pub height: u32,
+    /// Set when LTX drew it ([`crate::pipeline::Engine::enlarge_clip`] with a
+    /// model): a latent ×2 and a refine, not FSR. `None` for FSR and for
+    /// every version written before LTX enlarged anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ltx: Option<LtxEnlarge>,
+}
+
+/// What an LTX enlarge ran with.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LtxEnlarge {
+    pub model: String,
+    /// How much of the schedule the refine redraws, 0..1.
+    pub strength: f32,
+    pub steps: u32,
 }
 
 // No `duration()` to match [`crate::config::VideoModel::duration`]: that one
@@ -358,7 +372,7 @@ pub struct ClipVersion {
 
 /// The `frame_*.png` files directly in `dir`, sorted — the names are
 /// zero-padded, so name order is frame order.
-fn frames_in(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn frames_in(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };

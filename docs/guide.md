@@ -927,6 +927,12 @@ stays in Current and shows on **Favorites** too. Nothing goes to Outputs on its 
 
 **The clip dialog.** Click the clip on the stage. *Enlarge* runs FSR over every frame
 into a new version (sharpness and clarity are fixed kernels, so they don't flicker),
+or, with an LTX model and its latent upscaler installed, **LTX**: each shot is redrawn
+at twice its size by LTX from its own words — any clip, Wan's and H3's too. It sees
+all of a shot's frames at once, so the new detail holds still instead of flickering.
+*Strength* is how much it redraws (0.3–0.5 keeps the clip, higher invents more); the
+sound stays the clip's. It is slow and heavy on memory: a long or large clip may run
+out, and *Stream from SSD* on the LTX model is the first thing to try.
 *History* lists the original and each version — click to show one, *Compare* to split
 the frame between it and the original — and *Save to output* writes the version on
 screen to the output folder, where it shows in Outputs with a play mark and opens in

@@ -1092,8 +1092,33 @@
   <section class="fpanel" id="panel-cb-enlarge" aria-label="Enlarge" hidden>
     <header class="fphead"><b>Enlarge</b> <span class="foldstate" id="sum-cb-enlarge"></span><button type="button" class="fpclose" aria-label="Close Enlarge">&times;</button></header>
     <div class="fpbody">
+      <!-- FSR, or LTX's latent ×2 and refine (clipview.js `syncMethod`),
+           offered when an LTX model with its latent upscaler is installed. -->
+      <div class="btnrow" id="cbmethodrow" hidden>
+        <button type="button" class="btn btn-choice active" data-method="fsr">FSR</button>
+        <button type="button" class="btn btn-choice" data-method="ltx">LTX</button>
+      </div>
+      <div id="cbltx" hidden>
+        <label for="cbltxmodel">LTX model</label>
+        <select id="cbltxmodel"></select>
+        <div class="row">
+          <div>
+            <label for="cbltxstrength">Strength</label>
+            <input id="cbltxstrength" type="number" step="0.05" min="0.05" max="1" value="0.45">
+          </div>
+          <div id="cbltxstepsbox">
+            <label for="cbltxsteps">Steps</label>
+            <input id="cbltxsteps" type="number" min="1" max="50" value="8">
+          </div>
+        </div>
+        <p class="sub">Each shot redrawn at twice its size by LTX, from its own words,
+          all its frames at once — new detail that holds still. The sound is the clip's.
+          Slow, and heavy on memory.</p>
+      </div>
+      <div id="cbfsr">
       <label for="cbfactor">Enlarge by</label>
       <select id="cbfactor"></select>
+      </div>
       <div class="row">
         <div>
           <label for="cbsharp">Sharpness</label>
@@ -1104,7 +1129,7 @@
           <input id="cbclarity" type="number" step="0.05" min="-1" max="1" value="0">
         </div>
       </div>
-      <p class="sub">FSR on every frame of the original, into a new version in
+      <p class="sub" id="cbfsrnote">FSR on every frame of the original, into a new version in
         History. A fixed kernel can't flicker, so the frames stay stable — unlike
         a per-frame diffusion, which invents new detail each frame and boils.</p>
     </div>

@@ -55,9 +55,14 @@ release build carries it. The first build takes a few minutes, most of it ggml's
 shaders; after that an unchanged sd.cpp costs nothing. A debug build (`cargo build`,
 `cargo test`) builds sd-cli too but doesn't embed it, so tests stay quick.
 
+`build.rs` also applies the patches in `patches/stable-diffusion.cpp/` to the clone
+(today one: LTX enlarging an existing clip). A patch already in is skipped; one that
+no longer fits the checkout stops the build with its name.
+
 To update sd.cpp, `git -C stable-diffusion.cpp pull && git -C stable-diffusion.cpp
 submodule update --recursive`, then build as usual — the next build notices the new
-commit. `YASDIG_SD_CLI=/path/to/sd-cli` embeds a binary built elsewhere instead.
+commit. Pull with the patches reverted (`git -C stable-diffusion.cpp checkout -- .`),
+and if one no longer applies, it needs rebasing onto the new commit. `YASDIG_SD_CLI=/path/to/sd-cli` embeds a binary built elsewhere instead.
 
 The agent's driver is our own small program, `llm/yasdig-llm.cpp`, built against
 llama.cpp as a library: `build.rs` configures `llm/` (not llama.cpp's own project) into

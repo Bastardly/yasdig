@@ -17,6 +17,10 @@ What changed in each release of yasdig. Each release's executables are on the
   distilled checkpoints, 8 steps at CFG 1), and every part is recognised from its
   file. The Generation panel's **Hi-res ×2** runs LTX's own latent upscaler: draw
   small, refine at twice the size, in one run.
+- **Enlarge any clip with LTX**: the clip dialog's Enlarge has an **LTX** choice
+  beside FSR once an LTX model is installed. Each shot is redrawn at twice its size
+  from its own words, all its frames at once, so the new detail doesn't flicker —
+  Wan and H3 clips too. The sound stays the clip's.
 - **The page says when the server is gone.** If yasdig stops answering (closed in
   another tab, crashed, or the computer slept), a red banner appears within a few
   seconds, also over an open dialog, and goes away by itself when yasdig is back.

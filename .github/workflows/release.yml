@@ -165,8 +165,11 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: Fetch stable-diffusion.cpp
+        # LF as upstream has it: build.rs applies patches/stable-diffusion.cpp/
+        # to this tree, and the runner's autocrlf would make every context
+        # line of them differ by a CR.
         run: |
-          git clone https://github.com/leejet/stable-diffusion.cpp
+          git -c core.autocrlf=false clone https://github.com/leejet/stable-diffusion.cpp
           git -C stable-diffusion.cpp checkout $env:SD_CPP_REF
           git -C stable-diffusion.cpp submodule update --init --recursive
 

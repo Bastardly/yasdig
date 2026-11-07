@@ -765,6 +765,65 @@ pub struct EnlargeResult {
     pub ms: u128,
 }
 
+/// The clip dialog's Enlarge with *LTX* picked: which installed LTX model,
+/// how much of the schedule its refine redraws, and (for a dev model) in
+/// how many steps. A distilled model refines on its own grid instead.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct LtxEnlargeRequest {
+    pub model: String,
+    pub strength: f32,
+    #[serde(default = "ltx_enlarge_steps")]
+    pub steps: u32,
+}
+
+fn ltx_enlarge_steps() -> u32 {
+    8
+}
+
+/// A side for LTX's first pass: the nearest multiple of 32, as sd.cpp would
+/// otherwise round it up and warn (`align_image_size`).
+pub fn ltx_side(v: u32) -> u32 {
+    ((v + 16) / 32).max(1) * 32
+}
+
+/// A shot's frame count padded **up** to LTX's 8k+1, since sd.cpp rounds a
+/// count down and would drop the shot's last frames. The patch holds the
+/// last frame over the padding, which is cut off after.
+pub fn ltx_frames(n: u32) -> u32 {
+    (n.max(1) - 1).div_ceil(8) * 8 + 1
+}
+
+/// The refine's `--hires-sigmas` for a model with a fixed refine schedule
+/// (the distilled ones, [`crate::config::VideoModel::hires_sigmas`]): start
+/// at `strength`, then that schedule's own values below it. `None` without
+/// one, when sd.cpp trims its scheduler's schedule by the strength instead.
+pub fn ltx_refine_sigmas(schedule: Option<&str>, strength: f32) -> Option<String> {
+    let below: Vec<f32> = schedule?
+        .split(',')
+        .filter_map(|v| v.trim().parse::<f32>().ok())
+        .filter(|v| *v < strength - 1e-4)
+        .collect();
+    let mut out = vec![format!("{strength}")];
+    out.extend(below.iter().map(|v| format!("{v}")));
+    if below.last() != Some(&0.0) {
+        out.push("0.0".into());
+    }
+    Some(out.join(","))
+}
+
+/// The frames each shot holds on disk, in order: from its `start` to the
+/// next one's (or the end). A continue's seam frame is already gone, so the
+/// ranges tile the clip.
+pub fn shot_ranges(segments: &[Segment], total: usize) -> Vec<std::ops::Range<usize>> {
+    let starts: Vec<usize> = segments.iter().map(|s| (s.start as usize).min(total)).collect();
+    starts
+        .iter()
+        .enumerate()
+        .map(|(k, &a)| a..starts.get(k + 1).copied().unwrap_or(total).max(a))
+        .filter(|r| !r.is_empty())
+        .collect()
+}
+
 /// Per-pass overrides for `refine` / `hires`, read from the Advanced panel at
 /// the moment the button is pressed.
 ///
@@ -2611,10 +2670,14 @@ impl Engine {
         id: &str,
         factor: f32,
         filters: &Filters,
+        ltx: Option<&LtxEnlargeRequest>,
     ) -> Result<EnlargeResult> {
         let mut clip = self.videos.load(id)?;
         if !clip.rendered {
             bail!("that clip isn't generated yet, so there is nothing to enlarge");
+        }
+        if let Some(req) = ltx {
+            return self.enlarge_clip_ltx(clip, filters, req);
         }
         if !(1.0..=MAX_UPSCALE).contains(&factor) {
             bail!("upscale factor must be between 1.0 and {MAX_UPSCALE}");
@@ -2643,6 +2706,138 @@ impl Engine {
             clarity: filters.clarity,
             width: size.0,
             height: size.1,
+            ltx: None,
+        });
+        self.videos.save(&clip)?;
+        guard.keep();
+        Ok(EnlargeResult { clip, version: n, ms: t.elapsed().as_millis() })
+    }
+
+    /// Enlarge ×2 with LTX: each shot's frames are the first pass of an LTX
+    /// run whose latent upscaler and refine draw it again at twice the size
+    /// (sd.cpp patched, `patches/stable-diffusion.cpp/0001-…`). Any clip, any
+    /// family — the frames are only pixels to it.
+    ///
+    /// Invariant 9's exception, and why it holds: the refine is one diffusion
+    /// over a whole shot at once, every frame seen together, so it can't boil
+    /// the way a per-frame refine does. A shot at a time, each on its own
+    /// words, since the refine follows the prompt; the shot's sound is the
+    /// clip's, untouched (LTX's own soundtrack from the run is dropped).
+    fn enlarge_clip_ltx(&mut self, mut clip: Clip, filters: &Filters, req: &LtxEnlargeRequest) -> Result<EnlargeResult> {
+        let id = clip.id.clone();
+        let mut m = self.cfg.video_model(&req.model)?;
+        if !m.family.is_ltx() {
+            bail!("'{}' isn't an LTX model: only LTX can enlarge a clip this way", req.model);
+        }
+        if m.latent_upscaler.is_none() {
+            bail!("'{}' has no latent upscaler — Get models → {} has it", req.model, m.family.label());
+        }
+        if !m.exists {
+            bail!("'{}' is missing files: {}", req.model, m.missing().iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "));
+        }
+        if !(0.05..=1.0).contains(&req.strength) {
+            bail!("strength must be between 0.05 and 1");
+        }
+        filters.validate(&id)?;
+        let frames = self.videos.frames(&id);
+        let first = frames.first().with_context(|| format!("clip '{id}' has no frames on disk"))?;
+        let (w, h) = image::image_dimensions(first).with_context(|| format!("reading {}", first.display()))?;
+        let out = (w * 2, h * 2);
+        self.check_side(out.0, out.1)?;
+        let (pw, ph) = (ltx_side(w), ltx_side(h));
+        m.width = pw;
+        m.height = ph;
+        m.fps = clip.fps.max(1);
+        m.hires = true;
+        let steps = match ltx_refine_sigmas(m.hires_sigmas.as_deref(), req.strength) {
+            // A distilled model refines on its own grid, from the strength down.
+            Some(sig) => {
+                let n = crate::config::sigma_steps(&sig);
+                m.hires_sigmas = Some(sig);
+                n
+            }
+            None => {
+                m.hires_sigmas = None;
+                m.extra_args.extend(["--hires-denoising-strength".to_string(), format!("{}", req.strength)]);
+                req.steps.clamp(1, 50)
+            }
+        };
+        m.hires_steps = Some(steps);
+        // Its LoRAs are the clip's model's, not this one's.
+        m.picked_loras.clear();
+
+        let n = clip.versions.iter().map(|v| v.n).max().unwrap_or(0) + 1;
+        let out_dir = self.videos.version_root(&id, n);
+        let mut guard = crate::videos::ClipDir::at(out_dir.clone());
+        std::fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+        let t = Instant::now();
+        let ranges = shot_ranges(&clip.segments, frames.len());
+        let total = ranges.len();
+        for (k, (range, seg)) in ranges.into_iter().zip(&clip.segments).enumerate() {
+            let stage = self.scratch.join(format!("{id}-ltx{n}-{k}"));
+            let _ = std::fs::remove_dir_all(&stage);
+            let (input, drawn) = (stage.join("in"), stage.join("out"));
+            std::fs::create_dir_all(&input)?;
+            std::fs::create_dir_all(&drawn)?;
+            let ran = (|| -> Result<()> {
+                // Copied in (invariant 8), and fitted to LTX's grid of 32.
+                for (i, f) in frames[range.clone()].iter().enumerate() {
+                    let dst = input.join(format!("frame_{i:03}.png"));
+                    if (w, h) == (pw, ph) {
+                        std::fs::copy(f, &dst).with_context(|| format!("copying {}", f.display()))?;
+                    } else {
+                        let img = image::open(f).with_context(|| format!("reading {}", f.display()))?.to_rgb8();
+                        image::imageops::resize(&img, pw, ph, image::imageops::FilterType::Lanczos3).save(&dst)?;
+                    }
+                }
+                let count = range.len() as u32;
+                let mut ms = m.clone();
+                ms.frames = ltx_frames(count);
+                let prompt = if seg.conditioned.trim().is_empty() { &seg.text } else { &seg.conditioned };
+                self.sd().video(
+                    &ms,
+                    prompt,
+                    &m.negative_prompt,
+                    seg.seed.max(0),
+                    &VideoIo { init: None, control: Some(&input), out: &drawn.join("frame_%03d.png"), refs: &[], audio: &[] },
+                    Some((k + 1, total)),
+                )?;
+                // The padding off, back to the clip's own shape at twice its
+                // size, then the detail filters (FSR at 1×, per frame:
+                // deterministic, so no flicker).
+                let got = crate::videos::frames_in(&drawn);
+                if got.len() < count as usize {
+                    bail!("LTX drew {} frames of shot {}, not {count}", got.len(), k + 1);
+                }
+                for (i, f) in got.iter().take(count as usize).enumerate() {
+                    let dst = self.videos.version_frame(&id, n, (range.start + i) as u32);
+                    let img = image::open(f).with_context(|| format!("reading {}", f.display()))?.to_rgb8();
+                    let img = if img.dimensions() == out {
+                        img
+                    } else {
+                        image::imageops::resize(&img, out.0, out.1, image::imageops::FilterType::Lanczos3)
+                    };
+                    if filters.sharpness != 0.0 || filters.clarity != 0.0 {
+                        let tmp = stage.join("filter.png");
+                        img.save(&tmp)?;
+                        self.fsr().process(&tmp, &dst, 1.0, filters)?;
+                    } else {
+                        img.save(&dst).with_context(|| format!("writing {}", dst.display()))?;
+                    }
+                }
+                Ok(())
+            })();
+            let _ = std::fs::remove_dir_all(&stage);
+            ran?;
+        }
+        clip.versions.push(crate::videos::ClipVersion {
+            n,
+            factor: 2.0,
+            sharpness: filters.sharpness,
+            clarity: filters.clarity,
+            width: out.0,
+            height: out.1,
+            ltx: Some(crate::videos::LtxEnlarge { model: req.model.clone(), strength: req.strength, steps }),
         });
         self.videos.save(&clip)?;
         guard.keep();
@@ -4890,6 +5085,25 @@ mod tests {
 
     /// *Save*: the rows as typed, on the family's grid, with no frames and
     /// nothing rolled; saved again by its id, it stays one clip.
+    /// LTX's enlarge: sides to the nearest 32, a shot padded up to 8k+1 (sd.cpp
+    /// would round down and drop frames), a distilled refine starting at the
+    /// strength on its own grid, and the shots tiling the clip.
+    #[test]
+    fn an_ltx_enlarge_fits_each_shot_to_ltx() {
+        assert_eq!((super::ltx_side(832), super::ltx_side(480), super::ltx_side(720)), (832, 480, 736));
+        assert_eq!((super::ltx_frames(33), super::ltx_frames(34), super::ltx_frames(81), super::ltx_frames(1)), (33, 41, 81, 1));
+        let tail = "0.909375,0.725,0.421875,0.0";
+        assert_eq!(super::ltx_refine_sigmas(Some(tail), 0.5).as_deref(), Some("0.5,0.421875,0"));
+        assert_eq!(super::ltx_refine_sigmas(Some(tail), 0.3).as_deref(), Some("0.3,0"));
+        assert_eq!(super::ltx_refine_sigmas(None, 0.5), None);
+        let seg = |start| crate::videos::Segment { start, ..crate::videos::Segment::default() };
+        assert_eq!(super::shot_ranges(&[seg(0), seg(33), seg(64)], 96), vec![0..33, 33..64, 64..96]);
+        // An old version, before LTX, reads as FSR's.
+        let v: crate::videos::ClipVersion =
+            serde_json::from_str(r#"{"n":1,"factor":2,"sharpness":0,"clarity":0,"width":2,"height":2}"#).unwrap();
+        assert!(v.ltx.is_none());
+    }
+
     #[test]
     fn a_saved_plan_keeps_the_rows_as_typed_and_its_id() {
         let dir = std::env::temp_dir().join(format!("yasdig-plan-{}", std::process::id()));

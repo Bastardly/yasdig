@@ -53,9 +53,46 @@ function versions() {
   return [{ n: 0, label: 'Original', width: c.width, height: c.height },
     ...(c.versions ?? []).map((v) => ({
       ...v,
-      label: `Enlarged ${v.factor}×${v.sharpness ? ` · sharpness ${v.sharpness}` : ''}`
+      label: `Enlarged ${v.factor}×${v.ltx ? ` by ${v.ltx.model} at ${v.ltx.strength}` : ''}`
+        + `${v.sharpness ? ` · sharpness ${v.sharpness}` : ''}`
         + `${v.clarity ? ` · clarity ${v.clarity}` : ''}`,
     }))];
+}
+
+// ---- Enlarge's method ---------------------------------------------------------
+//
+// FSR, or LTX's latent ×2 and refine (`Engine::enlarge_clip_ltx`): offered
+// only while some installed LTX model has its latent upscaler. Read from
+// `/video-models` on each open, since a download may have landed since.
+
+let method = 'fsr';
+let ltxModels = [];
+
+async function loadLtxModels() {
+  try {
+    const all = await getJSON('/video-models');
+    ltxModels = (Array.isArray(all) ? all : []).filter((m) => m.ltx && m.exists && m.latent_upscaler);
+  } catch {
+    ltxModels = [];
+  }
+  const pick = $('cbltxmodel').value;
+  $('cbltxmodel').innerHTML = ltxModels.map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join('');
+  if (ltxModels.some((m) => m.name === pick)) $('cbltxmodel').value = pick;
+  if (!ltxModels.length) method = 'fsr';
+  syncMethod();
+}
+
+function syncMethod() {
+  $('cbmethodrow').hidden = !ltxModels.length;
+  for (const b of $('cbmethodrow').querySelectorAll('[data-method]')) b.classList.toggle('active', b.dataset.method === method);
+  const ltx = method === 'ltx';
+  $('cbltx').hidden = !ltx;
+  $('cbfsr').hidden = ltx;
+  $('cbfsrnote').hidden = ltx;
+  // A distilled model refines on its own schedule: no steps to choose.
+  const m = ltxModels.find((x) => x.name === $('cbltxmodel').value);
+  $('cbltxstepsbox').hidden = !!m?.hires_sigmas;
+  syncRail();
 }
 
 function frameUrl(v, k) {
@@ -181,7 +218,7 @@ function syncRail() {
   if (!clip) {
     for (const id of ['panel-cb-enlarge', 'panel-cb-history']) if ($(id).open) $(id).open = false;
   }
-  $('sum-cb-enlarge').textContent = `— ${S.upFactor}×`;
+  $('sum-cb-enlarge').textContent = method === 'ltx' ? '— 2× by LTX' : `— ${S.upFactor}×`;
 }
 
 // ---- Download ----------------------------------------------------------------
@@ -315,6 +352,7 @@ function open() {
   $('cbcompare').checked = false;
   sound();
   onOpen();
+  loadLtxModels();
   if (!$('clipbox').open) $('clipbox').showModal();
   panels.layout();
 }
@@ -362,9 +400,14 @@ async function enlarge() {
   try {
     const data = await post('/videos/enlarge', {
       id: view.clip.id,
-      upscale: parseFloat($('cbfactor').value) || S.upFactor,
+      upscale: method === 'ltx' ? 2 : parseFloat($('cbfactor').value) || S.upFactor,
       sharpness: parseFloat($('cbsharp').value) || 0,
       clarity: parseFloat($('cbclarity').value) || 0,
+      ltx: method === 'ltx' ? {
+        model: $('cbltxmodel').value,
+        strength: parseFloat($('cbltxstrength').value) || 0.45,
+        steps: parseInt($('cbltxsteps').value, 10) || 8,
+      } : null,
     });
     view.clip = data.clip;
     onClip(data.clip);
@@ -440,6 +483,13 @@ export function initClipView({ onClipChange, onOpen: opened } = {}) {
   });
   $('cbcanvas').addEventListener('pointerdown', dragSplit);
   $('cbenlarge').addEventListener('click', enlarge);
+  $('cbmethodrow').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-method]');
+    if (!b) return;
+    method = b.dataset.method;
+    syncMethod();
+  });
+  $('cbltxmodel').addEventListener('change', syncMethod);
   $('cbsave').addEventListener('click', save);
   $('cbdlgo').addEventListener('click', download);
   $('cbdlstop').addEventListener('click', () => exporting?.abort());

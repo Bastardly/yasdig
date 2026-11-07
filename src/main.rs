@@ -279,13 +279,15 @@ enum Work {
     /// must not do that underneath a render. Going through the worker is also
     /// what gives it `/progress` and `/cancel` for free.
     Convert(convert::Plan),
-    /// FSR over every frame of a finished clip. GPU work, so it belongs to the
-    /// worker even though there is no diffusion in it.
+    /// FSR over every frame of a finished clip — GPU work, so it belongs to
+    /// the worker even though there is no diffusion in it — or, with `ltx`,
+    /// an LTX latent ×2 and refine per shot (sd-cli, so Stop kills it).
     EnlargeClip {
         id: String,
         upscale: f32,
         sharpness: Option<f32>,
         clarity: Option<f32>,
+        ltx: Option<pipeline::LtxEnlargeRequest>,
     },
     /// Shots added to a clip, or its last one cut off (`Engine::extend_clip`).
     ExtendClip(pipeline::ExtendClipRequest),
@@ -691,6 +693,7 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
             upscale,
             sharpness,
             clarity,
+            ltx,
         } => queue.finish(
             t.id,
             engine
@@ -698,6 +701,7 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
                     &id,
                     upscale,
                     &Filters::starting_at(sharpness.unwrap_or(0.0), clarity.unwrap_or(0.0)),
+                    ltx.as_ref(),
                 )
                 .and_then(|r| json_body(&r)),
         ),
@@ -1823,6 +1827,9 @@ fn handle_enlarge_clip(
         sharpness: Option<f32>,
         #[serde(default)]
         clarity: Option<f32>,
+        /// LTX instead of FSR: `{model, strength, steps?}`, always ×2.
+        #[serde(default)]
+        ltx: Option<pipeline::LtxEnlargeRequest>,
     }
 
     match parse_json::<Dto>(conn, body)? {
@@ -1836,6 +1843,7 @@ fn handle_enlarge_clip(
                 upscale: dto.upscale.unwrap_or(2.0),
                 sharpness: dto.sharpness,
                 clarity: dto.clarity,
+                ltx: dto.ltx,
             },
             false,
             400,
