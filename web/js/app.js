@@ -14,7 +14,8 @@ import { initRefs } from './refs.js';
 import { initSounds } from './sounds.js';
 import { initHints } from './hints.js';
 import { applyAssistantSettings, assistantSettings, initImage, layoutImageTab, restoreImage } from './image.js';
-import { initJobs, jobCount } from './jobs.js';
+import { initJobs, jobCount, stopJobs } from './jobs.js';
+import { initAlive, stopAlive } from './alive.js';
 import { initBusy } from './busy.js';
 import { initWorkItems, loadWorkItems, markGrid } from './workitems.js';
 import { initOutputs, loadOutputs } from './outputs.js';
@@ -155,6 +156,10 @@ async function closeServer() {
       ? `These are deleted, as your saved settings ask:\n• ${doomed.join('\n• ')}`
       : 'Nothing is deleted.');
   if (!confirm(msg)) return;
+  // Before the request: the server is about to go, on purpose, and this tab
+  // says so itself below.
+  stopAlive();
+  stopJobs();
   try {
     // `clear` said out loud: the server deletes nothing unless asked to.
     const resp = await fetch('/shutdown', { method: 'POST', body: JSON.stringify({ clear: true }) });
@@ -221,3 +226,4 @@ initModelSettings();
 // modules above registered, so they have to be registered first.
 initJobs();
 initTabs();
+initAlive();

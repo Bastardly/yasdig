@@ -1042,6 +1042,10 @@ Break silently:
   `done` kept), and the page re-sends the panel on change (`syncLoop` from
   `syncSummaries`: debounced, deduplicated, skipped on a blank prompt, `update_only`
   so a stale edit never restarts an ended loop).
+- **Liveness is `alive.js`'s alone** (`GET /health` every 2 s, a banner after two
+  misses, a top-layer `popover` so it shows over a modal dialog): the jobs poll and
+  every other fetch stay quiet on failure. Close server calls `stopAlive`/`stopJobs`
+  before its request.
 - **A run's failure has no request**: `fail_run` ends it with a `Notice`; the page's
   first poll adopts existing notices.
 - **`/generate` validates only the count**; everything else surfaces as a notice.

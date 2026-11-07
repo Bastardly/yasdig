@@ -281,6 +281,21 @@ a.btn, a.btn:hover { text-decoration: none; color: var(--text); }
    row allows. */
 .tabs-end { margin-left: auto; }
 
+/* The heartbeat's banner (alive.js): a top-layer popover across the top of
+   the window, over the tab row and any open dialog. Red while the server is
+   gone; neutral once it is back but restarted, since then nothing is wrong
+   that a reload doesn't fix. */
+.serverdown {
+  inset: 0 0 auto 0; margin: 0 auto; width: min(44rem, calc(100vw - 2 * var(--sp-4)));
+  top: var(--sp-2); padding: var(--sp-2) var(--sp-3);
+  display: none; align-items: center; gap: var(--sp-3);
+  background: var(--danger); color: var(--text); border: 0; border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop); font-size: var(--fs-sm);
+}
+.serverdown:popover-open { display: flex; }
+.serverdown.restarted { background: var(--ink-600); border: var(--line-strong); }
+.serverdown > span { flex: 1; }
+
 /* What the page becomes once Close server has stopped the server. */
 .stopped { max-width: 32rem; margin: 20vh auto 0; text-align: center; }
 

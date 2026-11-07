@@ -3,6 +3,15 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### Added
+
+- **The page says when the server is gone.** If yasdig stops answering (closed in
+  another tab, crashed, or the computer slept), a red banner appears within a few
+  seconds, also over an open dialog, and goes away by itself when yasdig is back.
+  If it came back as a different build, the banner offers **Reload**.
+
 ## 0.7.1 — 2026-11-04
 
 ### Changed

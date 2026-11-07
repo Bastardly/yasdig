@@ -410,6 +410,9 @@ needs a Vulkan device and nothing else.
   `POST /favorite-outputs/delete` deletes from there only. There is no open or thumbnail route of their own: a stem names one
   picture in either gallery, so `/outputs/open`, `/outputs/{stem}/thumb.png` and a
   `source` on `/img2img` or `/video` find a favourite by stem as well.
+- `GET /health` — `{ "ok": true, "build": "…" }`, answered on the connection thread
+  even mid-render. The page polls it every 2 s and shows a banner after two misses;
+  a different `build` than the page first saw means the server was restarted.
 - `GET /progress` — what the worker is doing right now:
   `{ "busy": true, "label": "hi-res", "phase": "sampling", "step": 7, "steps": 20,
   "rate": "1.23s/it" }`, or `{ "busy": false }` when nothing is running. `phase` is

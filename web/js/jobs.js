@@ -272,7 +272,12 @@ async function deliverLatest(seq) {
   }
 }
 
+// Close server's tab: with the server gone, every poll is a miss.
+let halted = false;
+export function stopJobs() { halted = true; clearTimeout(timer); }
+
 export async function pollJobs() {
+  if (halted) return;
   if (polling) { again = true; return; }
   polling = true;
   clearTimeout(timer);
@@ -311,7 +316,7 @@ export async function pollJobs() {
     // the request that actually matters reports its own failure.
   } finally {
     polling = false;
-    timer = setTimeout(pollJobs, snap.jobs.length ? BUSY_MS : IDLE_MS);
+    if (!halted) timer = setTimeout(pollJobs, snap.jobs.length ? BUSY_MS : IDLE_MS);
     if (again) { again = false; pollJobs(); }
   }
 }

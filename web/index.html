@@ -1024,6 +1024,13 @@
 
   <!-- Credits, and the way to the licence notices a one-file release has to
        carry inside itself (Help → About & licences). -->
+  <!-- The heartbeat's banner (`alive.js`): a popover, so it shows over an
+       open modal dialog too. Outside `.app`, which Close server rewrites. -->
+  <div id="serverdown" class="serverdown" popover="manual" role="alert">
+    <span id="serverdowntext"></span>
+    <button type="button" id="serverdownreload" class="btn" hidden>Reload</button>
+  </div>
+
   <footer class="powered">
     Powered by
     <a href="https://github.com/leejet/stable-diffusion.cpp" target="_blank" rel="noopener noreferrer">stable-diffusion.cpp</a>

@@ -947,6 +947,15 @@ fn route(
             )
             .as_bytes(),
         ),
+        // The page's heartbeat (`web/js/alive.js`, every 2 s): on the
+        // connection thread, so a render in flight never reads as a dead
+        // server. `build` lets the page tell a restarted binary from the one it
+        // loaded its modules from.
+        ("GET", "/health") => conn.respond(
+            200,
+            "application/json",
+            format!("{{\"ok\":true,\"build\":{}}}", json_str(startup::build_id())).as_bytes(),
+        ),
         ("GET", "/progress") => conn.respond(
             200,
             "application/json",
