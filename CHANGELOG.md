@@ -7,6 +7,12 @@ What changed in each release of yasdig. Each release's executables are on the
 
 ### Added
 
+- **Save a clip without generating it.** The Video tab's **Save** keeps every shot,
+  *Every shot*, the negative, the model, its parts, LoRAs and settings as a clip marked
+  **Not generated** in Current. Open it any time; it saves itself as you change it, and
+  **Generate clip** draws it into the same tile. Star it like any clip.
+- Shot edits you haven't drawn yet are kept with the clip on the server, not in the
+  browser, so they survive a reload and show in another browser.
 - **The page says when the server is gone.** If yasdig stops answering (closed in
   another tab, crashed, or the computer slept), a red banner appears within a few
   seconds, also over an open dialog, and goes away by itself when yasdig is back.

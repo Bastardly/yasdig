@@ -1829,11 +1829,23 @@ from `family` goes on `VideoModelDto`.
     flight; it reads *Queue another clip*), each request waits on the job queue. Only
     a change to one clip is one at a time (`busyClips`: its footer and × hide), so a
     clip's rows are never sent twice.
-  - **Unsent edits are a per-clip draft** (`setDraft`/`keepDraft`, `localStorage`
-    `yasdig.clipdrafts`): saved on the Shots panel's input (debounced), on switching
-    clip or New clip, on `pagehide`; restored by `applyClip`; dropped when the panel
-    matches the clip (`matchesClip`, via `rowMatches`). A change landing off the stage
-    rewrites that clip's draft to what was drawn plus the rows it didn't reach.
+  - **Unsent edits are a per-clip draft on the server** (`setDraft`/`keepDraft` →
+    `POST /videos/draft`, `draft.json` beside `clip.json` — never inside it, so a draft
+    written mid-render can't race the worker's record rewrite): saved on the Shots
+    panel's input (debounced), on switching clip or New clip, on `pagehide`
+    (`keepalive`); restored by `applyClip` from `drafts` (the listing's, except ids this
+    page wrote — `draftsMine`); dropped when the panel matches the clip (`matchesClip`,
+    via `rowMatches`). A change landing off the stage rewrites that clip's draft to what
+    was drawn plus the rows it didn't reach. Old `localStorage` `yasdig.clipdrafts` are
+    moved up once (`adoptOldDrafts`).
+  - **A clip may be a plan** (`Clip.rendered == false`, `pipeline::plan_clip`,
+    `POST /videos/plan`, on the connection thread): the rows as typed (no roll, no
+    file checks), no frames, listed (`list` skips frameless dirs only when rendered).
+    On the stage it is `plan` with player `clip` null, so `shotState` says `generate`;
+    any tab change autosaves it; Generate sends its `id` (`VideoRequest.into`) and
+    `prepare_plan`'s guard sweeps only what the run wrote (`sweep_render`), keeping the
+    plan on failure. `save_plan` refuses over a rendered clip, under `RECORD`, the one
+    lock on `clip.json` writes. Extend, Enlarge and Save to output refuse a plan.
   - **A finished clip never refills the boxes**: `startClip`'s `finally` calls
     `syncReady()`, not `syncVideo()` (which puts the model's defaults back), and
     `loadVideoModels({refill:false})` after a download. Only a model `change` refills.

@@ -511,6 +511,139 @@ pub struct VideoRequest {
     /// The Shots panel's *Every shot*: what goes in front of every shot's
     /// text ([`crate::videos::shot_prompt`]).
     pub every: Option<String>,
+    /// A clip saved and not generated yet ([`plan_clip`]): render into it,
+    /// keeping its id and place in the grid, rather than make a new one.
+    pub into: Option<String>,
+}
+
+/// The model a clip request runs on: the `[[video]]` entry with the request's
+/// knobs, parts and LoRAs on a clone — which is then the clip's record.
+/// Whether its files are all there is the caller's question: a plan may name
+/// one not downloaded yet.
+pub fn resolve_video(cfg: &Config, req: &VideoRequest) -> Result<VideoModel> {
+    let mut m = cfg.video_model(&req.model)?;
+    if let Some(v) = req.width {
+        m.width = v;
+    }
+    if let Some(v) = req.height {
+        m.height = v;
+    }
+    if let Some(v) = req.fps {
+        m.fps = v;
+    }
+    if let Some(v) = req.steps {
+        m.steps = v;
+    }
+    if let Some(v) = req.cfg_scale {
+        m.cfg_scale = v;
+    }
+    // Stays an `Option`, like `refine_cfg_scale`: unset means the expert
+    // follows `cfg_scale`, and pinning it here would sever that.
+    if let Some(v) = req.high_noise_cfg_scale {
+        m.high_noise_cfg_scale = Some(v);
+    }
+    if let Some(v) = req.high_noise_steps {
+        m.high_noise_steps = Some(v);
+    }
+    if let Some(v) = req.flow_shift {
+        m.flow_shift = Some(v);
+    }
+    if let Some(v) = &req.sampler {
+        if !v.is_empty() {
+            m.sampler = v.clone();
+        }
+    }
+    if let Some(v) = req.vae_tiling {
+        m.vae_tiling = v;
+    }
+    if let Some(v) = req.memory.as_deref().filter(|v| !v.is_empty()) {
+        m.memory = Some(v.to_string());
+    }
+    if let Some(parts) = &req.parts {
+        cfg.apply_video_parts(&mut m, parts)?;
+        // `exists` was the model's own files; a pick replaces some.
+        m.exists = m.missing().is_empty();
+    }
+    // Whole-list, as on the image side: `[]` is none.
+    if let Some(v) = &req.loras {
+        m.picked_loras = v.clone();
+    }
+    m.validate()?;
+    Ok(m)
+}
+
+/// *Save* on the Video tab: the clip as the Shots panel and the settings
+/// have it, recorded with no frames (`rendered: false`) so it can be opened,
+/// changed and generated later. Nothing is rolled or drawn: the rows are kept
+/// as typed, `{variables}` and random seeds and all, and every check that
+/// needs the files waits for Generate. On the connection thread — it only
+/// writes a record.
+pub fn plan_clip(cfg: &Config, items: &workitems::Store, videos: &VideoStore, req: &VideoRequest) -> Result<Clip> {
+    let m = resolve_video(cfg, req)?;
+    let first = req.shots.first().context("say what happens: the clip has no shots")?;
+    for stem in req.source.iter().chain(req.shots.iter().flat_map(|s| s.keyframe.iter().chain(&s.references).chain(&s.audio))) {
+        if !workitems::valid_id(stem) {
+            bail!("'{stem}' is not an output name");
+        }
+    }
+    let segments: Vec<Segment> = req
+        .shots
+        .iter()
+        .map(|s| Segment {
+            text: s.text.clone(),
+            conditioned: String::new(),
+            seed: s.seed,
+            start: 0,
+            frames: m.family.align_frames(s.frames.unwrap_or(m.frames)),
+            cut: s.cut,
+            references: s.references.clone(),
+            keyframe: s.keyframe.clone(),
+            audio: s.audio.clone(),
+            words: s.words.clone(),
+        })
+        .collect();
+    let id = match &req.into {
+        Some(id) => id.clone(),
+        None => workitems::new_id(first.seed.max(0)),
+    };
+    // The tile: shot 1's picture, else the first keyframe. A stem that is gone
+    // is no tile, not a refused save.
+    let picture = req
+        .source
+        .iter()
+        .chain(req.shots.iter().filter_map(|s| s.keyframe.as_ref()))
+        .find_map(|stem| items.find_output(stem));
+    let (width, height, _) = m.aligned();
+    let mut clip = Clip {
+        id,
+        created_ms: now_ms(),
+        prompt: first.text.trim().to_string(),
+        negative: req.negative.clone().unwrap_or_else(|| m.negative_prompt.clone()),
+        typed_prompt: None,
+        typed_negative: None,
+        seed: first.seed,
+        model: req.model.clone(),
+        width,
+        height,
+        frames: segments.iter().map(|s| s.frames).sum(),
+        fps: m.effective_fps(),
+        thumb_width: 0,
+        thumb_height: 0,
+        source: req.source.clone(),
+        audio: false,
+        video: m,
+        versions: Vec::new(),
+        every: req.every.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+        segments,
+        favorite: false,
+        shots: Vec::new(),
+        shot_starts: Vec::new(),
+        rendered: false,
+        draft: None,
+    };
+    videos.save_plan(&mut clip, picture.as_deref())?;
+    // Read back, so `favorite` says where it is.
+    videos.load(&clip.id)
 }
 
 /// One row of the Shots panel: its words, seed and length, and whether it
@@ -2097,57 +2230,10 @@ impl Engine {
     /// `req.source` names an image in `work/output/`, which becomes the first
     /// frame. Leaving it out runs the same checkpoint as plain text-to-video.
     pub fn video(&mut self, req: &VideoRequest) -> Result<VideoResult> {
-        let mut m = self.cfg.video_model(&req.model)?;
         // Per-request overrides onto a *clone*, which is then stored in the
         // clip's sidecar — the same property `Engine::run` gives a still, and
         // the reason a clip can be reproduced from its own record.
-        if let Some(v) = req.width {
-            m.width = v;
-        }
-        if let Some(v) = req.height {
-            m.height = v;
-        }
-        if let Some(v) = req.fps {
-            m.fps = v;
-        }
-        if let Some(v) = req.steps {
-            m.steps = v;
-        }
-        if let Some(v) = req.cfg_scale {
-            m.cfg_scale = v;
-        }
-        // Stays an `Option`, like `refine_cfg_scale`: unset means the expert
-        // follows `cfg_scale`, and pinning it here would sever that.
-        if let Some(v) = req.high_noise_cfg_scale {
-            m.high_noise_cfg_scale = Some(v);
-        }
-        if let Some(v) = req.high_noise_steps {
-            m.high_noise_steps = Some(v);
-        }
-        if let Some(v) = req.flow_shift {
-            m.flow_shift = Some(v);
-        }
-        if let Some(v) = &req.sampler {
-            if !v.is_empty() {
-                m.sampler = v.clone();
-            }
-        }
-        if let Some(v) = req.vae_tiling {
-            m.vae_tiling = v;
-        }
-        if let Some(v) = req.memory.as_deref().filter(|v| !v.is_empty()) {
-            m.memory = Some(v.to_string());
-        }
-        if let Some(parts) = &req.parts {
-            self.cfg.apply_video_parts(&mut m, parts)?;
-            // `exists` was the model's own files; a pick replaces some.
-            m.exists = m.missing().is_empty();
-        }
-        // Whole-list, as on the image side: `[]` is none.
-        if let Some(v) = &req.loras {
-            m.picked_loras = v.clone();
-        }
-        m.validate()?;
+        let mut m = resolve_video(&self.cfg, req)?;
         // Before minutes of render: a missing or wrong-family LoRA is a silent
         // drop in sd.cpp.
         self.cfg.check_video_loras(&m.picked_loras, m.family)?;
@@ -2203,10 +2289,21 @@ impl Engine {
         self.check_sounds(&segments)?;
         let n = segments.len();
 
-        let id = workitems::new_id(seed);
         // A soundtrack only survives in a container — see `videos::CONTAINER`.
         let sound = m.audio_vae.is_some();
-        let (pattern, mut dir) = self.videos.prepare(&id, sound)?;
+        // Into a saved plan, keeping its id (and so its URLs and star), or a
+        // clip of its own.
+        let (id, created_ms, (pattern, mut dir)) = match &req.into {
+            Some(id) => {
+                let plan = self.videos.load(id)?;
+                (id.clone(), plan.created_ms, self.videos.prepare_plan(id, sound)?)
+            }
+            None => {
+                let id = workitems::new_id(seed);
+                let prep = self.videos.prepare(&id, sound)?;
+                (id, now_ms(), prep)
+            }
+        };
 
         let t = Instant::now();
         let mut done = 0;
@@ -2252,7 +2349,7 @@ impl Engine {
         m.frames = segments[0].frames;
         let mut clip = Clip {
             id,
-            created_ms: now_ms(),
+            created_ms,
             prompt,
             negative,
             typed_prompt,
@@ -2277,6 +2374,8 @@ impl Engine {
             favorite: false,
             shots: Vec::new(),
             shot_starts: Vec::new(),
+            rendered: true,
+            draft: None,
         };
         self.videos.finish(&mut clip)?;
         // Past every `?`, so the guard stops being a sweeper. Everything before
@@ -2416,6 +2515,9 @@ impl Engine {
     pub fn extend_clip(&mut self, req: &ExtendClipRequest) -> Result<VideoResult> {
         let id = req.id.as_str();
         let mut clip = self.videos.load(id)?;
+        if !clip.rendered {
+            bail!("that clip isn't generated yet: press Generate clip");
+        }
         let m = clip.video.clone();
         if req.keep == 0 {
             bail!("shot 1 is the clip: to change it, press Generate clip");
@@ -2502,6 +2604,9 @@ impl Engine {
         filters: &Filters,
     ) -> Result<EnlargeResult> {
         let mut clip = self.videos.load(id)?;
+        if !clip.rendered {
+            bail!("that clip isn't generated yet, so there is nothing to enlarge");
+        }
         if !(1.0..=MAX_UPSCALE).contains(&factor) {
             bail!("upscale factor must be between 1.0 and {MAX_UPSCALE}");
         }
@@ -4772,6 +4877,58 @@ mod tests {
 
     fn shot(text: &str, seed: i64, frames: Option<u32>) -> ShotSpec {
         ShotSpec { text: text.into(), seed, frames, ..Default::default() }
+    }
+
+    /// *Save*: the rows as typed, on the family's grid, with no frames and
+    /// nothing rolled; saved again by its id, it stays one clip.
+    #[test]
+    fn a_saved_plan_keeps_the_rows_as_typed_and_its_id() {
+        let dir = std::env::temp_dir().join(format!("yasdig-plan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = "[sd]\nbinary = \"sd-cli\"\n\n[[video]]\nname = \"m\"\nfamily = \"wan22_ti2v_5b\"\n\
+                   diffusion_model = \"d.safetensors\"\nvae = \"v.safetensors\"\nt5xxl = \"t.gguf\"\nframes = 33\n";
+        let mut cfg: crate::config::Config = toml::from_str(src).unwrap();
+        cfg.base_dir = dir.clone();
+        let items = workitems::Store::new(&dir.join("work"), &dir.join("user"));
+        let videos = super::VideoStore::new(&dir.join("work"), &dir.join("user"));
+        let mut req = super::VideoRequest {
+            model: "m".into(),
+            negative: None,
+            source: None,
+            width: None,
+            height: None,
+            fps: None,
+            steps: Some(4),
+            cfg_scale: None,
+            high_noise_steps: None,
+            high_noise_cfg_scale: None,
+            flow_shift: None,
+            sampler: None,
+            vae_tiling: None,
+            memory: None,
+            parts: None,
+            loras: None,
+            shots: vec![shot("a {animal} walks", -1, Some(30)), shot("it swims", 9, None)],
+            every: Some("  ".into()),
+            into: None,
+        };
+        let c = super::plan_clip(&cfg, &items, &videos, &req).unwrap();
+        assert!(!c.rendered);
+        assert_eq!(c.segments[0].text, "a {animal} walks", "kept as typed, not rolled");
+        assert_eq!(c.segments[0].seed, -1, "a random seed stays random until Generate");
+        assert_eq!((c.segments[0].frames, c.segments[1].frames), (29, 33), "on Wan's 4k+1 grid");
+        assert_eq!(c.video.steps, 4);
+        assert_eq!(c.every, None);
+        req.into = Some(c.id.clone());
+        req.shots.truncate(1);
+        let again = super::plan_clip(&cfg, &items, &videos, &req).unwrap();
+        assert_eq!(again.id, c.id);
+        assert_eq!(videos.list(Shelf::Work).len(), 1);
+        assert_eq!(videos.load(&c.id).unwrap().segments.len(), 1);
+        req.source = Some("../x".into());
+        assert!(super::plan_clip(&cfg, &items, &videos, &req).is_err(), "stems are whitelisted");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Each shot keeps its own seed and length — on the family's grid — and

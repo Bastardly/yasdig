@@ -483,31 +483,51 @@ export function drawShots(rows) {
 // ---- Unsent edits, per clip ----------------------------------------------------
 //
 // Rows added or changed on a clip and not drawn yet are the clip's draft: kept
-// when another clip is opened and put back when it is opened again — and in
-// this browser's storage, so a reload keeps them too. Only what differs from
-// the clip is kept; a draft that matches it is dropped. Per browser on purpose:
-// it is a convenience over the record, never part of it.
-const DRAFTS_KEY = 'yasdig.clipdrafts';
-const MAX_DRAFTS = 200;
-let drafts = null;
+// when another clip is opened and put back when it is opened again. Only what
+// differs from the clip is kept; a draft that matches it is dropped. On the
+// server, beside the clip (`draft.json`, `POST /videos/draft`), so a reload or
+// another browser has them too; `drafts` is what this page last knew of them.
+// They used to be this browser's `localStorage` (`OLD_DRAFTS_KEY`), moved up
+// once by `adoptOldDrafts`.
+const OLD_DRAFTS_KEY = 'yasdig.clipdrafts';
+const drafts = new Map();
+// Drafts this page wrote: the listing may be older than the write, so its
+// copy of these never replaces ours.
+const draftsMine = new Set();
 let draftTimer = null;
+let oldDraftsAdopted = false;
 
-function draftMap() {
-  if (!drafts) {
-    try {
-      drafts = new Map(Object.entries(JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}')));
-    } catch {
-      drafts = new Map();
-    }
+// The listing's drafts, for clips this page hasn't written one for.
+function takeDrafts(items) {
+  for (const c of items) {
+    if (draftsMine.has(c.id)) continue;
+    if (c.draft) drafts.set(c.id, c.draft);
+    else drafts.delete(c.id);
   }
-  return drafts;
 }
 
-function storeDrafts() {
-  const map = draftMap();
-  // Oldest first, as inserted: a long-forgotten clip's edits go first.
-  while (map.size > MAX_DRAFTS) map.delete(map.keys().next().value);
-  try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(Object.fromEntries(map))); } catch { /* a convenience */ }
+function writeDraft(id, d, opts = {}) {
+  const was = drafts.get(id) ?? null;
+  if (JSON.stringify(was) === JSON.stringify(d)) return;
+  draftsMine.add(id);
+  if (d) drafts.set(id, d);
+  else drafts.delete(id);
+  post('/videos/draft', { id, draft: d }, opts)
+    .catch((e) => console.warn('[yasdig] a clip draft was not kept', e));
+}
+
+// This browser's old drafts, onto the server once, for clips that have none
+// there; then the old key goes.
+function adoptOldDrafts(items) {
+  if (oldDraftsAdopted) return;
+  oldDraftsAdopted = true;
+  let old = {};
+  try { old = JSON.parse(localStorage.getItem(OLD_DRAFTS_KEY) || '{}'); } catch { return; }
+  const known = new Set(items.map((c) => c.id));
+  for (const [id, d] of Object.entries(old)) {
+    if (known.has(id) && !drafts.has(id)) writeDraft(id, d);
+  }
+  try { localStorage.removeItem(OLD_DRAFTS_KEY); } catch { /* it stays, harmlessly */ }
 }
 
 // Whether the panel holds just what clip `c` is: its shots, its Every shot,
@@ -522,25 +542,99 @@ function matchesClip(c, rows, every, negative) {
 
 // Record the panel as clip `c`'s draft, or drop the draft when there is
 // nothing unsent. `rows` defaults to the panel's.
-function setDraft(c, rows = rowEls().map(readRow), every = $('veverytext').value, negative = $('vnegative').value) {
-  // A storyboard's clip keeps none: the film is its draft.
-  if (board?.isBoardClip(c.id)) return;
+function setDraft(c, rows = rowEls().map(readRow), every = $('veverytext').value, negative = $('vnegative').value, opts = {}) {
+  // A storyboard's clip keeps none: the film is its draft. A plan is saved
+  // whole instead (`savePlan`).
+  if (board?.isBoardClip(c.id) || c.rendered === false) return;
   clearTimeout(draftTimer);
-  const map = draftMap();
   const m = currentVideoModel();
   const live = rows.filter((r) => String(r.text ?? '').trim())
     .map((r) => ({ ...r, frames: m && r.frames != null ? alignFrames(r.frames, m.frame_grid) : r.frames }));
-  map.delete(c.id);
-  if (!matchesClip(c, live, every, negative)) map.set(c.id, { rows, every, negative });
-  storeDrafts();
+  writeDraft(c.id, matchesClip(c, live, every, negative) ? null : { rows, every, negative }, opts);
 }
 
-const keepDraft = () => { if (clip) setDraft(clip); };
+// What the stage holds is kept: a plan saved, a clip's draft written.
+function keepDraft(opts = {}) {
+  if (plan) savePlan({ quiet: true, ...opts });
+  else if (clip) setDraft(clip, undefined, undefined, undefined, opts);
+}
 
 // Typing saves a moment later, so a reload loses at most that moment.
 function keepDraftSoon() {
   clearTimeout(draftTimer);
   draftTimer = setTimeout(keepDraft, 400);
+}
+
+// ---- Saved, not generated ------------------------------------------------------
+//
+// *Save* keeps the whole clip as the Shots panel and the settings have it —
+// a record with no frames (`POST /videos/plan`, `rendered: false`), listed in
+// Current with a "Not generated" tile. While one is on the stage (`plan`, with
+// `clip` null: there is nothing to play) every change saves itself, and
+// Generate renders into it, so it keeps its id, its place and its star.
+let plan = null;
+let planSent = null;
+let planSaving = false;
+
+function planBody() {
+  return { ...vidPayload(liveRows()), id: plan?.id ?? null };
+}
+
+// `quiet`: an autosave, which says nothing and skips a panel with no shots.
+async function savePlan({ quiet = false, keepalive = false } = {}) {
+  clearTimeout(draftTimer);
+  if (!liveRows().length) {
+    if (!quiet) showError($('verr'), 'Say what happens in shot 1.');
+    return;
+  }
+  if (plan && busyClips.has(plan.id)) return;
+  // A first save still on its way has no id to save over yet: a second would
+  // make a second clip.
+  if (!plan && planSaving) return;
+  const body = planBody();
+  const json = JSON.stringify(body);
+  if (quiet && json === planSent) return;
+  planSent = json;
+  const seq = stageSeq;
+  const first = !plan;
+  if (first) planSaving = true;
+  try {
+    const data = await post('/videos/plan', body, { keepalive });
+    // A New clip saved for the first time becomes the plan on the stage —
+    // unless the stage moved on while it was on its way.
+    if (seq === stageSeq) {
+      plan = data.clip;
+      if (!quiet) $('vsentnote').textContent = 'Saved, not generated. Changes save as you make them.';
+      drawPlanInfo();
+    }
+    loadClips();
+  } catch (e) {
+    planSent = null;
+    if (!quiet) showError($('verr'), String(e.message || e));
+    else console.warn('[yasdig] a saved clip was not updated', e);
+  } finally {
+    if (first) planSaving = false;
+  }
+}
+
+function drawPlanInfo() {
+  if (!plan) return;
+  $('vresultinfo').innerHTML = `<p class="sub">Saved, not generated yet — ${plan.segments.length} shot(s).
+    Generate draws it into this clip.</p>`;
+}
+
+// A plan onto the stage: its settings and rows into the panel, nothing to play.
+function stagePlan(c) {
+  keepDraft();
+  stageSeq++;
+  $('verr').textContent = '';
+  clearClip();
+  applyClip(c);
+  plan = c;
+  planSent = JSON.stringify(planBody());
+  drawPlanInfo();
+  markClips();
+  syncShots();
 }
 
 // A row for + Add shot: the seed and length of the row above it, so a new
@@ -1004,7 +1098,12 @@ async function startClip() {
     return;
   }
   const stageAtStart = stageSeq;
-  const body = vidPayload(sent);
+  // A plan on the stage is saved as it stands, then drawn into.
+  const into = plan?.id ?? null;
+  if (into && busyClips.has(into)) return;
+  if (into) await savePlan({ quiet: true });
+  const body = { ...vidPayload(sent), id: into };
+  if (into) busyClips.add(into);
   began();
   try {
     const req = post('/video', body);
@@ -1014,6 +1113,7 @@ async function startClip() {
     // while this one rendered: then it only joins the grid, and the stage and
     // the rows being set up stay.
     if (stageSeq === stageAtStart) {
+      plan = null;
       renderClip(data.clip, data.gen_ms);
       landRows(data.clip, sent);
     }
@@ -1031,6 +1131,7 @@ async function startClip() {
         ? 'Removed from the queue before it started.'
         : msg, e.oom, { memory: 'vmemory', retry: startClip });
   } finally {
+    if (into) busyClips.delete(into);
     ended();
   }
 }
@@ -1134,6 +1235,7 @@ function clipGrid({ list, del, grid, mode, delBtn, all, empty }) {
     }],
   });
 
+  // Answers the listing, for `loadClips`' drafts: `[]` when this load lost a race.
   async function load() {
     const mine = ++seq;
     let got = [];
@@ -1144,10 +1246,11 @@ function clipGrid({ list, del, grid, mode, delBtn, all, empty }) {
     } catch (e) {
       $('verr').textContent = 'Could not load clips: ' + (e.message || e);
     }
-    if (mine !== seq) return;
+    if (mine !== seq) return [];
     items = got;
     marks.prune(items.map((c) => c.id));
     draw();
+    return items;
   }
 
   function draw() {
@@ -1157,11 +1260,11 @@ function clipGrid({ list, del, grid, mode, delBtn, all, empty }) {
       marks.sync();
       return;
     }
-    el.innerHTML = items.map((c) => `<span class="tile">
+    el.innerHTML = items.map((c) => (c.rendered === false ? planTile(c) : `<span class="tile">
       <button type="button" data-id="${esc(c.id)}"
         title="${esc(c.prompt)}&#10;${c.width}×${c.height} · ${c.frames} frames @ ${c.fps} fps · ${(c.segments ?? []).length || 1} shot(s) · seed ${c.seed}&#10;Click to show it; click again to open it (Enlarge, History, Save to output)">
         <img src="/videos/${esc(c.id)}/thumb.png" alt="" loading="lazy"
-          width="${c.thumb_width}" height="${c.thumb_height}"></button>${star(c.favorite)}</span>`).join('');
+          width="${c.thumb_width}" height="${c.thumb_height}"></button>${star(c.favorite)}</span>`)).join('');
     for (const b of el.querySelectorAll('button[data-id]')) {
       b.addEventListener('click', () => click(b.dataset.id));
     }
@@ -1181,7 +1284,7 @@ function clipGrid({ list, del, grid, mode, delBtn, all, empty }) {
   function mark() {
     for (const b of $(grid).querySelectorAll('button[data-id]')) {
       marks.mark(b, b.dataset.id);
-      b.classList.toggle('active', !!clip && b.dataset.id === clip.id);
+      b.classList.toggle('active', b.dataset.id === (clip ?? plan)?.id);
     }
     marks.sync();
   }
@@ -1198,6 +1301,18 @@ function clipGrid({ list, del, grid, mode, delBtn, all, empty }) {
   return { init: () => marks.init(), load, mark, find: (id) => items.find((c) => c.id === id) };
 }
 
+// A clip saved and not generated: its first picture if it has one, else a
+// card of the same height, both marked.
+function planTile(c) {
+  const pic = c.thumb_width
+    ? `<img src="/videos/${esc(c.id)}/thumb.png?${c.created_ms}" alt="" loading="lazy" width="${c.thumb_width}" height="${c.thumb_height}">`
+    : `<span class="plancard">${esc(c.prompt).slice(0, 80)}</span>`;
+  return `<span class="tile plantile">
+    <button type="button" data-id="${esc(c.id)}"
+      title="${esc(c.prompt)}&#10;Saved, not generated · ${(c.segments ?? []).length} shot(s) · ${esc(c.model)}&#10;Click to open it; Generate draws it">
+      ${pic}<span class="planmark">Not generated</span></button>${star(c.favorite)}</span>`;
+}
+
 const grids = [
   clipGrid({
     list: '/videos', del: '/videos/delete', grid: 'vgrid', mode: 'vmode', delBtn: 'vdelete', all: 'vdeleteall',
@@ -1210,8 +1325,13 @@ const grids = [
 ];
 
 // Both shelves: a generate, a star, a delete or an extend can change either.
-function loadClips() {
-  return Promise.all(grids.map((g) => g.load()));
+async function loadClips() {
+  const got = await Promise.all(grids.map((g) => g.load()));
+  const items = got.flat();
+  takeDrafts(items);
+  adoptOldDrafts(items);
+  // The plan on the stage, as the server now has it (a star moves it).
+  if (plan) plan = items.find((c) => c.id === plan.id) ?? plan;
 }
 
 function markClips() {
@@ -1230,6 +1350,12 @@ function clickClip(c) {
     openClipView(clip);
     return;
   }
+  if (c.rendered === false) {
+    board?.flush();
+    stagePlan(c);
+    board?.left();
+    return;
+  }
   // The board's pending edits are read before the rows change; it is left
   // after, since its clip keeps no draft and the staging must still know it.
   board?.flush();
@@ -1241,6 +1367,7 @@ function clickClip(c) {
 // clip too (`board.js`), which then draws the board's rows over them.
 export function stageClip(c) {
   keepDraft();
+  plan = null;
   stageSeq++;
   $('verr').textContent = '';
   applyClip(c);
@@ -1265,6 +1392,7 @@ function newClip() {
 // it has a clip (`board.js`), which then draws its rows.
 export function freshStage() {
   keepDraft();
+  plan = null;
   stageSeq++;
   clearClip();
   markClips();
@@ -1314,7 +1442,7 @@ function applyClip(c) {
   $('veverytext').value = c.every ?? '';
   drawShots(rowsOf(c));
   // What was added or changed on it and not drawn yet.
-  const d = board?.isBoardClip(c.id) ? null : draftMap().get(c.id);
+  const d = board?.isBoardClip(c.id) || c.rendered === false ? null : drafts.get(c.id);
   if (d) {
     $('veverytext').value = d.every ?? '';
     $('vnegative').value = d.negative ?? $('vnegative').value;
@@ -1392,6 +1520,10 @@ export function initVideo() {
   for (const ev of ['input', 'change']) $('tab-video').addEventListener(ev, syncVideoSummaries);
   $('vgo').addEventListener('click', startClip);
   $('vnew').addEventListener('click', newClip);
+  $('vsaveclip').addEventListener('click', () => savePlan());
+  // A plan saves itself on any change on the tab — its settings are part of
+  // it, not only the rows.
+  for (const ev of ['input', 'change']) $('tab-video').addEventListener(ev, () => { if (plan) keepDraftSoon(); });
   // A clip a chat made, opened from it: the grids learn of it
   // first, since it landed while this tab wasn't looking.
   document.addEventListener('yasdig:openclip', async (e) => {
@@ -1505,7 +1637,7 @@ export function initVideo() {
   for (const ev of ['input', 'change', 'click']) $('vfold-prompt').addEventListener(ev, keepDraftSoon);
   // And a bound storyboard's: the rows are its shots.
   for (const ev of ['input', 'change', 'click']) $('vfold-prompt').addEventListener(ev, () => board?.edited());
-  window.addEventListener('pagehide', keepDraft);
+  window.addEventListener('pagehide', () => keepDraft({ keepalive: true }));
   $('vextend').addEventListener('click', extendClip);
   $('vclearmodel').addEventListener('click', () => saveVideoDefaults(true));
   $('vstop').addEventListener('click', cancelClip);

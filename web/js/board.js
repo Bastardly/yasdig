@@ -84,7 +84,7 @@ const HOOKS = {
 
 // The rows into the film, now. Read before anything else changes them, so a
 // leave can call it just before the stage takes another clip's rows.
-async function flush(extra = {}) {
+async function flush(extra = {}, opts = {}) {
   clearTimeout(timer);
   timer = null;
   if (!bound || !got || busy()) return;
@@ -93,7 +93,7 @@ async function flush(extra = {}) {
   if (json === sent && !extra.clip) return;
   sent = json;
   try {
-    const g = await post('/chats/board', { id: chatId(), ...body, ...extra });
+    const g = await post('/chats/board', { id: chatId(), ...body, ...extra }, opts);
     warning = g.warning ?? '';
     show?.(g);
   } catch (e) {
@@ -303,6 +303,9 @@ export function showBoard() {
 }
 
 export function initBoard() {
+  // An edit still inside its debounce when the page goes would be lost: the
+  // film is a storyboard clip's only draft.
+  window.addEventListener('pagehide', () => { if (timer) flush({}, { keepalive: true }); });
   const body = $('castbody');
   body.addEventListener('change', (e) => {
     const t = e.target;

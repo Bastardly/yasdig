@@ -6,6 +6,14 @@
 //!   work/videos/{id}/clip.json      the settings that produced it
 //! ```
 //!
+//! A clip may also be **not generated yet** (`rendered: false`): the Shots
+//! panel's rows, model and settings saved as a record with no frames
+//! ([`VideoStore::save_plan`]), listed like any clip and rendered into the same
+//! id later. And any clip may carry a **draft** — rows added or changed and
+//! not drawn — in `draft.json` beside `clip.json` ([`VideoStore::save_draft`]),
+//! a file of its own so a draft written mid-render never races the worker's
+//! rewrite of the record.
+//!
 //! A starred clip is the same folder moved to `user/favorite_clips/{id}/`
 //! ([`VideoStore::favorite`]). An id names one clip wherever it lives, so
 //! every reader goes through [`VideoStore::dir`], which looks in both; only
@@ -117,6 +125,31 @@ pub struct Clip {
     pub(crate) shots: Vec<String>,
     #[serde(default, skip_serializing)]
     pub(crate) shot_starts: Vec<u32>,
+    /// False for a clip saved from the Shots panel and not generated yet: its
+    /// `segments` are the rows (no `conditioned`, `start` 0), `video` the
+    /// model and settings as they were, and there are no frames. A record from
+    /// before plans existed was always a render.
+    #[serde(default = "yes")]
+    pub rendered: bool,
+    /// The page's unsent edits on this clip (`{rows, every, negative}`), read
+    /// from `draft.json` by [`VideoStore::load`] — never part of `clip.json`.
+    /// Opaque here: only the page reads it.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<serde_json::Value>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// One writer of a clip's record at a time: the worker finishing or enlarging
+/// a clip and a connection thread saving a plan would otherwise interleave
+/// read-check-write, and a plan saved over a clip the worker had just
+/// rendered would read as never generated.
+static RECORD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn record_lock() -> std::sync::MutexGuard<'static, ()> {
+    RECORD.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// One shot of a clip: what was typed for it, what sd-cli was conditioned on,
@@ -390,6 +423,98 @@ impl VideoStore {
         self.dir(id).join("clip.json")
     }
 
+    fn draft_path(&self, id: &str) -> PathBuf {
+        self.dir(id).join("draft.json")
+    }
+
+    /// `clip.json`, through a `.part` and a rename so a reader never sees half
+    /// of one. The draft stays in its own file.
+    fn write_record(&self, clip: &Clip) -> Result<()> {
+        let mut c = clip.clone();
+        c.draft = None;
+        let json = serde_json::to_vec_pretty(&c).context("serializing clip")?;
+        let path = self.sidecar_path(&clip.id);
+        let part = path.with_extension("json.part");
+        std::fs::write(&part, json).with_context(|| format!("writing {}", part.display()))?;
+        std::fs::rename(&part, &path).with_context(|| format!("writing {}", path.display()))
+    }
+
+    /// Save a clip that isn't generated yet — a new one, or a plan saved
+    /// before. Refused over a generated clip: its record is what made its
+    /// frames. `picture` is the plan's first image, if it has one, for its
+    /// tile.
+    pub fn save_plan(&self, clip: &mut Clip, picture: Option<&Path>) -> Result<()> {
+        if !valid_id(&clip.id) {
+            bail!("'{}' is not a clip id", clip.id);
+        }
+        let _g = record_lock();
+        if let Ok(old) = self.load(&clip.id) {
+            if old.rendered {
+                bail!("that clip has been generated; its shots change with Extend or Redo");
+            }
+            // Its place in the grid stays where it was first saved.
+            clip.created_ms = old.created_ms;
+        }
+        clip.rendered = false;
+        let dir = self.dir(&clip.id);
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let thumb = self.thumb_path(&clip.id);
+        match picture.map(image::open) {
+            Some(Ok(img)) => {
+                let tw = ((img.width() as f32) * (THUMB_HEIGHT as f32) / (img.height().max(1) as f32))
+                    .round() as u32;
+                let t = img.thumbnail(tw.max(1), THUMB_HEIGHT);
+                clip.thumb_width = t.width();
+                clip.thumb_height = t.height();
+                t.save(&thumb).context("writing the plan's thumbnail")?;
+            }
+            // No picture, or one that won't open: the page draws a placeholder.
+            _ => {
+                let _ = std::fs::remove_file(&thumb);
+                clip.thumb_width = 0;
+                clip.thumb_height = 0;
+            }
+        }
+        self.write_record(clip)
+    }
+
+    /// Keep or drop (`None`) a clip's unsent edits. The clip must exist.
+    pub fn save_draft(&self, id: &str, draft: Option<&serde_json::Value>) -> Result<()> {
+        if !valid_id(id) {
+            bail!("'{id}' is not a clip id");
+        }
+        if !self.sidecar_path(id).is_file() {
+            bail!("that clip is gone");
+        }
+        let path = self.draft_path(id);
+        match draft {
+            None => match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    Err(e).with_context(|| format!("removing {}", path.display()))
+                }
+                _ => Ok(()),
+            },
+            Some(d) => {
+                let part = path.with_extension("json.part");
+                std::fs::write(&part, serde_json::to_vec(d)?).with_context(|| format!("writing {}", part.display()))?;
+                std::fs::rename(&part, &path).with_context(|| format!("writing {}", path.display()))
+            }
+        }
+    }
+
+    /// Render into a saved plan's folder: the `-o`, and a guard that on
+    /// failure sweeps what the run wrote but leaves the plan — its record,
+    /// draft and tile — as it was.
+    pub fn prepare_plan(&self, id: &str, sound: bool) -> Result<(PathBuf, ClipDir)> {
+        let clip = self.load(id)?;
+        if clip.rendered {
+            bail!("that clip has already been generated");
+        }
+        let dir = self.dir(id);
+        let out = dir.join(if sound { CONTAINER } else { FRAME_PATTERN });
+        Ok((out, ClipDir { dir, keep: false, plan: true }))
+    }
+
     /// Where a frame landed. Matches [`FRAME_PATTERN`] — sd-cli numbers from 0.
     pub fn frame_path(&self, id: &str, n: u32) -> PathBuf {
         self.dir(id).join(format!("frame_{n:03}.png"))
@@ -410,7 +535,7 @@ impl VideoStore {
         let dir = self.dir(id);
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let out = dir.join(if sound { CONTAINER } else { FRAME_PATTERN });
-        Ok((out, ClipDir { dir, keep: false }))
+        Ok((out, ClipDir { dir, keep: false, plan: false }))
     }
 
     /// Where segment `k` of a long clip renders before it joins the clip — a
@@ -549,9 +674,8 @@ impl VideoStore {
 
     /// Rewrite the clip's record — after an enlarge adds a version.
     pub fn save(&self, clip: &Clip) -> Result<()> {
-        let json = serde_json::to_vec_pretty(clip).context("serializing clip")?;
-        let path = self.sidecar_path(&clip.id);
-        std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
+        let _g = record_lock();
+        self.write_record(clip)
     }
 
     /// The clip as one video file at `dest`: sd-cli's own AVI for a clip that
@@ -616,9 +740,9 @@ impl VideoStore {
             .save(self.thumb_path(&clip.id))
             .context("writing clip thumbnail")?;
 
-        let json = serde_json::to_vec_pretty(clip).context("serializing clip")?;
-        let path = self.sidecar_path(&clip.id);
-        std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
+        clip.rendered = true;
+        let _g = record_lock();
+        self.write_record(clip)
     }
 
     pub fn load(&self, id: &str) -> Result<Clip> {
@@ -632,6 +756,10 @@ impl VideoStore {
             serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
         clip.normalize();
         clip.favorite = path.starts_with(&self.favorites);
+        // A draft that won't parse is a convenience lost, not a clip lost.
+        clip.draft = std::fs::read(self.draft_path(id))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok());
         Ok(clip)
     }
 
@@ -649,8 +777,9 @@ impl VideoStore {
                 let id = e.file_name().to_str()?.to_string();
                 let clip = self.load(&id).ok()?;
                 // The frames are the clip; a sidecar with none is a half-written
-                // save and would render as a broken tile.
-                (!self.frames(&id).is_empty()).then_some(clip)
+                // save and would render as a broken tile — unless it is a plan,
+                // which has none yet on purpose.
+                (!clip.rendered || !self.frames(&id).is_empty()).then_some(clip)
             })
             .collect();
         out.sort_by(|a, b| b.created_ms.cmp(&a.created_ms));
@@ -745,6 +874,9 @@ pub(crate) fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<()> {
 pub struct ClipDir {
     dir: PathBuf,
     keep: bool,
+    /// The folder holds a saved plan: a failure sweeps only what the run
+    /// wrote, never the plan itself.
+    plan: bool,
 }
 
 impl ClipDir {
@@ -754,18 +886,41 @@ impl ClipDir {
 
     /// A guard over any folder this module writes: an enlarge's version.
     pub fn at(dir: PathBuf) -> ClipDir {
-        ClipDir { dir, keep: false }
+        ClipDir { dir, keep: false, plan: false }
     }
 }
 
 impl Drop for ClipDir {
     fn drop(&mut self) {
-        if !self.keep {
+        if !self.keep && self.plan {
+            sweep_render(&self.dir);
+        } else if !self.keep {
             if let Err(e) = std::fs::remove_dir_all(&self.dir) {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     eprintln!("[yasdig] leaving {} behind: {e}", self.dir.display());
                 }
             }
+        }
+    }
+}
+
+/// What a render writes into a plan's folder — frames, sd-cli's container,
+/// the sound, a shot's `seg{k}/` — and nothing a plan is made of.
+fn sweep_render(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.filter_map(|e| e.ok()) {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let p = e.path();
+        let ran = (name.starts_with("frame_") && name.ends_with(".png"))
+            || name == CONTAINER
+            || name == AUDIO
+            || (name.starts_with("seg") && p.is_dir());
+        if !ran {
+            continue;
+        }
+        let gone = if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+        if let Err(e) = gone {
+            eprintln!("[yasdig] leaving {} behind: {e}", p.display());
         }
     }
 }
@@ -818,7 +973,86 @@ t5xxl = "t.gguf"
             favorite: false,
             shots: Vec::new(),
             shot_starts: Vec::new(),
+            rendered: true,
+            draft: None,
         }
+    }
+
+    /// A plan is a clip with no frames: listed, read back as written, and
+    /// rendered into later — a failed render leaves the plan, a finished one
+    /// makes it a clip that no plan may be saved over.
+    #[test]
+    fn a_plan_is_listed_survives_a_failed_render_and_becomes_a_clip() {
+        let dir = std::env::temp_dir().join(format!("yasdig-vid-plan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = VideoStore::new(&dir, &dir);
+        let mut p = clip("500-7", 500);
+        p.segments = vec![Segment { text: "a crab walks".into(), seed: 7, frames: 33, ..Default::default() }];
+        store.save_plan(&mut p, None).unwrap();
+        let listed = store.list(Shelf::Work);
+        assert_eq!(listed.len(), 1, "a plan has no frames and is still listed");
+        assert!(!listed[0].rendered);
+        assert_eq!(listed[0].segments[0].text, "a crab walks");
+
+        // Saved again later: its place in the grid stays.
+        let mut again = clip("500-7", 900);
+        store.save_plan(&mut again, None).unwrap();
+        assert_eq!(store.load("500-7").unwrap().created_ms, 500);
+
+        // A render that dies sweeps its frames and keeps the plan.
+        {
+            let (out, _guard) = store.prepare_plan("500-7", false).unwrap();
+            assert!(out.ends_with(FRAME_PATTERN));
+            write_frames(&store.dir("500-7"), 2, 8, 8);
+            std::fs::create_dir_all(store.dir("500-7").join("seg1")).unwrap();
+        }
+        assert!(store.frames("500-7").is_empty());
+        assert!(!store.dir("500-7").join("seg1").exists());
+        assert!(!store.load("500-7").unwrap().rendered, "the plan is as it was");
+
+        // One that finishes is a clip, and a plan can't be saved over it.
+        let (_, mut guard) = store.prepare_plan("500-7", false).unwrap();
+        write_frames(&store.dir("500-7"), 2, 8, 8);
+        let mut c = clip("500-7", 500);
+        store.finish(&mut c).unwrap();
+        guard.keep();
+        assert!(store.load("500-7").unwrap().rendered);
+        assert!(store.save_plan(&mut clip("500-7", 1), None).is_err());
+        assert!(store.prepare_plan("500-7", false).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A record from before plans is a render; a draft lives beside the
+    /// record, never in it, so a rewrite of the record keeps it.
+    #[test]
+    fn an_old_record_is_rendered_and_a_draft_stays_out_of_the_record() {
+        let mut v = serde_json::to_value(clip("600-7", 600)).unwrap();
+        v.as_object_mut().unwrap().remove("rendered");
+        let old: Clip = serde_json::from_value(v).unwrap();
+        assert!(old.rendered);
+
+        let dir = std::env::temp_dir().join(format!("yasdig-vid-draft-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = VideoStore::new(&dir, &dir);
+        assert!(store.save_draft("600-7", Some(&serde_json::json!({}))).is_err(), "no clip, no draft");
+        let (_, mut guard) = store.prepare("600-7", false).unwrap();
+        write_frames(&store.dir("600-7"), 1, 8, 8);
+        let mut c = clip("600-7", 600);
+        store.finish(&mut c).unwrap();
+        guard.keep();
+        let d = serde_json::json!({ "rows": [{ "text": "then it swims" }], "every": "", "negative": "" });
+        store.save_draft("600-7", Some(&d)).unwrap();
+        let mut back = store.load("600-7").unwrap();
+        assert_eq!(back.draft.as_ref(), Some(&d));
+        // An enlarge rewrites the record; the draft is untouched.
+        back.versions.clear();
+        store.save(&back).unwrap();
+        let json = std::fs::read_to_string(store.dir("600-7").join("clip.json")).unwrap();
+        assert!(!json.contains("then it swims"));
+        assert_eq!(store.load("600-7").unwrap().draft.as_ref(), Some(&d));
+        store.save_draft("600-7", None).unwrap();
+        assert!(store.load("600-7").unwrap().draft.is_none());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A clip with sound comes from sd-cli as one AVI and leaves as frames,

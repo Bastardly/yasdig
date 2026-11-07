@@ -627,6 +627,15 @@ needs a Vulkan device and nothing else.
 - `POST /videos/save` — `{ "id": "…", "version": 0 }`. The version into `work/output/`,
   as `{id}[-v{n}].avi` (or a frames folder with `video_save = "frames"`). Answers
   `{ "saved": "…" }`.
+- `POST /videos/plan` — `/video`'s body, plus an optional `id`: the clip saved as it
+  stands without generating — a record with no frames, `"rendered": false`, listed by
+  `/videos` like any clip. With `id`, saved over that plan (refused over a generated
+  clip). Nothing is rolled or checked against the files; that waits for Generate.
+  Answers `{ "clip": {…} }`. `/video` with the plan's `id` renders into it, keeping the
+  id; a render that fails leaves the plan as it was.
+- `POST /videos/draft` — `{ "id": "…", "draft": {…} }` keeps a clip's unsent edits
+  beside it (`draft.json`, the page's own shape; `null` drops them). `/videos` carries
+  each clip's `draft`.
 - `POST /videos/delete` — `{ "ids": ["…"] }`. Removes each clip's whole directory from
   `work/videos/`; a starred clip is out of its reach.
 

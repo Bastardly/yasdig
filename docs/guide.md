@@ -851,6 +851,14 @@ press **Generate clip** — the same seeds, drawn properly. Shot 1 is the clip i
 changing it means a new clip. A clip's enlarged versions are removed when it changes,
 since they no longer cover it.
 
+**Save without generating.** **Save** on the rail keeps the clip as it stands — every
+shot, *Every shot*, the negative, the model, its parts, LoRAs and settings — without
+drawing a frame. It waits in Current with a **Not generated** mark (its first picture,
+if a shot has one), opens like any clip, and saves itself as you change it; star it to
+keep it past *Delete all* and Close server's clear. **Generate clip** draws it into the
+same tile. Edits on a generated clip that you haven't drawn yet are kept with the clip
+too, so a reload or another browser shows them.
+
 **Continue or cut.** One frame is all that carries across a seam, so a face that
 leaves the picture and comes back is drawn anew and may not match. A shot can be a
 **Cut** instead of *Continue*: it starts fresh, a new camera shot, and doesn't join the

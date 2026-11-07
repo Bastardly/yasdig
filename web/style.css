@@ -622,6 +622,23 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .wigrid .star:disabled { cursor: progress; }
 @media (hover: none) { .wigrid .star { opacity: 1; } }
 
+/* A clip saved and not generated (`planTile` in video.js): its first picture,
+   or a card of words at the same height, with a mark on it — so a strip of
+   tiles says at a glance which ones have frames. */
+.wigrid .plantile button { position: relative; }
+.wigrid .plancard {
+  display: flex; align-items: center; justify-content: center;
+  height: var(--thumb-h); width: calc(var(--thumb-h) * 16 / 9); padding: var(--sp-3);
+  background: var(--ink-800); border: 1px dashed var(--ink-400); border-radius: var(--r-sm);
+  color: var(--text-dim); font-size: var(--fs-sm); line-height: var(--lh-body); text-align: center;
+  white-space: normal; overflow: hidden;
+}
+.wigrid .planmark {
+  position: absolute; left: var(--sp-2); bottom: var(--sp-2);
+  padding: 2px var(--sp-2); border-radius: var(--r-sm);
+  background: var(--scrim-soft); color: var(--text); font-size: var(--fs-micro); line-height: 1.4;
+}
+
 /* The outputs picker. Same grid as the work items, in a dialog. */
 #picker, #castpickdlg {
   max-width: min(1100px, 92vw); max-height: 86vh; background: var(--ink-700);

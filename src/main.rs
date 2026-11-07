@@ -81,7 +81,10 @@
 //!                        (a favourite opens, starts a generation and gets its
 //!                        thumbnail through the /outputs routes, by stem)
 //!   GET  /video-models -> the [[video]] table, with each family's grid rules
-//!   POST /video       -> generate a clip (minutes; watch GET /progress)
+//!   POST /video       -> generate a clip (minutes; watch GET /progress);
+//!                        `id` renders into a saved plan
+//!   POST /videos/plan -> {id?, …/video body} save without generating ({clip})
+//!   POST /videos/draft -> {id, draft|null} a clip's unsent edits
 //!   GET  /videos      -> Current: every clip, starred ones too, newest first
 //!   GET  /videos/{id}/thumb.png
 //!   GET  /videos/{id}/frames/{n}.png   one frame; the page plays the sequence
@@ -1077,6 +1080,8 @@ fn route(
         ("POST", p) if p.starts_with("/downloads/") => handle_download(conn, cfg, lanes, p, &req.body),
         ("GET", "/video-models") => handle_video_models(conn, cfg),
         ("POST", "/video") => handle_video(conn, lanes, &req.body),
+        ("POST", "/videos/plan") => handle_plan_clip(conn, cfg, &req.body),
+        ("POST", "/videos/draft") => handle_clip_draft(conn, cfg, &req.body),
         ("POST", "/videos/enlarge") => handle_enlarge_clip(conn, lanes, &req.body),
         ("POST", "/videos/extend") => handle_extend_clip(conn, lanes, &req.body),
         ("GET", "/videos") => handle_list_clips(conn, cfg, Shelf::Work),
@@ -1633,75 +1638,132 @@ impl ShotDto {
     }
 }
 
+/// The `/video` body, which `/videos/plan` shares: a plan is what a Generate
+/// would send, saved instead of drawn.
+#[derive(serde::Deserialize)]
+struct VideoDto {
+    /// A saved, not-yet-generated clip to render into or save over.
+    #[serde(default)]
+    id: Option<String>,
+    model: String,
+    #[serde(default)]
+    negative: Option<String>,
+    /// A `work/output/` stem. Absent or empty runs the same model as plain
+    /// text-to-video, which is what clearing the picker means.
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
+    #[serde(default)]
+    fps: Option<u32>,
+    #[serde(default)]
+    steps: Option<u32>,
+    #[serde(default)]
+    cfg_scale: Option<f32>,
+    #[serde(default)]
+    high_noise_steps: Option<u32>,
+    #[serde(default)]
+    high_noise_cfg_scale: Option<f32>,
+    #[serde(default)]
+    flow_shift: Option<f32>,
+    #[serde(default)]
+    sampler: Option<String>,
+    #[serde(default)]
+    vae_tiling: Option<bool>,
+    #[serde(default)]
+    memory: Option<String>,
+    #[serde(default)]
+    parts: Option<std::collections::BTreeMap<String, Option<String>>>,
+    #[serde(default)]
+    loras: Option<Vec<config::VideoLora>>,
+    shots: Vec<ShotDto>,
+    #[serde(default)]
+    every: Option<String>,
+}
+
+impl VideoDto {
+    fn request(self) -> VideoRequest {
+        VideoRequest {
+            model: self.model,
+            negative: self.negative,
+            source: self.source.filter(|s| !s.is_empty()),
+            width: self.width,
+            height: self.height,
+            fps: self.fps,
+            steps: self.steps,
+            cfg_scale: self.cfg_scale,
+            high_noise_steps: self.high_noise_steps,
+            high_noise_cfg_scale: self.high_noise_cfg_scale,
+            flow_shift: self.flow_shift,
+            sampler: self.sampler,
+            vae_tiling: self.vae_tiling,
+            memory: self.memory,
+            parts: self.parts,
+            loras: self.loras,
+            shots: self.shots.into_iter().map(ShotDto::spec).collect(),
+            every: self.every,
+            into: self.id.filter(|s| !s.is_empty()),
+        }
+    }
+}
+
 fn handle_video(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    let dto: VideoDto = match parse_json::<VideoDto>(conn, body)? {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+    let req = dto.request();
+    if let Some(id) = &req.into {
+        if !workitems::valid_id(id) {
+            return conn.respond(400, "application/json", error_json("not a clip id").as_bytes());
+        }
+    }
+    let label = req.model.clone();
+    enqueue_wait(conn, lanes, jobs::Kind::Video, label, Work::Video(req), false, 500)
+}
+
+/// `POST /videos/plan {id?, …the /video body}`: save the clip as the Shots
+/// panel and settings have it, without generating — a new clip with no
+/// frames, or over the plan `id`. Answers `{clip}`. On the connection thread:
+/// it writes a record and nothing else.
+fn handle_plan_clip(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    let dto: VideoDto = match parse_json::<VideoDto>(conn, body)? {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+    let req = dto.request();
+    if req.into.as_deref().is_some_and(|id| !workitems::valid_id(id)) {
+        return conn.respond(400, "application/json", error_json("not a clip id").as_bytes());
+    }
+    match pipeline::plan_clip(cfg, &store(cfg), &video_store(cfg), &req) {
+        Ok(clip) => {
+            let body = serde_json::json!({ "clip": clip });
+            conn.respond(200, "application/json", body.to_string().as_bytes())
+        }
+        Err(e) => conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
+    }
+}
+
+/// `POST /videos/draft {id, draft}`: a clip's unsent edits, kept beside its
+/// record (`draft.json`) so they survive a reload and another browser;
+/// `draft: null` drops them. The page's own shape; the server only stores it.
+fn handle_clip_draft(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Dto {
-        model: String,
+        id: String,
         #[serde(default)]
-        negative: Option<String>,
-        /// A `work/output/` stem. Absent or empty runs the same model as plain
-        /// text-to-video, which is what clearing the picker means.
-        #[serde(default)]
-        source: Option<String>,
-        #[serde(default)]
-        width: Option<u32>,
-        #[serde(default)]
-        height: Option<u32>,
-        #[serde(default)]
-        fps: Option<u32>,
-        #[serde(default)]
-        steps: Option<u32>,
-        #[serde(default)]
-        cfg_scale: Option<f32>,
-        #[serde(default)]
-        high_noise_steps: Option<u32>,
-        #[serde(default)]
-        high_noise_cfg_scale: Option<f32>,
-        #[serde(default)]
-        flow_shift: Option<f32>,
-        #[serde(default)]
-        sampler: Option<String>,
-        #[serde(default)]
-        vae_tiling: Option<bool>,
-        #[serde(default)]
-        memory: Option<String>,
-        #[serde(default)]
-        parts: Option<std::collections::BTreeMap<String, Option<String>>>,
-        #[serde(default)]
-        loras: Option<Vec<config::VideoLora>>,
-        shots: Vec<ShotDto>,
-        #[serde(default)]
-        every: Option<String>,
+        draft: Option<serde_json::Value>,
     }
-
     let dto: Dto = match parse_json::<Dto>(conn, body)? {
         Some(d) => d,
         None => return Ok(()),
     };
-
-    let req = VideoRequest {
-        model: dto.model,
-        negative: dto.negative,
-        source: dto.source.filter(|s| !s.is_empty()),
-        width: dto.width,
-        height: dto.height,
-        fps: dto.fps,
-        steps: dto.steps,
-        cfg_scale: dto.cfg_scale,
-        high_noise_steps: dto.high_noise_steps,
-        high_noise_cfg_scale: dto.high_noise_cfg_scale,
-        flow_shift: dto.flow_shift,
-        sampler: dto.sampler,
-        vae_tiling: dto.vae_tiling,
-        memory: dto.memory,
-        parts: dto.parts,
-        loras: dto.loras,
-        shots: dto.shots.into_iter().map(ShotDto::spec).collect(),
-        every: dto.every,
-    };
-
-    let label = req.model.clone();
-    enqueue_wait(conn, lanes, jobs::Kind::Video, label, Work::Video(req), false, 500)
+    match video_store(cfg).save_draft(&dto.id, dto.draft.as_ref().filter(|d| !d.is_null())) {
+        Ok(()) => conn.respond(200, "application/json", b"{\"ok\":true}"),
+        Err(e) => conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
+    }
 }
 
 /// `POST /videos/extend {id, keep, shots, every?, negative?}`: clip `id`
@@ -1929,6 +1991,9 @@ fn handle_save_clip(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> R
     let videos = video_store(cfg);
     let r = (|| -> Result<PathBuf> {
         let clip = videos.load(&dto.id)?;
+        if !clip.rendered {
+            anyhow::bail!("that clip isn't generated yet: there is nothing to save");
+        }
         if dto.version > 0 && !clip.versions.iter().any(|v| v.n == dto.version) {
             anyhow::bail!("clip '{}' has no version {}", dto.id, dto.version);
         }

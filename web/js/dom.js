@@ -49,11 +49,14 @@ export function bar(name, ms, max) {
     <span class="val">${ms} ms</span></div>`;
 }
 
-export async function post(path, payload) {
+// `keepalive` for a write sent as the page goes (`pagehide`), which the
+// browser would otherwise cancel with the page.
+export async function post(path, payload, { keepalive = false } = {}) {
   return answer(await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+    keepalive,
   }));
 }
 
