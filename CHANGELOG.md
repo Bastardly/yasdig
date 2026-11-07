@@ -26,7 +26,8 @@ What changed in each release of yasdig. Each release's executables are on the
 - **LTX-2.3 and LTX-2.5 video**, with sound: Get models has a card for each (the
   distilled checkpoints, 8 steps at CFG 1), and every part is recognised from its
   file. The Generation panel's **Hi-res ×2** runs LTX's own latent upscaler: draw
-  small, refine at twice the size, in one run.
+  small, refine at twice the size, in one run. Curly quotes, dashes and ellipses in
+  an LTX prompt are sent as plain ASCII: on LTX-2.5 they threw the picture off.
 - **Enlarge any clip with LTX**: the clip dialog's Enlarge has an **LTX** choice
   beside FSR once an LTX model is installed. Each shot is redrawn at twice its size
   from its own words, all its frames at once, so the new detail doesn't flicker —

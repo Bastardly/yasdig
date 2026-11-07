@@ -221,8 +221,10 @@ pub fn parse(content: &str) -> Result<Enhanced> {
     Ok(e)
 }
 
+/// Markdown and wrapping quotes off, and typographic punctuation as ASCII:
+/// the box then shows what LTX is sent (`sd::ascii_punctuation`).
 fn clean(s: &str) -> String {
-    let s = s.replace("**", "").replace("__", "");
+    let s = crate::sd::ascii_punctuation(&s.replace("**", "").replace("__", ""));
     let s = s.trim();
     let s = s.strip_prefix('"').and_then(|x| x.strip_suffix('"')).unwrap_or(s);
     s.trim().to_string()

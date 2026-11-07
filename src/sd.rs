@@ -415,9 +415,15 @@ impl<'a> SdRunner<'a> {
         for l in &m.picked_loras {
             p.push_str(&l.tags(m.family.is_moe()));
         }
+        // LTX-2.5 lost the picture to a curly apostrophe and an em dash
+        // (measured 2026-11-07: the same 135 words, the same seed, drew a man
+        // walking, and with ASCII punctuation the cat it described; 2.3 drew
+        // the cat either way). sd.cpp tokenizes both releases with its one
+        // built-in Gemma vocabulary, Gemma 3's, and 2.5's encoder is a Gemma 4.
+        let (p, negative) = if m.family.is_ltx() { (ascii_punctuation(&p), ascii_punctuation(negative)) } else { (p, negative.to_string()) };
         cmd.args(["-p", &p]);
         if !negative.is_empty() {
-            cmd.args(["-n", negative]);
+            cmd.args(["-n", &negative]);
         }
         // Always, the image side's trap: an empty `--lora-model-dir` skips tag
         // extraction, and its default is the process's CWD.
@@ -2096,6 +2102,30 @@ pub(crate) fn drain(stream: impl Read, mut on_progress: impl FnMut(&str)) -> Vec
     tail
 }
 
+
+/// Typographic punctuation as its ASCII spelling: curly quotes, dashes, an
+/// ellipsis, non-breaking and odd spaces. Letters are left alone.
+pub fn ascii_punctuation(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' | '\u{2032}' => out.push('\''),
+            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' | '\u{2033}' | '\u{00AB}' | '\u{00BB}' => out.push('"'),
+            '\u{2013}' | '\u{2012}' | '\u{2212}' | '\u{2010}' | '\u{2011}' => out.push('-'),
+            '\u{2014}' | '\u{2015}' => out.push_str(", "),
+            '\u{2026}' => out.push_str("..."),
+            '\u{00A0}' | '\u{2002}'..='\u{200A}' | '\u{202F}' => out.push(' '),
+            '\u{200B}' | '\u{FEFF}' => {}
+            c => out.push(c),
+        }
+    }
+    // "word, , word" when a dash already had spaces round it.
+    while out.contains(" ,  ") || out.contains(" , ") {
+        out = out.replace(" ,  ", ", ").replace(" , ", ", ");
+    }
+    out.replace(",  ", ", ")
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -3071,6 +3101,28 @@ lora_dir = "loras""#,
         m.steps = 20;
         let a = argv(&SdRunner::new(&cfg).video_cmd(&m, "cat", "", 1, &io));
         assert_eq!(flag(&a, "--sigmas"), None);
+    }
+
+    /// LTX-2.5 drew another picture for a prompt with a curly apostrophe and
+    /// an em dash; LTX prompts go out in ASCII punctuation, letters kept.
+    #[test]
+    fn an_ltx_prompt_goes_out_in_ascii_punctuation() {
+        assert_eq!(
+            ascii_punctuation("the cat\u{2019}s purr \u{2014} \u{201C}hello\u{201D}\u{2026} 3\u{2013}4 bl\u{00E5}b\u{00E6}r"),
+            "the cat's purr, \"hello\"... 3-4 bl\u{00E5}b\u{00E6}r"
+        );
+        assert_eq!(ascii_punctuation("quiet\u{2014}only wind"), "quiet, only wind");
+        let (cfg, mut m) = video_fixture("");
+        m.high_noise_diffusion_model = None;
+        let io = VideoIo { init: None, control: None, out: Path::new("o.avi"), refs: &[], audio: &[] };
+        let p = "cat\u{2019}s \u{2014} purr";
+        m.family = crate::config::VideoFamily::Ltx25;
+        let a = argv(&SdRunner::new(&cfg).video_cmd(&m, p, "no \u{201C}blur\u{201D}", 1, &io));
+        assert_eq!(flag(&a, "-p"), Some("cat's, purr"));
+        assert_eq!(flag(&a, "-n"), Some("no \"blur\""));
+        m.family = crate::config::VideoFamily::MinimaxH3;
+        let a = argv(&SdRunner::new(&cfg).video_cmd(&m, p, "", 1, &io));
+        assert_eq!(flag(&a, "-p"), Some(p), "only LTX is folded");
     }
 
     /// A VACE refine: frames in, frames out, and the input directory is what
