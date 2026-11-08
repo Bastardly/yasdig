@@ -73,6 +73,9 @@ What changed in each release of yasdig. Each release's executables are on the
 - A shot that goes on from the one before has no *Who is in it*: it starts from the
   last frame, with whoever that shows, so a name there did nothing. Switching a shot to
   Continue clears it, and the Assistant cuts to bring someone in.
+- On H3 a shot starts from its first frame or follows cast pictures, never both: a cast
+  member added to a shot with a first frame is named, not pictured, and the page says
+  so. Before, the frame was dropped without a word.
 - An uploaded PNG keeps the settings it carries, so *Settings from a PNG* works on it
   in Outputs. With *Settings inside saved PNGs* off, they are taken out on the way in.
 

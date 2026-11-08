@@ -43,9 +43,9 @@ const words = (x, fresh = true) => JSON.stringify([
 // What row `k` sends to a model that takes `take` ({references, sounds}, as
 // `/video-models` says): H3 follows its references and sounds, and its image
 // only with neither (sd.cpp refuses Ref2VA beside `-i`); Wan starts from its
-// image. Only shot 1 and a cut start fresh, so only they take any. The row
-// keeps the rest, so a switch of model takes it up again — a storyboard's
-// rows hold the cast's pictures and the keyframes both.
+// image. Only shot 1 and a cut start fresh, so only they take any. A row
+// holds one or the other now (`castOnRow`, `session::shot_spec`); this is the
+// guard for one saved before, which may hold both.
 export const ALL = { references: true, sounds: true };
 export function sentRow(r, k, take = ALL) {
   const fresh = k === 0 || !!r.cut;

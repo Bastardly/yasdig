@@ -258,14 +258,21 @@ function drawCast() {
   body.innerHTML = castHtml(got?.chat ?? null, { busy: busy(), off: got?.toolkit.film_off, models: got?.toolkit.models ?? [] });
 }
 
+const shotList = (ns) => (ns.length === 1 ? `Shot ${ns[0]}` : `Shots ${ns.slice(0, -1).join(', ')} and ${ns.at(-1)}`);
+
 // A saved member onto the shots, as its picture's and voice's output copies.
 async function addToClip(id) {
   err('');
   try {
     const c = await castEntry(id);
-    if (!addCastToShots(c)) {
-      err(`Some shots had no room for ${c.name}: a shot follows at most 4 pictures and 3 sounds.`);
+    const { full, framed } = addCastToShots(c);
+    const said = [];
+    if (full.length) said.push(`${shotList(full)} had no room for ${c.name}: a shot follows at most 4 pictures and 3 sounds.`);
+    if (framed.length) {
+      said.push(`${shotList(framed)} ${framed.length === 1 ? 'starts' : 'start'} from a first frame, so ${c.name} is named `
+        + 'there, not pictured: clear the frame for a shot to follow their picture.');
     }
+    if (said.length) err(said.join(' '));
   } catch (ex) {
     err(String(ex.message || ex));
   }

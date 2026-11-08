@@ -279,11 +279,14 @@ function drawRowCast(el) {
 }
 
 // `c`: `{stem, name, kind, look, voice}`. Their picture and voice only where
-// the model follows them (H3); elsewhere the name alone, which the prompt and
-// a storyboard's keyframes use. What didn't fit is said in the result.
+// the model follows them (H3) and the shot doesn't start from a first frame
+// (sd.cpp takes one or the other: the frame stays, see `framed`); elsewhere
+// the name alone, which the prompt and a storyboard's keyframes use. What
+// didn't fit is said in the result.
+const framed = (el) => videoTakes().references && !!el.dataset.key;
 function castOnRow(el, c) {
   const take = videoTakes();
-  if (!take.references) c = { ...c, stem: null, voice: null };
+  if (!take.references || framed(el)) c = { ...c, stem: null, voice: null };
   else if (!take.sounds) c = { ...c, voice: null };
   const refs = json(el, 'refs');
   const subjects = json(el, 'subjects');
@@ -367,6 +370,11 @@ function addCastToRow(el) {
         return;
       }
       rowsChanged();
+      if (framed(el) && c.stem) {
+        note.textContent = `Shot ${i + 1} starts from its first frame, so ${c.name} is named in it, not pictured. `
+          + 'Clear the frame for the shot to follow their picture.';
+        note.classList.remove('err');
+      }
     } catch (ex) {
       rowsChanged();
       note.textContent = String(ex.message || ex);
@@ -379,14 +387,18 @@ function addCastToRow(el) {
 export const videoTakes = () => takeOf(currentVideoModel());
 
 // A saved cast member onto every shot that starts fresh (shot 1 and each
-// cut): where references and sounds go. False when one had no room.
+// cut): where references and sounds go. `{full, framed}`: the shot numbers
+// that had no room, and those that start from a first frame, so name them
+// without their picture.
 export function addCastToShots(c) {
-  let full = false;
+  const out = { full: [], framed: [] };
   rowEls().forEach((el, i) => {
-    if (i === 0 || el.dataset.cut === '1') full = castOnRow(el, c) || full;
+    if (i > 0 && el.dataset.cut !== '1') return;
+    if (framed(el) && c.stem) out.framed.push(i + 1);
+    if (castOnRow(el, c)) out.full.push(i + 1);
   });
   rowsChanged();
-  return !full;
+  return out;
 }
 
 // Everything of `name` off every shot (or just `rows`): its references, its
@@ -755,10 +767,10 @@ function syncShots() {
     start.hidden = i === 0 || !keyOk;
     for (const b of start.querySelectorAll('[data-start]')) b.classList.toggle('active', (b.dataset.start === '1') === cut);
     // References on a cut, or on shot 1, never beside its image: H3 can't
-    // follow them and go on from a frame at once. A row may hold both (a
-    // storyboard's does): on H3 its references win and the image waits in
-    // `data-key` for Wan, which in turn holds the references unseen
-    // (`sentRow` sends what the model takes).
+    // follow them and go on from a frame at once, so each hides the other's
+    // buttons and a cast member added beside a frame is a name (`framed`). A
+    // row from before may still hold both: `sentRow` sends what the model
+    // takes, the references on H3.
     const refs = el.querySelector('.shotrefs');
     const n = JSON.parse(el.dataset.refs || '[]').length;
     const a = JSON.parse(el.dataset.audio || '[]').length;
