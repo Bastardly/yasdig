@@ -259,9 +259,10 @@ function commitTypedCast(el) {
 }
 
 // A chip per name: the picture is the row's reference named for them, when
-// it has one (a cast member added here, a storyboard's member).
+// it has one (a cast member added here, a storyboard's member) and the model
+// follows references — on Wan or LTX a thumbnail would say it is used.
 function drawRowCast(el) {
-  const refs = json(el, 'refs');
+  const refs = videoTakes().references ? json(el, 'refs') : [];
   const subjects = json(el, 'subjects');
   const html = rowCast(el).map((name) => {
     const k = subjects.findIndex((sub, j) => refs[j] && same(sub?.name, name));
@@ -277,8 +278,13 @@ function drawRowCast(el) {
   }
 }
 
-// `c`: `{stem, name, kind, look, voice}`. What didn't fit is said in the result.
+// `c`: `{stem, name, kind, look, voice}`. Their picture and voice only where
+// the model follows them (H3); elsewhere the name alone, which the prompt and
+// a storyboard's keyframes use. What didn't fit is said in the result.
 function castOnRow(el, c) {
+  const take = videoTakes();
+  if (!take.references) c = { ...c, stem: null, voice: null };
+  else if (!take.sounds) c = { ...c, voice: null };
   const refs = json(el, 'refs');
   const subjects = json(el, 'subjects');
   const audio = json(el, 'audio');

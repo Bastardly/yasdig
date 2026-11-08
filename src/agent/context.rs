@@ -92,15 +92,16 @@ pub fn board_text(f: &Film) -> String {
 const LIBRARY_MAX: usize = 24;
 const LIBRARY_LOOK_CHARS: usize = 240;
 
-/// The person's saved cast, for a story turn: names it reuses exactly, so
-/// `session::apply_story` finds the entry and its pictures come with it.
+/// The saved cast the person asked for (`toolkit::offered`), for a story
+/// turn: names it reuses exactly, so `session::apply_story` finds the entry
+/// and its pictures come with it.
 fn library_text(library: &[super::toolkit::SavedCast]) -> Option<String> {
     if library.is_empty() {
         return None;
     }
     let mut s = String::from(
-        "\nThe person's saved cast. When the film has one of them, use the name exactly as written here and \
-         the look word for word: their pictures come with the name. Leave out the ones the story doesn't need.",
+        "\nFrom the person's saved cast, the ones they asked for. Use the name exactly as written here and the \
+         look word for word: their pictures come with the name. Anyone else in the film is new.",
     );
     for e in library.iter().take(LIBRARY_MAX) {
         let mut look: String = e.look.chars().take(LIBRARY_LOOK_CHARS).collect();

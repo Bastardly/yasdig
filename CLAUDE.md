@@ -577,9 +577,11 @@ shelf, and Close server's clear never reaches it.
   copies, pictures kept in the chat's `img/`, `kind: "output"`), so it is never
   redrawn; `Member.cast_id` names the entry. *Add from cast…* is `/chats/film
   {from_cast}` → `BoardEdit.add` (name unique in the film, `MAX_CAST`).
-- **A story turn reuses the cast by name**: `Toolkit.library` (saved entries with a
-  picture, Video chats only, `serde(skip)`) is listed in the turn (`library_text`,
-  capped); `apply_story` gives a name match (case aside) the entry's spelling, kind,
+- **A story turn reuses the cast by name, only as asked**: `Toolkit.library` (saved
+  entries with a picture, Video chats only, `serde(skip)`) is cut by
+  `toolkit::offered` to the ones the person's messages name (whole word, as spelled),
+  the film already has, or all on "my cast" — the whole list had a camel-and-parrot
+  film pull in unrelated characters — and listed in the turn (`library_text`, capped); `apply_story` gives a name match (case aside) the entry's spelling, kind,
   look and `cast_id`, and keeps an old drawn picture only for the same entry. The
   files arrive after the turn (`adopt_cast`, end of `turn`), only where the member has
   none. film.md is at the skill budget, so the instruction is in the turn's text.
@@ -990,9 +992,11 @@ Break silently:
   (`skills::select` takes both families' names, which never collide).
 - **The board is the Shots rows, while its chat is open** (`web/js/board.js`, *bound*;
   no Story panel, no Send — a copy sent over lost every later edit on either side).
-  Film → rows: `chat_json`'s `board` (`session::board_rows`: `shot_spec` per shot — the
-  pictured cast as references with `subjects`, the speakers' voices as `audio` with
-  `voices`, then the shot's own picks, *and* the key, shot 1's too), drawn when its JSON
+  Film → rows: `chat_json`'s `board` (`session::board_rows`: `shot_spec` per shot — on a
+  references model (`Film.references`, H3) the pictured cast as references with
+  `subjects`, the speakers' voices as `audio` with `voices`, then the shot's own picks;
+  else, or when the person gave it a first frame, the key, shot 1's too — never both;
+  `set_rows` keeps the H3 picks while a Wan board's rows carry none), drawn when its JSON
   moves and the person isn't typing in the panel. Rows → film: `/chats/board` →
   `session::set_rows` (debounced, deduplicated): matched by place, a shot keeps its
   first frame while words/cast/cut hold (the person's always), a key the film didn't
@@ -1010,9 +1014,11 @@ Break silently:
   `chains()`); `apply_story` writes `Chat.video` first and keeps an unchanged shot's
   seed, length and picks.
 - **The agent never films** (checked 2026-10-28; it used to shoot and judge each take).
-  **A row holds every model's part; `shots.js` `sentRow` picks what is sent**
-  (references/sounds on H3, the image only beside neither; Wan the image) — rows
-  built for the model at the press lost the references on a switch to H3. `shotState`
+  **A board's rows are built for the board's model** (`shot_spec` on
+  `Film.references`, redrawn when `set_video` moves it); unbound, *Add cast…* adds
+  pictures and voices only on a model that follows them (`castOnRow`), the name
+  elsewhere. **`shots.js` `sentRow` still picks what is sent** (references/sounds on
+  H3, the image only beside neither; Wan the image), the guard for old drafts. `shotState`
   compares `sentRow` for the clip's own family (`clipTake`), so held references
   aren't a change on a Wan clip; `matchesClip` (the draft) compares the raw row. Nothing is queued. The board stays editable (`Phase` is
   `Board`/`Ready`; old `shooting`/`done` and `next: shoot|take` read through serde

@@ -65,6 +65,11 @@ What changed in each release of yasdig. Each release's executables are on the
 
 ### Fixed
 
+- The Assistant's films use your saved cast only when you ask: by name, or "use my
+  cast". A clip of a camel and a parrot no longer brings in your other characters.
+- Cast pictures and voices go on a shot only where the video model follows them (H3).
+  On Wan and LTX a cast member is their name, which the prompt and the first frames
+  use; the chips no longer show a picture the model never sees.
 - An uploaded PNG keeps the settings it carries, so *Settings from a PNG* works on it
   in Outputs. With *Settings inside saved PNGs* off, they are taken out on the way in.
 

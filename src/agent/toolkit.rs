@@ -101,6 +101,59 @@ pub struct SavedCast {
     pub look: String,
 }
 
+/// The saved cast a turn may reuse: only what the person asked for. Listing
+/// every entry had a film about a camel and a parrot pull in the person's
+/// unrelated characters. An entry is offered when the person's messages name
+/// it (a whole word, spelled as saved — the Image tab's rule, so a member
+/// named "Rain" isn't found in "rain"), when the film already has it, or when
+/// the newest message asks for their cast as a whole ("my cast", "my saved
+/// characters"); that last is a phrase test and no more.
+pub fn offered(library: Vec<SavedCast>, chat: &super::chat::Chat) -> Vec<SavedCast> {
+    let said: Vec<&str> = chat
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            super::chat::Msg::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    if said.last().is_some_and(|t| asks_for_whole_cast(t)) {
+        return library;
+    }
+    let bound: Vec<&str> = chat
+        .film
+        .iter()
+        .flat_map(|f| f.cast.iter())
+        .filter_map(|m| m.cast_id.as_deref())
+        .collect();
+    library
+        .into_iter()
+        .filter(|e| bound.contains(&e.id.as_str()) || said.iter().any(|t| names(t, &e.name)))
+        .collect()
+}
+
+/// `name` in `text` as a whole word: letters and digits of any script are
+/// word characters, so "Eliason" doesn't name Elias.
+pub fn names(text: &str, name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() {
+        return false;
+    }
+    let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+    text.match_indices(name).any(|(at, _)| !word(text[..at].chars().next_back()) && !word(text[at + name.len()..].chars().next()))
+}
+
+fn asks_for_whole_cast(text: &str) -> bool {
+    let words: Vec<String> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    words.windows(2).any(|w| {
+        matches!(w[0].as_str(), "my" | "saved") && matches!(w[1].as_str(), "cast" | "characters" | "people")
+    })
+}
+
 /// A video model as a film needs it described: what its shots can do, and
 /// the size and length the Video tab gives each one.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -266,6 +319,7 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
             .filter(|v| !v.entry.draft && v.picture)
             .map(|v| SavedCast { id: v.entry.id, name: v.entry.name.trim().to_string(), kind: v.entry.kind, look: v.entry.look })
             .collect();
+        t.library = offered(std::mem::take(&mut t.library), chat);
     }
     t.video = video;
     t.videos = installed;
@@ -384,6 +438,44 @@ pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelCh
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn user(n: u32, text: &str) -> super::super::chat::Msg {
+        super::super::chat::Msg::User { n, ms: 0, text: text.into(), images: Vec::new() }
+    }
+
+    fn saved(id: &str, name: &str) -> SavedCast {
+        SavedCast { id: id.into(), name: name.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn only_the_saved_cast_the_person_asks_for_is_offered() {
+        let lib = || vec![saved("c1", "Elias"), saved("c2", "Rain")];
+        let mut chat = super::super::chat::Chat::new("1-0".into(), serde_json::json!({}), None);
+        chat.messages.push(user(1, "A clip of a camel and a parrot on a rainy day"));
+        assert!(offered(lib(), &chat).is_empty(), "nothing named, nothing offered");
+        chat.messages.push(user(2, "Now Elias rides the camel"));
+        assert_eq!(offered(lib(), &chat), vec![saved("c1", "Elias")]);
+        let mut chat = super::super::chat::Chat::new("1-0".into(), serde_json::json!({}), None);
+        chat.messages.push(user(1, "Use my cast for this one"));
+        assert_eq!(offered(lib(), &chat).len(), 2, "asked for as a whole");
+        // Already in the film: kept on a later turn that doesn't name it.
+        let mut chat = super::super::chat::Chat::new("1-0".into(), serde_json::json!({}), None);
+        chat.messages.push(user(1, "Make it longer"));
+        chat.film = Some(super::super::chat::Film {
+            cast: vec![super::super::chat::Member { name: "Rain".into(), cast_id: Some("c2".into()), ..Default::default() }],
+            ..Default::default()
+        });
+        assert_eq!(offered(lib(), &chat), vec![saved("c2", "Rain")]);
+    }
+
+    #[test]
+    fn a_name_is_a_whole_word() {
+        assert!(names("Elias lights a cigar", "Elias"));
+        assert!(names("with Elias.", "Elias"));
+        assert!(!names("Eliason lights a cigar", "Elias"));
+        assert!(!names("a rainy day", "Rain"));
+        assert!(names("Zoë et Élise", "Élise"));
+    }
 
     fn choice(name: &str, f: ImageFamily) -> ModelChoice {
         ModelChoice { name: name.into(), family: f.as_str(), label: f.label(), references: f.takes_references(), locks: Locks::default() }

@@ -105,12 +105,11 @@ fn draw_step(film: &Film) -> Option<Step> {
 }
 
 /// The board as the Video tab's Shots rows show it (`board.js`): its look,
-/// the first frame, a row per shot holding all the board has — the cast's
-/// pictures and voices with the person's own picks after them, the keyframe,
-/// the words, the seed and length. The rows choose per model (`sentRow`): H3
-/// follows the pictures, Wan starts a cut from its keyframe, so a switch on
-/// the Video tab needs nothing from here. `to`, the tab's model, only words
-/// the note. Pictures not drawn yet are left out: drawing them is optional.
+/// the first frame, a row per shot as the board's model takes it
+/// ([`shot_spec`]) — on H3 the cast's pictures and voices with the person's
+/// own picks after them, elsewhere the keyframe — and the words, the seed and
+/// length. A switch on the Video tab redraws them (`set_video` moves
+/// `Film.references`). `to`, the tab's model, only words the note. Pictures not drawn yet are left out: drawing them is optional.
 /// `to` is `None` before the Video tab has named an installed model.
 pub fn board_rows(f: &Film, to: Option<&super::toolkit::VideoView>) -> Value {
     let mut source = None;
@@ -186,17 +185,24 @@ pub fn board_rows(f: &Film, to: Option<&super::toolkit::VideoView>) -> Value {
     serde_json::json!({ "every": f.every, "source": source, "shots": rows, "note": notes.join(" ") })
 }
 
-/// Shot `k` of the film as a Shots row, and the picture it starts from, for
-/// any video model. A cut — and shot 1 — carries the pictures of the cast it
-/// names (front pictures: a turnaround's four figures may read as four
-/// people) and the voices of those who speak in it, for H3, and its keyframe,
-/// which for shot 1 is the clip's first frame, not on the spec, for Wan. What
-/// is said, heard and scored goes too; the engine writes it into H3's prompt
-/// layout (`h3prompt`) and Wan's row never sends it.
+/// Shot `k` of the film as a Shots row, and the picture it starts from. On a
+/// model that follows references (H3, `Film.references`) a cut — and shot 1
+/// — carries the pictures of the cast it names (front pictures: a
+/// turnaround's four figures may read as four people) and the voices of those
+/// who speak in it, unless it starts from the person's first frame; on any
+/// other its keyframe, which for shot 1 is the clip's first frame, not on the
+/// spec. A switch of model redraws the rows (`set_video`). What is said,
+/// heard and scored goes too; the engine writes it into H3's prompt layout
+/// (`h3prompt`) and Wan's row never sends it.
 pub fn shot_spec(f: &Film, k: usize) -> (crate::pipeline::ShotSpec, Option<String>) {
     let s = &f.shots[k];
     let fresh = k == 0 || s.cut;
-    let pictured: Vec<&Member> = if fresh {
+    let key = (fresh && !s.no_key).then(|| s.key_stem.clone()).flatten();
+    // Pictures and voices only where the model follows them (H3), and only
+    // on a shot that doesn't start from a picture: sd.cpp takes one or the
+    // other, and a first frame there is the person's (H3 draws none).
+    let follows = fresh && f.references && key.is_none();
+    let pictured: Vec<&Member> = if follows {
         s.cast.iter().filter_map(|n| f.member(n).filter(|m| m.stem.is_some())).take(crate::config::MAX_REFERENCES).collect()
     } else {
         Vec::new()
@@ -204,7 +210,7 @@ pub fn shot_spec(f: &Film, k: usize) -> (crate::pipeline::ShotSpec, Option<Strin
     // The voices of those who speak on screen or over it, in the order they
     // first do, where references may go: a continue can't take them.
     let mut voiced: Vec<&Member> = Vec::new();
-    if fresh {
+    if follows {
         for l in &s.lines {
             if let Some(m) = f.member(&l.who).filter(|m| m.voice.is_some()) {
                 if !voiced.iter().any(|v| v.name == m.name) && voiced.len() < crate::pipeline::MAX_REF_AUDIO {
@@ -213,11 +219,10 @@ pub fn shot_spec(f: &Film, k: usize) -> (crate::pipeline::ShotSpec, Option<Strin
             }
         }
     }
-    let key = (fresh && !s.no_key).then(|| s.key_stem.clone()).flatten();
     // The person's own picks go after the cast's, as far as there is room.
     let mut references: Vec<String> = pictured.iter().filter_map(|m| m.stem.clone()).collect();
     let mut audio: Vec<String> = voiced.iter().filter_map(|m| m.voice.clone()).collect();
-    if fresh {
+    if follows {
         for x in &s.references {
             if !references.contains(x) && references.len() < crate::config::MAX_REFERENCES {
                 references.push(x.clone());
@@ -366,6 +371,12 @@ pub fn set_rows(c: &mut Chat, every: Option<&str>, rows: Option<&[RowIn]>) -> Re
             let voices: Vec<&String> = f.cast.iter().filter_map(|m| m.voice.as_ref()).collect();
             shot.references = row.refs.iter().filter(|x| !ours.contains(x) && crate::workitems::valid_id(x)).cloned().collect();
             shot.audio = row.audio.iter().filter(|x| !voices.contains(x) && crate::workitems::valid_id(x)).cloned().collect();
+            // Rows for a model that takes none carry none: the picks made
+            // on H3 wait for a switch back, while the shot says the same.
+            if let Some(w) = was.filter(|w| !f.references && w.text == shot.text && w.cut == shot.cut) {
+                shot.references = w.references.clone();
+                shot.audio = w.audio.clone();
+            }
             shots.push(shot);
         }
         if shots.is_empty() {
@@ -2104,13 +2115,14 @@ mod tests {
     }
 
     #[test]
-    fn a_row_carries_both_its_keyframe_and_its_cast_for_any_model() {
+    fn a_row_starts_from_its_keyframe_or_its_cast_never_both() {
         let c = ready(false);
         let s1 = spec(&c, 1);
         assert!(!s1.cut && s1.keyframe.is_none() && s1.references.is_empty(), "a continue starts from the last frame");
         let s2 = spec(&c, 2);
         assert!(s2.cut && s2.keyframe.as_deref() == Some("p2-s0"), "Wan cuts from its keyframe");
-        assert_eq!(s2.references, ["p1-s0"], "kept for H3, should the Video tab switch");
+        assert!(s2.references.is_empty() && s2.words.subjects.is_empty(), "Wan takes no references");
+        assert_eq!(s2.words.cast, ["Leo"], "the cast stays as words");
         let (s0, key) = shot_spec(c.film.as_ref().unwrap(), 0);
         assert!(s0.keyframe.is_none() && key.as_deref() == Some("p0-s0"), "shot 1's keyframe is the clip's first frame");
         let c = ready(true);
@@ -2118,6 +2130,13 @@ mod tests {
         let s2 = spec(&c, 2);
         assert!(s2.cut && s2.keyframe.is_none() && s2.references == ["p1-s0"]);
         assert_eq!(s2.words.subjects[0].name, "Leo", "named, so the prompt says who");
+        // The person's own first frame on H3 wins over the cast's pictures.
+        let mut c = c;
+        c.film.as_mut().unwrap().shots[2].key_stem = Some("mine".into());
+        let (s2, _) = shot_spec(c.film.as_ref().unwrap(), 2);
+        assert_eq!(s2.keyframe.as_deref(), Some("mine"));
+        assert!(s2.references.is_empty() && s2.audio.is_empty() && s2.words.subjects.is_empty());
+        assert_eq!(s2.words.cast, ["Leo"]);
     }
 
     #[test]
