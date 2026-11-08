@@ -1,18 +1,11 @@
 Roadmap as it is currently planned. Changes can happen.
 
-# v0.8.x - Extended video support
-- [x] LTX video support.
-- [x] Add LTX video upscaler for all video clips.
-- [x] Add isAlive check on the server. UI should reflect if backend is not running.
-- [x] Improve assistant's skills in focusing on action when creating shots, and align clip length with that shot. (First take)
-- [x] Save video workflow  without generation.
-
 # v0.9.x - Models manager
-- [ ] Create an overview of installed models, to solve the issue of finding redundant models. 
-- [ ] Site wide download indicator when downloading models
-- [ ] Lora trigger words - Add option to add them as a note in manager.
-- [ ] Show lora trigger words in UI
-- [ ] Concurrent downloads
+- [x] Create an overview of installed models, to solve the issue of finding redundant models. 
+- [x] Site wide download indicator when downloading models
+- [x] Lora trigger words - Add option to add them as a note in manager.
+- [x] Show lora trigger words in UI
+- [x] Concurrent downloads
 
 # v0.10.x - Assistant improvements
 - [ ] Teach assistant to use variables.
