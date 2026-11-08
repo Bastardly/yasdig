@@ -1852,7 +1852,8 @@ from `family` goes on `VideoModelDto`.
     the bf16 is picked. LTX prompts go
     out in ASCII punctuation (`sd::ascii_punctuation`), a precaution only — it
     was blamed first, but the vocabularies agree on ’ and —. **The two upscalers are identical and unversioned**:
-    `video_components` prefers the file named as the slot's `file`.
+    `video_components` prefers the file named as the slot's `file`, and a card
+    counts its upscaler as had only at its own dest (`downloads::present`).
   - **LTX hi-res is in the one run** (`VideoModel.hires`, `--hires
     --hires-upscalers-dir <parent> --hires-upscaler <stem>`: sd-cli refuses a path
     or an extension there); `-W/-H` are the first pass's, the clip comes out ×2

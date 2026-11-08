@@ -28,7 +28,7 @@
 //!   between the last byte and the rename) is finished without asking the
 //!   server, which would answer a range past the end with a 416.
 
-use crate::catalog::{Agent, AgentFile, Catalog, Entry, File, Lora, Upscaler};
+use crate::catalog::{Agent, AgentFile, Catalog, Entry, Family, File, Lora, Upscaler};
 use crate::config::{slash_name, Config};
 use crate::discover::{self, Found};
 use anyhow::{bail, Result};
@@ -542,6 +542,12 @@ fn present(root: &Path, e: &Entry, f: &File, found: &[Found]) -> Option<PathBuf>
     if e.slot(f).is_none() && Catalog::get().has_several(e.family) {
         return None;
     }
+    // LTX-2.3's and 2.5's latent upscalers have the same tensors and no
+    // release in their metadata, so either fits both cards' slot: had only at
+    // its own dest, or a deleted 2.5 upscaler read as had beside 2.3's.
+    if matches!(e.family, Family::Video(v) if v.is_ltx()) && f.slot == "latent_upscaler" {
+        return None;
+    }
     let replaced = |x: &Found| f.replaces.iter().any(|r| x.path == root.join(r));
     found.iter().find(|x| !replaced(x) && e.fits(f, &x.path, &x.role)).map(|x| x.path.clone())
 }
@@ -840,6 +846,20 @@ mod tests {
         assert_eq!(file_state(dir.as_path(), e, file(e, "llm"), &bf16, &st).state, "missing");
         let q8 = [enc("gemma4-12b-with-proj-ltx-2.5-bf16-q8_0.gguf")];
         assert_eq!(file_state(dir.as_path(), e, file(e, "llm"), &q8, &st).state, "have");
+    }
+
+    /// The two LTX releases' latent upscalers are told apart by name only:
+    /// 2.3's in the folder is not 2.5's.
+    #[test]
+    fn an_ltx_upscaler_is_had_only_at_its_own_dest() {
+        let dir = tmpdir("ltxup");
+        let e = Catalog::get().video.iter().find(|e| e.id == "ltx-2.5-distilled-q4").unwrap();
+        let found = [Found {
+            path: dir.join("latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"),
+            role: Role::LatentUpscaler,
+        }];
+        let st = State::default();
+        assert_eq!(file_state(dir.as_path(), e, file(e, "latent_upscaler"), &found, &st).state, "missing");
     }
 
     /// MOSS-Image has two cards, INT8 and BF16: one installed is not the
