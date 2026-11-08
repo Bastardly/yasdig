@@ -961,16 +961,22 @@
        recommended set, with what each file is on this disk. The page sends a
        catalog id and nothing else; `getmodels.js` draws everything from
        `/catalog`. -->
-  <div class="layout" id="tab-models" hidden>
-  <div class="card col-controls">
-    <b>Models</b>
-    <p class="sub">Download a model with every file it needs, or see and tidy what you
-    have. Each model has its own licence — check it before you use what you make.</p>
-    <p class="sub" id="gmdir"></p>
-    <div id="gmerr" class="err"></div>
-    <nav class="helpnav spaced" id="gmnav" aria-label="Model families by category"></nav>
+  <div class="workspace" id="tab-models" hidden>
+  <nav class="wsrail" aria-label="Models">
+    <div id="gmrail" class="railbtns gmrail"></div>
+  </nav>
+  <div class="stage gmstage">
+    <div class="gmintro">
+      <b>Models</b>
+      <p class="sub">Download a model with every file it needs, or see and tidy what you
+      have. Each model has its own licence — check it before you use what you make.</p>
+      <p class="sub" id="gmdir"></p>
+      <div id="gmerr" class="err"></div>
+    </div>
   </div>
-  <div class="col-result" id="gmlist"></div>
+  <!-- A panel per family, and one each for upscalers and agent models,
+       built by `getmodels.js` from the first `/catalog` and placed after
+       this comment. -->
   </div>
 
   <!-- ==================== Help ====================

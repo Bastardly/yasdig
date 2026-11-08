@@ -684,7 +684,7 @@ gallery holds, so `Store::find_output` searches both and `output_source`,
 Models tab: `src/catalog.toml` (compiled in), `src/catalog.rs`, `src/downloads.rs`,
 `GET /catalog`, `POST /downloads/{start,cancel,clear}`, `web/js/getmodels.js`. A set
 per runnable family, each file keyed by its `slots()` key (or `"model"`); **a family
-may have two cards** (MOSS INT8 + BF16), so its anchor, nav button and Help's family
+may have two cards** (MOSS INT8 + BF16), so its panel, rail button and Help's family
 row take its *first* card (`firstPerFamily`) — keep the default first in the toml.
 A card's model is had **only at its own dest** when its family has several cards
 (`has_several` in `downloads::present`), or the BF16 card reads as had beside the INT8.
@@ -737,9 +737,15 @@ baseline) reloads the model lists; `onDownloads` refetches `/catalog` — which 
 only while the Models tab shows, plus once after activity stops (a dialog cancel).
 A failure stays listed until retried or `POST /downloads/dismiss`.
 
-Page: cards and nav are grouped by category (`categories()` in `getmodels.js`: image,
-video, upscalers); `finished` moving triggers `loadModels()` (and `loadVideoModels()`);
-`#getparts` opens the family's card (`openModels`).
+Page: the tab is a **workspace**: `#gmrail` has a `.railtitle` per category
+(`categories()` in `getmodels.js`) and a button per family, `panel-gm-<family>` (or
+`gm-upscaler`/`gm-agent`, `SINGLE`) a floating panel of its cards. **Built once from the
+first `/catalog`** (`build()`; the catalog is compiled in), then a poll rewrites only
+the bodies (`data-gmbody`, skipped when unchanged), so position/scroll/focus stay;
+`stack` keeps two dozen panels from cascading off the window. The Recommended mark is
+per panel over *every* category (it used to read `view.entries` only, missing video).
+`openModels(family)` is `wsPanels.show` (`panels.js`: open *and* raise) — `#getparts`,
+Help, the Assistant and Fill's link call it.
 
 ## Settings in the PNG
 

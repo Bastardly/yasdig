@@ -115,7 +115,10 @@ export function floatPanels({ host, rail, defs }) {
 
   return {
     init() {
-      defs.forEach((d, index) => {
+      defs.forEach((d, i) => {
+        // Where it cascades from: its place in the list, unless the def says
+        // (the Models tab's two dozen would cascade off the window).
+        const index = d.stack ?? i;
         // `el` when the panel kept an older id (the Image tab's folds did,
         // so the code that opens one by id still finds it).
         const el = document.getElementById(d.el ?? `panel-${d.id}`);
@@ -177,6 +180,13 @@ export function floatPanels({ host, rail, defs }) {
       for (const p of panels.values()) {
         if (!p.el.hidden) { place(p); front(p); }
       }
+    },
+    // Open it and bring it to the front, open already or not.
+    show(id) {
+      const p = panels.get(id);
+      if (!p) return;
+      setOpen(p, true);
+      front(p);
     },
     // A rail button's dot: its panel has something in effect.
     dot(id, on) {

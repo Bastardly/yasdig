@@ -1367,11 +1367,17 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
 a:hover { color: var(--accent-hi); }
 
-/* The Models tab: a card per catalog entry. The file table borrows
-   `.helptable`; its first column is a slot name, not a third of the width. */
-.gmcard { margin-bottom: var(--sp-4); }
-.gmgroup { font-size: var(--fs-title); color: var(--text); margin: var(--sp-4) 0 var(--sp-2); }
-.gmgroup:first-child { margin-top: 0; }
+/* The Models tab: a workspace, a panel per family holding a card per catalog
+   entry. Wider panels than the other workspaces': a card's file table has
+   three columns. The file table borrows `.helptable`; its first column is a
+   slot name, not a third of the width. */
+#tab-models { --fpanel-w: min(560px, 80vw); }
+.gmstage { align-items: flex-start; justify-content: flex-start; }
+.gmintro { max-width: 520px; margin-left: auto; }
+.gmrail .railbtn { flex-direction: column; align-items: flex-start; text-align: left; gap: 2px; }
+.gmrail .railtitle { margin-top: var(--sp-2); }
+.gmrail .railtitle:first-child { margin-top: 0; }
+.gmcard + .gmcard { border-top: var(--line); margin-top: var(--sp-3); padding-top: var(--sp-3); }
 .gmhead { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); }
 .gmhead .sub { margin: 0 0 0 auto; }
 /* Green, the "this one" colour the family table uses for done; amber is the

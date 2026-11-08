@@ -16,6 +16,9 @@ What changed in each release of yasdig. Each release's executables are on the
 - **A Downloads button in the top bar**, beside Jobs, on every tab: how far along the
   downloads are and how much is left, and a list with a Cancel per file, and Retry or
   Dismiss on a failed one.
+- **The Models tab is a workspace**: a rail of families by category, each opening a
+  panel of its cards, so two families can be read side by side. Video families show
+  their *Recommended* mark too.
 
 ## 0.8.0 — 2026-11-08
 

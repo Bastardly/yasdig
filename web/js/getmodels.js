@@ -1,4 +1,5 @@
 import { $, esc, getJSON, post } from './dom.js';
+import { floatPanels } from './panels.js';
 import { loadModels } from './image.js';
 import { loadVideoModels } from './video.js';
 import { loadAgents } from './assistant.js';
@@ -22,14 +23,20 @@ import { downloadsChanged, onDownloads, soonDownloads } from './downloads.js';
 // a reload; the cards (`/catalog`, which scans) are refetched only while this
 // tab shows, once a second while anything moves.
 //
-// The cards come in categories — image models, video models, upscalers — each a
-// list of its own on the wire (`entries`, `videos`, `upscalers`) and a group of
-// its own in the nav, because one flat list stopped being readable. Separate
-// on the wire too, because Help's family table reads `entries` and neither a
-// video model nor an upscaler belongs in it.
+// The cards come in categories — image models, video models, upscalers, agent
+// models — each a list of its own on the wire (`entries`, `videos`,
+// `upscalers`, `agents`): Help's family table reads `entries` and neither a
+// video model nor an upscaler belongs in it. The tab is a workspace: the rail
+// has a heading per category and a button per family, each family's cards a
+// floating panel (`panels.js`), so two can be read side by side. Rail and
+// panels are built once, from the first answer — the catalog is compiled in,
+// so its families change only with the server, and `alive.js` asks for a
+// reload then — and a poll rewrites only the panels' bodies, so open state,
+// position and scroll stay.
 
 let view = null;
 let pending = null;
+let wsPanels = null;
 
 const gb = (b) => (b / 1e9).toFixed(b < 1e9 ? 2 : 1) + ' GB';
 // A GPU's memory as it is sold: 24 GiB is a "24 GB" card.
@@ -81,13 +88,8 @@ function pages(e) {
     + `${esc(u.replace('https://huggingface.co/', ''))}</a>`).join(', ');
 }
 
-// Every card, in the order drawn — the one list the poll and the buttons care
-// about.
-const allEntries = () =>
-  [...view.entries, ...(view.videos ?? []), ...(view.upscalers ?? []), ...(view.agents ?? [])];
-
-// The categories whose cards have no families to tell apart: one nav button
-// and one anchor, on the first card.
+// The categories whose cards have no families to tell apart: one rail button
+// and one panel.
 const SINGLE = { upscaler: 'Upscalers', agent: 'Agent models' };
 
 // A family's first card, once each: the nav buttons, and the anchor
@@ -108,7 +110,7 @@ const categories = () => [
     where: 'Everything is here. Pick it beside the Assistant panel’s Send button, on the Image or Video tab.' },
 ].filter((c) => c.entries.length);
 
-function card(e, i, where, first) {
+function card(e, where) {
   const left = e.files.filter(needed).reduce((s, f) => s + f.bytes - f.got, 0);
   const busy = e.files.some(active);
   const partial = !busy && e.files.some((f) => f.got > 0 && (f.state === 'partial' || f.state === 'failed'));
@@ -120,17 +122,12 @@ function card(e, i, where, first) {
     busy ? '<button type="button" class="btn btn-danger" data-act="cancel">Cancel</button>' : '',
     partial ? '<button type="button" class="btn" data-act="clear">Remove partial</button>' : '',
   ].join('');
-  // The upscalers and the agents share one anchor each, on the first card.
-  // A family with two cards anchors on the first of them, the same way.
-  const anchor = SINGLE[e.family]
-    ? (i === 0 ? `id="gm-${e.family}"` : '')
-    : (first ? `id="gm-${e.family}"` : '');
   const badge = e.recommended ? '<span class="gmbadge">Recommended</span>' : '';
   // More than the GPU holds: it still runs, with part of it in system RAM.
   const big = view.vram && e.card_gb && e.card_gb * 2 ** 30 > view.vram
     ? `<p class="sub">Needs about ${e.card_gb} GB on the GPU, more than this one’s ${vramGb(view.vram)}:`
       + ' part of it will sit in system RAM, which is slower.</p>' : '';
-  return `<div class="card gmcard" ${anchor} data-entry="${esc(e.id)}">
+  return `<div class="gmcard" data-entry="${esc(e.id)}">
     <div class="gmhead"><b>${esc(e.label)}</b>${badge}<span class="sub">${esc(e.family_label)} · ${gb(e.bytes)}</span></div>
     <p class="sub">${esc(e.note)}</p>${big}
     <p class="sub">Licence: each file has its own — see ${pages(e)}.</p>
@@ -139,6 +136,46 @@ function card(e, i, where, first) {
     <div class="btnrow">${buttons}</div>
     <div class="err" data-err></div>
   </div>`;
+}
+
+// A rail button and a panel each: a family's cards (its first card's family,
+// in catalog order), or a whole category with no families to tell apart.
+function groups() {
+  return categories().map((c) => ({
+    ...c,
+    panels: SINGLE[c.id]
+      ? [{ id: c.id, label: SINGLE[c.id], entries: c.entries }]
+      : firstPerFamily(c.entries).map((f) => ({
+        id: f.family, label: f.family_label, entries: c.entries.filter((e) => e.family === f.family),
+      })),
+  }));
+}
+
+// A family is recommended when any of its cards is — video ones too. The mark
+// sits in place; the rail is never reordered by it.
+const isRecommended = (g) => g.entries.some((e) => e.recommended);
+
+function build() {
+  const gs = groups();
+  $('gmrail').innerHTML = gs.map((c) => `<p class="railtitle">${c.title}</p>`
+    + c.panels.map((g) => `<button type="button" class="btn btn-choice railbtn" data-panel="gm-${g.id}">`
+      + `<span>${esc(g.label)}</span>`
+      + `${isRecommended(g) ? '<span class="gmbadge">Recommended</span>' : ''}</button>`).join('')).join('');
+  $('tab-models').insertAdjacentHTML('beforeend', gs.flatMap((c) => c.panels).map((g) => `
+  <section class="fpanel" id="panel-gm-${g.id}" aria-label="${esc(g.label)}" hidden>
+    <header class="fphead"><b>${esc(g.label)}</b><span class="foldstate" data-gmstate="${g.id}"></span><button type="button" class="fpclose" aria-label="Close ${esc(g.label)}">&times;</button></header>
+    <div class="fpbody" data-gmbody="${g.id}"></div>
+  </section>`).join(''));
+  // Open the first time: the family picked for this GPU, else the first.
+  const image = gs.find((c) => c.id === 'image')?.panels ?? [];
+  const first = (image.find(isRecommended) ?? image[0])?.id;
+  wsPanels = floatPanels({
+    host: $('tab-models'),
+    rail: $('gmrail'),
+    defs: gs.flatMap((c) => c.panels.map((g, i) => ({ id: `gm-${g.id}`, open: g.id === first, both: true, stack: i % 8 }))),
+  });
+  wsPanels.init();
+  if (shown()) wsPanels.layout();
 }
 
 function draw() {
@@ -152,21 +189,20 @@ function draw() {
   if (view.agents?.length) $('gmdir').innerHTML += ` Agent models go in <code>${esc(view.agent_dir)}</code>.`;
   // What the recommendations were picked for, when the server could read it.
   if (view.vram) $('gmdir').innerHTML += ` <b>Recommended</b> is picked for this GPU’s ${vramGb(view.vram)}.`;
-  // The upscalers are one button: they have no families to tell apart.
-  // A family is recommended when any of its cards is.
-  const recommended = (fam) => view.entries.some((e) => e.family === fam && e.recommended);
-  const navButton = (e) =>
-    `<button type="button" class="btn btn-choice" data-family="${e.family}">${esc(e.family_label)}`
-    + `${recommended(e.family) ? ' <span class="gmbadge">Recommended</span>' : ''}</button>`;
-  $('gmnav').innerHTML = categories().map((c) => `<span class="grouphead">${c.title}</span>`
-    + (SINGLE[c.id]
-      ? `<button type="button" class="btn btn-choice" data-family="${c.id}">${SINGLE[c.id]}</button>`
-      : firstPerFamily(c.entries).map(navButton).join(''))).join('');
-  $('gmlist').innerHTML = categories().map((c) => {
-    const firsts = new Set(firstPerFamily(c.entries));
-    return `<h2 class="gmgroup">${c.title}</h2>`
-      + c.entries.map((e, i) => card(e, i, c.where, firsts.has(e))).join('');
-  }).join('');
+  if (!wsPanels) build();
+  for (const c of groups()) {
+    for (const g of c.panels) {
+      const body = document.querySelector(`[data-gmbody="${g.id}"]`);
+      if (!body) continue;
+      const html = g.entries.map((e) => card(e, c.where)).join('');
+      // Only when it moved: a rewrite would drop a pressed button's focus.
+      if (body.dataset.html !== html) { body.innerHTML = html; body.dataset.html = html; }
+      const busy = g.entries.some((e) => e.files.some(active));
+      const had = g.entries.some((e) => e.files.every((f) => f.state === 'have'));
+      document.querySelector(`[data-gmstate="${g.id}"]`).textContent = busy ? 'downloading' : had ? 'have it' : '';
+      wsPanels.dot(`gm-${g.id}`, busy);
+    }
+  }
 }
 
 const shown = () => !$('tab-models').hidden;
@@ -181,20 +217,21 @@ async function refresh() {
   draw();
 }
 
-// Open the tab on one family's card. For the Image tab's "Get the missing
-// files…" and the Help topic's table.
+// Open the tab on one family's panel, in front. For the Image tab's "Get the
+// missing files…", the Assistant's agent link and the Help topic's table;
+// `upscaler` and `agent` name those categories' panels.
 export function openModels(family) {
   document.querySelector('.tab[data-tab="models"]')?.click();
-  refresh().then(() => $(`gm-${family}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  refresh().then(() => wsPanels?.show(`gm-${family}`));
 }
+
+// `showTab`: a hidden tab has no size to place panels against.
+export const layoutModelsTab = () => wsPanels?.layout();
 
 export function initModels() {
   document.querySelector('.tab[data-tab="models"]')?.addEventListener('click', refresh);
-  $('gmnav').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-family]');
-    if (b) $(`gm-${b.dataset.family}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
-  $('gmlist').addEventListener('click', async (e) => {
+  // Delegated to the tab: the panels are built after the first fetch.
+  $('tab-models').addEventListener('click', async (e) => {
     const b = e.target.closest('[data-act]');
     if (!b) return;
     const box = b.closest('[data-entry]');

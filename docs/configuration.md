@@ -6,8 +6,9 @@ Where yasdig keeps its files, how it finds models, and every setting it reads. T
 
 ### Get a model
 
-**The Models tab is the easy way.** It lists one recommended set per family —
-the model and every file it needs beside it, with sizes — marks what you already
+**The Models tab is the easy way.** Its rail lists the families by category, each
+opening a panel with its recommended set — the model and every file it needs beside
+it, with sizes; open two side by side to compare. It marks what you already
 have, and downloads the rest into the right folders with progress, cancel and
 resume. A part you already have under another name is recognised by its header and
 not downloaded again. It runs `curl`, which ships with Windows 10 and later and with

@@ -28,7 +28,7 @@ import { initBoard } from './board.js';
 import { initConvert } from './convert.js';
 import { initSettings, layoutSettingsTab } from './settings.js';
 import { initHelp, openHelp } from './help.js';
-import { initModels } from './getmodels.js';
+import { initModels, layoutModelsTab } from './getmodels.js';
 import { initModelSettings } from './modelsettings.js';
 import { stopPlayback } from './player.js';
 import './prompt-box.js';
@@ -71,6 +71,7 @@ function showTab(name) {
   if (name === 'image') layoutImageTab();
   if (name === 'video') layoutVideoTab();
   if (name === 'settings') layoutSettingsTab();
+  if (name === 'models') layoutModelsTab();
   // Re-read on entry: a storyboard or another browser tab may have added one.
   if (name === 'cast') loadCast();
   // Nothing is playing on a tab nobody is looking at. A 24 fps canvas timer is
