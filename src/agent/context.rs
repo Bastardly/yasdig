@@ -152,8 +152,8 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                 v.label,
                 v.width,
                 v.height,
-                v.shot_seconds(),
-                v.frames,
+                v.longest_seconds(),
+                v.longest(),
                 v.fps
             ));
         }
@@ -461,7 +461,10 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
         }
         Mode::Story => {
             let refs = t.video.as_ref().is_some_and(|v| v.references);
-            let secs = t.video.as_ref().map_or(5.0, |v| v.shot_seconds());
+            // A typical shot, for counting shots off a length the person
+            // gives; the longest one may run is `seconds`' cap.
+            let longest = t.video.as_ref().map_or(5.0, |v| v.longest_seconds());
+            let secs = longest.min(3.0);
             let mut text = String::from("Write the storyboard for a short film, as the person asked.");
             if let Some(saved) = library_text(&t.library) {
                 text.push_str(&saved);
@@ -487,8 +490,10 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                  in.\n\
                  `every`: the film's look in a few words (style, light, colour), put in front of every shot.\n\
                  A shot's `text` says what happens, in the present tense, naming who is in it.\n\
-                 `seconds`: how long the shot's action takes, at most {:.1}: a glance is short, a walk across a \
-                 room long.",
+                 `seconds`: how long the shot's action takes at a natural pace, at most {:.1}. Add up its \
+                 actions: a look or a smile 1-2 s, a step or a turn 2 s, someone walking into frame 2-3 s, kneeling, \
+                 sitting down or standing up 2 s, crossing a room 3-4 s. \"She walks into frame and kneels by the \
+                 oasis\" is about 5 s. An action longer than that is two shots.",
                 secs,
                 (10.0 / secs.max(0.1)).round().max(1.0),
                 crate::pipeline::MAX_SHOTS,
@@ -498,7 +503,7 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                     "it starts from a picture drawn first, with the cast it names."
                 },
                 crate::config::MAX_REFERENCES,
-                secs,
+                longest,
             ));
             let attached = own.len();
             if attached > 0 {

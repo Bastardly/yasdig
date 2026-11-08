@@ -154,9 +154,38 @@ fn asks_for_whole_cast(text: &str) -> bool {
     })
 }
 
+/// How long a shot's words take to happen, at least: a beat to read the
+/// frame, then each action in turn. Actions are the clauses the text chains
+/// ("walks in, then kneels by the oasis" is two), and one that brings someone
+/// in, across or down — entering, walking, kneeling, sitting — takes longer
+/// than a glance. A floor under the agent's own `seconds`, which small models
+/// set to a second whatever the shot holds.
+pub fn action_seconds(text: &str) -> f32 {
+    const SLOW: [&str; 26] = [
+        "enter", "walk", "arriv", "appear", "shows up", "show up", "comes in", "come in", "into the frame",
+        "into frame", "across", "kneel", "sits", "sit down", "stand", "climb", "crouch", "lies down", "lie down",
+        "turns around", "turn around", "runs", "pick", "opens", "leaves", "steps",
+    ];
+    let lower = text.to_lowercase();
+    let clauses: Vec<&str> = lower
+        .split([',', ';', '.', '!', '?'])
+        .flat_map(|c| c.split(" and "))
+        .flat_map(|c| c.split(" then "))
+        .flat_map(|c| c.split(" before "))
+        .flat_map(|c| c.split(" after "))
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .collect();
+    let mut secs: f32 = 1.0;
+    for c in &clauses {
+        secs += if SLOW.iter().any(|w| c.contains(w)) { 2.0 } else { 1.0 };
+    }
+    secs.max(2.0)
+}
+
 /// A video model as a film needs it described: what its shots can do, and
 /// the size and length the Video tab gives each one.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct VideoView {
     pub name: String,
     pub family: &'static str,
@@ -195,16 +224,32 @@ impl VideoView {
         self.frames as f32 / self.fps.max(1) as f32
     }
 
-    /// A story's `seconds` for a shot as its frame count: at most the
-    /// Video tab's length, on the model's grid as the engine rounds it.
-    /// Nothing for none, so the row shows the model's.
-    pub fn frames_for(&self, seconds: f32) -> Option<u32> {
-        if !seconds.is_finite() || seconds <= 0.0 {
-            return None;
-        }
-        let family = crate::config::VideoFamily::ALL.into_iter().find(|f| f.as_str() == self.family)?;
-        let want = (seconds * self.fps.max(1) as f32).round() as u32;
-        Some(family.align_frames(want.clamp(1, self.frames.max(1))))
+    fn video_family(&self) -> Option<crate::config::VideoFamily> {
+        crate::config::VideoFamily::ALL.into_iter().find(|f| f.as_str() == self.family)
+    }
+
+    /// The most frames a storyboard shot may run: the family's
+    /// [`longest_shot`](crate::config::VideoFamily::longest_shot), or the
+    /// Video tab's length when that is longer.
+    pub fn longest(&self) -> u32 {
+        self.video_family().map_or(self.frames, |f| f.longest_shot().max(self.frames))
+    }
+
+    pub fn longest_seconds(&self) -> f32 {
+        self.longest() as f32 / self.fps.max(1) as f32
+    }
+
+    /// A storyboard shot's frame count: the story's `seconds`, but never
+    /// less than its words need ([`action_seconds`] — a small model asked for
+    /// a length writes a second for anything), at most [`longest`], on the
+    /// model's grid as the engine rounds it.
+    pub fn frames_for(&self, seconds: f32, text: &str) -> Option<u32> {
+        let family = self.video_family()?;
+        let asked = if seconds.is_finite() { seconds.max(0.0) } else { 0.0 };
+        let want = (asked.max(action_seconds(text)) * self.fps.max(1) as f32).round() as u32;
+        let top = self.longest();
+        // Rounding up (H3's grid) must not pass the top.
+        Some(family.align_frames(want.clamp(1, top)).min(top))
     }
 }
 
@@ -478,6 +523,20 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(offered(lib(), &chat), vec![saved("c2", "Rain")]);
+    }
+
+    #[test]
+    fn a_shot_runs_as_long_as_its_actions_take() {
+        assert_eq!(action_seconds("A woman shows up in the frame and then kneels beside the oasis."), 5.0);
+        assert_eq!(action_seconds("Close on Leo's face as he reads the letter."), 2.0);
+        assert_eq!(action_seconds("She smiles, looks up, and laughs."), 4.0);
+        assert_eq!(action_seconds(""), 2.0);
+        // On LTX at 24 fps the oasis shot is 5 s whatever the agent asked, not
+        // the 33 frames a new row starts at.
+        let ltx = VideoView { family: "ltx_2_5", frames: 33, fps: 24, ..Default::default() };
+        assert_eq!(ltx.frames_for(0.7, "A woman shows up in the frame and then kneels beside the oasis."), Some(113));
+        assert_eq!(ltx.frames_for(30.0, "She waits."), Some(121), "at most the longest shot");
+        assert!((ltx.longest_seconds() - 5.04).abs() < 0.01);
     }
 
     #[test]

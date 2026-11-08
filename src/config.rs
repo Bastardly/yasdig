@@ -1873,6 +1873,22 @@ impl VideoFamily {
         }
     }
 
+    /// The longest one shot of this family is written for, on its grid: about
+    /// five seconds, the length each is trained at (Wan's 81 at 16 fps and the
+    /// 5B's 121 at 24; LTX and H3 are held to the same, since a shot of this
+    /// size runs out of memory a few seconds in — a longer action is two shots).
+    /// What a storyboard may ask of a shot; the Video tab's Frames is only
+    /// where a new row starts, 33 by default — 1.4 s at 24 fps, which once
+    /// capped every storyboard shot and squeezed "she walks in and kneels"
+    /// into a second.
+    pub fn longest_shot(self) -> u32 {
+        match self {
+            VideoFamily::Wan22A14b | VideoFamily::Wan21Vace | VideoFamily::WanDense => 81,
+            VideoFamily::Wan22Ti2v5b | VideoFamily::Ltx23 | VideoFamily::Ltx25 => 121,
+            VideoFamily::MinimaxH3 => self.align_frames(120),
+        }
+    }
+
     /// The frame grid as data, so the page can round exactly the way
     /// [`VideoFamily::align_frames`] does.
     ///

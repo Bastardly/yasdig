@@ -1105,6 +1105,7 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
                 unknown.push(w);
             }
         }
+        let frames = video.frames_for(s.seconds, &text);
         let mut shot = FilmShot {
             text,
             cast: names,
@@ -1112,7 +1113,7 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
             lines,
             sound: plain(&s.sound),
             music: plain(&s.music),
-            frames: video.frames_for(s.seconds),
+            frames,
             ..Default::default()
         };
         if let Some(n) = recut(said.last().map_or(&[][..], |p| p.as_slice()), &mut shot, k) {
@@ -1945,9 +1946,10 @@ mod tests {
         b["shots"][1]["seconds"] = json!(60.0);
         story(&mut c, &t, b);
         let frames: Vec<Option<u32>> = c.film.as_ref().unwrap().shots.iter().map(|s| s.frames).collect();
-        // 48 frames rounds up onto H3's 17k+5; a minute is capped at the tab's 121 (→ 124).
-        assert_eq!(frames, [Some(56), Some(124), None], "no seconds is the model's length");
-        assert_eq!(board_rows(c.film.as_ref().unwrap(), t.video.as_ref())["shots"][0]["frames"], 56);
+        // "Mara opens the door" asked 2 s and needs 3 (72 → H3's 73); a minute
+        // is capped at the longest a shot runs; no seconds is what its words need.
+        assert_eq!(frames, [Some(73), Some(124), Some(56)]);
+        assert_eq!(board_rows(c.film.as_ref().unwrap(), t.video.as_ref())["shots"][0]["frames"], 73);
     }
 
     #[test]
