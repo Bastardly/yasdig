@@ -3,7 +3,7 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
-## Unreleased
+## 0.9.0 — 2026-11-08
 
 ### Changed
 
