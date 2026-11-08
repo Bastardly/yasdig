@@ -114,6 +114,7 @@
   --panel-w: 300px;      /* a floating panel in Refine & adjust */
   --rail-w: 130px;       /* that dialog's rail of panel toggles */
   --ws-rail-w: 150px;    /* the Image and Video tabs' rail: longer labels */
+  --gm-rail-w: 220px;    /* the Models tab's: family names, a count, a mark */
   --ws-panel-w: 380px;   /* their panels: forms, wider than the dialog's */
   --shot-w: 300px;       /* one shot's card in the Shots panel's strip */
   --shot-common-w: 640px; /* Shots' Every shot and negative, however wide the panel */
@@ -1394,10 +1395,11 @@ a:hover { color: var(--accent-hi); }
    entry. Wider panels than the other workspaces': a card's file table has
    three columns. The file table borrows `.helptable`; its first column is a
    slot name, not a third of the width. */
-#tab-models { --fpanel-w: min(560px, 80vw); }
+#tab-models { --fpanel-w: min(560px, 80vw); --railw: var(--gm-rail-w); }
 .gmstage { align-items: flex-start; justify-content: flex-start; }
 .gmintro { max-width: 520px; margin-left: auto; }
-.gmrail .railbtn { flex-direction: column; align-items: flex-start; text-align: left; gap: 2px; }
+/* One line each where it fits: the name left, its count or mark right. */
+.gmrail .railbtn { justify-content: space-between; flex-wrap: wrap; text-align: left; gap: 2px var(--sp-2); }
 .gmrail .railtitle { margin-top: var(--sp-2); }
 .gmrail .railtitle:first-child { margin-top: 0; }
 .gmrail .railbtn .meta { font-weight: 400; }
