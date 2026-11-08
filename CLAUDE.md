@@ -305,7 +305,7 @@ Break silently:
 
 ## The dock
 
-Convert's and Settings' columns end in `<div class="dock">` (`position: sticky;
+Settings' columns end in `<div class="dock">` (`position: sticky;
 bottom: 0`): error box, progress, `.runstop`, amber button. A dock with nothing
 showing hides itself by CSS. The workspaces and the Refine & adjust dialog have a
 rail foot and a status card instead (same rules for the preview and the caps); every
@@ -765,7 +765,7 @@ baseline) reloads the model lists; `onDownloads` refetches `/catalog` — which 
 only while the Models tab shows, plus once after activity stops (a dialog cancel).
 A failure stays listed until retried or `POST /downloads/dismiss`.
 
-Page: the tab is a **workspace**: `#gmrail` has a `.railtitle` per category
+Page: the tab is a **workspace**: `#gmrail` has a `details.fold` per section (Installed, then each category; `rememberFolds`, `gmfold-<id>`; `openModels` opens the fold holding its button)
 (`categories()` in `getmodels.js`) and a button per family, `panel-gm-<family>` (or
 `gm-upscaler`/`gm-agent`, `SINGLE`) a floating panel of its cards. **Built once from the
 first `/catalog`** (`build()`; the catalog is compiled in), then a poll rewrites only
@@ -1474,7 +1474,7 @@ only `js/app.js`.
 | `shots.js` | which Shots rows the clip on the stage has (`shotState`) |
 | `clipview.js` / `export.js` | the clip dialog; Download's WebCodecs encode |
 | `mp4mux.js` / `webmmux.js` / `gifenc.js` | the download containers and GIF, pure |
-| `convert.js` | Convert tab |
+| `convert.js` | the Models tab's Convert panel (`loadConvertModels`, reloaded by `loadInstalled`) |
 | `getmodels.js` | Models tab, `openModels` |
 | `prompt-box.js` / `prompt-weight.js` | the custom element; pure weighting maths |
 | `help.js` | Help tab `TOPICS` |
@@ -2092,7 +2092,9 @@ from `family` goes on `VideoModelDto`.
     JPEG) handle either. Frames come out of the AVI (`/outputs/{stem}/frames/{k}.jpg`,
     one parsed file cached, `OUTPUT_CLIP`). The source picker filters `video`, and
     Refine & adjust's ←/→ steps over them.
-- **Convert tab** (`src/convert.rs`, `-M convert`): a file's on-disk type isn't its run
+- **Convert** (`src/convert.rs`, `-M convert`; the Models tab's `#panel-gm-convert`,
+  static markup, its rail button in the Tools fold after Installed (`build()`) — file, type, the
+  button; role/estimate/dest are the selects' `title`s): a file's on-disk type isn't its run
   cost — Vulkan has no fp8 matmul, so `Linear::forward` casts to BF16 in-graph; `q4_K`
   is the first type actually multiplied.
   - **The component flag renames tensors** (`--diffusion-model` →

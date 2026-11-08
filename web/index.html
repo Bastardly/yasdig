@@ -17,7 +17,6 @@
     <button type="button" class="btn btn-choice tab" data-tab="video">Video</button>
     <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
     <button type="button" class="btn btn-choice tab" data-tab="cast">Cast</button>
-    <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
     <button type="button" class="btn btn-choice tab" data-tab="models">Models</button>
     <button type="button" class="btn btn-choice tab" data-tab="help">Help</button>
     <button type="button" class="btn btn-choice tab" data-tab="settings">Settings</button>
@@ -906,62 +905,6 @@
   </div>
   </div>
 
-  <!-- Convert: requantize a file you already have, rather than downloading a
-       different copy of it. The whole tab is driven by what `crate::discover`
-       already read out of each file's header — the role is what picks the
-       `sd-cli` component flag, and picking the wrong one produces a valid file
-       full of misnamed tensors. So the page never names a path or a flag; it
-       chooses from what /convert-models offered. -->
-  <div class="layout" id="tab-convert" hidden>
-  <div class="card col-controls">
-    <!-- Folds for the look the other tabs share; both open, since the form is
-         short and both halves are needed for every conversion. -->
-    <details id="cfold-file" class="fold" open>
-      <summary>Model file</summary>
-      <label for="csource">File</label>
-      <select id="csource"></select>
-      <p class="sub" id="crole"></p>
-      <p class="sub" id="cnote"></p>
-    </details>
-
-    <details id="cfold-type" class="fold" open>
-      <summary>Convert to</summary>
-      <label for="ctype">Weight type</label>
-      <select id="ctype"></select>
-      <p class="sub" id="ctypenote"></p>
-      <p class="sub" id="csize"></p>
-      <p class="sub" id="cdest"></p>
-    </details>
-    <div class="dock">
-      <div id="cerr" class="err"></div>
-      <p class="sub" id="cprog"></p>
-      <!-- Same Stop as the video tab and for the same reason: there is one child
-           process, so stopping it means killing it. A half-written GGUF is
-           removed by Engine::convert rather than left for discovery to find. -->
-      <div class="runstop">
-        <button id="cstop" class="btn btn-danger btn-block" hidden>Stop</button>
-      </div>
-      <button id="cgo" class="btn btn-run btn-block">Convert</button>
-    </div>
-  </div>
-
-  <div class="col-result">
-    <div class="card">
-      <b>What this is for</b>
-      <p class="sub">A file's type on disk is not what it costs to run. When the
-      backend can't multiply the stored type — every Vulkan device today reports
-      no fp8 — sd.cpp casts each layer's weights at run time instead, so an fp8
-      checkpoint executes as if it were BF16 and needs about twice its own size.
-      Converting to a type the backend multiplies natively is smaller
-      <em>and</em> faster.</p>
-      <p class="sub">The result is written beside its source, so it is
-      discovered on the next start with no config edit. Nothing is deleted — the
-      original stays where it is.</p>
-      <div id="cresult"></div>
-    </div>
-  </div>
-  </div>
-
   <!-- ==================== Models ====================
        The catalog the server compiled in (`src/catalog.toml`), one card per
        recommended set, with what each file is on this disk. The page sends a
@@ -980,6 +923,31 @@
       <div id="gmerr" class="err"></div>
     </div>
   </div>
+  <!-- Convert: requantize a file you already have, rather than downloading a
+       different copy of it (convert.js). What each file is comes from
+       `crate::discover`, which picks the sd-cli component flag — the page never
+       names a path or a flag; it chooses from what /convert-models offered.
+       Its rail button sits under Installed; the result goes beside its source. -->
+  <section class="fpanel" id="panel-gm-convert" aria-label="Convert" hidden>
+    <header class="fphead"><b>Convert</b><button type="button" class="fpclose" aria-label="Close Convert">&times;</button></header>
+    <div class="fpbody">
+      <label for="csource">File</label>
+      <select id="csource"></select>
+      <label for="ctype">Weight type</label>
+      <select id="ctype"></select>
+    </div>
+    <div class="fpfoot">
+      <div id="cerr" class="err"></div>
+      <p class="sub" id="cprog"></p>
+      <div id="cresult"></div>
+      <!-- One child process, so Stop kills it; Engine::convert removes the
+           half-written GGUF. -->
+      <div class="runstop">
+        <button id="cstop" class="btn btn-danger btn-block" hidden>Stop</button>
+      </div>
+      <button id="cgo" class="btn btn-run btn-block">Convert</button>
+    </div>
+  </section>
   <!-- A panel per family, and one each for upscalers and agent models,
        built by `getmodels.js` from the first `/catalog` and placed after
        this comment. -->

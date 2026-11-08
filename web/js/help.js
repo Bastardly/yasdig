@@ -68,7 +68,7 @@ export const TOPICS = [
       <b>Q4</b> is about a quarter of the size and starts to lose fine detail — the
       way to fit a 20B model on one card.</p>
       <p><b>Avoid fp8 files</b> on this app. AMD cards can’t compute in fp8, so an
-      fp8 file runs at twice its size. The <b>Convert</b> tab turns one into a
+      fp8 file runs at twice its size. <b>Models → Convert</b> turns one into a
       GGUF that runs at its real size.</p>
 
       <h3>Where to find more</h3>
@@ -506,7 +506,7 @@ export const TOPICS = [
       a bit less again, and <b>Q4</b> about a quarter — with Q8 indistinguishable
       and Q4 starting to lose fine detail. <b>fp8 files run at twice their
       size</b> on AMD cards. The <b>Models</b> tab has GGUF sets for every
-      family, and the <b>Convert</b> tab turns a file you have into one.</p>
+      family, and its <b>Convert</b> panel turns a file you have into one.</p>
 
       <h3>After a run</h3>
       <p>When any weights weren’t on the card, a line under the timings says

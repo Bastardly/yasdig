@@ -58,7 +58,7 @@ pub fn f32_to_f16(x: f32) -> u16 {
     sign | v as u16
 }
 
-/// What a conversion did, for the Convert tab's result line.
+/// What a conversion did, for Convert's result line.
 pub struct Converted {
     pub tensors: usize,
     pub halved: usize,

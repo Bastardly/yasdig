@@ -847,7 +847,7 @@ Gemma 4 with the projection inside (a stock Gemma 4 won't do, and is listed grey
 out). The 2.5 card fetches a Q4_K_M of that encoder: on Lightricks' bf16 file 2.5
 can ignore the prompt and draw a stock scene. If you have the bf16 from an earlier
 download, the Video tab says so; get the card's file, or convert the bf16 to q8_0 on
-the Convert tab (about 15 GB, a few minutes). Either is used from then on. 2.5's
+**Models → Convert** (about 15 GB, a few minutes). Either is used from then on. 2.5's
 default video VAE decodes by diffusion, which sd.cpp doesn't run: use the
 `-conv` VAE the card fetches. **Hi-res ×2** (Generation panel, LTX only) draws at the
 size you set, enlarges the latent with LTX's latent upscaler and refines it at twice
@@ -1108,10 +1108,11 @@ long or how detailed the enhanced prompts are.
 
 ## Convert
 
-The third tab requantizes a model file you already have, instead of downloading a
-different copy of it. Pick a file, pick a weight type, press Convert; the result is
-written **beside the original** as a `.gguf`, so it is discovered on the next start with
-no config edit. Nothing is deleted.
+**Models → Convert** (in the rail’s Tools section, under Installed) requantizes a model file you
+already have, instead of downloading a different copy of it. Pick a file, pick a weight
+type, press Convert; the result is written **beside the original** as a `.gguf`, so it
+is discovered with no config edit and listed in Installed. Nothing is deleted. Hover
+the file for what it is and the estimated size, the weight type for what it costs.
 
 This exists because **a file's type on disk is not what it costs to run**. sd.cpp asks
 the backend whether it can multiply the stored type and, when it can't, inserts a cast

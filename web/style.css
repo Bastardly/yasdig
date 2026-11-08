@@ -1400,9 +1400,14 @@ a:hover { color: var(--accent-hi); }
 .gmintro { max-width: 520px; margin-left: auto; }
 /* One line each where it fits: the name left, its count or mark right. */
 .gmrail .railbtn { justify-content: space-between; flex-wrap: wrap; text-align: left; gap: 2px var(--sp-2); }
-.gmrail .railtitle { margin-top: var(--sp-2); }
-.gmrail .railtitle:first-child { margin-top: 0; }
+/* The rail's sections are folds: the heading in the folds' colour, so it never
+   reads as one more button. */
+.gmrail { gap: 0; }
+.gmfold:first-child { padding-top: 0; }
+.gmfold:last-child { border-bottom: 0; }
 .gmrail .railbtn .meta { font-weight: 400; }
+/* Convert's footer: the progress and result lines only while they say something. */
+#panel-gm-convert .fpfoot > .sub:empty, #panel-gm-convert .fpfoot > #cresult:empty { display: none; }
 /* Installed: a row per file — what it is, what it serves — and its buttons. */
 .gmitems { list-style: none; margin: 0; padding: 0; }
 .gmitem { display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2) 0; border-top: var(--line); }

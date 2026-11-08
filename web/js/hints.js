@@ -529,7 +529,7 @@ const HELP = [
     text: 'Quantize the weights as they load, e.g. q8_0 or q4_K — sd-cli’s '
         + '--type. It trades a little quality for memory and, on a backend that '
         + 'cannot multiply the stored type, for speed. Leave it empty to run the '
-        + 'file as it is on disk. The Convert tab does the same thing once, '
+        + 'file as it is on disk. Models → Convert does the same thing once, '
         + 'permanently, instead of on every load.' },
   { ids: ['setargs'],
     text: 'Flags passed straight to sd-cli, one per line, after everything '

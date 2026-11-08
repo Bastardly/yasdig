@@ -64,7 +64,6 @@ function showTab(name) {
   $('tab-outputs').hidden = name !== 'outputs';
   $('tab-cast').hidden = name !== 'cast';
   $('tab-video').hidden = name !== 'video';
-  $('tab-convert').hidden = name !== 'convert';
   $('tab-models').hidden = name !== 'models';
   $('tab-help').hidden = name !== 'help';
   $('tab-settings').hidden = name !== 'settings';

@@ -1,6 +1,7 @@
-import { $, esc, getJSON, post } from './dom.js';
+import { $, esc, getJSON, post, rememberFolds } from './dom.js';
 import { floatPanels } from './panels.js';
 import { forget, infoButton } from './notes.js';
+import { loadConvertModels } from './convert.js';
 import { loadModels } from './image.js';
 import { loadVideoModels } from './video.js';
 import { loadAgents } from './assistant.js';
@@ -169,13 +170,21 @@ const panelHtml = (id, label) => `
 function build() {
   const gs = groups();
   const inv = installed.groups;
-  $('gmrail').innerHTML = '<p class="railtitle">Installed</p>'
-    + inv.map((g) => `<button type="button" class="btn btn-choice railbtn" data-panel="gm-installed-${g.id}">`
-      + `<span>${esc(g.title)}</span><span class="meta" data-gmcount="${g.id}"></span></button>`).join('')
-    + gs.map((c) => `<p class="railtitle">${c.title}</p>`
-    + c.panels.map((g) => `<button type="button" class="btn btn-choice railbtn" data-panel="gm-${g.id}">`
-      + `<span>${esc(g.label)}</span>`
-      + `${isRecommended(g) ? '<span class="gmbadge">Recommended</span>' : ''}</button>`).join('')).join('');
+  // A fold per section, so one can be put away: the rail holds two dozen
+  // buttons. Open the first time; after that as this browser left it.
+  const fold = (id, title, buttons) => `<details class="fold gmfold" id="gmfold-${id}" open>`
+    + `<summary>${esc(title)}</summary><div class="railbtns">${buttons}</div></details>`;
+  $('gmrail').innerHTML = fold('installed', 'Installed',
+    inv.map((g) => `<button type="button" class="btn btn-choice railbtn" data-panel="gm-installed-${g.id}">`
+      + `<span>${esc(g.title)}</span><span class="meta" data-gmcount="${g.id}"></span></button>`).join(''))
+    // What acts on the files Installed lists: requantizing one, today.
+    + fold('tools', 'Tools',
+      '<button type="button" class="btn btn-choice railbtn" data-panel="gm-convert"><span>Convert</span></button>')
+    + gs.map((c) => fold(c.id, c.title,
+      c.panels.map((g) => `<button type="button" class="btn btn-choice railbtn" data-panel="gm-${g.id}">`
+        + `<span>${esc(g.label)}</span>`
+        + `${isRecommended(g) ? '<span class="gmbadge">Recommended</span>' : ''}</button>`).join(''))).join('');
+  rememberFolds($('gmrail'));
   $('tab-models').insertAdjacentHTML('beforeend',
     inv.map((g) => panelHtml(`installed-${g.id}`, g.title)).join('')
     + gs.flatMap((c) => c.panels).map((g) => panelHtml(g.id, g.label)).join(''));
@@ -189,6 +198,7 @@ function build() {
     // the two opened the first time never sit on each other.
     defs: [
       ...inv.map((g, i) => ({ id: `gm-installed-${g.id}`, open: g.id === 'checkpoints', both: true, stack: i })),
+      { id: 'gm-convert', stack: 2 },
       ...gs.flatMap((c) => c.panels.map((g, i) => ({ id: `gm-${g.id}`, open: g.id === first, both: true, stack: 3 + (i % 6) }))),
     ],
   });
@@ -265,6 +275,9 @@ async function deleteItem(id, row) {
 export async function loadInstalled() {
   try {
     installed = await getJSON('/installed');
+    // Convert's list is the same files; a download, a delete or a conversion
+    // moves both.
+    loadConvertModels();
   } catch (e) {
     $('gmerr').textContent = 'Could not list the installed models: ' + e;
     // The family panels still build; Installed has no groups this time.
@@ -321,7 +334,12 @@ async function refresh() {
 // `upscaler` and `agent` name those categories' panels.
 export function openModels(family) {
   document.querySelector('.tab[data-tab="models"]')?.click();
-  refresh().then(() => wsPanels?.show(`gm-${family}`));
+  refresh().then(() => {
+    // Its rail button too, should its section be folded away.
+    const fold = document.querySelector(`[data-panel="gm-${family}"]`)?.closest('details');
+    if (fold) fold.open = true;
+    wsPanels?.show(`gm-${family}`);
+  });
 }
 
 // `showTab`: a hidden tab has no size to place panels against.

@@ -8,6 +8,8 @@ What changed in each release of yasdig. Each release's executables are on the
 ### Changed
 
 - **Get models is now Models**, and its introduction is two sentences.
+- **Convert is in the Models tab**, under Tools in the rail: the file, the weight
+  type and the button. The Convert tab is gone.
 - **Three files download at once**, so a card's small files no longer wait behind its
   big one. Cancel can stop a single file.
 

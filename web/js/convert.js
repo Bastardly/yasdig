@@ -1,8 +1,14 @@
-import { $, esc, getJSON, post, rememberFolds } from './dom.js';
+import { $, esc, getJSON, post } from './dom.js';
 import { setBusy, setIdle, cancelRun } from './busy.js';
 import { soonJobs } from './jobs.js';
+import { loadInstalled } from './getmodels.js';
 
 // ---- Convert ----------------------------------------------------------------
+//
+// A panel of the Models tab (`#panel-gm-convert`, its rail button under
+// Installed): the file, the weight type, Convert. The size the result will be
+// is in the file's option and the type's tooltip; the result line says what it
+// came to.
 
 // The list the server published: which files exist, what each one is, and what
 // every offered type would cost. The page does no arithmetic on any of it — the
@@ -23,7 +29,7 @@ function currentConvertFile() {
   return cfiles.find((f) => f.id === $('csource').value) || null;
 }
 
-async function loadConvertModels() {
+export async function loadConvertModels() {
   try {
     const data = await getJSON('/convert-models');
     ctypes = data.types || [];
@@ -60,31 +66,14 @@ function syncConvert() {
   const f = currentConvertFile();
   const ty = $('ctype').value;
   const t = ctypes.find((x) => x.name === ty);
-  $('ctypenote').textContent = t ? `${t.bits} bits per weight — ${t.note}` : '';
-  if (!f) {
-    $('crole').textContent = '';
-    $('cnote').textContent = '';
-    $('csize').textContent = '';
-    $('cdest').textContent = '';
-    return;
-  }
-  $('crole').textContent = `${f.role} · stored as ${f.dtype} · goes in as ${f.slot}`;
-  $('cnote').textContent = f.note || '';
+  // What the panel used to spell out in lines, kept as the controls' titles.
+  $('ctype').title = t ? `${t.bits} bits per weight — ${t.note}` : '';
+  if (!f) { $('csource').title = ''; return; }
   const after = f.estimates[ty];
-  if (after === undefined) {
-    $('csize').textContent = '';
-  } else {
-    // Signed, and shown as a percentage, because the interesting cases go both
-    // ways: q4_K halves an fp8 transformer, and f16 doubles it.
-    const pct = Math.round(((after - f.bytes) / f.bytes) * 100);
-    const dir = pct === 0 ? 'no change' : (pct < 0 ? `${-pct}% smaller` : `${pct}% larger`);
-    $('csize').innerHTML = `<b>${gb(f.bytes)} → ~${gb(after)}</b> (${dir}, estimated)`;
-  }
-  // The destination is shown rather than chosen: it goes beside the source so
-  // discovery finds it, and the server derives it the same way.
   const dot = f.file.lastIndexOf('.');
-  $('cdest').textContent =
-    `Writes ${(dot < 0 ? f.file : f.file.slice(0, dot))}-${ty}.gguf beside the original.`;
+  $('csource').title = `${f.role} · stored as ${f.dtype}${f.note ? ` · ${f.note}` : ''}`
+    + (after === undefined ? '' : `\n${gb(f.bytes)} → ~${gb(after)} as ${ty} (estimated)`)
+    + `\nWrites ${(dot < 0 ? f.file : f.file.slice(0, dot))}-${ty}.gguf beside the original.`;
   $('cgo').disabled = crunning || f.dtype === ty;
 }
 
@@ -114,9 +103,9 @@ async function startConvert() {
       `<div class="meta spaced"><b>Done in ${mins} min.</b><br>` +
       `${esc(r.out)}<br>${gb(r.source_bytes)} → <b>${gb(r.bytes)}</b>${esc(off)}<br>` +
       (r.folded ? `Folded ${r.folded} fp8 scales into their weights.<br>` : '') +
-      `It is picked up on the next restart — the model list is read at startup.</div>`;
-    // So the new file appears in the list, and the old one now shows a sibling.
-    loadConvertModels();
+      `It is in Installed, beside the original.</div>`;
+    // Installed lists it, and reloads this list too.
+    loadInstalled();
   } catch (e) {
     const msg = String(e.message || e);
     $('cerr').textContent = msg.includes('cancelled by request')
@@ -133,7 +122,6 @@ async function startConvert() {
 }
 
 export function initConvert() {
-  rememberFolds($('tab-convert'));
   $('cgo').addEventListener('click', startConvert);
   $('cstop').addEventListener('click', () => cancelRun('cstop', 'convert'));
   $('csource').addEventListener('change', () => {

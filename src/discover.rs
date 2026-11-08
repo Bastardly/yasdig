@@ -1796,7 +1796,7 @@ pub fn video_components(family: VideoFamily, found: &[Found], dir: &Path) -> Vec
             // The conventional file first when it is here: LTX-2.3's and
             // 2.5's upscalers fit either, and only the name the catalog gave
             // each says which belongs to which. Then a GGUF over a
-            // safetensors: the Convert tab writes its copy beside the source,
+            // safetensors: Convert writes its copy beside the source,
             // and LTX-2.5's bf16 encoder ignored prompts its q8_0 copy followed.
             let fits = |f: &&Found| (slot.fits)(&f.role);
             let named = |f: &&Found| f.path.file_name().is_some_and(|n| n == slot.file);

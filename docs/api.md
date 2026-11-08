@@ -494,7 +494,7 @@ needs a Vulkan device and nothing else.
   purpose — the page rounds the frame count to show a duration and the command builder
   rounds it to run the model, and two implementations of `4k+1` are how those start
   disagreeing.
-- `GET /convert-models` — `{types, files}` for the Convert tab. `types` is the weight
+- `GET /convert-models` — `{types, files}` for Models → Convert. `types` is the weight
   types `--type` accepts, each with its real bits-per-weight (`q4_K` is 4.5, `q6_K` is
   6.5625 — not the round numbers the names suggest); `files` is every model file either
   models dir holds that `-M convert` can be pointed at, each with the role read from its

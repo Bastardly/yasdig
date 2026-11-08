@@ -168,7 +168,7 @@ rest and can go anywhere under `models/`:
 
 | file | where to get it |
 |---|---|
-| the model | SFT or Base from [Comfy-Org](https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/diffusion_models): `int8_convrot` (5.4 GB, the Models tab's default — sd.cpp multiplies it as INT8, and the Convert tab leaves it alone) or `bf16` (10.2 GB); or leejet's [GGUF](https://huggingface.co/leejet/MOSS-Image-SFT-GGUF/tree/main) (`Q8_0`, 5.7 GB) |
+| the model | SFT or Base from [Comfy-Org](https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/diffusion_models): `int8_convrot` (5.4 GB, the Models tab's default — sd.cpp multiplies it as INT8, and Convert leaves it alone) or `bf16` (10.2 GB); or leejet's [GGUF](https://huggingface.co/leejet/MOSS-Image-SFT-GGUF/tree/main) (`Q8_0`, 5.7 GB) |
 | the text encoder — Qwen3.5-9B | [GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/main) (`Q8_0`, 9.5 GB; not an `mmproj` file) |
 | the tokenizer | [`tokenizer.json`](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/tree/main/tokenizer) |
 | the VAE — Flux.2's | the same file as Flux.2 Klein's, above |
@@ -425,7 +425,7 @@ Every control has a small **(i)** beside its label, with a sentence or two on wh
 setting does and how to choose a value — and, where that is the honest answer, on the
 fact that the value belongs to the *checkpoint* rather than to image generation: a
 turbo model is trained to land in 1–4 steps at CFG 1, where a standard SDXL wants
-around 20 at 5–7. The same icons are on the Convert tab and on the viewer's ten
+around 20 at 5–7. The same icons are on Models → Convert and on the viewer's ten
 sliders.
 
 The interface is static files — `web/index.html`, `web/style.css` and a folder of ES
