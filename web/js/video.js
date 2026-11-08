@@ -348,9 +348,8 @@ export async function castEntry(id) {
   return { stem, voice, name: e.name.trim(), kind: e.kind, look: e.look };
 }
 
-// A shot's *Add cast…*: on a shot that starts fresh (shot 1, a cut) the
-// member's picture and voice too, as `castOnRow` puts them; a continue
-// takes no references, so there only the name.
+// A shot's *Add cast…*, on a shot that starts fresh (shot 1, a cut; a
+// continue has no cast): the member as `castOnRow` puts them.
 function addCastToRow(el) {
   const names = rowCast(el, true);
   chooseCastEntry(async (id) => {
@@ -360,15 +359,12 @@ function addCastToRow(el) {
       const i = rowEls().indexOf(el);
       if (i < 0) return;
       commitTypedCast(el);
-      if (i === 0 || el.dataset.cut === '1') {
-        if (castOnRow(el, c)) {
-          rowsChanged();
-          note.textContent = `Shot ${i + 1} had no room for all of ${c.name}: a shot follows at most 4 pictures and 3 sounds.`;
-          note.classList.add('err');
-          return;
-        }
-      } else if (!rowCast(el).some((n) => same(n, c.name))) {
-        setRowCast(el, [...rowCast(el), c.name]);
+      if (i > 0 && el.dataset.cut !== '1') return;
+      if (castOnRow(el, c)) {
+        rowsChanged();
+        note.textContent = `Shot ${i + 1} had no room for all of ${c.name}: a shot follows at most 4 pictures and 3 sounds.`;
+        note.classList.add('err');
+        return;
       }
       rowsChanged();
     } catch (ex) {
@@ -515,7 +511,7 @@ export function drawShots(rows) {
           <div class="withbtn">
             <input type="text" class="shotcastadd" placeholder="Type a name, or Add cast…"
               aria-label="Add someone to shot ${k + 1}">
-            <button type="button" class="btn shotcastpick" title="Someone from the Cast tab: on a shot that starts fresh, their picture and voice come too">Add cast…</button>
+            <button type="button" class="btn shotcastpick" title="Someone from the Cast tab: on H3 their picture and voice come too">Add cast…</button>
           </div>
         </div>
         <div class="shotsoundrows" hidden>
@@ -779,8 +775,9 @@ function syncShots() {
     el.querySelector('.shotwhy').hidden = !refsOk || fresh;
     el.querySelector('.shotsoundrows').hidden = !m?.sounds;
     // Who is in it decides a storyboard's references and first frames on any
-    // model; off a board, only H3 reads it.
-    el.querySelector('.shotcastrow').hidden = !m?.sounds && !board;
+    // model; off a board, only H3 reads it. Never on a continue: it starts
+    // from the last frame, whoever that shows.
+    el.querySelector('.shotcastrow').hidden = (!m?.sounds && !board) || !fresh;
     drawRowCast(el);
     // Shot 1's image is the clip's first frame; a cut's is how Wan cuts.
     const keyBtn = el.querySelector('.shotkey');
@@ -1683,11 +1680,13 @@ export function initVideo() {
       row.querySelector('.shotseed').value = randomSeed();
     } else if (e.target.closest('[data-start]')) {
       row.dataset.cut = e.target.closest('[data-start]').dataset.start;
-      // A shot that goes on from a frame can't follow references, or start
-      // from a picture of its own.
+      // A shot that goes on from a frame can't follow references, start
+      // from a picture of its own, or name a cast: it has whoever the frame
+      // shows.
       if (row.dataset.cut === '0') {
-        for (const k of ['refs', 'subjects', 'audio', 'voices']) row.dataset[k] = '[]';
+        for (const k of ['refs', 'subjects', 'audio', 'voices', 'cast']) row.dataset[k] = '[]';
         row.dataset.key = '';
+        row.querySelector('.shotcastadd').value = '';
       }
     } else if (e.target.closest('.shotkeyup')) {
       uploadFor = row;

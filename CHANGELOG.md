@@ -70,6 +70,9 @@ What changed in each release of yasdig. Each release's executables are on the
 - Cast pictures and voices go on a shot only where the video model follows them (H3).
   On Wan and LTX a cast member is their name, which the prompt and the first frames
   use; the chips no longer show a picture the model never sees.
+- A shot that goes on from the one before has no *Who is in it*: it starts from the
+  last frame, with whoever that shows, so a name there did nothing. Switching a shot to
+  Continue clears it, and the Assistant cuts to bring someone in.
 - An uploaded PNG keeps the settings it carries, so *Settings from a PNG* works on it
   in Outputs. With *Settings inside saved PNGs* off, they are taken out on the way in.
 

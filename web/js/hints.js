@@ -182,8 +182,9 @@ const HELP = [
         + 'one the model runs as plain text-to-video.' },
   { ids: ['vshotcast'],
     text: 'Who is in the shot, by the names Spoken uses: type a name, or Add cast… '
-        + 'for someone from the Cast tab — on a shot that starts fresh their picture '
-        + 'becomes a reference and their voice a sound. Anyone here with no line is '
+        + 'for someone from the Cast tab — on H3 their picture becomes a reference '
+        + 'and their voice a sound. Only shot 1 and a cut have it: a shot that goes '
+        + 'on starts from the last frame, with whoever it shows. Anyone here with no line is '
         + 'told to stay silent, lips closed: MiniMax H3 fills time nobody accounted '
         + 'for with speech nobody wrote.' },
   { ids: ['vshotlines'],

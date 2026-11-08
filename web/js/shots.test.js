@@ -99,10 +99,19 @@ test('what is said, heard or scored, or who is pictured, changed on a done row r
   r[1].lines = [{ who: 'Crab', words: 'Hello', language: '', voiceover: false }];
   r[1].sound = '';
   assert.equal(shotState(r, c, true).done, 2, 'absent and empty alike');
-  for (const change of [{ lines: [] }, { sound: 'waves' }, { music: 'a harp' }, { cast: ['Crab'] }]) {
+  for (const change of [{ lines: [] }, { sound: 'waves' }, { music: 'a harp' }, { cut: true, cast: ['Crab'] }]) {
     const s = shotState([r[0], { ...r[1], ...change }], c, true);
     assert.equal(s.done, 1, JSON.stringify(change));
   }
+});
+
+test('a continue has no cast: none is sent, and an old clip that recorded one is still done', () => {
+  const c = clip('a crab walks', 'it lifts a claw');
+  c.segments[1].cast = ['Crab'];
+  const r = rows('a crab walks', 'it lifts a claw');
+  assert.equal(shotState(r, c, true).done, 2);
+  assert.deepEqual(sentRow({ ...r[1], cast: ['Crab'] }, 1).cast, []);
+  assert.deepEqual(sentRow({ ...r[0], cast: ['Crab'] }, 0).cast, ['Crab'], 'shot 1 keeps its own');
 });
 
 test("shot 1's image is the clip's first frame: another one makes it again", () => {

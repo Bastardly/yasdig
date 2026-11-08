@@ -29,9 +29,10 @@
 const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 // The fields a segment records beyond its words, as one comparable string;
-// absent and empty alike.
-const words = (x) => JSON.stringify([
-  x.cast ?? [],
+// absent and empty alike. A continue's cast is left out: it starts from the
+// last frame, so it has none (clips before that recorded one).
+const words = (x, fresh = true) => JSON.stringify([
+  fresh ? x.cast ?? [] : [],
   (x.lines ?? []).map((l) => [l.who ?? '', l.words ?? '', l.language ?? '', !!l.voiceover]),
   String(x.sound ?? '').trim(),
   String(x.music ?? '').trim(),
@@ -58,7 +59,7 @@ export function sentRow(r, k, take = ALL) {
     key: fresh && !refs.length && !audio.length ? r.key ?? null : null,
     subjects: (r.subjects ?? []).slice(0, refs.length),
     voices: (r.voices ?? []).slice(0, audio.length),
-    cast: said ? r.cast ?? [] : [],
+    cast: said && fresh ? r.cast ?? [] : [],
     lines: said ? r.lines ?? [] : [],
     sound: said ? r.sound ?? '' : '',
     music: said ? r.music ?? '' : '',
@@ -75,7 +76,7 @@ export function rowMatches(row, seg, k, source = null) {
     && (k === 0 || !!row.cut === !!seg.cut)
     && same(row.refs ?? [], seg.references ?? [])
     && same(row.audio ?? [], seg.audio ?? [])
-    && words(row) === words(seg)
+    && words(row, k === 0 || !!row.cut) === words(seg, k === 0 || !!row.cut)
     // A continue's picture is the last frame, whatever the row holds.
     && (k === 0 ? (row.key || null) === (source || null) : !row.cut || (row.key || null) === (seg.keyframe ?? null));
 }

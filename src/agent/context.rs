@@ -482,7 +482,9 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                  same people and place carry on. Shot 1 is never a cut.\n\
                  `cast`: each person, place or thing that must look the same in more than one shot, with its `look` \
                  in words and a `prompt` for its picture: that one subject alone, whole, on a plain background, in \
-                 the film's look. A shot's `cast` names who is in it, at most {}.\n\
+                 the film's look. A shot's `cast` names who is in it, at most {}. A shot that goes on takes no cast of \
+                 its own: its people are the ones its first frame shows, so name only them, and cut to bring anyone \
+                 in.\n\
                  `every`: the film's look in a few words (style, light, colour), put in front of every shot.\n\
                  A shot's `text` says what happens, in the present tense, naming who is in it.",
                 secs,

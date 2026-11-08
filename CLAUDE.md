@@ -594,8 +594,10 @@ shelf, and Close server's clear never reaches it.
   is in it*; Sounds fills *Voice of*.
 - **A shot's *Who is in it* is chips** (`data-cast` on the row, `rowCast`/
   `drawRowCast`; a name still in the box counts via `rowCast(el, true)`). Its
-  *Add cast…* (`addCastToRow`, `castEntry`) is `castOnRow` on a fresh shot, the name
-  alone on a continue; a chip's × is `removeCastFromShots(name, [row])`.
+  *Add cast…* (`addCastToRow`, `castEntry`) is `castOnRow`; a chip's × is
+  `removeCastFromShots(name, [row])`. **A continue has no cast** (it starts from the
+  last frame, whoever that shows): the row hides it, Continue clears it, `sentRow`
+  sends none and `rowMatches` ignores an old clip's.
 - **Unbound, the Cast panel is the rows** (`clipCast`, read off references'
   `subjects`; no state of its own): *Add from cast…* → `addCastToShots` (shot 1 and
   every cut), Remove → `removeCastFromShots` by name. Redrawn on `onRowsChange`
@@ -965,7 +967,7 @@ Break silently:
   hands over to a `Mode::Story` turn (its own schema, `n_predict` 3072), whose board is
   **rewritten whole**, never patched; what survives is matched by the server — a member
   keeps its picture by name and an unchanged look (or when it is the person's), a shot
-  its keyframe when its words, cast and cut are unchanged. **A continue that names someone not in the shot before is made a cut** (`recut_board`, after the board turn and every panel edit, with a note): a continue carries only the last frame, so a return would be drawn from words. **Nothing is drawn unasked, and
+  its keyframe when its words, cast and cut are unchanged. **A continue that names someone not in the shot before is made a cut** (`recut` in `apply_story` against the story's own names, then a continue's `cast` is emptied; `recut_board` after a panel edit, for older boards): a continue carries only the last frame, so a return would be drawn from words. **Nothing is drawn unasked, and
   drawing is optional**: an undrawn member is words, an undrawn first frame a cut from
   words. *Draw the cast* (Cast footer) and *Draw the first frames* (Shots footer,
   `#vframes`) are `/chats/film {draw, frames}` → `board_press_for`; a row's *Draw again*

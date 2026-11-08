@@ -321,6 +321,9 @@ pub fn set_rows(c: &mut Chat, every: Option<&str>, rows: Option<&[RowIn]>) -> Re
                 }
             }
             cast.truncate(crate::config::MAX_REFERENCES);
+            if k > 0 && !row.cut {
+                cast.clear();
+            }
             let (lines, who) = crate::h3prompt::clean_lines(&names, &row.lines);
             for w in who {
                 if !unknown.iter().any(|u| u.eq_ignore_ascii_case(&w)) {
@@ -952,14 +955,13 @@ pub const MAX_CAST: usize = 6;
 /// picture when its name is the same and its look is too — or the picture
 /// is the person's, which the look describes — and a shot keeps its
 /// keyframe when its words, cast and cut are unchanged.
-/// Shot `k` made a cut when it goes on from `before`'s last shot but names
-/// someone that shot doesn't: a continue starts from its last frame and
-/// nothing else, so they would be drawn from words alone, where a cut starts
-/// from their picture (H3's references, Wan's keyframe drawn with the cast).
-/// Its number when it was made one.
-fn recut(before: &[FilmShot], shot: &mut FilmShot, k: usize) -> Option<usize> {
-    let prev = before.get(k.checked_sub(1)?)?;
-    if shot.cut || shot.cast.iter().all(|n| prev.cast.contains(n)) {
+/// Shot `k` made a cut when it goes on from the shot before but names
+/// someone that shot doesn't (`prev`, its names): a continue starts from its
+/// last frame and nothing else, so they would be drawn from words alone, where
+/// a cut starts from their picture (H3's references, Wan's keyframe drawn with
+/// the cast). Its number when it was made one.
+fn recut(prev: &[String], shot: &mut FilmShot, k: usize) -> Option<usize> {
+    if k == 0 || shot.cut || shot.cast.iter().all(|n| prev.contains(n)) {
         return None;
     }
     shot.cut = true;
@@ -972,9 +974,11 @@ fn recut(before: &[FilmShot], shot: &mut FilmShot, k: usize) -> Option<usize> {
 /// shot's cast can make the next one a cut. The note saying which, if any.
 pub fn recut_board(film: &mut Film) -> Option<String> {
     let mut made = Vec::new();
+    // A continue has no cast since the story names none there; a board
+    // from before that still may.
     for k in 1..film.shots.len() {
         let (before, rest) = film.shots.split_at_mut(k);
-        if let Some(n) = recut(before, &mut rest[0], k) {
+        if let Some(n) = recut(&before[k - 1].cast, &mut rest[0], k) {
             made.push(n);
         }
     }
@@ -1067,6 +1071,8 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
     let mut shots: Vec<FilmShot> = Vec::new();
     let mut unknown: Vec<String> = Vec::new();
     let mut recuts: Vec<usize> = Vec::new();
+    // Who the story said each shot so far has, a continue's included.
+    let mut said: Vec<Vec<String>> = Vec::new();
     for s in r.shots.take().unwrap_or_default() {
         let text = plain(&s.text);
         if text.is_empty() {
@@ -1105,8 +1111,14 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
             music: plain(&s.music),
             ..Default::default()
         };
-        if let Some(n) = recut(&shots, &mut shot, k) {
+        if let Some(n) = recut(said.last().map_or(&[][..], |p| p.as_slice()), &mut shot, k) {
             recuts.push(n);
+        }
+        // A continue has whoever its first frame shows; its names were only
+        // for the check above, and the next shot's.
+        said.push(shot.cast.clone());
+        if k > 0 && !shot.cut {
+            shot.cast.clear();
         }
         let mut kept = false;
         if let Some(was) = old.as_ref().and_then(|f| f.shots.get(k)) {
@@ -1888,7 +1900,8 @@ mod tests {
         assert_eq!(f.shots.len(), 3, "an empty shot is no shot");
         assert_eq!(f.shots[0].cast, ["Mara"], "Bob isn't cast");
         assert!(!f.shots[0].cut, "shot 1 is never a cut");
-        assert_eq!(f.shots[1].cast, ["Mara"], "named as the cast spells it");
+        assert!(f.shots[1].cast.is_empty(), "a continue has whoever its first frame shows");
+        assert_eq!(f.shots[2].cast, ["Leo"], "a cut keeps its cast");
         assert!(c.messages.iter().any(|m| matches!(m, Msg::Note { text, .. } if text.contains("Bob"))));
         assert_eq!(f.phase, Phase::Board);
     }
@@ -1932,6 +1945,8 @@ mod tests {
         story(&mut c, &t, b);
         let cuts: Vec<bool> = c.film.as_ref().unwrap().shots.iter().map(|s| s.cut).collect();
         assert_eq!(cuts, [false, false, true], "leaving is a continue; coming back starts from his picture");
+        assert_eq!(c.film.as_ref().unwrap().shots[2].cast, ["Mara", "Leo"], "a cut keeps its cast");
+        assert!(c.film.as_ref().unwrap().shots[1].cast.is_empty());
         assert!(c.messages.iter().any(|m| matches!(m, Msg::Note { text, .. } if text.starts_with("Shot 3 brings in"))));
     }
 
