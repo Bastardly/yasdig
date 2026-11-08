@@ -83,9 +83,9 @@ What changed in each release of yasdig. Each release's executables are on the
 - The Assistant's storyboards give each shot its own length, as long as its action
   takes: someone walking into frame and kneeling gets about 5 s, not a second. The
   Assistant is told how long common actions take, and a shot is never shorter than its
-  words need (each action it chains counts). A shot runs up to about 5 s, the length
-  the models are made for — before, the Video tab's starting length (1.4 s on LTX)
-  capped every shot.
+  words need (each action it chains counts). A shot runs up to **Settings → Video →
+  Longest storyboard shot**, 5 s by default, the length the models are made for —
+  before, the Video tab's starting length (1.4 s on LTX) capped every shot.
 - An uploaded PNG keeps the settings it carries, so *Settings from a PNG* works on it
   in Outputs. With *Settings inside saved PNGs* off, they are taken out on the way in.
 

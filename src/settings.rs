@@ -158,6 +158,14 @@ pub struct Settings {
     /// `frames`, a folder of the PNG frames. Nothing reaches `work/output/`
     /// without that press. Page-level.
     pub video_save: String,
+    /// The longest an Assistant storyboard's shot may run, in seconds: the
+    /// cap on the story's `seconds` (`agent::toolkit::VideoView::longest`).
+    /// Seconds, not frames, so one number holds across 16 and 24 fps
+    /// families. 5 by default, the length the video models are trained at; a
+    /// card with room for more on LTX may raise it. The Video tab's Frames is
+    /// only where a new row starts — 33, 1.4 s at 24 fps, which once capped
+    /// every shot. Page-level.
+    pub storyboard_shot_seconds: f32,
     /// Write the settings that made a picture into the PNG when it is saved to
     /// output: A1111's `parameters` text and yasdig's own record
     /// ([`crate::pngmeta`]). On by default, as in A1111; off for someone who
@@ -339,6 +347,7 @@ impl Default for Settings {
             // picture; direct convolution computes the same sums.
             vae_conv_direct: true,
             video_save: VIDEO_FILE.into(),
+            storyboard_shot_seconds: DEFAULT_STORYBOARD_SHOT_SECONDS,
             embed_png_settings: true,
             // Prompt, negative and a bounded CFG on; the rest is asked for.
             agent: crate::agent::knobs::Rules::default(),
@@ -408,6 +417,7 @@ impl Settings {
             reference_size: self.reference_size,
             vae_conv_direct: self.vae_conv_direct,
             video_save: self.video_save.clone(),
+            storyboard_shot_seconds: self.storyboard_shot_seconds,
             embed_png_settings: self.embed_png_settings,
             agent: self.agent.clone(),
             variables: self.variables.clone(),
@@ -503,6 +513,12 @@ impl Settings {
             bail!(
                 "max_image_side is {}, must be between 1024 and {MAX_IMAGE_SIDE_CEILING}",
                 self.max_image_side
+            );
+        }
+        if !(1.0..=MAX_STORYBOARD_SHOT_SECONDS).contains(&self.storyboard_shot_seconds) {
+            bail!(
+                "storyboard_shot_seconds is {}, must be between 1 and {MAX_STORYBOARD_SHOT_SECONDS}",
+                self.storyboard_shot_seconds
             );
         }
         if !VIDEO_SAVES.contains(&self.video_save.as_str()) {
@@ -1009,9 +1025,15 @@ const PAGE_ONLY: &[&str] = &[
     "reference_size",
     "vae_conv_direct",
     "video_save",
+    "storyboard_shot_seconds",
     "embed_png_settings",
     "agent",
 ];
+
+/// [`Settings::storyboard_shot_seconds`]'s default and ceiling: 20 s is
+/// LTX-2's longest, past any card here.
+pub const DEFAULT_STORYBOARD_SHOT_SECONDS: f32 = 5.0;
+pub const MAX_STORYBOARD_SHOT_SECONDS: f32 = 20.0;
 
 /// [`Settings::video_save`]'s values: a video file beside the frames, or the
 /// frames alone.
@@ -1235,6 +1257,11 @@ mod tests {
         assert_eq!(toml::from_str::<Settings>(&toml::to_string_pretty(&r).unwrap()).unwrap().gpu_reserve_gb, 3.0);
         assert!(Settings { gpu_reserve_gb: -1.0, ..Settings::default() }.validate().is_err());
         assert!(Settings { gpu_reserve_gb: 20.0, ..Settings::default() }.validate().is_err());
+        // The storyboard's longest shot: page-level, 5 s, 1..20.
+        assert!(PAGE_ONLY.contains(&"storyboard_shot_seconds"));
+        assert_eq!(Settings::default().storyboard_shot_seconds, 5.0);
+        assert!(Settings { storyboard_shot_seconds: 0.5, ..Settings::default() }.validate().is_err());
+        assert!(Settings { storyboard_shot_seconds: 30.0, ..Settings::default() }.validate().is_err());
         // The reference size: page-level, 512 by default, 0 or a sane side.
         assert!(PAGE_ONLY.contains(&"reference_size"));
         assert_eq!(Settings::default().reference_size, 512);

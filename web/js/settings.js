@@ -140,10 +140,13 @@ export const FIELDS = [
   { key: 'weight_type', label: 'Weight type', help: 'setwtype', kind: 'text', blank: BLANK },
   { key: 'extra_args', label: 'Extra sd-cli arguments', help: 'setargs', kind: 'lines' },
 
-  // The Video tab's own: what *Save to output* writes for a clip.
+  // The Video tab's own: what *Save to output* writes for a clip, and how long
+  // the Assistant's storyboard shots may run.
   SECTION('Video', { rail: 'Video' }),
   { key: 'video_save', page: true, label: 'Save clips as', help: 'setvideosave', kind: 'choice',
     options: [['file', 'A video file (.avi)'], ['frames', 'Frames (PNG folder)']] },
+  { key: 'storyboard_shot_seconds', page: true, label: 'Longest storyboard shot (seconds)', help: 'setshotsecs',
+    kind: 'num', min: 1, max: 20, step: 0.5 },
 
   // What the agent may do in every chat, and which agent a new chat starts
   // with (`agent::knobs::Rules`), drawn by `agentperms.js`.

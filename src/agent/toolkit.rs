@@ -198,9 +198,12 @@ pub struct VideoView {
     pub sounds: bool,
     pub width: u32,
     pub height: u32,
-    /// The most a shot may run: the model's own length, what fits this card.
+    /// Where a Video tab row starts: the model's own length.
     pub frames: u32,
     pub fps: u32,
+    /// The longest a storyboard shot may run, in seconds: Settings'
+    /// `storyboard_shot_seconds` ([`VideoView::of`] gives the default).
+    pub longest_secs: f32,
 }
 
 impl VideoView {
@@ -216,6 +219,7 @@ impl VideoView {
             height: m.height,
             frames: m.frames,
             fps: m.effective_fps(),
+            longest_secs: crate::settings::DEFAULT_STORYBOARD_SHOT_SECONDS,
         }
     }
 
@@ -228,11 +232,16 @@ impl VideoView {
         crate::config::VideoFamily::ALL.into_iter().find(|f| f.as_str() == self.family)
     }
 
-    /// The most frames a storyboard shot may run: the family's
-    /// [`longest_shot`](crate::config::VideoFamily::longest_shot), or the
-    /// Video tab's length when that is longer.
+    /// The most frames a storyboard shot may run: Settings' seconds at the
+    /// model's fps, at the nearest point of its grid — 5 s is LTX's 121, H3's
+    /// 124, Wan A14B's 81.
     pub fn longest(&self) -> u32 {
-        self.video_family().map_or(self.frames, |f| f.longest_shot().max(self.frames))
+        let want = ((self.longest_secs * self.fps.max(1) as f32).round() as u32).max(1);
+        let Some(f) = self.video_family() else { return want };
+        let step = f.frame_grid().multiple;
+        let a = f.align_frames(want);
+        let (lo, hi) = if a >= want { (a.saturating_sub(step), a) } else { (a, a + step) };
+        if lo >= f.frame_grid().min.max(1) && want - lo <= hi - want { lo } else { hi }
     }
 
     pub fn longest_seconds(&self) -> f32 {
@@ -351,14 +360,21 @@ pub fn locks_for(cfg: &Config, profile: Option<&Profile>, settings: &Value) -> L
 
 /// The chat's toolkit under the rules in `user/settings.toml` now.
 pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
-    let rules = crate::settings::Settings::load_or_default(&cfg.user_dir()).agent;
+    let settings = crate::settings::Settings::load_or_default(&cfg.user_dir());
+    let rules = settings.agent;
     let registry = cfg.registry();
     let template = chat.settings.get("template").and_then(|t| t.as_str()).unwrap_or("");
     let profile = registry.get(template);
     let locks = locks_for(cfg, profile, &chat.settings);
     let models = runnable(cfg, &registry);
     let image = models.iter().any(|m| m.name == template);
-    let installed: Vec<VideoView> = cfg.video_models().iter().filter(|m| m.exists).map(VideoView::of).collect();
+    let longest_secs = settings.storyboard_shot_seconds;
+    let installed: Vec<VideoView> = cfg
+        .video_models()
+        .iter()
+        .filter(|m| m.exists)
+        .map(|m| VideoView { longest_secs, ..VideoView::of(m) })
+        .collect();
     let video = chat.video.as_deref().and_then(|name| installed.iter().find(|v| v.name == name)).cloned();
     let mut t = build(&rules, &shown(cfg, chat, profile), &locks, models, profile.map(|p| p.family));
     t.film_off = match chat.context {
@@ -533,9 +549,13 @@ mod tests {
         assert_eq!(action_seconds(""), 2.0);
         // On LTX at 24 fps the oasis shot is 5 s whatever the agent asked, not
         // the 33 frames a new row starts at.
-        let ltx = VideoView { family: "ltx_2_5", frames: 33, fps: 24, ..Default::default() };
+        let ltx = VideoView { family: "ltx_2_5", frames: 33, fps: 24, longest_secs: 5.0, ..Default::default() };
         assert_eq!(ltx.frames_for(0.7, "A woman shows up in the frame and then kneels beside the oasis."), Some(113));
         assert_eq!(ltx.frames_for(30.0, "She waits."), Some(121), "at most the longest shot");
+        let h3 = VideoView { family: "minimax_h3", fps: 24, longest_secs: 5.0, ..Default::default() };
+        let wan = VideoView { family: "wan22_a14b", fps: 16, longest_secs: 5.0, ..Default::default() };
+        assert_eq!((h3.longest(), wan.longest()), (124, 81), "the nearest point of each grid");
+        assert_eq!(VideoView { longest_secs: 10.0, ..ltx.clone() }.longest(), 241, "Settings raises it");
         assert!((ltx.longest_seconds() - 5.04).abs() < 0.01);
     }
 
@@ -599,7 +619,7 @@ mod tests {
     fn a_film_needs_the_rule_an_image_model_and_a_video_model_that_chains() {
         let wan = VideoView {
             name: "wan".into(), family: "wan22_ti2v_5b", label: "Wan 2.2 TI2V 5B", chains: true, references: false, sounds: false,
-            width: 1280, height: 704, frames: 121, fps: 24,
+            width: 1280, height: 704, frames: 121, fps: 24, longest_secs: 5.0,
         };
         let rules = Rules::default();
         assert_eq!(film_off(&rules, true, Some("wan"), Some(&wan)), None);

@@ -542,6 +542,7 @@ mod tests {
             height: 704,
             frames: 121,
             fps: 24,
+            longest_secs: 5.0,
         });
         let shot = &output(Mode::Story, &h3, 2, 0, false)["properties"]["shots"]["items"];
         assert_eq!(keys(shot), ["text", "cast", "cut", "seconds", "lines", "sound", "music"]);

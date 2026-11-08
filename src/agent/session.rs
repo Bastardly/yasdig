@@ -1799,6 +1799,7 @@ mod tests {
             height: 480,
             frames: 121,
             fps: 24,
+            longest_secs: 5.0,
         });
         t.film_off = None;
         t

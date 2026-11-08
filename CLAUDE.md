@@ -1010,8 +1010,9 @@ Break silently:
   `refs`/`audio` less the cast's own are `FilmShot.references`/`audio`; then
   `recut_board`. `FilmShot.seed`/`frames` are the row's, a story's `seconds` the first `frames`
   (`VideoView::frames_for`: never under `toolkit::action_seconds`, the words' floor,
-  capped at `VideoFamily::longest_shot` ~5 s — the tab's Frames is where a new row
-  starts, 1.4 s on LTX, and once capped every shot) (a reworded shot −1;
+  capped at `VideoView::longest`, Settings' `storyboard_shot_seconds` (5) on the nearest
+  grid point — the tab's Frames is where a new row starts, 1.4 s on LTX, and once
+  capped every shot) (a reworded shot −1;
   `FilmShot`'s `Default` is by hand for that). `#vmodel` → `{video}` →
   `session::set_video` (`Film.references`, so what *Draw the first frames* draws follows
   the model); a press that lands → `{clip}` (`Film.clip`, staged on bind; its rows keep

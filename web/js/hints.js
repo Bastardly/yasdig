@@ -485,6 +485,14 @@ const HELP = [
         + 'and would rather your prompts did not travel with them. No file paths are '
         + 'ever written. A PNG you upload keeps the settings it carries while this '
         + 'is on; off, they are taken out.' },
+  { ids: ['setshotsecs'],
+    text: 'The longest the Assistant may make one shot of a storyboard. It gives each '
+        + 'shot as long as its action takes, up to this, rounded to what the video model '
+        + 'allows (5 s is 121 frames on LTX, 124 on H3, 81 on Wan A14B). Seconds rather '
+        + 'than frames, so one number holds whatever the model’s frame rate. The models '
+        + 'are trained at about 5 s; a longer shot needs more memory as it goes, so raise '
+        + 'it only if your card has room — a longer action can also be two shots. '
+        + 'Shots you type yourself start at the Frames the Video tab gives.' },
   { ids: ['setvideosave'],
     text: 'What the clip dialog’s Save to output writes into the output folder. A '
         + 'video file is an .avi that any video player opens (with sound, for a model '
