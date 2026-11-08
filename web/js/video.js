@@ -213,6 +213,8 @@ function enhanceRow(row, btn) {
     every: $('veverytext').value,
     first: k > 0 ? text(0) : '',
     scene,
+    // The next row goes on from this one's last frame (`then_continues`).
+    then_continues: k + 1 < els.length && els[k + 1].dataset.cut !== '1' && !!text(k + 1).trim(),
     before: k > 0 ? text(k - 1) : '',
     cut: k > 0 && r.cut,
     picture: sentRow(r, k, takeOf(m)).key || null,

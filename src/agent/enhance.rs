@@ -54,6 +54,10 @@ pub struct Request {
     /// that is neither shot 1 nor the shot before.
     #[serde(default)]
     pub scene: String,
+    /// The next shot goes on from this one's last frame: it must end with
+    /// the people in it in view, or they come back with new faces.
+    #[serde(default)]
+    pub then_continues: bool,
     #[serde(default)]
     pub cut: bool,
     /// Shot 1, or a cut, starting from a picture (an output stem).
@@ -248,6 +252,14 @@ fn continuity(out: &mut String, req: &Request, sees_picture: bool) {
         out.push_str(
             "Keep the film's light, time of day and colours unless this shot's words move to another place or time, \
              and say again who is where.\n",
+        );
+    }
+    // The next shot knows only this one's last frame: a face turned away or
+    // framed out there comes back as a stranger's.
+    if req.then_continues {
+        out.push_str(
+            "\nThe next shot goes on from this shot's last frame and knows only what it shows: end with everyone in \
+             it in view, faces visible, no one turned away, leaving or cut off by the frame.\n",
         );
     }
 }
@@ -464,6 +476,9 @@ mod tests {
         assert!(!b.contains("opens with"), "{b}");
         // Shot 1 has none of it.
         assert!(!brief(t, &shot("Dusk on a pier."), &[], false).contains("shot before"));
+        // One the next shot goes on from ends with its people in view.
+        let r = super::Request { then_continues: true, ..shot("Dusk on a pier.") };
+        assert!(brief(t, &r, &[], false).contains("faces visible"));
     }
 
     #[test]

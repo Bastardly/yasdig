@@ -487,7 +487,8 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                  in words and a `prompt` for its picture: that one subject alone, whole, on a plain background, in \
                  the film's look. A shot's `cast` names who is in it, at most {}. A shot that goes on takes no cast of \
                  its own: its people are the ones its first frame shows, so name only them, and cut to bring anyone \
-                 in.\n\
+                 in. Its first frame is the last of the shot before, so that shot must end with their faces in view; \
+                 when someone leaves, turns away or is framed out, cut after it.\n\
                  `every`: the film's look in a few words (style, light, colour), put in front of every shot.\n\
                  A shot's `text` says what happens, in the present tense, naming who is in it.\n\
                  `seconds`: how long the shot's action takes at a natural pace, at most {:.1}. Add up its \

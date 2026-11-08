@@ -764,7 +764,8 @@ the chat, whose `rev` moves on every write.
   video model) by the agent's model (`agent`, else Settings' default), with the
   family's `enhance-*` guide. `every` is the clip's look; `first` is shot 1, `scene` the
   last cut before this shot, `before` the shot before it (the one it goes on from, or on
-  a `cut` cuts from) — what a later shot keeps to, shed in that order when the agent's
+  a `cut` cuts from), `then_continues` that the next shot goes on from this one (so it
+  ends with its people in view) — what a later shot keeps to, shed in that order when the agent's
   context is short; `picture` the output stem it starts from (shown to a model with
   vision), `cast` who is in it (looks from `looks`, else the saved cast). Queued as a
   button press (kind `enhance`; Stop kills it); answers `{prompt, sound?}` — `sound` an

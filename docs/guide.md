@@ -878,6 +878,9 @@ A later shot is written to belong to the same clip: Enhance shows the agent shot
 last cut before it and the shot before, and asks it to keep the place, the light, the
 time of day and how people look unless the shot's own words change them — a shot that
 goes on carries on from the one before, a cut is a new camera shot of the same film.
+A shot that the next one goes on from is written to end with everyone in it in view:
+the next shot knows only that last frame, so a face turned away or framed out there
+would come back as someone else's.
 **Enhance every shot**, under the shots, does them in order, each one waiting for the
 one before, so shot 5 is written to match shots 1 to 4 as they now read. Stop ends it
 where it is: the shots done stay written.

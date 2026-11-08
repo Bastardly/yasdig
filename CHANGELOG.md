@@ -77,6 +77,10 @@ What changed in each release of yasdig. Each release's executables are on the
 - A shot that goes on from the one before has no *Who is in it*: it starts from the
   last frame, with whoever that shows, so a name there did nothing. Switching a shot to
   Continue clears it, and the Assistant cuts to bring someone in.
+- A shot that goes on carries only the last frame, so someone whose face left it came
+  back as a stranger. The Assistant now ends a shot the next one goes on from with its
+  people in view, and cuts when someone must leave, turn away or be framed out; Enhance
+  writes such a shot to end with every face visible.
 - On H3 a shot starts from its first frame or follows cast pictures, never both: a cast
   member added to a shot with a first frame is named, not pictured, and the page says
   so. Before, the frame was dropped without a word.
