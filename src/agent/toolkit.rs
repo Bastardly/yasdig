@@ -194,6 +194,18 @@ impl VideoView {
     pub fn shot_seconds(&self) -> f32 {
         self.frames as f32 / self.fps.max(1) as f32
     }
+
+    /// A story's `seconds` for a shot as its frame count: at most the
+    /// Video tab's length, on the model's grid as the engine rounds it.
+    /// Nothing for none, so the row shows the model's.
+    pub fn frames_for(&self, seconds: f32) -> Option<u32> {
+        if !seconds.is_finite() || seconds <= 0.0 {
+            return None;
+        }
+        let family = crate::config::VideoFamily::ALL.into_iter().find(|f| f.as_str() == self.family)?;
+        let want = (seconds * self.fps.max(1) as f32).round() as u32;
+        Some(family.align_frames(want.clamp(1, self.frames.max(1))))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

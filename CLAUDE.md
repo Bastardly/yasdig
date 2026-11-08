@@ -1004,7 +1004,8 @@ Break silently:
   first frame while words/cast/cut hold (the person's always), a key the film didn't
   draw is the person's (copied into the chat by the route), an emptied one `no_key`,
   `refs`/`audio` less the cast's own are `FilmShot.references`/`audio`; then
-  `recut_board`. `FilmShot.seed`/`frames` are the row's (a reworded shot −1;
+  `recut_board`. `FilmShot.seed`/`frames` are the row's, a story's `seconds` the first `frames`
+  (`VideoView::frames_for`: on the grid, capped at the tab's length) (a reworded shot −1;
   `FilmShot`'s `Default` is by hand for that). `#vmodel` → `{video}` →
   `session::set_video` (`Film.references`, so what *Draw the first frames* draws follows
   the model); a press that lands → `{clip}` (`Film.clip`, staged on bind; its rows keep

@@ -936,6 +936,9 @@ pub struct ShotJson {
     pub cast: Vec<String>,
     #[serde(default)]
     pub cut: bool,
+    /// How long it runs; none (an older reply) is the model's length.
+    #[serde(default)]
+    pub seconds: f32,
     /// H3's: what is said, heard and scored.
     #[serde(default)]
     pub lines: Vec<super::chat::Line>,
@@ -1109,6 +1112,7 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
             lines,
             sound: plain(&s.sound),
             music: plain(&s.music),
+            frames: video.frames_for(s.seconds),
             ..Default::default()
         };
         if let Some(n) = recut(said.last().map_or(&[][..], |p| p.as_slice()), &mut shot, k) {
@@ -1930,6 +1934,20 @@ mod tests {
         c.film.as_mut().unwrap().cast[1].picture = Some(pic.clone());
         story(&mut c, &t, b);
         assert_eq!(c.film.as_ref().unwrap().cast[1].picture, Some(pic));
+    }
+
+    #[test]
+    fn a_story_sets_each_shots_length_on_the_models_grid() {
+        let mut c = film_chat();
+        let t = film_tk(&c, true);
+        let mut b = board();
+        b["shots"][0]["seconds"] = json!(2.0);
+        b["shots"][1]["seconds"] = json!(60.0);
+        story(&mut c, &t, b);
+        let frames: Vec<Option<u32>> = c.film.as_ref().unwrap().shots.iter().map(|s| s.frames).collect();
+        // 48 frames rounds up onto H3's 17k+5; a minute is capped at the tab's 121 (→ 124).
+        assert_eq!(frames, [Some(56), Some(124), None], "no seconds is the model's length");
+        assert_eq!(board_rows(c.film.as_ref().unwrap(), t.video.as_ref())["shots"][0]["frames"], 56);
     }
 
     #[test]

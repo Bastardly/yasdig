@@ -486,7 +486,9 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                  its own: its people are the ones its first frame shows, so name only them, and cut to bring anyone \
                  in.\n\
                  `every`: the film's look in a few words (style, light, colour), put in front of every shot.\n\
-                 A shot's `text` says what happens, in the present tense, naming who is in it.",
+                 A shot's `text` says what happens, in the present tense, naming who is in it.\n\
+                 `seconds`: how long the shot's action takes, at most {:.1}: a glance is short, a walk across a \
+                 room long.",
                 secs,
                 (10.0 / secs.max(0.1)).round().max(1.0),
                 crate::pipeline::MAX_SHOTS,
@@ -495,7 +497,8 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                 } else {
                     "it starts from a picture drawn first, with the cast it names."
                 },
-                crate::config::MAX_REFERENCES
+                crate::config::MAX_REFERENCES,
+                secs,
             ));
             let attached = own.len();
             if attached > 0 {

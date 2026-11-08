@@ -76,6 +76,9 @@ What changed in each release of yasdig. Each release's executables are on the
 - On H3 a shot starts from its first frame or follows cast pictures, never both: a cast
   member added to a shot with a first frame is named, not pictured, and the page says
   so. Before, the frame was dropped without a word.
+- The Assistant's storyboards give each shot its own length, as long as its action
+  takes, up to the Video tab's length. Before, every row fell back to the model's
+  default.
 - An uploaded PNG keeps the settings it carries, so *Settings from a PNG* works on it
   in Outputs. With *Settings inside saved PNGs* off, they are taken out on the way in.
 

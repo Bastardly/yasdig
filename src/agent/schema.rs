@@ -151,6 +151,9 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
     shot.insert("text".into(), text(500));
     shot.insert("cast".into(), json!({ "type": "array", "items": text(40), "maxItems": crate::config::MAX_REFERENCES }));
     shot.insert("cut".into(), json!({ "type": "boolean" }));
+    // How long its action takes; `apply_story` rounds it onto the model's
+    // grid and caps it (a grammar holds no float range).
+    shot.insert("seconds".into(), json!({ "type": "number" }));
     // H3 films sound; its prompt says what is spoken, heard and scored
     // (`h3prompt`), so the board asks for each — and when the agent may pick
     // H3 for it, since the board is written for the model it picks.
@@ -525,7 +528,7 @@ mod tests {
         assert_eq!(keys(member), ["name", "kind", "look", "picture", "prompt"]);
         assert_eq!(member["required"], json!(keys(member)));
         assert_eq!(member["properties"]["picture"]["maximum"], json!(2), "one of the pictures attached, or none");
-        assert_eq!(keys(&s["properties"]["shots"]["items"]), ["text", "cast", "cut"]);
+        assert_eq!(keys(&s["properties"]["shots"]["items"]), ["text", "cast", "cut", "seconds"]);
         // On H3 a shot says what is spoken, heard and scored.
         let mut h3 = t.clone();
         h3.video = Some(crate::agent::toolkit::VideoView {
@@ -541,7 +544,7 @@ mod tests {
             fps: 24,
         });
         let shot = &output(Mode::Story, &h3, 2, 0, false)["properties"]["shots"]["items"];
-        assert_eq!(keys(shot), ["text", "cast", "cut", "lines", "sound", "music"]);
+        assert_eq!(keys(shot), ["text", "cast", "cut", "seconds", "lines", "sound", "music"]);
         assert_eq!(keys(&shot["properties"]["lines"]["items"]), ["who", "words", "language", "voiceover"]);
         assert_eq!(s["properties"]["shots"]["maxItems"], json!(crate::pipeline::MAX_SHOTS));
     }
