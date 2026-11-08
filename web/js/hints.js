@@ -134,7 +134,7 @@ const HELP = [
         + 'beyond them, on any image. The picture you have stays exactly as it is; '
         + 'only the new strips are drawn, blended in over Edge softness. Blank '
         + 'prompt continues the background — type one to put something there. '
-        + 'Uses FLUX.1 Fill, from the Get models tab.' },
+        + 'Uses FLUX.1 Fill, from the Models tab.' },
   { ids: ['rescale'],
     text: 'Edit with a new shape: pick sides and the model redraws the whole '
         + 'picture to fill the bigger frame, following your instruction. Unlike '

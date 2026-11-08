@@ -13,7 +13,7 @@ let cfiles = [];
 let ctypes = [];
 let crunning = false;
 
-// Decimal, like Get models and the memory box: the same file must read as the
+// Decimal, like the Models tab and the memory box: the same file must read as the
 // same number of GB on every tab.
 function gb(bytes) {
   return (bytes / 1e9).toFixed(2) + ' GB';

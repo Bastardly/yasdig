@@ -1,5 +1,5 @@
 import { $, esc } from './dom.js';
-import { fetchCatalog, firstPerFamily, openGetModels } from './getmodels.js';
+import { fetchCatalog, firstPerFamily, openModels } from './getmodels.js';
 
 // The Help tab: a menu of topics on the left, one topic on the right.
 //
@@ -14,7 +14,7 @@ import { fetchCatalog, firstPerFamily, openGetModels } from './getmodels.js';
 //
 // A row may carry `fill(el)`, run each time the topic is shown, for a part that
 // is the server's to know. *Intro to models* uses it for its family table, so
-// the parts each family needs come from the same `/catalog` the Get models tab
+// the parts each family needs come from the same `/catalog` the Models tab
 // draws, not from a second copy written here.
 
 // A name/use table, the shape every comparison here takes. The first column is
@@ -34,7 +34,7 @@ export const TOPICS = [
       <h2>Intro to models</h2>
       <p>A <b>model</b> is what draws the picture. It is a big file of learned
       numbers — 2 to 20 GB — and each one has its own look and its own idea of
-      good settings. The <b>Get models</b> tab downloads a working set for each
+      good settings. The <b>Models</b> tab downloads a working set for each
       kind this app runs, so this page is for when you want to know what you are
       looking at, or go looking for more.</p>
 
@@ -90,7 +90,7 @@ export const TOPICS = [
       (on Hugging Face, in the model card and the <i>License</i> tag; on Civitai,
       under the model’s permissions). A quantized copy — a GGUF someone else made —
       is still under the original model’s licence. That includes the files the
-      Get models tab downloads; each card links their pages.</p>
+      Models tab downloads; each card links their pages.</p>
       <p>A <b>LoRA</b> is a small add-on (10–300 MB) that teaches a model a style,
       a character or a detail. It only works on the family it was trained for —
       an SDXL LoRA does nothing on Flux — and the LoRA picker greys out the ones
@@ -140,7 +140,7 @@ export const TOPICS = [
       ]), false) + '<p class="sub">SD 1.5 and SD 2 checkpoints also run: one file each, from Civitai.</p>';
       box.addEventListener('click', (ev) => {
         const b = ev.target.closest('[data-family]');
-        if (b) openGetModels(b.dataset.family);
+        if (b) openModels(b.dataset.family);
       });
     },
   },
@@ -164,7 +164,7 @@ export const TOPICS = [
       <p>Models are not part of yasdig. <b>Every model has its own licence</b>, set by
       the people who made it: some allow anything, some forbid commercial use of what
       you make. Check a model’s page before using its pictures — each card on the
-      <i>Get models</i> tab links the pages its files come from.</p>
+      <i>Models</i> tab links the pages its files come from.</p>
       <h3>Third-party notices</h3>
       <p>The components built into this program, and the licence notices they ask to
       travel with every copy:</p>
@@ -405,7 +405,7 @@ export const TOPICS = [
       blends the join. Each side is its own pass at the drawing model’s full size,
       left and right first, so picking all four draws the corners too.</p>
       <p>It uses <b>FLUX.1 Fill</b>, a model trained for exactly this, and turns on
-      by itself once one is installed (Get models → FLUX.1 Fill). With a blank
+      by itself once one is installed (Models → FLUX.1 Fill). With a blank
       prompt it continues the background; the image’s own prompt would name
       the subject, and Fill would draw it again in the strip. Type a prompt to put
       something particular there — "a window", "more of the beach".</p>
@@ -505,7 +505,7 @@ export const TOPICS = [
       <p>A <b>Q8</b> GGUF needs about half the memory of the original, <b>Q6</b>
       a bit less again, and <b>Q4</b> about a quarter — with Q8 indistinguishable
       and Q4 starting to lose fine detail. <b>fp8 files run at twice their
-      size</b> on AMD cards. The <b>Get models</b> tab has GGUF sets for every
+      size</b> on AMD cards. The <b>Models</b> tab has GGUF sets for every
       family, and the <b>Convert</b> tab turns a file you have into one.</p>
 
       <h3>After a run</h3>

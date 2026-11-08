@@ -1,4 +1,4 @@
-# The Get models tab's catalog: a set of files per family — sometimes two, in
+# The Models tab's catalog: a set of files per family — sometimes two, in
 # different precisions, the first being the one Help's family table names — and
 # the only URLs the downloader will fetch (src/catalog.rs, src/downloads.rs).
 # `recommended = true` marks the cards a newcomer should start from, and

@@ -209,7 +209,7 @@ async function drawTry() {
     return;
   }
   if (!f.image_model) {
-    err('No image model to draw with: Get models has some.');
+    err('No image model to draw with: the Models tab has some.');
     return;
   }
   try { localStorage.setItem(MODEL_KEY, f.image_model); } catch { /* private window */ }

@@ -6,7 +6,7 @@ Where yasdig keeps its files, how it finds models, and every setting it reads. T
 
 ### Get a model
 
-**The Get models tab is the easy way.** It lists one recommended set per family —
+**The Models tab is the easy way.** It lists one recommended set per family —
 the model and every file it needs beside it, with sizes — marks what you already
 have, and downloads the rest into the right folders with progress, cancel and
 resume. A part you already have under another name is recognised by its header and
@@ -116,7 +116,7 @@ Forest Labs' own repos are gated, so these links are leejet's GGUFs:
 
 **Qwen-Image 2.1** — about 18 GB with these picks. A 7B model of its own, not a
 Qwen-Image finetune: none of Qwen-Image's files fit it. It renders 40 steps at CFG 6,
-or 8 at CFG 1 with the turbo LoRA (the Get models card fetches it, and the Models
+or 8 at CFG 1 with the turbo LoRA (the Models tab's card fetches it, and the Models
 panel's **Turbo** switch adds its fixed `--sigmas qwen-image-2.1-turbo` schedule). It
 was trained around 2048²; here that is the Hi-res pass's size. Its licence is Qwen's
 research licence — read it on the model's page before you use it:
@@ -133,7 +133,7 @@ model and its text encoder are all it needs. Its recipe loads it as q8_0
 (`weight_type`). Two releases with identical tensors: **Turbo** (`turbo/`, BF16,
 6 GB), 4 steps at CFG 1 on the σ list of its `distill.yaml`, and the base (fp32,
 12 GB), 100 steps at CFG 3 — 200 network passes a picture, so minutes. A header can't
-tell them apart, so the Turbo's settings come with the file the Get models card
+tell them apart, so the Turbo's settings come with the file the Models tab's card
 downloads (at its own name and size); a Turbo saved under another name starts at the
 base's 100 steps — set 4 steps at CFG 1 and *Save as defaults*, though its fixed
 schedule only comes with the card's file:
@@ -151,7 +151,7 @@ rest and can go anywhere under `models/`:
 
 | file | where to get it |
 |---|---|
-| the model | SFT or Base from [Comfy-Org](https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/diffusion_models): `int8_convrot` (5.4 GB, the Get models default — sd.cpp multiplies it as INT8, and the Convert tab leaves it alone) or `bf16` (10.2 GB); or leejet's [GGUF](https://huggingface.co/leejet/MOSS-Image-SFT-GGUF/tree/main) (`Q8_0`, 5.7 GB) |
+| the model | SFT or Base from [Comfy-Org](https://huggingface.co/Comfy-Org/MOSS-Image/tree/main/diffusion_models): `int8_convrot` (5.4 GB, the Models tab's default — sd.cpp multiplies it as INT8, and the Convert tab leaves it alone) or `bf16` (10.2 GB); or leejet's [GGUF](https://huggingface.co/leejet/MOSS-Image-SFT-GGUF/tree/main) (`Q8_0`, 5.7 GB) |
 | the text encoder — Qwen3.5-9B | [GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/main) (`Q8_0`, 9.5 GB; not an `mmproj` file) |
 | the tokenizer | [`tokenizer.json`](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/tree/main/tokenizer) |
 | the VAE — Flux.2's | the same file as Flux.2 Klein's, above |
@@ -160,7 +160,7 @@ rest and can go anywhere under `models/`:
 for one that sees pictures, its vision projector (an `mmproj` file), both GGUF, in a
 folder of their own under `models/agents/`. A folder holding one model and one
 projector is one agent — that is how a projector is paired, since their headers can't
-always say which goes with which. Get models → *Agent models* fetches each into its own
+always say which goes with which. Models → *Agent models* fetches each into its own
 folder. Any llama.cpp instruct model with a chat template works; `doctor` lists what is
 there and what each file is.
 

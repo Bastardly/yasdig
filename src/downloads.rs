@@ -1,4 +1,4 @@
-//! The Get models tab's downloads: `curl` as a subprocess, one file at a time,
+//! The Models tab's downloads: `curl` as a subprocess, one file at a time,
 //! on a thread of its own.
 //!
 //! **Why curl and not an HTTP client in here.** A Rust client means a TLS stack

@@ -2026,7 +2026,7 @@ impl VideoFamily {
         }
     }
 
-    /// Human-readable name, for the Get models tab and error messages.
+    /// Human-readable name, for the Models tab and error messages.
     pub fn label(self) -> &'static str {
         match self {
             VideoFamily::Wan22Ti2v5b => "Wan 2.2 TI2V-5B",
@@ -2695,7 +2695,7 @@ impl VideoModel {
         }
         if self.hires && self.latent_upscaler.is_none() {
             bail!(
-                "video '{n}': hi-res ×2 needs the latent upscaler — Get models → {} has it",
+                "video '{n}': hi-res ×2 needs the latent upscaler — Models → {} has it",
                 self.family.label()
             );
         }

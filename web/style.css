@@ -1363,7 +1363,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
 a:hover { color: var(--accent-hi); }
 
-/* The Get models tab: a card per catalog entry. The file table borrows
+/* The Models tab: a card per catalog entry. The file table borrows
    `.helptable`; its first column is a slot name, not a third of the width. */
 .gmcard { margin-bottom: var(--sp-4); }
 .gmgroup { font-size: var(--fs-title); color: var(--text); margin: var(--sp-4) 0 var(--sp-2); }

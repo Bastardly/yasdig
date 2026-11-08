@@ -510,7 +510,7 @@ needs a Vulkan device and nothing else.
   flight. The conversion itself queues on the worker: no GPU is involved, but it
   saturates the cores and the disk for minutes and must not do that underneath a render.
   Going through the worker is also what gives it `/progress` and `/cancel` for free.
-- `GET /catalog` — the Get models tab: `{curl, finished, models_dir, upscaler_dir,
+- `GET /catalog` — the Models tab: `{curl, finished, models_dir, upscaler_dir,
   video_dir, entries, videos, upscalers}`. Each
   entry is a recommended set from `src/catalog.toml` (`id`, `family`, `family_label`,
   `label`, `note`, `bytes`) with its `files`, each carrying `slot`, `slot_label`, `dest`

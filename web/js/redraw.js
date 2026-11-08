@@ -5,7 +5,7 @@ import { onJobs, passRunning, runningJob, soonJobs } from './jobs.js';
 import { claimLeft, closeViewer, deliver, onLook, onOpen, passLander, railDot, stepRequest, stepTo } from './viewer.js';
 import { fillReady, hiresPass, modelNamed, oomOptions, passSteps, refine, upscalerOptions, upscalersReady } from './image.js';
 import { mirrors } from './mirror.js';
-import { openGetModels } from './getmodels.js';
+import { openModels } from './getmodels.js';
 import { showError } from './memory.js';
 import { onRefsChange, references } from './refs.js';
 
@@ -428,7 +428,7 @@ function syncButtons() {
   extendSides.disable(!fill);
   if (!isBusy('rdextendgo')) {
     $('rdextendgo').disabled = !live || !fill || painted || !extendSides.any();
-    $('rdextendgo').title = !fill ? 'Needs a FLUX.1 Fill model (Get models)'
+    $('rdextendgo').title = !fill ? 'Needs a FLUX.1 Fill model (the Models tab)'
       : painted ? 'Clear the Refine fold’s mask to extend the canvas'
         : !extendSides.any() ? 'Pick a side to extend' : '';
   }
@@ -766,7 +766,7 @@ export function initRedraw() {
   $('rdmodel').addEventListener('change', setModel);
   $('rpstrength').addEventListener('input', syncDialogSummaries);
   $('rdupscaler').addEventListener('change', syncDialogSummaries);
-  $('rdgetfill').addEventListener('click', () => { if (closeViewer()) openGetModels('flux_fill'); });
+  $('rdgetfill').addEventListener('click', () => { if (closeViewer()) openModels('flux_fill'); });
   // After the pane's own listener (viewer.js's initViewer runs first), so a
   // pan it took is `defaultPrevented` here.
   $('lbview').addEventListener('pointerdown', stroke);

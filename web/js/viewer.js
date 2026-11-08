@@ -154,7 +154,7 @@ const closeGuards = [];
 export const guardClose = (fn) => { closeGuards.push(fn); };
 const mayClose = () => closeGuards.every((g) => g());
 // Close it, if the guards agree — for a button that leaves the dialog for
-// another tab (Extend's *Get models…*).
+// another tab (Extend's *Models…*).
 export function closeViewer() {
   if (!mayClose()) return false;
   $('lightbox').close();

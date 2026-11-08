@@ -18,7 +18,7 @@
     <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
     <button type="button" class="btn btn-choice tab" data-tab="cast">Cast</button>
     <button type="button" class="btn btn-choice tab" data-tab="convert">Convert</button>
-    <button type="button" class="btn btn-choice tab" data-tab="getmodels">Get models</button>
+    <button type="button" class="btn btn-choice tab" data-tab="models">Models</button>
     <button type="button" class="btn btn-choice tab" data-tab="help">Help</button>
     <button type="button" class="btn btn-choice tab" data-tab="settings">Settings</button>
     <!-- Not a tab, so not `.tab`: it opens the queue in a dialog over whatever
@@ -953,29 +953,19 @@
   </div>
   </div>
 
-  <!-- ==================== Get models ====================
+  <!-- ==================== Models ====================
        The catalog the server compiled in (`src/catalog.toml`), one card per
        recommended set, with what each file is on this disk. The page sends a
        catalog id and nothing else; `getmodels.js` draws everything from
        `/catalog`. -->
-  <div class="layout" id="tab-getmodels" hidden>
+  <div class="layout" id="tab-models" hidden>
   <div class="card col-controls">
-    <b>Get models</b>
-    <p class="sub">One recommended set per model family: the model and every
-    file it needs beside it, each going to the right folder. A file you already
-    have — under any name — is not downloaded again.</p>
-    <p class="sub"><b>Check the licence before you use what you make.</b>
-    Every model has its own: some allow commercial use, some are for
-    non-commercial or research use only, some ask you to accept terms. Each
-    card links the pages its files come from, and a quantized copy (GGUF) is
-    under the licence of the model it was made from. yasdig only fetches
-    the files; the terms are between you and the people who made them.</p>
-    <p class="sub">Downloads keep going while you generate. <b>Cancel</b> keeps
-    what has arrived, so <b>Resume</b> carries on from there.</p>
+    <b>Models</b>
+    <p class="sub">Download a model with every file it needs, or see and tidy what you
+    have. Each model has its own licence — check it before you use what you make.</p>
     <p class="sub" id="gmdir"></p>
     <div id="gmerr" class="err"></div>
     <nav class="helpnav spaced" id="gmnav" aria-label="Model families by category"></nav>
-    <p class="sub">More models, and LoRAs: Help → Intro to models.</p>
   </div>
   <div class="col-result" id="gmlist"></div>
   </div>
@@ -1379,7 +1369,7 @@
     <div class="fpbody">
       <p class="sub" id="rdneedsfill" hidden>Needs FLUX.1 Fill, a model trained to
         continue a picture past its edges.
-        <button type="button" id="rdgetfill" class="btn">Get models…</button></p>
+        <button type="button" id="rdgetfill" class="btn">Models…</button></p>
       <div class="rdsides" id="rdextendsides">
         <button type="button" class="btn btn-choice" data-side="left" title="Extend left">←</button>
         <button type="button" class="btn btn-choice" data-side="top" title="Extend up">↑</button>

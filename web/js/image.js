@@ -9,7 +9,7 @@ import { sourceSlot } from './source-slot.js';
 import { wireHints } from './hints.js';
 import { onRefsChange, references, refsActive, syncRefs } from './refs.js';
 import { castNames, castPayload, initCastPicks, syncCastPicks } from './castpicks.js';
-import { openGetModels } from './getmodels.js';
+import { openModels } from './getmodels.js';
 import { floatPanels } from './panels.js';
 import { partRows } from './parts.js';
 import { showError, MEMORY_LABELS } from './memory.js';
@@ -21,7 +21,7 @@ import { enhance } from './enhance.js';
 export let models = [];
 
 // Whether Extend can run: a fill-only model with every file present. The Refine
-// dialog reads it to enable its Extend group or point at Get models instead.
+// dialog reads it to enable its Extend group or point at the Models tab instead.
 export const fillReady = () => models.some((m) => m.fill && m.exists);
 
 // This tab's attached LoRAs. Exported because `applyWorkItem` has to put a
@@ -130,10 +130,10 @@ function currentModel() {
 }
 
 // What every out-of-memory box on this tab can offer besides a retry: the
-// Memory select, and the Get models card for a smaller file of this family.
+// Memory select, and the Models tab's card for a smaller file of this family.
 export const oomOptions = () => ({
   memory: 'memory',
-  smallerFile: currentModel() ? () => openGetModels(currentModel().family) : null,
+  smallerFile: currentModel() ? () => openModels(currentModel().family) : null,
   // Opens the References dialog, where a pick is removed.
   references: () => $('refsopen').click(),
 });
@@ -709,7 +709,7 @@ export async function loadModels({ refill = true } = {}) {
             opt.disabled = true;
             opt.textContent += ' (missing files)';
             opt.title = 'Waiting for:\n' + m.missing.join('\n')
-              + '\n\nThe Get models tab can download them.';
+              + '\n\nThe Models tab can download them.';
           }
           group.appendChild(opt);
         }
@@ -719,13 +719,13 @@ export async function loadModels({ refill = true } = {}) {
     // What a first run looks like: the folders exist, nothing is in them. The
     // server rescans per request, so a reload is all it takes after the copy.
     if (!models.some((m) => !m.fill)) {
-      $('err').textContent = 'No image models yet. The Get models tab downloads one, or put a '
+      $('err').textContent = 'No image models yet. The Models tab downloads one, or put a '
         + '.safetensors or .gguf model into models/checkpoints (in the folder yasdig is in) '
         + 'and reload this page.';
     } else if ($('err').textContent.startsWith('No image models yet')) {
       $('err').textContent = '';
     }
-    // A greyed-out model is a family whose parts the Get models tab can fetch.
+    // A greyed-out model is a family whose parts the Models tab can fetch.
     // The link goes to the first such family; the tab lists the rest.
     const waiting = models.filter((m) => !m.exists && !m.fill);
     $('getparts').hidden = !waiting.length;
@@ -733,7 +733,7 @@ export async function loadModels({ refill = true } = {}) {
       $('getparts').innerHTML = `${waiting.length === 1 ? 'One model is' : `${waiting.length} models are`} `
         + `waiting for files (${waiting.map((m) => esc(m.name)).join(', ')}). `
         + '<button type="button" class="btn">Get the missing files…</button>';
-      $('getparts').querySelector('button').onclick = () => openGetModels(waiting[0].family);
+      $('getparts').querySelector('button').onclick = () => openModels(waiting[0].family);
     }
     if (refill || $('template').value !== before) syncAdvanced();
     // A download may have brought a speed LoRA: Turbo shows once it is here.

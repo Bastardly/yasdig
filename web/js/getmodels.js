@@ -3,7 +3,7 @@ import { loadModels } from './image.js';
 import { loadVideoModels } from './video.js';
 import { loadAgents } from './assistant.js';
 
-// The Get models tab: the server's catalog (`src/catalog.toml`), one card per
+// The Models tab: the server's catalog (`src/catalog.toml`), one card per
 // set of files — a family may have two, in different precisions — and what
 // each of its files is on this disk. A recommended card says so, on the card
 // and on its family's nav button; the server decides which are, against this
@@ -91,7 +91,7 @@ const allEntries = () =>
 const SINGLE = { upscaler: 'Upscalers', agent: 'Agent models' };
 
 // A family's first card, once each: the nav buttons, and the anchor
-// `openGetModels` scrolls to.
+// `openModels` scrolls to.
 export const firstPerFamily = (list) =>
   list.filter((e, i) => list.findIndex((o) => o.family === e.family) === i);
 
@@ -192,13 +192,13 @@ async function refresh() {
 
 // Open the tab on one family's card. For the Image tab's "Get the missing
 // files…" and the Help topic's table.
-export function openGetModels(family) {
-  document.querySelector('.tab[data-tab="getmodels"]')?.click();
+export function openModels(family) {
+  document.querySelector('.tab[data-tab="models"]')?.click();
   refresh().then(() => $(`gm-${family}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 }
 
-export function initGetModels() {
-  document.querySelector('.tab[data-tab="getmodels"]')?.addEventListener('click', refresh);
+export function initModels() {
+  document.querySelector('.tab[data-tab="models"]')?.addEventListener('click', refresh);
   $('gmnav').addEventListener('click', (e) => {
     const b = e.target.closest('[data-family]');
     if (b) $(`gm-${b.dataset.family}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });

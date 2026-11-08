@@ -55,7 +55,7 @@ const videoParts = partRows({
   el: 'vpartrows', prefix: 'vpart', none: 'None', onChange: () => { syncReady(); syncHires(); syncPartNote(); },
 });
 
-// LTX-2.5 on the Get models card's bf16 encoder drew a stock scene (a man
+// LTX-2.5 on the Models tab's old bf16 encoder drew a stock scene (a man
 // talking to camera) for prompts its q8_0 copy followed, same seed
 // (2026-11-07). The Convert tab makes that copy beside it, and discovery
 // prefers it; until then, say so.
@@ -66,7 +66,7 @@ function syncPartNote() {
   const bf16 = currentVideoModel()?.family === 'ltx_2_5' && /\.safetensors$/i.test(path);
   note.hidden = !bf16;
   note.textContent = bf16
-    ? 'This bf16 text encoder can ignore the prompt on LTX-2.5. Get models fetches a Q4_K_M copy, or convert this one to q8_0 on the '
+    ? 'This bf16 text encoder can ignore the prompt on LTX-2.5. The Models tab fetches a Q4_K_M copy, or convert this one to q8_0 on the '
       + 'Convert tab (about 15 GB, a few minutes); the copy is picked here from then on.'
     : '';
 }
@@ -910,7 +910,7 @@ function syncHires() {
   if (!has) $('vhires').checked = false;
   const w = numOr('vw'), h = numOr('vh');
   $('vhiresnote').textContent = !has
-    ? 'Needs the latent upscaler (Get models has it on the LTX cards).'
+    ? 'Needs the latent upscaler (the Models tab has it on the LTX cards).'
     : $('vhires').checked && w && h
       ? `Drawn at ${w}×${h}, refined at ${w * 2}×${h * 2} — the clip's size.`
       : 'Draws at this size, then enlarges ×2 and refines it in the same run.';

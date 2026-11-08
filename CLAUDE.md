@@ -681,7 +681,7 @@ gallery holds, so `Store::find_output` searches both and `output_source`,
 
 ## Downloads
 
-Get models tab: `src/catalog.toml` (compiled in), `src/catalog.rs`, `src/downloads.rs`,
+Models tab: `src/catalog.toml` (compiled in), `src/catalog.rs`, `src/downloads.rs`,
 `GET /catalog`, `POST /downloads/{start,cancel,clear}`, `web/js/getmodels.js`. A set
 per runnable family, each file keyed by its `slots()` key (or `"model"`); **a family
 may have two cards** (MOSS INT8 + BF16), so its anchor, nav button and Help's family
@@ -726,7 +726,7 @@ what discovery assembles from.
 Cards link source repos (`File::page`). **No licence names in the catalog**, on purpose.
 Page: cards and nav are grouped by category (`categories()` in `getmodels.js`: image,
 video, upscalers); `finished` moving triggers `loadModels()` (and `loadVideoModels()`);
-`#getparts` opens the family's card (`openGetModels`).
+`#getparts` opens the family's card (`openModels`).
 
 ## Settings in the PNG
 
@@ -1426,7 +1426,7 @@ only `js/app.js`.
 | `clipview.js` / `export.js` | the clip dialog; Download's WebCodecs encode |
 | `mp4mux.js` / `webmmux.js` / `gifenc.js` | the download containers and GIF, pure |
 | `convert.js` | Convert tab |
-| `getmodels.js` | Get models tab, `openGetModels` |
+| `getmodels.js` | Models tab, `openModels` |
 | `prompt-box.js` / `prompt-weight.js` | the custom element; pure weighting maths |
 | `help.js` | Help tab `TOPICS` |
 | `settings.js` / `modelsettings.js` | Settings form from `FIELDS`; *Per model* card |

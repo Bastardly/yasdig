@@ -386,7 +386,7 @@ than running without it. A LoRA nothing could identify is offered for every mode
 refusing a file that works would be worse. `doctor` prints each LoRA's family.
 
 **Turbo.** Some models have a *speed LoRA*: the model distilled to a few steps. The
-MOSS-Image cards on Get models fetch one (lodestones' 8-step DMD LoRA, into the LoRA
+MOSS-Image cards on the Models tab fetch one (lodestones' 8-step DMD LoRA, into the LoRA
 folder), and with it installed the Models panel shows a **Turbo** switch. On, it adds
 that LoRA and sets Steps and CFG to what it was distilled for (8 steps at CFG 1,
 against the model's own 50 at CFG 3); off, it removes it and puts the model's own
@@ -427,7 +427,7 @@ Every render is enlarged on its way to the output size, and the **Upscaler** sel
 beside *Output upscale*, at the foot of the Generation panel, picks what does it. **FSR (EASU)** is the
 default: milliseconds, no file, and it only redistributes the pixels the checkpoint
 drew. A **model** draws new fine texture instead — hair, fabric, skin — at the cost of
-seconds. **Get models → Upscalers** downloads four that run here — 4x-UltraSharp and
+seconds. **Models → Upscalers** downloads four that run here — 4x-UltraSharp and
 4xNomosWebPhoto (ESRGAN), Real-ESRGAN general x4v3 (Compact, fast) and 2xNomosUni SPAN
 (a fast 2×) — or drop one in `models/upscalers/` (subfolders work) and it appears in
 the select with its architecture beside it; `doctor` prints the folder, what each file is, and
@@ -681,7 +681,7 @@ picture must stay exactly as it is, Extend.
 **Extend** grows the canvas on the sides you pick (128-512 px each) and draws what lies
 beyond them, on any image — SDXL, Klein, an upload. It uses **FLUX.1 Fill**, a model
 trained to continue a picture from a mask, and turns on by itself once one is installed
-(Get models → FLUX.1 Fill, about 12.7 GB at Q8 plus Flux.1's three shared parts);
+(Models → FLUX.1 Fill, about 12.7 GB at Q8 plus Flux.1's three shared parts);
 without one the group is greyed out with a link to it. Each side is its own Fill pass
 at the Fill model's full size — left and right first, then top and bottom across the
 new width, which draws the corners — and only the strips are drawn: every pixel you had
@@ -926,7 +926,7 @@ limits). Name them in the shot's prompt as `<Audio 1>`, `<Audio 2>`: "the woman 
 in the voice of `<Audio 1>`". Any sound the browser can play uploads; it is kept as a
 32 kHz stereo WAV, cut to 15 seconds. A sound can be named as someone's **voice** in
 the Sounds dialog, by the name its speaker has in *Spoken* (below). H3 comes as two files with the same shape, so
-yasdig can't tell them apart: Get models has both, and the **Ref2VA** one is the one
+yasdig can't tell them apart: the Models tab has both, and the **Ref2VA** one is the one
 MiniMax made for following references — pick it for shots that do.
 
 **What is said, heard and scored (MiniMax H3).** With its audio VAE, an H3 shot also
@@ -992,7 +992,7 @@ Firefox on Linux may have no H.264 encoder; Chrome has.
 
 The **Assistant** panel (on the Image and Video tabs' rails) is a chat with a small
 language model that runs on your own GPU, the way the image models do. It needs an agent
-model (Get models → *Agent models*; the 4B fits an 8 GB card). Each tab keeps its own
+model (Models → *Agent models*; the 4B fits an 8 GB card). Each tab keeps its own
 chats — pick one, or *New chat*, at the top of the panel, with ☆ to keep it in
 Favorites and *Delete*. The Image tab's chats work on pictures (below); the Video tab's
 write storyboards for films (*From a storyboard*, under Video). There is one *Send*:

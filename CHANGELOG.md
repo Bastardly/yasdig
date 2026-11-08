@@ -3,6 +3,12 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### Changed
+
+- **Get models is now Models**, and its introduction is two sentences.
+
 ## 0.8.0 — 2026-11-08
 
 ### Added

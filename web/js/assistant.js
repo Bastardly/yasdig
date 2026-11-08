@@ -4,7 +4,7 @@ import { openWorkItem } from './workitems.js';
 import { choosePicture, upload } from './source-slot.js';
 import { renderChat, sessionHtml, stateText } from './chatview.js';
 import { flushBoard, follow as followBoard, showBoard } from './board.js';
-import { openGetModels } from './getmodels.js';
+import { openModels } from './getmodels.js';
 import { openCastEditor } from './casteditor.js';
 import { wireHints } from './hints.js';
 
@@ -581,7 +581,7 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
   });
   log.addEventListener('click', onLogClick);
   q('amodelnote').addEventListener('click', (e) => {
-    if (e.target.closest('[data-get-agents]')) openGetModels('agent');
+    if (e.target.closest('[data-get-agents]')) openModels('agent');
   });
   q('amodel').addEventListener('change', async () => {
     syncModelNote();

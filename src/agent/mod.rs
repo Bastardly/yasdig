@@ -53,7 +53,7 @@ pub fn agent_for(cfg: &Config, name: Option<&str>) -> Result<AgentModel> {
     }
     scan.models.into_iter().next().ok_or_else(|| {
         anyhow!(
-            "no agent model is installed — Get models → Agent models has some, or put a GGUF and its \
+            "no agent model is installed — Models → Agent models has some, or put a GGUF and its \
              mmproj in a folder of their own under {}",
             cfg.agent_dir().display()
         )
@@ -492,7 +492,7 @@ fn cast_try(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat) -> Result
         .or_else(|| pick(template))
         .or_else(|| models.iter().find(|m| m.references))
         .or_else(|| models.first())
-        .ok_or_else(|| anyhow!("no image model to draw the cast member with: Get models has some"))?
+        .ok_or_else(|| anyhow!("no image model to draw the cast member with: the Models tab has some"))?
         .clone();
     let fields = Fields { name: want.name.clone(), kind: want.kind, look: want.look.clone(), image_model: model.name.clone() };
     let id = match &entry {

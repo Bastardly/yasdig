@@ -68,7 +68,7 @@ no macOS version.
    certificate, so choose *More info → Run anyway*. (Started from inside the zip
    without extracting, it stops and says so: it would be running from a temporary
    folder Windows deletes.)
-4. **Your browser opens on the app.** Open the **Get models** tab and download a model
+4. **Your browser opens on the app.** Open the **Models** tab and download a model
    — one click, with progress. The table below helps you choose.
 5. **Back on the Image tab**, type a prompt and press **Generate**.
 
@@ -98,7 +98,7 @@ Vulkan GPUs and Windows should work; reports are welcome.
 
 **Everything stays on your computer.** Your prompts, pictures and settings never
 leave it: there is no account, no telemetry and no update check. The only time YASDIG
-goes online is when you press download on the **Get models** tab, and then it fetches
+goes online is when you press download on the **Models** tab, and then it fetches
 that model from Hugging Face, from addresses built into the program.
 
 **The page is for this computer only.** The app is a small web server that listens on
@@ -147,7 +147,7 @@ vulnerability*) rather than in a public issue.
 
 ## What's supported
 
-**Model families.** Each but SD 1.x/2.x has a one-click card on the Get models tab.
+**Model families.** Each but SD 1.x/2.x has a one-click card on the Models tab.
 Not sure where to start? The ones marked *Recommended* there and in the model list
 (FLUX.3 Klein, MOSS-Image and Krea 2, or Iris-3B on a GPU under 12 GB) fit your GPU.
 
@@ -172,7 +172,7 @@ long clips made a shot at a time from each shot's last frame. Clips enlarge (FSR
 flicker) and save to Outputs as video files.
 
 **Model files** can be `.safetensors`, `.gguf` or `.ckpt`, and are recognised by what
-is inside them, so file names and folders don't matter. The Get models tab fetches the
+is inside them, so file names and folders don't matter. The Models tab fetches the
 parts a model needs beside it (text encoder, VAE); your own downloads can go anywhere
 under `models/`.
 
@@ -212,7 +212,7 @@ YASDIG is licensed under the [Apache License 2.0](LICENSE). It is powered by
 built into the program; its notices and those of everything else inside are in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and in the app under Help → *About &
 licences*. **Models are not part of YASDIG.** Every model has its own licence, set by
-the people who made it, and some forbid commercial use: check the page each Get models
+the people who made it, and some forbid commercial use: check the page each Models tab
 card links before using what you make.
 
 ## Support

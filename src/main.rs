@@ -378,7 +378,7 @@ struct Lanes {
     display: Sender<Job>,
     queue: Jobs,
     retained: Arc<Mutex<Retained>>,
-    /// The Get models tab's lane — curl, no GPU, never the job queue.
+    /// The Models tab's lane — curl, no GPU, never the job queue.
     downloads: downloads::Downloads,
 }
 
@@ -1073,7 +1073,7 @@ fn route(
         ("GET", "/loras") => handle_list_loras(conn, cfg),
         // Same shape and reason, minus the header read — see `UpscalerFile`.
         ("GET", "/upscalers") => handle_list_upscalers(conn, cfg),
-        // The Get models tab. Its own lane (`downloads`), so all four answer
+        // The Models tab. Its own lane (`downloads`), so all four answer
         // here: a download is network, not GPU, and must neither wait behind a
         // render nor hold one up. The body names a catalog id and nothing else.
         // The third-party notices a release has to carry inside itself — the

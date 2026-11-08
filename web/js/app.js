@@ -27,7 +27,7 @@ import { initBoard } from './board.js';
 import { initConvert } from './convert.js';
 import { initSettings, layoutSettingsTab } from './settings.js';
 import { initHelp, openHelp } from './help.js';
-import { initGetModels } from './getmodels.js';
+import { initModels } from './getmodels.js';
 import { initModelSettings } from './modelsettings.js';
 import { stopPlayback } from './player.js';
 import './prompt-box.js';
@@ -63,7 +63,7 @@ function showTab(name) {
   $('tab-cast').hidden = name !== 'cast';
   $('tab-video').hidden = name !== 'video';
   $('tab-convert').hidden = name !== 'convert';
-  $('tab-getmodels').hidden = name !== 'getmodels';
+  $('tab-models').hidden = name !== 'models';
   $('tab-help').hidden = name !== 'help';
   $('tab-settings').hidden = name !== 'settings';
   // A hidden workspace has no size: its panels are placed once it shows.
@@ -211,7 +211,7 @@ initAssistants();
 // The Video chat's film on the Shots rows and the Cast panel.
 initBoard();
 initConvert();
-initGetModels();
+initModels();
 initHelp();
 // After initImage(), because it applies the stored hi-res scale through
 // `setUpFactor`, which addresses a select initImage() fills the options of.

@@ -2730,7 +2730,7 @@ impl Engine {
             bail!("'{}' isn't an LTX model: only LTX can enlarge a clip this way", req.model);
         }
         if m.latent_upscaler.is_none() {
-            bail!("'{}' has no latent upscaler — Get models → {} has it", req.model, m.family.label());
+            bail!("'{}' has no latent upscaler — Models → {} has it", req.model, m.family.label());
         }
         if !m.exists {
             bail!("'{}' is missing files: {}", req.model, m.missing().iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "));
@@ -3109,7 +3109,7 @@ impl Engine {
     /// it. A history step like every pass.
     pub fn extend(&mut self, id: u64, req: &ExtendRequest) -> Result<GenResult> {
         let mut fill = self.cfg.fill_model().context(
-            "Extend needs a FLUX.1 Fill model — download one on the Get models tab",
+            "Extend needs a FLUX.1 Fill model — download one on the Models tab",
         )?;
         set_memory(&mut fill, req.memory.as_deref())?;
         fill.validate()?;

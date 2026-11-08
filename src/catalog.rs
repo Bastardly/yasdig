@@ -1,4 +1,4 @@
-//! What the Get models tab offers: a set of files per family — two where a
+//! What the Models tab offers: a set of files per family — two where a
 //! model ships in two precisions, the first being the default — compiled in
 //! from `catalog.toml`.
 //!
