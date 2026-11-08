@@ -768,6 +768,12 @@ after each of its images, anything queued behind it runs first. **Refine** and
 **Hi-res** pressed during a batch run between two of its images rather than after the
 whole batch. Conversions queue the same way.
 
+Downloads from the **Models** tab have a button of their own beside it, **Downloads**,
+with how far along they are and how much is left. Three files download at once. Its
+list has a **Cancel** for each file (what it has fetched is kept, so Download on the
+card picks up where it stopped), and a failed file's reason with **Retry** and
+**Dismiss**.
+
 The run belongs to the server, not the page: switch tabs, edit outputs in the viewer
 (which never waits on the queue) or reload, and it carries on — the Image tab shows its
 newest image when you come back.

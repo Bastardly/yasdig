@@ -730,6 +730,13 @@ since only `noise_marker` tells the experts apart. "Have" scans the video dir al
 what discovery assembles from.
 
 Cards link source repos (`File::page`). **No licence names in the catalog**, on purpose.
+**The top bar's Downloads** (`downloads.js`, `#dlbtn`/`#dldlg`) is the only download
+poll: 1 s while active, 5 s idle (another browser tab's download). `downloadsChanged`
+(the `observable` from `jobs.js`, on `finished`; the first answer is a silent
+baseline) reloads the model lists; `onDownloads` refetches `/catalog` — which scans —
+only while the Models tab shows, plus once after activity stops (a dialog cancel).
+A failure stays listed until retried or `POST /downloads/dismiss`.
+
 Page: cards and nav are grouped by category (`categories()` in `getmodels.js`: image,
 video, upscalers); `finished` moving triggers `loadModels()` (and `loadVideoModels()`);
 `#getparts` opens the family's card (`openModels`).
@@ -1410,7 +1417,8 @@ only `js/app.js`.
 | `dom.js` | `$`, `esc`, `post`, `numOr`, `bar`, `rememberFolds`, `ICONS`/`fillIcons`/`setPlayIcon`, `randomSeed`. No state, no imports |
 | `state.js` | `S`, `PANES`, `P`, `clearPane`, `escErr` |
 | `busy.js` | `IDLE_LABELS`, `setBusy`/`setIdle`, `onIdle`, `cancelRun` |
-| `jobs.js` | the `/jobs` poll: Jobs button/dialog, progress lines, `onResult`, `onNotice` |
+| `jobs.js` | the `/jobs` poll: Jobs button/dialog, progress lines, `onResult`, `onNotice`, `observable` |
+| `downloads.js` | the `/downloads` poll: Downloads button/dialog, `downloadsChanged`, `onDownloads` |
 | `hints.js` | `HELP`, `HINTS`, `wireHints`, the tooltip bubble |
 | `viewer.js` | the Refine & adjust dialog: open/close, `FILTERS`, sliders, `/adjust`, History, `zoomPane` |
 | `panels.js` | floating panels (the dialog's and the workspaces'): open, drag, remember, rail dots |

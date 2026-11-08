@@ -710,11 +710,11 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* The job queue. Narrow — a list of one-line rows — and the box inside it
    carries the padding, so a click on the dialog element itself can only be a
    click on the backdrop. */
-#jobsdlg {
+#jobsdlg, #dldlg {
   width: min(440px, 92vw); max-height: 80vh; padding: 0; background: var(--ink-700);
   color: var(--text); border: var(--line); border-radius: var(--r-lg);
 }
-#jobsdlg::backdrop { background: var(--scrim-soft); }
+#jobsdlg::backdrop, #dldlg::backdrop { background: var(--scrim-soft); }
 /* References: the Jobs dialog's box, two slots a row. */
 #refsdlg {
   width: min(640px, 92vw); padding: 0; border: var(--line); border-radius: var(--r-lg);
@@ -733,6 +733,10 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .jobrow .jobinfo { flex: 1; min-width: 0; }
 .jobrow .jobinfo .meta { overflow-wrap: anywhere; }
 .jobrow.running b, .jobrow.stopping b { color: var(--go); }
+.jobrow .bar { margin-top: var(--sp-1); }
+/* Only failures left: the button says so in the error colour. */
+#dlbtn.failed { background: var(--danger); color: #fff; }
+#dlbtn.failed:hover { background: var(--danger-hi); }
 
 /* ============================ The Help tab ============================
 

@@ -11,6 +11,12 @@ What changed in each release of yasdig. Each release's executables are on the
 - **Three files download at once**, so a card's small files no longer wait behind its
   big one. Cancel can stop a single file.
 
+### Added
+
+- **A Downloads button in the top bar**, beside Jobs, on every tab: how far along the
+  downloads are and how much is left, and a list with a Cancel per file, and Retry or
+  Dismiss on a failed one.
+
 ## 0.8.0 — 2026-11-08
 
 ### Added

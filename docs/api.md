@@ -537,7 +537,8 @@ needs a Vulkan device and nothing else.
   `{finished, got, bytes, files: [{entry, file, label, state, got, bytes, why?}]}`,
   `state` one of `downloading`, `queued`, `failed`; `got`/`bytes` totals leave failed
   files out. `finished` counts completed files since start, the page's cue to reload
-  its model lists.
+  its model lists. `POST /downloads/dismiss {entry, file}` forgets a failed file (its `.part`
+  stays).
 - `POST /video` — `model` and `shots` (at least one) are required; everything else
   optional:
   ```json

@@ -1572,6 +1572,7 @@ fn handle_download(
         "/downloads/start" => d.enqueue(cfg, &entry).map(|n| format!("{{\"queued\":{n}}}")),
         "/downloads/cancel" => d.cancel(&entry, file).map(|()| "{}".into()),
         "/downloads/clear" => d.clear(&entry).map(|()| "{}".into()),
+        "/downloads/dismiss" => d.dismiss(&entry, file.unwrap_or_default()).map(|()| "{}".into()),
         _ => return conn.respond(404, "text/plain", b"not found"),
     };
     match r {

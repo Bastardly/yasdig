@@ -25,7 +25,7 @@ const POLL_TIMEOUT_MS = 8000;
 // A value that tells its subscribers when it moves, with when it did (`at`,
 // the page's clock). The one pattern for "something on the server happened":
 // a subscriber refetches what it shows, whatever it believed before.
-function observable(value) {
+export function observable(value) {
   const subs = new Set();
   const o = {
     value,

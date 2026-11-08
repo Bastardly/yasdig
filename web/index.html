@@ -25,6 +25,9 @@
          tab you are on rather than taking you away from it. Hidden while the
          queue is empty; `jobs.js` writes its count and the loop mark. -->
     <button type="button" id="jobsbtn" class="btn btn-jobs" hidden></button>
+    <!-- The same for the Models tab's downloads (`downloads.js`): hidden
+         while nothing is queued, running or failed. -->
+    <button type="button" id="dlbtn" class="btn btn-jobs" hidden></button>
     <!-- The way out of a release started from a file manager, which has no
          console to close. Red because it stops a render in flight; never
          disabled while busy, for #stop's reason. Pushed to the far end so it
@@ -1720,6 +1723,19 @@
       queued behind it after each image.</p>
     <ul id="jobslist" class="joblist"></ul>
     <div id="jobserr" class="err"></div>
+  </div>
+</dialog>
+<!-- Downloads (downloads.js): the Jobs dialog's shape, one row per file. -->
+<dialog id="dldlg" class="jobsdlg" aria-labelledby="dltitle">
+  <div class="jobsbox">
+    <div class="wihead">
+      <b id="dltitle">Downloads</b>
+      <button type="button" id="dlclose" class="btn">Close</button>
+    </div>
+    <p class="sub">Three files at a time. A cancelled file keeps what it has, and
+      Download on its card in the Models tab picks it up again.</p>
+    <ul id="dllist" class="joblist"></ul>
+    <div id="dlerr" class="err"></div>
   </div>
 </dialog>
 <!-- The cast editor (casteditor.js): one entry, made or changed. Draw keeps

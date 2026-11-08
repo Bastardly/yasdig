@@ -305,6 +305,18 @@ impl Downloads {
         Ok(())
     }
 
+    /// Forget why `id`'s file `file` failed, so the Downloads dialog stops
+    /// listing it. Its `.part` stays (`clear` is what deletes one).
+    pub fn dismiss(&self, id: &str, file: usize) -> Result<()> {
+        let Some(t) = self.tasks(id)?.into_iter().nth(file) else {
+            bail!("{id:?} has no file {file}");
+        };
+        let mut st = self.lock();
+        st.failed.remove(&t.key);
+        st.failed_tasks.remove(&t.key);
+        Ok(())
+    }
+
     /// What the top bar's Downloads button shows: every file queued, running
     /// or failed, and the totals over them. Only `.part` lengths are read, never
     /// a model scan — it is polled every second while anything runs.
@@ -1124,6 +1136,13 @@ mod tests {
         d.cancel(&e.id, None).unwrap();
         assert!(flag(&mine[0].key) && !flag(&other.key));
         assert!(d.cancel(&e.id, Some(mine.len())).is_err());
+        // A failure is listed until dismissed.
+        d.lock().failed_tasks.insert(other.key.clone(), other.clone());
+        d.lock().failed.insert(other.key.clone(), "curl failed".into());
+        let failed = |d: &Downloads| d.summary().contains("curl failed");
+        assert!(failed(&d));
+        d.dismiss(&u.id, 0).unwrap();
+        assert!(!failed(&d));
         // The dialog's rows: one per running file, labelled by card and slot.
         let v: serde_json::Value = serde_json::from_str(&d.summary()).unwrap();
         assert_eq!(v["files"].as_array().unwrap().len(), 3);

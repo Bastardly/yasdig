@@ -16,6 +16,7 @@
 // beat, which puts it back on top of a dialog opened since.
 import { $ } from './dom.js';
 import { soonJobs } from './jobs.js';
+import { soonDownloads } from './downloads.js';
 
 const BEAT_MS = 2000;
 const TIMEOUT_MS = 1500;
@@ -59,6 +60,7 @@ function show(state) {
     // The jobs poll kept missing while we were down; catch it up now rather
     // than in up to its idle interval.
     soonJobs();
+    soonDownloads();
     return;
   }
   const restarted = state === 'restarted';

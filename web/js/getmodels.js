@@ -2,6 +2,7 @@ import { $, esc, getJSON, post } from './dom.js';
 import { loadModels } from './image.js';
 import { loadVideoModels } from './video.js';
 import { loadAgents } from './assistant.js';
+import { downloadsChanged, onDownloads, soonDownloads } from './downloads.js';
 
 // The Models tab: the server's catalog (`src/catalog.toml`), one card per
 // set of files — a family may have two, in different precisions — and what
@@ -15,10 +16,11 @@ import { loadAgents } from './assistant.js';
 // which is the same test the Models fold uses, so a Qwen3-4B under another name
 // is not offered a second time.
 //
-// Polled once a second while anything is queued or downloading, whichever tab
-// is showing: `finished` moving is what reloads the Image tab's model list —
-// and with it the upscaler list — so a file that just landed is pickable
-// without a reload.
+// Downloads are `downloads.js`'s poll, which reads no disk: a file finishing
+// (`downloadsChanged`) reloads the Image, Video and agent model lists — and
+// with them the upscaler list — so a file that just landed is pickable without
+// a reload; the cards (`/catalog`, which scans) are refetched only while this
+// tab shows, once a second while anything moves.
 //
 // The cards come in categories — image models, video models, upscalers — each a
 // list of its own on the wire (`entries`, `videos`, `upscalers`) and a group of
@@ -27,8 +29,6 @@ import { loadAgents } from './assistant.js';
 // video model nor an upscaler belongs in it.
 
 let view = null;
-let timer = null;
-let finished = null;
 let pending = null;
 
 const gb = (b) => (b / 1e9).toFixed(b < 1e9 ? 2 : 1) + ' GB';
@@ -169,25 +169,16 @@ function draw() {
   }).join('');
 }
 
+const shown = () => !$('tab-models').hidden;
+
 async function refresh() {
-  clearTimeout(timer);
-  timer = null;
   try {
     view = await fetchCatalog();
   } catch (e) {
     $('gmerr').textContent = 'Could not read the catalog: ' + e;
     return;
   }
-  // The first answer only sets the baseline; a later one that moved means a
-  // file landed, so the model list may have a new runnable entry.
-  if (finished !== null && view.finished !== finished) {
-    loadModels({ refill: false });
-    if (view.videos?.length) loadVideoModels({ refill: false });
-    if (view.agents?.length) loadAgents();
-  }
-  finished = view.finished;
   draw();
-  if (allEntries().some((e) => e.files.some(active))) timer = setTimeout(refresh, 1000);
 }
 
 // Open the tab on one family's card. For the Image tab's "Get the missing
@@ -210,6 +201,7 @@ export function initModels() {
     b.disabled = true;
     try {
       await post(`/downloads/${b.dataset.act}`, { entry: box.dataset.entry });
+      soonDownloads();
     } catch (err) {
       box.querySelector('[data-err]').textContent = String(err.message || err);
       b.disabled = false;
@@ -217,7 +209,21 @@ export function initModels() {
     }
     refresh();
   });
-  // A download started before a reload is still running on the server; the
-  // first poll picks it up and keeps polling.
+  // A file landed: the model may have a new runnable entry.
+  downloadsChanged.subscribe(() => {
+    loadModels({ refill: false });
+    loadVideoModels({ refill: false });
+    loadAgents();
+    if (shown()) refresh();
+  });
+  // Progress on the cards, only where they are seen.
+  // One more after the last stops, so a cancel from the Downloads dialog
+  // shows on its card.
+  let moving = false;
+  onDownloads((d) => {
+    const now = d.files.some(active);
+    if (shown() && (now || moving)) refresh();
+    moving = now;
+  });
   refresh();
 }
