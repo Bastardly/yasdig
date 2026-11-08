@@ -3,7 +3,7 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
-## Unreleased
+## 0.8.0 — 2026-11-08
 
 ### Added
 
@@ -48,25 +48,6 @@ What changed in each release of yasdig. Each release's executables are on the
   seconds, also over an open dialog, and goes away by itself when yasdig is back.
   If it came back as a different build, the banner offers **Reload**.
 
-## 0.7.1 — 2026-11-04
-
-### Changed
-
-- **Shots side by side**: the Video tab's Shots panel shows each shot as a card in a
-  strip that scrolls sideways, left to right as the clip plays, and the panel resizes
-  in both directions — widen it to see more shots at once. A round amber **+** at the
-  strip's right edge adds a shot. Shot 1 and every cut are a shade brighter, since the
-  shots after them go on from them. *Every shot* and the negative prompt fold away
-  under **For every shot**, and no longer stretch across a wide panel.
-- **Who is in it** on a shot is cast chips with their pictures: type a name, or
-  **Add cast…** — on a shot that starts fresh that brings their picture as a reference
-  and their voice as a sound. A chip's × takes them off that shot.
-- A shot's **Start from image** is a label over *Choose…* and *Upload…*, and
-  *References…*/*Sounds…* have a row of their own, so the buttons no longer squeeze
-  onto three lines with MiniMax H3.
-- The Image tab's Prompts panel: **Cast**, **References** and **Settings from a PNG**
-  each have a heading over plain buttons, like *Image to image*.
-
 ### Fixed
 
 - The Assistant's films use your saved cast only when you ask: by name, or "use my
@@ -90,6 +71,28 @@ What changed in each release of yasdig. Each release's executables are on the
   words need (each action it chains counts). A shot runs up to **Settings → Video →
   Longest storyboard shot**, 5 s by default, the length the models are made for —
   before, the Video tab's starting length (1.4 s on LTX) capped every shot.
+
+## 0.7.1 — 2026-11-04
+
+### Changed
+
+- **Shots side by side**: the Video tab's Shots panel shows each shot as a card in a
+  strip that scrolls sideways, left to right as the clip plays, and the panel resizes
+  in both directions — widen it to see more shots at once. A round amber **+** at the
+  strip's right edge adds a shot. Shot 1 and every cut are a shade brighter, since the
+  shots after them go on from them. *Every shot* and the negative prompt fold away
+  under **For every shot**, and no longer stretch across a wide panel.
+- **Who is in it** on a shot is cast chips with their pictures: type a name, or
+  **Add cast…** — on a shot that starts fresh that brings their picture as a reference
+  and their voice as a sound. A chip's × takes them off that shot.
+- A shot's **Start from image** is a label over *Choose…* and *Upload…*, and
+  *References…*/*Sounds…* have a row of their own, so the buttons no longer squeeze
+  onto three lines with MiniMax H3.
+- The Image tab's Prompts panel: **Cast**, **References** and **Settings from a PNG**
+  each have a heading over plain buttons, like *Image to image*.
+
+### Fixed
+
 - An uploaded PNG keeps the settings it carries, so *Settings from a PNG* works on it
   in Outputs. With *Settings inside saved PNGs* off, they are taken out on the way in.
 
