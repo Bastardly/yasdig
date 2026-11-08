@@ -541,6 +541,16 @@ needs a Vulkan device and nothing else.
   with why in `what`); `families` are labels of every family it serves. A file both
   the image and video scans find is one item. An agent is one item for its model and
   projector.
+- `POST /installed/delete {id}` — deletes the item's file(s) and `.part`, never a
+  folder; answers `{note}` (anything left to say, e.g. a `models.toml` entry naming
+  it). A 400 for an id not in a fresh listing, while any job is queued or running,
+  while its download is busy, or a file another program holds (Windows). Its settings
+  in `user/model-settings.toml` follow: the deleted model's tables parked, renamed
+  survivors' tables moved to their new names, part pins naming it removed.
+- `GET /model-notes` — `{id: text}`, every note. `POST /model-notes {id, text}` saves
+  one (blank removes it; at most 20 000 characters); `id` must have an Installed id's
+  shape. `/models`, `/video-models` and `/loras` carry `note_id`, the model file's
+  Installed id (`null` outside every model folder).
 - `GET /downloads` — what is queued, running or failed, without a disk scan:
   `{finished, got, bytes, files: [{entry, file, label, state, got, bytes, why?}]}`,
   `state` one of `downloading`, `queued`, `failed`; `got`/`bytes` totals leave failed

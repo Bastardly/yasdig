@@ -25,7 +25,18 @@ to find more.
 **Installed**, at the top of the same rail, lists what is already on disk by kind —
 checkpoints, video models, LoRAs, text encoders, VAEs, upscalers, agent models, and
 *Other* for files that can't be used here, with the reason — each with its size and
-the families it serves, read from its header like everything else.
+the families it serves, read from its header like everything else. **Delete** removes
+the file (an agent's model and projector together, and any half-downloaded `.part`),
+after a confirm that names the families that use it; it is refused while a job is
+queued or running, or while that file downloads. Settings saved for a deleted model
+are set aside in `user/model-settings.removed.toml` as on a start that finds a model
+gone, a part pinned to the file goes back to the one the scan picks, and its note is
+deleted. A `models.toml` entry naming it is yours to edit — the confirm says which.
+
+The blue **i** beside each file, and beside the model and LoRAs picked on the Image
+and Video tabs, opens your **note** on it: plain text, saved as you type, filled in
+blue once there is one. Notes live in `user/model-notes.toml`, keyed by where the file
+is, so a file moved outside yasdig loses its note until it is moved back.
 
 The rest of this section is the manual route, and what to do for a model the tab
 doesn't list.
@@ -203,6 +214,7 @@ stable-diffusion.cpp/build-yasdig/bin/sd-cli -M img_gen -m models/checkpoints/sd
 | `models.toml` | what the program needs in order to start: the sd.cpp binary, the directories, per-checkpoint presets | you, by hand |
 | `user/settings.toml` | your defaults: steps, CFG, size, the refine and hi-res settings, the default prompt | the **Settings tab**, on every save |
 | `user/model-settings.toml` | what one model does differently — a turbo's 6 steps, say | *Save as defaults for this model* and the Settings tab's **Per model** card |
+| `user/model-notes.toml` | your own notes on model files, keyed by where each file is | the blue **i** beside a model, in the Models tab and the Image and Video tabs |
 
 `user/settings.toml` is created on first run, seeded from a `[defaults]` block in
 `models.toml` if you still have one. It is rewritten in full every time you press

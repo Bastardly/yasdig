@@ -928,6 +928,93 @@ impl ModelSettings {
         Self::load(user_dir).unwrap_or_default()
     }
 
+    /// After the Models tab deleted a file: what this file says about it, made
+    /// true again. `image`/`video` are the registry names before and after,
+    /// each mapped to the model's path (`None` when the delete took it).
+    /// `part` is the deleted file as a part pin spells it.
+    ///
+    /// - **The deleted model's tables are parked**, as `reconcile` would on the
+    ///   next start — but now, before the next step hands its name to another.
+    /// - **A survivor whose name moved takes its tables along.** Names are file
+    ///   stems made unique in scan order, so deleting `a/model` renames
+    ///   `b/model-2` to `model`, which would otherwise inherit the deleted
+    ///   model's settings and leave its own behind.
+    /// - **Pins naming the file are removed**, so a model falls back to the part
+    ///   the scan picks rather than greying out over a file that was deleted
+    ///   on purpose.
+    ///
+    /// Returns whether anything changed.
+    pub fn follow_delete(
+        &mut self,
+        parked: &mut ModelSettings,
+        image: &[(String, Option<String>)],
+        video: &[(String, Option<String>)],
+        part: &str,
+    ) -> bool {
+        use std::collections::BTreeMap;
+        fn shift<T>(
+            live: &mut BTreeMap<String, T>,
+            parked: &mut BTreeMap<String, T>,
+            moves: &[(String, Option<String>)],
+        ) -> bool {
+            let mut changed = false;
+            // Everything that moves is taken out first, so a swap of two
+            // names can't overwrite one with the other.
+            let mut carried = Vec::new();
+            for (old, new) in moves {
+                if new.as_deref() == Some(old.as_str()) {
+                    continue;
+                }
+                if let Some(t) = live.remove(old) {
+                    changed = true;
+                    match new {
+                        None => {
+                            parked.insert(old.clone(), t);
+                        }
+                        Some(n) => carried.push((n.clone(), t)),
+                    }
+                }
+            }
+            for (n, t) in carried {
+                live.insert(n, t);
+            }
+            changed
+        }
+        let mut changed = shift(&mut self.model, &mut parked.model, image);
+        changed |= shift(&mut self.parts, &mut parked.parts, image);
+        changed |= shift(&mut self.video, &mut parked.video, video);
+        changed |= shift(&mut self.video_parts, &mut parked.video_parts, video);
+        for table in [&mut self.parts, &mut self.video_parts] {
+            for pins in table.values_mut() {
+                let before = pins.len();
+                pins.retain(|_, v| v != part);
+                changed |= pins.len() != before;
+            }
+            table.retain(|_, pins| !pins.is_empty());
+        }
+        changed
+    }
+
+    /// [`ModelSettings::follow_delete`] on the files in `user_dir`: the parked
+    /// file first, as `reconcile` writes them.
+    pub fn follow_delete_in(
+        user_dir: &Path,
+        image: &[(String, Option<String>)],
+        video: &[(String, Option<String>)],
+        part: &str,
+    ) -> Result<()> {
+        let mut live = Self::load(user_dir)?;
+        let parked_path = Self::parked_path(user_dir);
+        let mut parked = Self::read(&parked_path)?;
+        if !live.follow_delete(&mut parked, image, video, part) {
+            return Ok(());
+        }
+        if parked != ModelSettings::default() {
+            parked.write(&parked_path, PARKED_HEADER)?;
+        }
+        live.save(user_dir)
+    }
+
     /// Write it whole, through a rename, as [`Settings::save`] does.
     pub fn save(&self, user_dir: &Path) -> Result<()> {
         self.write(&Self::path(user_dir), MODELS_HEADER)
@@ -1106,6 +1193,34 @@ mod tests {
     /// refuses that key for a model. The per-model card hides marked rows and
     /// sends every other one, so a missing mark makes every per-model save
     /// fail — which a hand-kept second list did, from `max_image_side` on.
+    #[test]
+    fn a_delete_parks_the_model_moves_the_survivors_and_drops_its_pins() {
+        let mut live = ModelSettings::default();
+        let steps = |n: u32| PartialSettings { steps: Some(n), ..PartialSettings::default() };
+        live.model.insert("model".into(), steps(10));
+        live.model.insert("model-2".into(), steps(20));
+        live.model.insert("other".into(), steps(30));
+        let pin = |v: &str| [("vae".to_string(), v.to_string())].into_iter().collect();
+        live.parts.insert("other".into(), pin("vae/gone.safetensors"));
+        live.parts.insert("model-2".into(), pin("vae/kept.safetensors"));
+        live.video_parts.insert("wan".into(), pin("vae/gone.safetensors"));
+        let mut parked = ModelSettings::default();
+        // `a/model` deleted: `b/model-2` is `model` now.
+        let image = vec![
+            ("model".to_string(), None),
+            ("model-2".to_string(), Some("model".to_string())),
+            ("other".to_string(), Some("other".to_string())),
+        ];
+        assert!(live.follow_delete(&mut parked, &image, &[], "vae/gone.safetensors"));
+        assert_eq!(parked.model["model"].steps, Some(10));
+        assert_eq!(live.model["model"].steps, Some(20), "the survivor kept its own");
+        assert!(!live.model.contains_key("model-2"));
+        assert_eq!(live.parts["model"]["vae"], "vae/kept.safetensors");
+        assert!(!live.parts.contains_key("other"), "its only pin named the deleted file");
+        assert!(live.video_parts.is_empty());
+        assert!(!live.follow_delete(&mut parked, &[], &[], "vae/gone.safetensors"));
+    }
+
     #[test]
     fn fields_mark_exactly_the_page_only_keys() {
         let page = crate::web::lookup("/js/settings.js").expect("settings.js is served");

@@ -45,6 +45,11 @@
   --danger:      #b8413a;
   --danger-hi:   #cc4c44;
   --danger-text: #ff9c8f;
+  /* The blue i, a model file's note: blue because nothing else on the page
+     is, so it never reads as an action, a state or a heading. */
+  --info:        #4f9fe8;
+  --info-soft:   rgba(79, 159, 232, .18);
+  --on-info:     #07121d;
   /* The Jobs button: something is queued. The danger red's saturation and
      lightness (52%, 47%) at a green hue, so the two buttons in the tab row read
      as a pair of the same weight. A green that light carries dark text — white
@@ -65,6 +70,7 @@
      the one part of the app that needs the internet. Pick the best installed. --- */
   --font-ui:  Inter, "SF Pro Text", "Segoe UI Variable Text", Cantarell, "Noto Sans", system-ui, sans-serif;
   --font-num: "JetBrains Mono", "IBM Plex Mono", "DejaVu Sans Mono", ui-monospace, monospace;
+  --font-info: Georgia, "DejaVu Serif", serif;   /* the i's glyph */
 
   --fs-micro:   11px;
   --fs-sm:      13px;
@@ -424,10 +430,27 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    `minmax(0, 1fr)` is what lets the select shrink instead, since a select's
    default minimum is its widest option. */
 .lorarow {
-  display: grid; grid-template-columns: minmax(0, 1fr) 5.5rem auto;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto 5.5rem auto;
   gap: var(--sp-2); margin-top: var(--sp-2);
 }
 .lorarow .btn { padding: var(--sp-2); }
+.lorarow .btn-info { align-self: center; }
+/* A select with its model's note beside it. */
+.withinfo { display: flex; align-items: center; gap: var(--sp-2); }
+.withinfo > select { flex: 1; min-width: 0; }
+/* The blue i: a model file's note (`notes.js`). Outlined until there is one,
+   filled when there is — seen without opening it. Not `.hint`, which is the
+   tooltip's icon. */
+.btn.btn-info {
+  flex: 0 0 auto; width: 1.6em; height: 1.6em; padding: 0; border-radius: 50%;
+  font: italic 700 var(--fs-sm)/1 var(--font-info);
+  background: transparent; color: var(--info); border: 1.5px solid var(--info);
+}
+.btn.btn-info:hover { background: var(--info-soft); }
+.btn.btn-info.has { background: var(--info); color: var(--on-info); }
+.btn.btn-info:disabled, .btn.btn-info:disabled:hover { opacity: .35; background: transparent; }
+#notetext { width: 100%; margin-top: var(--sp-2); resize: vertical; }
+#notedlg { width: min(560px, 92vw); }
 /* Per model's list of video models with saved defaults. */
 .pmvrow { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
 /* A long clip's shot: a heading line (its number, how it starts, done, ×),
@@ -710,11 +733,11 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* The job queue. Narrow — a list of one-line rows — and the box inside it
    carries the padding, so a click on the dialog element itself can only be a
    click on the backdrop. */
-#jobsdlg, #dldlg {
+#jobsdlg, #dldlg, #notedlg {
   width: min(440px, 92vw); max-height: 80vh; padding: 0; background: var(--ink-700);
   color: var(--text); border: var(--line); border-radius: var(--r-lg);
 }
-#jobsdlg::backdrop, #dldlg::backdrop { background: var(--scrim-soft); }
+#jobsdlg::backdrop, #dldlg::backdrop, #notedlg::backdrop { background: var(--scrim-soft); }
 /* References: the Jobs dialog's box, two slots a row. */
 #refsdlg {
   width: min(640px, 92vw); padding: 0; border: var(--line); border-radius: var(--r-lg);
@@ -1383,6 +1406,10 @@ a:hover { color: var(--accent-hi); }
 .gmitem { display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2) 0; border-top: var(--line); }
 .gmitem:first-child { border-top: 0; }
 .gmiteminfo { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.gmitem > .btn-info { margin-top: 2px; }
+.gmitem > .btn-danger { padding: var(--sp-1) var(--sp-2); }
+.gmiteminfo > .err:empty { display: none; }
+.gmiteminfo > .err { margin-top: var(--sp-1); }
 .gmchips { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-1); }
 .gmchip {
   padding: 0 var(--sp-2); border: var(--line); border-radius: var(--r-sm);

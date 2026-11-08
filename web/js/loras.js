@@ -1,4 +1,5 @@
 import { $, esc, getJSON } from './dom.js';
+import { infoButton, setInfo } from './notes.js';
 
 // ---- LoRAs ------------------------------------------------------------------
 //
@@ -139,6 +140,7 @@ export function loraPicker({ rows, add, family = () => null, onChange = () => {}
       return `
       <div class="lorarow">
         <select data-i="${i}" aria-label="LoRA">${options(p.name, fam)}</select>
+        ${infoButton(l?.note_id, l?.label ?? p.name)}
         <input type="number" data-i="${i}" step="0.05"
           value="${p.strength}" aria-label="Strength" title="Multiplier. 1 is the weight it was trained at.">
         <button type="button" class="btn btn-danger" data-i="${i}"
@@ -149,7 +151,11 @@ export function loraPicker({ rows, add, family = () => null, onChange = () => {}
       }</select>` : ''}${off}`;
     }).join('');
     for (const sel of el.querySelectorAll('select[data-i]')) {
-      sel.addEventListener('change', () => { picked[Number(sel.dataset.i)].name = sel.value; });
+      sel.addEventListener('change', () => {
+        picked[Number(sel.dataset.i)].name = sel.value;
+        const l = available.find((a) => a.name === sel.value);
+        setInfo(sel.parentElement.querySelector('[data-note]'), l?.note_id, l?.label ?? sel.value);
+      });
     }
     for (const sel of el.querySelectorAll('select[data-e]')) {
       sel.addEventListener('change', () => { picked[Number(sel.dataset.e)].expert = sel.value; });
@@ -163,7 +169,8 @@ export function loraPicker({ rows, add, family = () => null, onChange = () => {}
         picked[Number(box.dataset.i)].strength = Number.isFinite(v) ? v : 1;
       });
     }
-    for (const b of el.querySelectorAll('button')) {
+    // The × only: the row's i is `notes.js`'s.
+    for (const b of el.querySelectorAll('button[data-i]')) {
       b.addEventListener('click', () => {
         picked.splice(Number(b.dataset.i), 1);
         render();

@@ -10,6 +10,7 @@ import { wireHints } from './hints.js';
 import { onRefsChange, references, refsActive, syncRefs } from './refs.js';
 import { castNames, castPayload, initCastPicks, syncCastPicks } from './castpicks.js';
 import { openModels } from './getmodels.js';
+import { setInfo } from './notes.js';
 import { floatPanels } from './panels.js';
 import { partRows } from './parts.js';
 import { showError, MEMORY_LABELS } from './memory.js';
@@ -166,6 +167,8 @@ const partSelects = imageParts.selects;
 // model without firing `change` and then puts back the parts the image ran with.
 export function syncParts() {
   imageParts.draw(currentModel()?.parts ?? []);
+  // The i beside the select follows the model, however it was set.
+  setInfo($('templatenote'), currentModel()?.note_id, currentModel()?.name);
   wireHints($('partrows'));
   syncModelsSummary();
 }

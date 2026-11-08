@@ -740,6 +740,24 @@ upscalers are `other`); `families_of` is every family with a slot that fits.
 Fetched on entering the tab and on `downloadsChanged`, never on the progress poll.
 Built with the rail, so the first `refresh` waits for both answers.
 
+- **Delete is `inventory::delete`** (`POST /installed/delete`, connection thread):
+  `find` in a fresh list, refused while *any* job is in the queue (which job reads
+  which file is in each profile; Stop is the clear answer) or `Downloads::busy`.
+  Files and `.part` only, never a folder; `PermissionDenied` is "in use" (Windows).
+- **Settings follow by path, not name** (`ModelSettings::follow_delete`, tested):
+  registry names are stems made unique in scan order, so deleting `a/model` makes
+  `b/model-2` into `model` — `delete` maps name → path before and after, parks the
+  deleted model's tables *now* (before a survivor takes the name), moves each
+  survivor's, and drops part pins equal to the file's models-dir name.
+- **Notes** (`src/notes.rs`, `user/model-notes.toml`, one `LOCK`, `.tmp` + rename)
+  are keyed by Installed id; a gone file's note is kept, only a delete removes it.
+  `note_id` rides on `/models` (hand-rolled JSON), `/video-models` (`VideoModelDto`)
+  and `/loras` (a `Value` patch, so `LoraFile` stays the config type). The page:
+  `notes.js` — every i is a `[data-note]` `.btn.btn-info` (blue `--info`, `.has`
+  filled), one document click listener, `setInfo` re-points one (`syncParts`,
+  `syncReady`, a LoRA row's select). **A LoRA row's × handler is `button[data-i]`**,
+  or it would remove the row on an i click.
+
 **The top bar's Downloads** (`downloads.js`, `#dlbtn`/`#dldlg`) is the only download
 poll: 1 s while active, 5 s idle (another browser tab's download). `downloadsChanged`
 (the `observable` from `jobs.js`, on `finished`; the first answer is a silent
@@ -1391,10 +1409,10 @@ the stem** (one stem, one picture), keeps the mtime (grid order), rebuilds each 
 and leaves the sidecar; the page cache-busts the tile (`edited` in `outputs.js`).
 
 - **Deleting is `gridmark.js`**, shared with the work-item grid.
-  **Delete all = the same request with every id.** One of seven `confirm()`s
+  **Delete all = the same request with every id.** One of eight `confirm()`s
   (with Close server, Jobs Stop/Remove, the Outputs viewer's unsaved edit, redrawing a film's first frame,
-  deleting the Assistant's chat — the panel has no click-to-delete grid — and closing the cast editor
-  with tries unsaved).
+  deleting the Assistant's chat — the panel has no click-to-delete grid — closing the cast editor
+  with tries unsaved, and deleting a model file in Installed, which names what uses it).
 - **`outputGrid` is the one tile** (`height`, `empty`, `onPick`, optional `star`); height must match
   `.wigrid`.
 - **Arrow keys yield to a focused range input**; listener on `document`.
@@ -1435,6 +1453,7 @@ only `js/app.js`.
 | `busy.js` | `IDLE_LABELS`, `setBusy`/`setIdle`, `onIdle`, `cancelRun` |
 | `jobs.js` | the `/jobs` poll: Jobs button/dialog, progress lines, `onResult`, `onNotice`, `observable` |
 | `downloads.js` | the `/downloads` poll: Downloads button/dialog, `downloadsChanged`, `onDownloads` |
+| `notes.js` | a model file's note: `#notedlg`, the blue i (`infoButton`, `setInfo`) |
 | `hints.js` | `HELP`, `HINTS`, `wireHints`, the tooltip bubble |
 | `viewer.js` | the Refine & adjust dialog: open/close, `FILTERS`, sliders, `/adjust`, History, `zoomPane` |
 | `panels.js` | floating panels (the dialog's and the workspaces'): open, drag, remember, rail dots |

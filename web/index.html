@@ -196,7 +196,10 @@
     <header class="fphead"><b>Models</b> <span class="foldstate" id="modelsum"></span><button type="button" class="fpclose" aria-label="Close Models">&times;</button></header>
     <div class="fpbody">
       <label for="template">Diffusion model</label>
-      <select id="template"></select>
+      <div class="withinfo">
+        <select id="template"></select>
+        <button type="button" id="templatenote" class="btn btn-info" data-note="" disabled aria-label="Note on this model">i</button>
+      </div>
       <!-- Filled by loadModels when a model is listed greyed out: the Get
            models tab knows which files it is waiting for and can fetch them.
            Right under the select, because a greyed-out model can't be picked —
@@ -721,7 +724,10 @@
     <header class="fphead"><b>Generation</b> <span class="foldstate" id="vsum-gen"></span><button type="button" class="fpclose" aria-label="Close Generation">&times;</button></header>
     <div class="fpbody">
       <label for="vmodel">Model</label>
-      <select id="vmodel"></select>
+      <div class="withinfo">
+        <select id="vmodel"></select>
+        <button type="button" id="vmodelinfo" class="btn btn-info" data-note="" disabled aria-label="Note on this model">i</button>
+      </div>
       <p class="sub" id="vmodelnote"></p>
       <!-- One select per separate file the model's family runs with (its VAE,
            text encoder, H3's audio VAE), drawn by parts.js from the slots
@@ -1729,6 +1735,19 @@
       queued behind it after each image.</p>
     <ul id="jobslist" class="joblist"></ul>
     <div id="jobserr" class="err"></div>
+  </div>
+</dialog>
+<!-- A model file's note (notes.js): one dialog, opened by every blue i. -->
+<dialog id="notedlg" class="jobsdlg" aria-labelledby="notetitle">
+  <div class="jobsbox">
+    <div class="wihead">
+      <b id="notetitle">Note</b>
+      <button type="button" id="noteclose" class="btn">Close</button>
+    </div>
+    <p class="meta" id="notefile"></p>
+    <textarea id="notetext" rows="10" aria-label="Your note" placeholder="What it is good at, the settings that worked…"></textarea>
+    <p class="sub" id="notemsg"></p>
+    <div id="noteerr" class="err"></div>
   </div>
 </dialog>
 <!-- Downloads (downloads.js): the Jobs dialog's shape, one row per file. -->

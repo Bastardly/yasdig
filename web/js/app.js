@@ -17,6 +17,7 @@ import { applyAssistantSettings, assistantSettings, initImage, layoutImageTab, r
 import { initJobs, jobCount, stopJobs } from './jobs.js';
 import { initAlive, stopAlive } from './alive.js';
 import { initDownloads, stopDownloads } from './downloads.js';
+import { initNotes } from './notes.js';
 import { initBusy } from './busy.js';
 import { initWorkItems, loadWorkItems, markGrid } from './workitems.js';
 import { initOutputs, loadOutputs } from './outputs.js';
@@ -229,5 +230,6 @@ initModelSettings();
 // modules above registered, so they have to be registered first.
 initJobs();
 initDownloads();
+initNotes();
 initTabs();
 initAlive();

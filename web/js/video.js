@@ -17,6 +17,7 @@ import { partRows } from './parts.js';
 import { loraPicker, turboMemory } from './loras.js';
 import { loadModelSettings } from './modelsettings.js';
 import { enhance } from './enhance.js';
+import { setInfo } from './notes.js';
 
 // ---- Video ------------------------------------------------------------------
 //
@@ -890,6 +891,7 @@ function missingNow(m) {
 function syncReady() {
   const m = currentVideoModel();
   if (!m) return;
+  setInfo($('vmodelinfo'), m.note_id, m.name);
   const missing = missingNow(m);
   $('vmodelnote').textContent = missing.length
     ? `Not ready — missing ${missing.length} file(s): ${missing.join(', ')}`

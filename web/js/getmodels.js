@@ -1,5 +1,6 @@
 import { $, esc, getJSON, post } from './dom.js';
 import { floatPanels } from './panels.js';
+import { forget, infoButton } from './notes.js';
 import { loadModels } from './image.js';
 import { loadVideoModels } from './video.js';
 import { loadAgents } from './assistant.js';
@@ -202,7 +203,10 @@ function installedRow(it) {
     <div class="gmiteminfo"><b>${esc(it.label)}</b> <span class="meta">${gb(it.bytes)}</span>
       <div class="sub">${esc(it.what)}</div>
       ${it.name !== it.label ? `<div class="meta"><code>${esc(it.name)}</code></div>` : ''}
-      ${fams ? `<div class="gmchips">${fams}</div>` : ''}</div>
+      ${fams ? `<div class="gmchips">${fams}</div>` : ''}
+      <div class="err" data-itemerr></div></div>
+    ${infoButton(it.id, it.label)}
+    <button type="button" class="btn btn-danger" data-delete="${esc(it.id)}">Delete</button>
   </li>`;
 }
 
@@ -221,6 +225,41 @@ function drawInstalled() {
     // An empty group has nothing to show; Other especially.
     document.querySelector(`[data-panel="gm-installed-${g.id}"]`).hidden = !items.length;
   }
+}
+
+// The confirm names what loses the file — the families it serves, and any
+// hand-written models.toml entry, which yasdig never edits — so deleting a VAE
+// six models share is a decision, not a slip.
+async function deleteItem(id, row) {
+  const it = installed?.items.find((i) => i.id === id);
+  if (!it) return;
+  const many = it.families.length > 3
+    ? `${it.families.slice(0, 3).join(', ')} and ${it.families.length - 3} more`
+    : it.families.join(', ').replace(/, ([^,]*)$/, ' and $1');
+  const uses = it.group === 'checkpoints' || it.group === 'video'
+    ? ''
+    : it.families.length
+      ? `\n\n${many} ${it.families.length > 1 ? 'use' : 'uses'} it, and would need it again.` : '';
+  const hand = it.named_by.length
+    ? `\n\nmodels.toml names it in ${it.named_by.join(', ')}; yasdig doesn't edit that file.` : '';
+  const files = it.group === 'agents' ? ' (the model and its projector)' : '';
+  if (!confirm(`Delete ${it.name}${files} (${gb(it.bytes)})?${uses}${hand}\n\nThis can't be undone.`)) return;
+  const err = row?.querySelector('[data-itemerr]');
+  if (err) err.textContent = '';
+  try {
+    const r = await post('/installed/delete', { id });
+    forget(id);
+    if (r.note) $('gmerr').textContent = r.note;
+  } catch (e) {
+    if (err) err.textContent = String(e.message || e);
+    return;
+  }
+  // Every list that could offer it, and the cards, which offer it again.
+  loadModels({ refill: false });
+  loadVideoModels({ refill: false });
+  loadAgents();
+  await loadInstalled();
+  refresh();
 }
 
 export async function loadInstalled() {
@@ -295,6 +334,13 @@ export function initModels() {
   });
   // Delegated to the tab: the panels are built after the first fetch.
   $('tab-models').addEventListener('click', async (e) => {
+    const del = e.target.closest('[data-delete]');
+    if (del) {
+      del.disabled = true;
+      await deleteItem(del.dataset.delete, del.closest('[data-item]'));
+      del.disabled = false;
+      return;
+    }
     const b = e.target.closest('[data-act]');
     if (!b) return;
     const box = b.closest('[data-entry]');

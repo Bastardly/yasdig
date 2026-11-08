@@ -143,6 +143,7 @@ mod inventory;
 mod jobs;
 mod layout;
 mod llm;
+mod notes;
 mod pipeline;
 mod pngmeta;
 mod redraw;
@@ -1089,7 +1090,13 @@ fn route(
             Ok(body) => conn.respond(200, "application/json", &body),
             Err(e) => conn.respond(500, "application/json", error_json(&format!("{e}")).as_bytes()),
         },
-        ("GET", "/installed") => conn.respond(200, "application/json", crate::inventory::json(cfg).to_string().as_bytes()),
+        ("GET", "/installed") => conn.respond(200, "application/json", inventory::json(cfg).to_string().as_bytes()),
+        ("POST", "/installed/delete") => handle_installed_delete(conn, cfg, lanes, &req.body),
+        ("GET", "/model-notes") => match serde_json::to_vec(&notes::all(&cfg.user_dir())) {
+            Ok(body) => conn.respond(200, "application/json", &body),
+            Err(e) => conn.respond(500, "application/json", error_json(&format!("{e}")).as_bytes()),
+        },
+        ("POST", "/model-notes") => handle_model_note(conn, cfg, &req.body),
         ("GET", "/downloads") => conn.respond(200, "application/json", lanes.downloads.summary().as_bytes()),
         ("POST", p) if p.starts_with("/downloads/") => handle_download(conn, cfg, lanes, p, &req.body),
         ("GET", "/video-models") => handle_video_models(conn, cfg),
@@ -1329,6 +1336,8 @@ struct VideoModelDto {
     /// It starts at saved defaults of its own (`[video."<name>"]`), which the
     /// select says, as the Image tab's "tuned" does.
     tuned: bool,
+    /// The transformer's Installed id, which its note is filed under.
+    note_id: Option<String>,
 }
 
 /// Everything in the LoRA dir, usable or not.
@@ -1536,7 +1545,19 @@ fn save_video_model_settings(
 /// `GET /loras`: every file in the LoRA dir, usable or not, with what each
 /// fits. Filesystem only, so it answers on the connection thread.
 fn handle_list_loras(conn: &mut http::Connection, cfg: &Config) -> Result<()> {
-    match serde_json::to_vec(&cfg.list_loras()) {
+    // Each with its Installed id, which its note is filed under.
+    let dir = cfg.lora_dir();
+    let loras: Vec<serde_json::Value> = cfg
+        .list_loras()
+        .into_iter()
+        .map(|l| {
+            let id = inventory::id_of(cfg, &dir.join(&l.name));
+            let mut v = serde_json::to_value(&l).unwrap_or_default();
+            v["note_id"] = id.into();
+            v
+        })
+        .collect();
+    match serde_json::to_vec(&loras) {
         Ok(body) => conn.respond(200, "application/json", &body),
         Err(e) => conn.respond(
             500,
@@ -1555,6 +1576,35 @@ fn handle_list_upscalers(conn: &mut http::Connection, cfg: &Config) -> Result<()
             "application/json",
             error_json(&format!("listing upscalers: {e}")).as_bytes(),
         ),
+    }
+}
+
+/// `POST /installed/delete {id}`, on the connection thread: a delete is a
+/// few unlinks and a settings rewrite, and must not wait behind the render it
+/// is refused during.
+fn handle_installed_delete(conn: &mut http::Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    let v = serde_json::from_slice::<serde_json::Value>(body).unwrap_or_default();
+    let id = v["id"].as_str().unwrap_or_default();
+    let busy = !lanes.queue.snapshot().jobs.is_empty();
+    match inventory::delete(cfg, id, busy, |p| lanes.downloads.busy(p)) {
+        Ok(note) => conn.respond(200, "application/json", serde_json::json!({"note": note}).to_string().as_bytes()),
+        Err(e) => conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
+    }
+}
+
+/// `POST /model-notes {id, text}`: blank text removes the note. The id must
+/// be one an Installed listing could hold — a note is never a path.
+fn handle_model_note(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    let v = serde_json::from_slice::<serde_json::Value>(body).unwrap_or_default();
+    let id = v["id"].as_str().unwrap_or_default();
+    let text = v["text"].as_str().unwrap_or_default();
+    let r = match inventory::resolve(cfg, id) {
+        None => Err(anyhow::anyhow!("{id:?} names no model file")),
+        Some(_) => notes::set(&cfg.user_dir(), id, text),
+    };
+    match r {
+        Ok(()) => conn.respond(200, "application/json", b"{}"),
+        Err(e) => conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
     }
 }
 
@@ -1591,6 +1641,7 @@ fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> 
         .into_iter()
         .map(|m| VideoModelDto {
             tuned: saved.video.contains_key(&m.name) || saved.video_parts.contains_key(&m.name),
+            note_id: inventory::id_of(cfg, &m.diffusion_model),
             parts: cfg.video_part_views(&m, &scan),
             family: m.family.as_str(),
             ltx: m.family.is_ltx(),
@@ -3836,7 +3887,7 @@ fn build_models_json(cfg: &Config) -> String {
                 .unwrap_or_else(|_| "[]".into());
             format!(
                 "{{\"name\":{},\"description\":{},\"discovered\":{},\"exists\":{},\
-                 \"family\":{},\"family_label\":{},\"recommended\":{},\"layout\":{},\"references\":{},\"fill\":{},\"tuned\":{},\"missing\":[{}],\"parts\":{},\
+                 \"family\":{},\"family_label\":{},\"recommended\":{},\"layout\":{},\"references\":{},\"fill\":{},\"tuned\":{},\"note_id\":{},\"missing\":[{}],\"parts\":{},\
                  \"base_width\":{},\"base_height\":{},\"out_width\":{},\"out_height\":{},\
                  \"steps\":{},\"cfg_scale\":{},\"sampler\":{},\"scheduler\":{},\"cache_mode\":{},\"memory\":{},\
                  \"upscale_factor\":{},\"upscaler\":{},\
@@ -3859,6 +3910,8 @@ fn build_models_json(cfg: &Config) -> String {
                 p.family.takes_references(),
                 p.family.fill_only(),
                 tuned.model.contains_key(&p.name) || tuned.parts.contains_key(&p.name),
+                // The model file's Installed id: what its note is filed under.
+                inventory::id_of(cfg, &p.model).map(|i| json_str(&i)).unwrap_or_else(|| "null".into()),
                 missing.join(","),
                 parts,
                 p.width,

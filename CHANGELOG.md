@@ -22,6 +22,11 @@ What changed in each release of yasdig. Each release's executables are on the
 - **Installed**, at the top of the Models tab's rail: every model file you have,
   grouped — checkpoints, video models, LoRAs, text encoders, VAEs, upscalers, agent
   models, and what can't be used — each with its size and the families it serves.
+  **Delete** removes a file after a confirm naming what uses it; saved settings and
+  pinned parts follow.
+- **Notes on models**: a blue *i* beside each installed file, and beside the model and
+  LoRAs picked on the Image and Video tabs, opens your own note on it, saved as you
+  type. It is filled in once a note exists.
 
 ## 0.8.0 — 2026-11-08
 

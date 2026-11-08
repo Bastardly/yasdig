@@ -317,6 +317,11 @@ impl Downloads {
         Ok(())
     }
 
+    /// Whether `path` is being written, or waits to be: a delete must leave it.
+    pub fn busy(&self, path: &Path) -> bool {
+        self.lock().busy(&key(path))
+    }
+
     /// What the top bar's Downloads button shows: every file queued, running
     /// or failed, and the totals over them. Only `.part` lengths are read, never
     /// a model scan — it is polled every second while anything runs.
