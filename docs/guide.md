@@ -874,6 +874,14 @@ and motion only. On H3 it writes what is seen, keeps names as they are (they are
 matched to the references), leaves Spoken, Sound and Music to their fields, and fills
 an empty Sound. Ctrl+Z puts your words back.
 
+A later shot is written to belong to the same clip: Enhance shows the agent shot 1, the
+last cut before it and the shot before, and asks it to keep the place, the light, the
+time of day and how people look unless the shot's own words change them — a shot that
+goes on carries on from the one before, a cut is a new camera shot of the same film.
+**Enhance every shot**, under the shots, does them in order, each one waiting for the
+one before, so shot 5 is written to match shots 1 to 4 as they now read. Stop ends it
+where it is: the shots done stay written.
+
 **Cheap first, then good.** After a render every row shows the seed it was drawn with,
 and the rows on the clip on the stage are ticked green. Change one row's seed, length or
 words and **Redo from shot k** appears at the foot of the panel: it keeps the shots

@@ -13,6 +13,10 @@ What changed in each release of yasdig. Each release's executables are on the
   (who speaks, in what voice, what is heard), which LTX otherwise guesses. On H3 the
   Spoken, Sound and Music fields stay apart, and an empty Sound gets a line. Ctrl+Z in
   the box puts your words back.
+- **Enhanced shots belong to one clip**: a later shot is written knowing shot 1, the
+  scene it is in and the shot before, and keeps their place, light and people unless
+  its words change them — a cut too. **Enhance every shot** does the rows in order, each
+  matching the ones before, and the Assistant's storyboards are enhanced the same way.
 - **The Assistant's storyboards are written out in full**: after it writes a film, each
   new or changed shot is enhanced for the film's video model before the rows appear.
   It keeps its own short words for the next rewrite, so a shot it didn't change keeps

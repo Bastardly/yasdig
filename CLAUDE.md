@@ -956,7 +956,11 @@ Break silently:
   family's `modes: [enhance]` guide (`skills::select_enhance`: `Skill.enhance` guides
   plus the family's mode-free style notes; `select` never gives a chat turn one). The
   page writes the answer with `insertText` (undo). H3 keeps names (its `<Subject N>`
-  match) and its fields; `sound` only fills an empty one. **A story's new or changed
+  match) and its fields; `sound` only fills an empty one. **A shot sees its
+  neighbours** (`enhance::neighbours`: shot 1, the last cut, the shot before — a cut
+  is "the same film", not "nothing carried over"), shed by `trimmed` to fit the
+  context and dropped on a `ContextOverflow` retry; *Enhance every shot*
+  (`enhanceAll`) runs the rows in order. **A story's new or changed
   shots are enhanced after the turn** (`FilmShot.enhance` → `Next::Enhance` →
   `Step::Enhance`, `session::shot_enhanced`): the story's words move to
   `FilmShot.brief`, which `board_text`, `apply_story`'s match (`words()`) and

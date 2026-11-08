@@ -25,10 +25,11 @@ export function replaceText(field, text) {
 //   body      the request, or null to do nothing
 //   onError   (message) — '' clears
 //   onDone    (answer) after the text is written: H3's `sound`, say
+// True when the text was written, so a caller can go on to the next box.
 export async function enhance(btn, field, body, { onError, onDone } = {}) {
-  if (btn.dataset.busy) { stopKind('enhance'); return; }
-  if (!body) return;
-  if (!body.text?.trim()) { onError?.('Write a few words first: Enhance fills in what they leave open.'); return; }
+  if (btn.dataset.busy) { stopKind('enhance'); return false; }
+  if (!body) return false;
+  if (!body.text?.trim()) { onError?.('Write a few words first: Enhance fills in what they leave open.'); return false; }
   const label = btn.textContent;
   btn.dataset.busy = '1';
   btn.textContent = 'Stop';
@@ -40,9 +41,12 @@ export async function enhance(btn, field, body, { onError, onDone } = {}) {
     if (field.isConnected && r.prompt) {
       replaceText(field, r.prompt);
       onDone?.(r);
+      return true;
     }
+    return false;
   } catch (e) {
     onError?.(e.message);
+    return false;
   } finally {
     delete btn.dataset.busy;
     btn.textContent = label;

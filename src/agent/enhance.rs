@@ -42,9 +42,18 @@ pub struct Request {
     /// The clip's look, added to every shot by the server.
     #[serde(default)]
     pub every: String,
-    /// The shot this one goes on from, when it isn't a cut.
+    /// The shot before this one, which it goes on from — or, on a cut, cuts
+    /// from. (An older page sent it on a continue only.)
     #[serde(default)]
     pub before: String,
+    /// Shot 1 of the clip, for every later shot: what it set up — the place,
+    /// the light, how its people look — holds unless the words change it.
+    #[serde(default)]
+    pub first: String,
+    /// The shot this one's scene began with (the last cut before it), when
+    /// that is neither shot 1 nor the shot before.
+    #[serde(default)]
+    pub scene: String,
     #[serde(default)]
     pub cut: bool,
     /// Shot 1, or a cut, starting from a picture (an output stem).
@@ -135,16 +144,7 @@ pub fn brief(t: Target, req: &Request, looks: &[(String, String)], sees_picture:
                 req.every.trim()
             ));
         }
-        if sees_picture {
-            out.push_str("\nThe shot starts from the picture shown: it is the first frame.\n");
-        } else if !req.cut && !req.before.trim().is_empty() {
-            out.push_str(&format!(
-                "\nThe shot goes on from the last frame of the shot before, which was: {}\n",
-                req.before.trim()
-            ));
-        } else if req.cut {
-            out.push_str("\nThe shot is a cut: a new scene, nothing carried over from before.\n");
-        }
+        continuity(&mut out, req, sees_picture);
         if let Some(s) = req.seconds.filter(|s| *s > 0.0) {
             out.push_str(&format!("\nIt lasts about {} seconds.\n", (s * 10.0).round() / 10.0));
         }
@@ -190,6 +190,97 @@ pub fn brief(t: Target, req: &Request, looks: &[(String, String)], sees_picture:
         }
     }
     out
+}
+
+/// The most of a neighbouring shot the brief quotes: an enhanced LTX shot runs
+/// to about 1400 characters, so this cuts only an unusually long one.
+const NEIGHBOUR_CHARS: usize = 1500;
+
+/// `s` to at most `max` characters, at a word.
+fn quote(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max).collect();
+    let cut = cut.rsplit_once(char::is_whitespace).map_or(cut.as_str(), |(a, _)| a);
+    format!("{}…", cut.trim_end())
+}
+
+/// What the shots around this one set up, so a clip's shots read as one
+/// film: shot 1 (the place, the light, the people), the shot its scene began
+/// with, and the shot before — which a continue goes on from and a cut cuts
+/// from. A cut used to be told "nothing carried over", and each shot of a
+/// five-shot clip lit its own place.
+fn continuity(out: &mut String, req: &Request, sees_picture: bool) {
+    let before = req.before.trim();
+    let first = req.first.trim();
+    let scene = req.scene.trim();
+    if sees_picture {
+        out.push_str("\nThe shot starts from the picture shown: it is the first frame.\n");
+    }
+    if !first.is_empty() && first != before {
+        out.push_str(&format!(
+            "\nThe clip opens with this shot:\n{}\nKeep to what it set up — the place, the light, the time of day, the \
+             colours, how its people look and dress — unless this shot's words change them.\n",
+            quote(first, NEIGHBOUR_CHARS)
+        ));
+    }
+    if !scene.is_empty() && scene != first && scene != before {
+        out.push_str(&format!("\nThis shot's scene began with:\n{}\n", quote(scene, NEIGHBOUR_CHARS)));
+    }
+    if !req.cut {
+        if !before.is_empty() && !sees_picture {
+            out.push_str(&format!(
+                "\nThe shot goes on from the last frame of the shot before, which was:\n{}\nCarry on the same place, \
+                 light, people and clothes, and describe what happens next and what changes; don't set the scene \
+                 again.\n",
+                quote(before, NEIGHBOUR_CHARS)
+            ));
+        }
+    } else {
+        out.push_str("\nThe shot is a cut: a new camera shot of the same film.");
+        if !before.is_empty() {
+            out.push_str(&format!(" It cuts from:\n{}\n", quote(before, NEIGHBOUR_CHARS)));
+        } else {
+            out.push('\n');
+        }
+        out.push_str(
+            "Keep the film's light, time of day and colours unless this shot's words move to another place or time, \
+             and say again who is where.\n",
+        );
+    }
+}
+
+/// Shot `k`'s neighbours from every shot's `(text, cut)`: shot 1, the last
+/// cut before it, and the shot before — `Request`'s `first`, `scene`,
+/// `before`. Empty for shot 1. The page's `enhanceRow` picks the same.
+pub fn neighbours(shots: &[(&str, bool)], k: usize) -> (String, String, String) {
+    if k == 0 || k > shots.len() {
+        return Default::default();
+    }
+    let scene = (1..k).rev().find(|&j| shots[j].1).map_or("", |j| shots[j].0);
+    (shots[0].0.to_string(), scene.to_string(), shots[k - 1].0.to_string())
+}
+
+/// `req` with less of its neighbours, so the brief fits `budget` tokens of
+/// context: the scene's opening goes first, then shot 1, then the shot
+/// before is shortened. A small agent at 8192 never fails for continuity's
+/// sake. `None` when the brief already fits.
+fn trimmed(req: &Request, t: Target, fixed: usize, budget: usize) -> Option<Request> {
+    let fits = |r: &Request| fixed + super::context::text_tokens(&brief(t, r, &r.looks, false)) <= budget;
+    if fits(req) {
+        return None;
+    }
+    let mut r = req.clone();
+    r.scene.clear();
+    if !fits(&r) {
+        r.first.clear();
+    }
+    if !fits(&r) {
+        r.before = quote(&r.before, 300);
+    }
+    Some(r)
 }
 
 /// The output's shape: the prompt, and H3's sound line beside it.
@@ -272,24 +363,39 @@ pub fn run(cfg: &Config, monitor: &Monitor, req: &Request) -> Result<Enhanced> {
         }
     }
     let sees = !parts.is_empty();
-    parts.push(llm::Part::Text { text: brief(t, req, &looks, sees) });
-
     let system = format!(
         "{guide}\n\nAnswer with one JSON object: `prompt` is the new prompt alone — no title, no \"Here is\", no quotes around it{}.",
         if t.fields() { ", and `sound` the shot's sound line (empty when it has one)" } else { "" }
     );
-    let ask = llm::Request {
-        v: llm::PROTOCOL,
-        model: model.lm.clone(),
-        mmproj: if sees { model.mmproj.clone() } else { None },
-        n_ctx: tune.n_ctx.min(N_CTX),
-        n_predict: N_PREDICT,
-        thinking: false,
-        sampling: Sampling { seed: (super::rand_seed() & 0xffff_ffff) as u32, ..tune.sampling },
-        json_schema: Some(schema(t)),
-        messages: vec![llm::Message::text(llm::Role::System, system), llm::Message { role: llm::Role::User, content: parts }],
+    let n_ctx = tune.n_ctx.min(N_CTX);
+    let fixed = super::context::text_tokens(&system) + if sees { super::context::image_tokens(tune.image_side) } else { 0 };
+    let budget = (n_ctx as usize).saturating_sub(N_PREDICT as usize + 64);
+    let fitted = trimmed(&Request { looks: looks.clone(), ..req.clone() }, t, fixed, budget);
+    let req = fitted.as_ref().map_or(req, |r| r);
+    let ask = |req: &Request| {
+        let mut content = parts.clone();
+        content.push(llm::Part::Text { text: brief(t, req, &looks, sees) });
+        llm::Request {
+            v: llm::PROTOCOL,
+            model: model.lm.clone(),
+            mmproj: if sees { model.mmproj.clone() } else { None },
+            n_ctx,
+            n_predict: N_PREDICT,
+            thinking: false,
+            sampling: Sampling { seed: (super::rand_seed() & 0xffff_ffff) as u32, ..tune.sampling },
+            json_schema: Some(schema(t)),
+            messages: vec![llm::Message::text(llm::Role::System, system.clone()), llm::Message { role: llm::Role::User, content }],
+        }
     };
-    let reply = LlmRunner::watched(cfg, monitor).run(&ask, &model.label, "enhance")?;
+    let runner = LlmRunner::watched(cfg, monitor);
+    let reply = match runner.run(&ask(req), &model.label, "enhance") {
+        // The estimate is rough: once more with the shot's own words alone.
+        Err(e) if e.downcast_ref::<llm::ContextOverflow>().is_some() && (!req.first.is_empty() || !req.before.is_empty()) => {
+            let bare = Request { first: String::new(), scene: String::new(), before: quote(&req.before, 300), ..req.clone() };
+            runner.run(&ask(&bare), &model.label, "enhance")?
+        }
+        r => r?,
+    };
     if reply.stats.stop == "length" {
         bail!("the enhanced prompt ran past {N_PREDICT} tokens and was cut off");
     }
@@ -320,7 +426,7 @@ mod tests {
         let ltx = brief(Target::Video(VideoFamily::Ltx25, false), &r, &looks, false);
         assert!(ltx.contains("The person's words:\na man sings opera"), "{ltx}");
         assert!(ltx.contains("don't repeat it): cinematic, warm light"), "{ltx}");
-        assert!(ltx.contains("shot before, which was: Leo walks on stage"), "{ltx}");
+        assert!(ltx.contains("shot before, which was:\nLeo walks on stage"), "{ltx}");
         assert!(ltx.contains("about 5 seconds"), "{ltx}");
         assert!(ltx.contains("- Leo: Leo is a tall man in a black tailcoat."), "{ltx}");
         assert!(ltx.contains("Spoken, word for word:\n- Leo [Italian]: \"Nessun dorma\""), "{ltx}");
@@ -333,6 +439,52 @@ mod tests {
         let img = brief(Target::Image(ImageFamily::Flux), &r, &looks, false);
         assert!(img.starts_with("Rewrite this image prompt for"), "{img}");
         assert!(!img.contains("Spoken") && !img.contains("seconds"), "{img}");
+    }
+
+    #[test]
+    fn every_later_shot_keeps_to_shot_one_and_a_cut_to_the_shot_it_cuts_from() {
+        let t = Target::Video(VideoFamily::Ltx25, false);
+        let rows = [("Dusk on a pier, orange light.", false), ("Mara walks on.", false), ("Leo in a cafe.", true), ("He sips.", false), ("Mara looks back.", true)];
+        assert_eq!(neighbours(&rows, 0), Default::default());
+        let (first, scene, before) = neighbours(&rows, 4);
+        assert_eq!((first.as_str(), scene.as_str(), before.as_str()), ("Dusk on a pier, orange light.", "Leo in a cafe.", "He sips."));
+        let mut r = shot("Mara looks back.");
+        (r.first, r.scene, r.before, r.cut) = (first, scene, before, true);
+        let b = brief(t, &r, &[], false);
+        assert!(b.contains("opens with this shot:\nDusk on a pier, orange light.\nKeep to what it set up"), "{b}");
+        assert!(b.contains("scene began with:\nLeo in a cafe."), "{b}");
+        assert!(b.contains("a new camera shot of the same film. It cuts from:\nHe sips."), "{b}");
+        assert!(!b.contains("nothing carried over"), "{b}");
+        // A continue goes on from the shot before; shot 1 isn't quoted twice.
+        let (first, scene, before) = neighbours(&rows, 1);
+        let mut r = shot("Mara walks on.");
+        (r.first, r.scene, r.before) = (first, scene, before);
+        let b = brief(t, &r, &[], false);
+        assert!(b.contains("which was:\nDusk on a pier") && b.contains("don't set the scene again"), "{b}");
+        assert!(!b.contains("opens with"), "{b}");
+        // Shot 1 has none of it.
+        assert!(!brief(t, &shot("Dusk on a pier."), &[], false).contains("shot before"));
+    }
+
+    #[test]
+    fn a_brief_too_long_for_the_context_sheds_its_neighbours_in_order() {
+        let t = Target::Video(VideoFamily::Ltx25, false);
+        let long = "word ".repeat(280);
+        let mut r = shot("Mara looks back.");
+        (r.first, r.scene, r.before, r.cut) = (format!("first {long}"), format!("scene {long}"), format!("before {long}"), true);
+        assert!(trimmed(&r, t, 0, 100_000).is_none(), "room for all of it");
+        let whole = text_len(&brief(t, &r, &[], false));
+        let a = trimmed(&r, t, 0, whole - 50).unwrap();
+        assert!(a.scene.is_empty() && !a.first.is_empty(), "the scene goes first");
+        let b = trimmed(&r, t, 0, whole - 700).unwrap();
+        assert!(b.scene.is_empty() && b.first.is_empty() && b.before.len() > 1000);
+        let c = trimmed(&r, t, 0, 300).unwrap();
+        assert!(c.before.chars().count() <= 301 && c.before.ends_with('…'), "{}", c.before);
+        assert_eq!(quote("one two three", 9), "one two…");
+    }
+
+    fn text_len(s: &str) -> usize {
+        super::super::context::text_tokens(s)
     }
 
     #[test]

@@ -2,7 +2,7 @@ import { $, esc, getJSON, post, numOr, rememberFolds, ICONS, randomSeed } from '
 import { floatPanels } from './panels.js';
 import { MEMORY_LABELS, showError } from './memory.js';
 import { cancelRun } from './busy.js';
-import { soonJobs } from './jobs.js';
+import { soonJobs, stopKind } from './jobs.js';
 import { clip, renderClip, stopPlayback, clearClip } from './player.js';
 import { initClipView, openClipView } from './clipview.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
@@ -188,10 +188,12 @@ function readRow(el) {
 // ---- Enhance -----------------------------------------------------------------
 //
 // A shot written out in full by the agent's model for the Video tab's model
-// (`enhance.js`): with the clip's look, the shot before when it goes on from
-// it, its first frame, who is in it and their looks, its length, and what is
-// said and heard — LTX weaves speech into the paragraph, H3 keeps its fields
-// and gets a Sound line when it had none.
+// (`enhance.js`): with the clip's look; shot 1, the last cut before it and
+// the shot before (`agent::enhance::neighbours`, so a later shot keeps the
+// place and light they set up); its first frame, who is in it and their
+// looks, its length, and what is said and heard — LTX weaves speech into the
+// paragraph, H3 keeps its fields and gets a Sound line when it had none.
+// Resolves true when the box was written.
 const ENHANCE_TIP = "The agent's model writes this shot out in full for the picked video model: action, looks, place, camera and, on LTX, every sound. Ctrl+Z in the box undoes it.";
 function enhanceRow(row, btn) {
   const m = currentVideoModel();
@@ -201,12 +203,17 @@ function enhanceRow(row, btn) {
   const fps = m?.forced_fps ?? (parseInt($('vfps').value, 10) || 0);
   const frames = r.frames ?? (m ? alignFrames(m.frames, m.frame_grid) : null);
   const note = row.querySelector('.shotenhanceerr');
+  const text = (j) => els[j].querySelector('textarea').value;
+  let scene = '';
+  for (let j = k - 1; j >= 1; j--) if (els[j].dataset.cut === '1') { scene = text(j); break; }
   const body = {
     kind: 'video',
     model: $('vmodel').value,
     text: r.text,
     every: $('veverytext').value,
-    before: k > 0 && !r.cut ? readRow(els[k - 1]).text : '',
+    first: k > 0 ? text(0) : '',
+    scene,
+    before: k > 0 ? text(k - 1) : '',
     cut: k > 0 && r.cut,
     picture: sentRow(r, k, takeOf(m)).key || null,
     seconds: fps && frames ? frames / fps : null,
@@ -216,7 +223,7 @@ function enhanceRow(row, btn) {
     sound: r.sound,
     music: r.music,
   };
-  enhance(btn, row.querySelector('textarea'), body, {
+  return enhance(btn, row.querySelector('textarea'), body, {
     onError: (msg) => { note.textContent = msg; note.hidden = !msg; },
     onDone: (a) => {
       const snd = row.querySelector('.shotsnd');
@@ -226,6 +233,27 @@ function enhanceRow(row, btn) {
       }
     },
   });
+}
+
+// *Enhance every shot*: the rows in order, each waiting for the one before,
+// so shot k is written to match the shots already written out. A row with
+// no words is passed over; an error (shown under its row) or Stop ends it.
+let enhancingAll = false;
+async function enhanceAll() {
+  const btn = $('venhanceall');
+  if (enhancingAll) { enhancingAll = false; stopKind('enhance'); return; }
+  enhancingAll = true;
+  btn.textContent = 'Stop';
+  try {
+    for (const row of rowEls()) {
+      if (!enhancingAll) break;
+      if (!row.isConnected || !row.querySelector('textarea').value.trim()) continue;
+      if (!(await enhanceRow(row, row.querySelector('.shotenhance')))) break;
+    }
+  } finally {
+    enhancingAll = false;
+    btn.textContent = 'Enhance every shot';
+  }
 }
 
 const MAX_SHOT_REFS = 4; // config::MAX_REFERENCES
@@ -813,7 +841,9 @@ function syncShots() {
   const frames = board?.framesLabel() ?? null;
   $('vframes').hidden = !frames;
   if (frames) $('vframes').textContent = frames;
-  $('vextendfoot').hidden = $('vextend').hidden && $('vframes').hidden;
+  // Worth it from two shots: one alone is its own Enhance.
+  $('venhanceall').hidden = live.length < 2 && !enhancingAll;
+  $('vextendfoot').hidden = $('vextend').hidden && $('vframes').hidden && $('venhanceall').hidden;
   for (const fn of rowWatchers) fn();
   const n = st.pending.length;
   $('vextend').textContent = st.action === 'redo'
@@ -1666,6 +1696,7 @@ export function initVideo() {
   });
   $('vsavemodel').addEventListener('click', () => saveVideoDefaults(false));
   $('vshotadd').addEventListener('click', addShot);
+  $('venhanceall').addEventListener('click', enhanceAll);
   $('vshots').addEventListener('click', (e) => {
     const row = e.target.closest('.shotrow');
     if (!row) return;

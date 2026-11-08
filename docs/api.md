@@ -758,12 +758,14 @@ the chat, whose `rev` moves on every write.
   `frames: false` is *Draw the cast*, absent the cast while it lacks one, else the
   frames. Both are optional. `409` while the agent is working on the chat. The shots
   themselves are edited through `/chats/board`.
-- `POST /enhance` — `{ kind?: "video", model, text, every?, before?, cut?, picture?,
+- `POST /enhance` — `{ kind?: "video", model, text, every?, first?, scene?, before?, cut?, picture?,
   seconds?, cast?, looks?: [[name, look]], lines?, sound?, music?, agent? }`: the words
   rewritten in full for `model` (an image registry name, or with `kind: "video"` a
   video model) by the agent's model (`agent`, else Settings' default), with the
-  family's `enhance-*` guide. `every` is the clip's look, `before` the shot this one
-  goes on from, `picture` the output stem it starts from (shown to a model with
+  family's `enhance-*` guide. `every` is the clip's look; `first` is shot 1, `scene` the
+  last cut before this shot, `before` the shot before it (the one it goes on from, or on
+  a `cut` cuts from) — what a later shot keeps to, shed in that order when the agent's
+  context is short; `picture` the output stem it starts from (shown to a model with
   vision), `cast` who is in it (looks from `looks`, else the saved cast). Queued as a
   button press (kind `enhance`; Stop kills it); answers `{prompt, sound?}` — `sound` an
   H3 shot's sound line, only when it sent none. `400` on empty text or a model not

@@ -759,7 +759,8 @@ fn keyframe_prompt(film: &chat::Film, shot: &chat::FilmShot) -> String {
 }
 
 /// A storyboard shot written out in full for the film's video model, from
-/// the story's words, the shot before, the cast's looks and the H3 fields.
+/// the story's words, shot 1, the scene's opening and the shot before, the
+/// cast's looks and the H3 fields.
 /// A failure leaves every shot as the story wrote it, with a note: the board
 /// is whole without it. A Stop is still a Stop.
 fn enhance_shot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: usize) -> Result<()> {
@@ -770,12 +771,18 @@ fn enhance_shot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: us
         None => Err(anyhow!("the film's video model '{}' isn't installed", film.video_model)),
         Some(v) => {
             let view = toolkit::VideoView::of(&v);
+            // The shots before are enhanced already (`next_step` goes in
+            // order), so this one is written to match them.
+            let all: Vec<(&str, bool)> = film.shots.iter().map(|s| (s.text.as_str(), s.cut)).collect();
+            let (first, scene, before) = enhance::neighbours(&all, k);
             let req = enhance::Request {
                 kind: "video".into(),
                 model: v.name.clone(),
                 text: shot.text.clone(),
                 every: film.every.clone(),
-                before: if k > 0 && !shot.cut { film.shots[k - 1].text.clone() } else { String::new() },
+                before,
+                first,
+                scene,
                 cut: k > 0 && shot.cut,
                 picture: None,
                 seconds: Some(shot.frames.map_or(view.shot_seconds(), |f| f as f32 / view.fps.max(1) as f32)),
