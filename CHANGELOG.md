@@ -19,6 +19,9 @@ What changed in each release of yasdig. Each release's executables are on the
 - **The Models tab is a workspace**: a rail of families by category, each opening a
   panel of its cards, so two families can be read side by side. Video families show
   their *Recommended* mark too.
+- **Installed**, at the top of the Models tab's rail: every model file you have,
+  grouped — checkpoints, video models, LoRAs, text encoders, VAEs, upscalers, agent
+  models, and what can't be used — each with its size and the families it serves.
 
 ## 0.8.0 — 2026-11-08
 

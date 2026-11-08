@@ -139,6 +139,7 @@ mod fsr;
 mod h3prompt;
 mod home;
 mod http;
+mod inventory;
 mod jobs;
 mod layout;
 mod llm;
@@ -1088,6 +1089,7 @@ fn route(
             Ok(body) => conn.respond(200, "application/json", &body),
             Err(e) => conn.respond(500, "application/json", error_json(&format!("{e}")).as_bytes()),
         },
+        ("GET", "/installed") => conn.respond(200, "application/json", crate::inventory::json(cfg).to_string().as_bytes()),
         ("GET", "/downloads") => conn.respond(200, "application/json", lanes.downloads.summary().as_bytes()),
         ("POST", p) if p.starts_with("/downloads/") => handle_download(conn, cfg, lanes, p, &req.body),
         ("GET", "/video-models") => handle_video_models(conn, cfg),

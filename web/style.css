@@ -1377,6 +1377,17 @@ a:hover { color: var(--accent-hi); }
 .gmrail .railbtn { flex-direction: column; align-items: flex-start; text-align: left; gap: 2px; }
 .gmrail .railtitle { margin-top: var(--sp-2); }
 .gmrail .railtitle:first-child { margin-top: 0; }
+.gmrail .railbtn .meta { font-weight: 400; }
+/* Installed: a row per file — what it is, what it serves — and its buttons. */
+.gmitems { list-style: none; margin: 0; padding: 0; }
+.gmitem { display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2) 0; border-top: var(--line); }
+.gmitem:first-child { border-top: 0; }
+.gmiteminfo { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.gmchips { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-1); }
+.gmchip {
+  padding: 0 var(--sp-2); border: var(--line); border-radius: var(--r-sm);
+  color: var(--text-dim); font-size: var(--fs-micro); line-height: 1.6;
+}
 .gmcard + .gmcard { border-top: var(--line); margin-top: var(--sp-3); padding-top: var(--sp-3); }
 .gmhead { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); }
 .gmhead .sub { margin: 0 0 0 auto; }

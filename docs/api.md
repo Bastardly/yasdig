@@ -533,6 +533,14 @@ needs a Vulkan device and nothing else.
   that file (its index in the card, the summary's `file`); clear deletes the `.part`
   files nothing is writing. Three files download at once. Answered on the connection
   thread — downloads have their own lane, not the GPU queue. An unknown id is a 400.
+- `GET /installed` — every model file yasdig sees, for the Models tab's *Installed*:
+  `{groups: [{id, title}], items: [{id, group, name, label, bytes, what, families}]}`.
+  `id` is `<root>/<path>`, root one of `models`, `video`, `loras`, `upscalers`,
+  `agents` — the only way the page names a file. `group` is `checkpoints`, `video`,
+  `loras`, `encoders`, `vaes`, `upscalers`, `agents` or `other` (what can't be used,
+  with why in `what`); `families` are labels of every family it serves. A file both
+  the image and video scans find is one item. An agent is one item for its model and
+  projector.
 - `GET /downloads` — what is queued, running or failed, without a disk scan:
   `{finished, got, bytes, files: [{entry, file, label, state, got, bytes, why?}]}`,
   `state` one of `downloading`, `queued`, `failed`; `got`/`bytes` totals leave failed

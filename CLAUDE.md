@@ -730,6 +730,16 @@ since only `noise_marker` tells the experts apart. "Have" scans the video dir al
 what discovery assembles from.
 
 Cards link source repos (`File::page`). **No licence names in the catalog**, on purpose.
+**Installed** (`src/inventory.rs`, `GET /installed`, the rail's first section): one
+list from `video_scan` (which holds the image scan, so a shared VAE is one row),
+`list_loras`, `list_upscalers`, `agents::scan` — no header read of its own. **An id is
+`<root>/<rel>`** (`id_of`, most specific root first, since the others sit inside
+`models/`); `resolve` takes only a known root and `Normal` components, and `find` is
+the whitelist (in a fresh `list`). `group_of` is by role alone (unusable LoRAs and
+upscalers are `other`); `families_of` is every family with a slot that fits.
+Fetched on entering the tab and on `downloadsChanged`, never on the progress poll.
+Built with the rail, so the first `refresh` waits for both answers.
+
 **The top bar's Downloads** (`downloads.js`, `#dlbtn`/`#dldlg`) is the only download
 poll: 1 s while active, 5 s idle (another browser tab's download). `downloadsChanged`
 (the `observable` from `jobs.js`, on `finished`; the first answer is a silent

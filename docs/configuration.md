@@ -22,6 +22,11 @@ into the upscaler folder the same way. Downloads run beside renders,
 not in their queue. **Help → Intro to models** explains what the files are and where
 to find more.
 
+**Installed**, at the top of the same rail, lists what is already on disk by kind —
+checkpoints, video models, LoRAs, text encoders, VAEs, upscalers, agent models, and
+*Other* for files that can't be used here, with the reason — each with its size and
+the families it serves, read from its header like everything else.
+
 The rest of this section is the manual route, and what to do for a model the tab
 doesn't list.
 

@@ -37,6 +37,10 @@ import { downloadsChanged, onDownloads, soonDownloads } from './downloads.js';
 let view = null;
 let pending = null;
 let wsPanels = null;
+// `GET /installed`: what is on disk, grouped (`src/inventory.rs`). Fetched on
+// entering the tab and when a download lands, never on the progress poll — it
+// walks every model folder.
+let installed = null;
 
 const gb = (b) => (b / 1e9).toFixed(b < 1e9 ? 2 : 1) + ' GB';
 // A GPU's memory as it is sold: 24 GiB is a "24 GB" card.
@@ -155,31 +159,84 @@ function groups() {
 // sits in place; the rail is never reordered by it.
 const isRecommended = (g) => g.entries.some((e) => e.recommended);
 
+const panelHtml = (id, label) => `
+  <section class="fpanel" id="panel-gm-${id}" aria-label="${esc(label)}" hidden>
+    <header class="fphead"><b>${esc(label)}</b><span class="foldstate" data-gmstate="${id}"></span><button type="button" class="fpclose" aria-label="Close ${esc(label)}">&times;</button></header>
+    <div class="fpbody" data-gmbody="${id}"></div>
+  </section>`;
+
 function build() {
   const gs = groups();
-  $('gmrail').innerHTML = gs.map((c) => `<p class="railtitle">${c.title}</p>`
+  const inv = installed.groups;
+  $('gmrail').innerHTML = '<p class="railtitle">Installed</p>'
+    + inv.map((g) => `<button type="button" class="btn btn-choice railbtn" data-panel="gm-installed-${g.id}">`
+      + `<span>${esc(g.title)}</span><span class="meta" data-gmcount="${g.id}"></span></button>`).join('')
+    + gs.map((c) => `<p class="railtitle">${c.title}</p>`
     + c.panels.map((g) => `<button type="button" class="btn btn-choice railbtn" data-panel="gm-${g.id}">`
       + `<span>${esc(g.label)}</span>`
       + `${isRecommended(g) ? '<span class="gmbadge">Recommended</span>' : ''}</button>`).join('')).join('');
-  $('tab-models').insertAdjacentHTML('beforeend', gs.flatMap((c) => c.panels).map((g) => `
-  <section class="fpanel" id="panel-gm-${g.id}" aria-label="${esc(g.label)}" hidden>
-    <header class="fphead"><b>${esc(g.label)}</b><span class="foldstate" data-gmstate="${g.id}"></span><button type="button" class="fpclose" aria-label="Close ${esc(g.label)}">&times;</button></header>
-    <div class="fpbody" data-gmbody="${g.id}"></div>
-  </section>`).join(''));
+  $('tab-models').insertAdjacentHTML('beforeend',
+    inv.map((g) => panelHtml(`installed-${g.id}`, g.title)).join('')
+    + gs.flatMap((c) => c.panels).map((g) => panelHtml(g.id, g.label)).join(''));
   // Open the first time: the family picked for this GPU, else the first.
   const image = gs.find((c) => c.id === 'image')?.panels ?? [];
   const first = (image.find(isRecommended) ?? image[0])?.id;
   wsPanels = floatPanels({
     host: $('tab-models'),
     rail: $('gmrail'),
-    defs: gs.flatMap((c) => c.panels.map((g, i) => ({ id: `gm-${g.id}`, open: g.id === first, both: true, stack: i % 8 }))),
+    // Installed cascades from the top, the families a little further in, so
+    // the two opened the first time never sit on each other.
+    defs: [
+      ...inv.map((g, i) => ({ id: `gm-installed-${g.id}`, open: g.id === 'checkpoints', both: true, stack: i })),
+      ...gs.flatMap((c) => c.panels.map((g, i) => ({ id: `gm-${g.id}`, open: g.id === first, both: true, stack: 3 + (i % 6) }))),
+    ],
   });
   wsPanels.init();
   if (shown()) wsPanels.layout();
 }
 
+// One file on disk: what it is, what it serves, how big.
+function installedRow(it) {
+  const fams = it.families.map((f) => `<span class="gmchip">${esc(f)}</span>`).join('');
+  return `<li class="gmitem" data-item="${esc(it.id)}">
+    <div class="gmiteminfo"><b>${esc(it.label)}</b> <span class="meta">${gb(it.bytes)}</span>
+      <div class="sub">${esc(it.what)}</div>
+      ${it.name !== it.label ? `<div class="meta"><code>${esc(it.name)}</code></div>` : ''}
+      ${fams ? `<div class="gmchips">${fams}</div>` : ''}</div>
+  </li>`;
+}
+
+function drawInstalled() {
+  if (!installed || !wsPanels) return;
+  for (const g of installed.groups) {
+    const items = installed.items.filter((i) => i.group === g.id);
+    const size = items.reduce((s, i) => s + i.bytes, 0);
+    const body = document.querySelector(`[data-gmbody="installed-${g.id}"]`);
+    const html = items.length
+      ? `<ul class="gmitems">${items.map(installedRow).join('')}</ul>`
+      : '<p class="sub">None here.</p>';
+    if (body.dataset.html !== html) { body.innerHTML = html; body.dataset.html = html; }
+    document.querySelector(`[data-gmstate="installed-${g.id}"]`).textContent = items.length ? `${items.length} · ${gb(size)}` : '';
+    document.querySelector(`[data-gmcount="${g.id}"]`).textContent = items.length ? String(items.length) : '';
+    // An empty group has nothing to show; Other especially.
+    document.querySelector(`[data-panel="gm-installed-${g.id}"]`).hidden = !items.length;
+  }
+}
+
+export async function loadInstalled() {
+  try {
+    installed = await getJSON('/installed');
+  } catch (e) {
+    $('gmerr').textContent = 'Could not list the installed models: ' + e;
+    // The family panels still build; Installed has no groups this time.
+    installed ??= { groups: [], items: [] };
+    return;
+  }
+  if (view) draw();
+}
+
 function draw() {
-  if (!view) return;
+  if (!view || !installed) return;
   $('gmdir').innerHTML = `Saved under <code>${esc(view.models_dir)}</code>, in the folder for each kind of file`
     + ` — upscalers in <code>${esc(view.upscaler_dir)}</code>.`;
   $('gmerr').textContent = view.curl ? ''
@@ -203,12 +260,15 @@ function draw() {
       wsPanels.dot(`gm-${g.id}`, busy);
     }
   }
+  drawInstalled();
 }
 
 const shown = () => !$('tab-models').hidden;
 
 async function refresh() {
   try {
+    // The rail is built from both, so the first time waits for both.
+    if (!installed) await loadInstalled();
     view = await fetchCatalog();
   } catch (e) {
     $('gmerr').textContent = 'Could not read the catalog: ' + e;
@@ -229,7 +289,10 @@ export function openModels(family) {
 export const layoutModelsTab = () => wsPanels?.layout();
 
 export function initModels() {
-  document.querySelector('.tab[data-tab="models"]')?.addEventListener('click', refresh);
+  document.querySelector('.tab[data-tab="models"]')?.addEventListener('click', () => {
+    loadInstalled();
+    refresh();
+  });
   // Delegated to the tab: the panels are built after the first fetch.
   $('tab-models').addEventListener('click', async (e) => {
     const b = e.target.closest('[data-act]');
@@ -251,6 +314,7 @@ export function initModels() {
     loadModels({ refill: false });
     loadVideoModels({ refill: false });
     loadAgents();
+    loadInstalled();
     if (shown()) refresh();
   });
   // Progress on the cards, only where they are seen.
