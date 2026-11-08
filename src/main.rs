@@ -1088,6 +1088,7 @@ fn route(
             Ok(body) => conn.respond(200, "application/json", &body),
             Err(e) => conn.respond(500, "application/json", error_json(&format!("{e}")).as_bytes()),
         },
+        ("GET", "/downloads") => conn.respond(200, "application/json", lanes.downloads.summary().as_bytes()),
         ("POST", p) if p.starts_with("/downloads/") => handle_download(conn, cfg, lanes, p, &req.body),
         ("GET", "/video-models") => handle_video_models(conn, cfg),
         ("POST", "/video") => handle_video(conn, lanes, &req.body),
@@ -1562,14 +1563,14 @@ fn handle_download(
     path: &str,
     body: &[u8],
 ) -> Result<()> {
-    let entry = serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v["entry"].as_str().map(str::to_string))
-        .unwrap_or_default();
+    let v = serde_json::from_slice::<serde_json::Value>(body).unwrap_or_default();
+    let entry = v["entry"].as_str().unwrap_or_default().to_string();
+    // One file of the card, by index — never a path.
+    let file = v["file"].as_u64().map(|i| i as usize);
     let d = &lanes.downloads;
     let r = match path {
         "/downloads/start" => d.enqueue(cfg, &entry).map(|n| format!("{{\"queued\":{n}}}")),
-        "/downloads/cancel" => d.cancel(&entry).map(|()| "{}".into()),
+        "/downloads/cancel" => d.cancel(&entry, file).map(|()| "{}".into()),
         "/downloads/clear" => d.clear(&entry).map(|()| "{}".into()),
         _ => return conn.respond(404, "text/plain", b"not found"),
     };

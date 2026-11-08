@@ -1,5 +1,5 @@
-//! The Models tab's downloads: `curl` as a subprocess, one file at a time,
-//! on a thread of its own.
+//! The Models tab's downloads: `curl` as a subprocess, [`PARALLEL`] files
+//! at a time, on threads of their own.
 //!
 //! **Why curl and not an HTTP client in here.** A Rust client means a TLS stack
 //! compiled into the one-file build, for a feature that runs a few times per
@@ -10,9 +10,12 @@
 //! linked library.
 //!
 //! **Its own lane, not the job queue.** A download is minutes of network and no
-//! GPU, so it must neither wait behind a render nor hold one up. One worker
-//! thread and a FIFO, so two entries sharing a VAE fetch it once and four
-//! downloads don't split one connection four ways.
+//! GPU, so it must neither wait behind a render nor hold one up. A FIFO and
+//! [`PARALLEL`] workers: one file per worker, keyed by its path, so two
+//! entries sharing a VAE fetch it once. One at a time left a 20 GB card's
+//! small files waiting behind its big one, and Hugging Face's CDN caps a
+//! single connection well below most home lines; more than three only splits
+//! the line further while every file finishes later.
 //!
 //! Three things break silently:
 //!
@@ -47,6 +50,12 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 #[derive(Clone)]
 struct Task {
     key: String,
+    /// What the Downloads dialog calls it: the card's label and the slot.
+    label: String,
+    /// The catalog item it was asked for under, and its index there — what
+    /// a per-file cancel names (never a path).
+    entry: String,
+    index: usize,
     dest: PathBuf,
     url: String,
     bytes: u64,
@@ -72,16 +81,43 @@ fn key(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// Files fetched at once.
+pub const PARALLEL: usize = 3;
+
+/// A file being fetched: its curl, once spawned, and whether it was cancelled.
+#[derive(Default)]
+struct Run {
+    task: Option<Task>,
+    child: Option<Child>,
+    cancelled: bool,
+}
+
 #[derive(Default)]
 struct State {
     queue: VecDeque<Task>,
-    running: Option<String>,
-    child: Option<Child>,
-    cancelled: bool,
+    /// What each worker is fetching, by key.
+    running: HashMap<String, Run>,
     /// Why the last attempt at a dest failed, until it is retried or cleared.
     failed: HashMap<String, String>,
+    /// The task each `failed` key was, for the Downloads dialog's row.
+    failed_tasks: HashMap<String, Task>,
     /// Bumped whenever a file lands, so the page knows to reload its models.
     finished: u64,
+}
+
+impl State {
+    fn busy(&self, key: &str) -> bool {
+        self.running.contains_key(key) || self.queue.iter().any(|q| q.key == key)
+    }
+}
+
+impl Run {
+    fn stop(&mut self) {
+        self.cancelled = true;
+        if let Some(c) = self.child.as_mut() {
+            let _ = c.kill();
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -111,10 +147,12 @@ impl Downloads {
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
         }));
-        let worker = d.clone();
-        std::thread::Builder::new()
-            .name("downloads".into())
-            .spawn(move || worker.work())?;
+        for n in 0..PARALLEL {
+            let worker = d.clone();
+            std::thread::Builder::new()
+                .name(format!("downloads-{n}"))
+                .spawn(move || worker.work())?;
+        }
         Ok(d)
     }
 
@@ -137,16 +175,23 @@ impl Downloads {
                 let dest = self.root(e).join(&f.dest);
                 Task {
                     key: key(&dest),
+                    label: format!("{} · {}", e.label, e.slot_label(f)),
+                    entry: e.id.clone(),
+                    index,
                     dest,
                     url: f.url.clone(),
                     bytes: f.bytes,
                     want: Want::Part { entry: e.id.clone(), index },
                 }
             });
-            let loras = c.loras_of(e).map(|l| {
+            let n = e.file.len();
+            let loras = c.loras_of(e).enumerate().map(|(k, l)| {
                 let dest = self.0.loras.join(&l.dest);
                 Task {
                     key: key(&dest),
+                    label: format!("{} · {}", e.label, l.label),
+                    entry: e.id.clone(),
+                    index: n + k,
                     dest,
                     url: l.url.clone(),
                     bytes: l.bytes,
@@ -159,6 +204,9 @@ impl Downloads {
             let dest = self.0.upscalers.join(&u.dest);
             return Ok(vec![Task {
                 key: key(&dest),
+                label: u.label.clone(),
+                entry: u.id.clone(),
+                index: 0,
                 dest,
                 url: u.url.clone(),
                 bytes: u.bytes,
@@ -174,6 +222,9 @@ impl Downloads {
                     let dest = self.0.agents.join(&f.dest);
                     Task {
                         key: key(&dest),
+                        label: format!("{} · {}", a.label, agent_slot_label(f)),
+                        entry: a.id.clone(),
+                        index,
                         dest,
                         url: f.url.clone(),
                         bytes: f.bytes,
@@ -200,7 +251,7 @@ impl Downloads {
         let mut st = self.lock();
         let mut n = 0;
         for t in tasks {
-            let busy = st.running.as_deref() == Some(&t.key) || st.queue.iter().any(|q| q.key == t.key);
+            let busy = st.busy(&t.key);
             let had = match &t.want {
                 Want::Part { entry, index } => {
                     let e = c.entry(entry).expect("tasks come from the catalog");
@@ -223,6 +274,7 @@ impl Downloads {
                 continue;
             }
             st.failed.remove(&t.key);
+            st.failed_tasks.remove(&t.key);
             st.queue.push_back(t);
             n += 1;
         }
@@ -231,20 +283,61 @@ impl Downloads {
         Ok(n)
     }
 
-    /// Stop every file of `id`: queued ones are dropped, a running one is
-    /// killed. Its `.part` stays, so Download resumes.
-    pub fn cancel(&self, id: &str) -> Result<()> {
-        let keys: Vec<String> = self.tasks(id)?.into_iter().map(|t| t.key).collect();
+    /// Stop every file of `id`, or only its file `file`: queued ones are
+    /// dropped, running ones killed. The `.part` stays, so Download resumes.
+    /// A file another card shares is stopped for that card too: it is one
+    /// download.
+    pub fn cancel(&self, id: &str, file: Option<usize>) -> Result<()> {
+        let tasks = self.tasks(id)?;
+        if file.is_some_and(|i| i >= tasks.len()) {
+            bail!("{id:?} has no file {}", file.unwrap_or_default());
+        }
+        let keys: Vec<String> =
+            tasks.into_iter().enumerate().filter(|(i, _)| file.is_none_or(|f| f == *i)).map(|(_, t)| t.key).collect();
         let mut st = self.lock();
         let mine = |k: &str| keys.iter().any(|x| x == k);
         st.queue.retain(|t| !mine(&t.key));
-        if st.running.as_deref().is_some_and(mine) {
-            st.cancelled = true;
-            if let Some(c) = st.child.as_mut() {
-                let _ = c.kill();
+        for (k, run) in st.running.iter_mut() {
+            if mine(k) {
+                run.stop();
             }
         }
         Ok(())
+    }
+
+    /// What the top bar's Downloads button shows: every file queued, running
+    /// or failed, and the totals over them. Only `.part` lengths are read, never
+    /// a model scan — it is polled every second while anything runs.
+    pub fn summary(&self) -> String {
+        let st = self.lock();
+        let mut rows: Vec<(&Task, &str, Option<&String>)> = Vec::new();
+        let mut running: Vec<&Run> = st.running.values().collect();
+        running.sort_by_key(|r| r.task.as_ref().map(|t| t.key.clone()));
+        rows.extend(running.iter().filter_map(|r| r.task.as_ref()).map(|t| (t, "downloading", None)));
+        rows.extend(st.queue.iter().map(|t| (t, "queued", None)));
+        let mut failed: Vec<&Task> = st.failed_tasks.values().collect();
+        failed.sort_by_key(|t| &t.key);
+        rows.extend(failed.into_iter().map(|t| (t, "failed", st.failed.get(&t.key))));
+        let (mut got, mut bytes) = (0u64, 0u64);
+        let files: Vec<serde_json::Value> = rows
+            .into_iter()
+            .map(|(t, state, why)| {
+                let have = std::fs::metadata(part_of(&t.dest)).map(|m| m.len()).unwrap_or(0).min(t.bytes);
+                if state != "failed" {
+                    got += have;
+                    bytes += t.bytes;
+                }
+                let mut v = serde_json::json!({
+                    "entry": t.entry, "file": t.index, "label": t.label,
+                    "state": state, "got": have, "bytes": t.bytes,
+                });
+                if let Some(why) = why {
+                    v["why"] = why.as_str().into();
+                }
+                v
+            })
+            .collect();
+        serde_json::json!({"finished": st.finished, "files": files, "got": got, "bytes": bytes}).to_string()
     }
 
     /// Everything, for *Close server*: an orphaned curl would go on writing
@@ -252,21 +345,22 @@ impl Downloads {
     pub fn cancel_all(&self) {
         let mut st = self.lock();
         st.queue.clear();
-        st.cancelled = true;
-        if let Some(c) = st.child.as_mut() {
-            let _ = c.kill();
+        for run in st.running.values_mut() {
+            run.stop();
         }
     }
+
+
 
     /// Delete the `.part` files of `id` that nothing is writing.
     pub fn clear(&self, id: &str) -> Result<()> {
         let tasks = self.tasks(id)?;
         let mut st = self.lock();
         for t in tasks {
-            let busy = st.running.as_deref() == Some(&t.key) || st.queue.iter().any(|q| q.key == t.key);
-            if !busy {
+            if !st.busy(&t.key) {
                 let _ = std::fs::remove_file(part_of(&t.dest));
                 st.failed.remove(&t.key);
+            st.failed_tasks.remove(&t.key);
             }
         }
         Ok(())
@@ -278,8 +372,7 @@ impl Downloads {
                 let mut st = self.lock();
                 loop {
                     if let Some(t) = st.queue.pop_front() {
-                        st.running = Some(t.key.clone());
-                        st.cancelled = false;
+                        st.running.insert(t.key.clone(), Run { task: Some(t.clone()), ..Run::default() });
                         break t;
                     }
                     st = self.0.wake.wait(st).unwrap_or_else(|p| p.into_inner());
@@ -287,14 +380,14 @@ impl Downloads {
             };
             let result = self.fetch(&task);
             let mut st = self.lock();
-            st.running = None;
-            st.child = None;
+            let cancelled = st.running.remove(&task.key).is_some_and(|r| r.cancelled);
             match result {
                 Ok(()) => st.finished += 1,
-                Err(_) if st.cancelled => {}
+                Err(_) if cancelled => {}
                 Err(e) => {
                     eprintln!("[yasdig] download {} failed: {e:#}", task.dest.display());
                     st.failed.insert(task.key.clone(), format!("{e:#}"));
+                    st.failed_tasks.insert(task.key.clone(), task.clone());
                 }
             }
         }
@@ -317,22 +410,23 @@ impl Downloads {
             let mut stderr = child.stderr.take().expect("stderr was piped");
             {
                 let mut st = self.lock();
-                if st.cancelled {
+                let run = st.running.entry(t.key.clone()).or_default();
+                if run.cancelled {
                     let _ = child.kill();
                 }
-                st.child = Some(child);
+                run.child = Some(child);
             }
             // EOF on stderr is the child exiting, or being killed. The child is
             // taken back out of the lock before `wait`, so a cancel is never
             // blocked behind the wait it is meant to end (`sd::Monitor`'s rule).
             let mut err = String::new();
             let _ = stderr.read_to_string(&mut err);
-            let child = self.lock().child.take();
+            let child = self.lock().running.get_mut(&t.key).and_then(|r| r.child.take());
             let status = match child {
                 Some(mut c) => c.wait()?,
                 None => bail!("curl went missing while it ran"),
             };
-            if self.lock().cancelled {
+            if self.lock().running.get(&t.key).is_some_and(|r| r.cancelled) {
                 bail!("cancelled");
             }
             if !status.success() {
@@ -575,7 +669,7 @@ fn file_state(models: &Path, e: &'static Entry, f: &'static File, found: &[Found
         name: None,
         why: None,
     };
-    if st.running.as_deref() == Some(&k) {
+    if st.running.contains_key(&k) {
         v.state = "downloading";
         v.got = got;
     } else if st.queue.iter().any(|t| t.key == k) {
@@ -621,7 +715,7 @@ fn lora_state(dir: &Path, l: &'static Lora, st: &State) -> FileView {
         name: None,
         why: None,
     };
-    if st.running.as_deref() == Some(&k) {
+    if st.running.contains_key(&k) {
         v.state = "downloading";
         v.got = got;
     } else if st.queue.iter().any(|t| t.key == k) {
@@ -685,7 +779,7 @@ fn agent_state(dir: &Path, f: &'static AgentFile, st: &State) -> FileView {
         name: None,
         why: None,
     };
-    if st.running.as_deref() == Some(&k) {
+    if st.running.contains_key(&k) {
         v.state = "downloading";
         v.got = got;
     } else if st.queue.iter().any(|t| t.key == k) {
@@ -735,7 +829,7 @@ fn upscaler_state(dir: &Path, u: &'static Upscaler, st: &State) -> FileView {
         name: None,
         why: None,
     };
-    if st.running.as_deref() == Some(&k) {
+    if st.running.contains_key(&k) {
         v.state = "downloading";
         v.got = got;
     } else if st.queue.iter().any(|t| t.key == k) {
@@ -894,10 +988,10 @@ mod tests {
         let mut st = State::default();
         let v = file_state(dir.as_path(), e, f, &[], &st);
         assert_eq!((v.state, v.got), ("partial", 1234));
-        st.running = Some(key(&dir.join(&f.dest)));
+        st.running.insert(key(&dir.join(&f.dest)), Run::default());
         let v = file_state(dir.as_path(), e, f, &[], &st);
         assert_eq!((v.state, v.got), ("downloading", 1234));
-        st.running = None;
+        st.running.clear();
         st.failed.insert(key(&dir.join(&f.dest)), "curl failed".into());
         assert_eq!(file_state(dir.as_path(), e, f, &[], &st).state, "failed");
     }
@@ -950,6 +1044,9 @@ mod tests {
         let dest = models.join("vae/test.safetensors");
         let t = Task {
             key: key(&dest),
+            label: String::new(),
+            entry: String::new(),
+            index: 0,
             dest: dest.clone(),
             url: format!("file://{}", src.display()),
             bytes: body.len() as u64,
@@ -970,6 +1067,9 @@ mod tests {
         std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
         let t = Task {
             key: key(&dest),
+            label: String::new(),
+            entry: String::new(),
+            index: 0,
             dest: dest.clone(),
             url: format!("file://{}", src.display()),
             bytes: body.len() as u64,
@@ -995,11 +1095,61 @@ mod tests {
     #[test]
     fn an_unknown_entry_is_refused() {
         let d = downloads(Path::new("/nonexistent"), Path::new("/nonexistent/upscalers"));
-        assert!(d.cancel("../../etc/passwd").is_err());
+        assert!(d.cancel("../../etc/passwd", None).is_err());
         assert!(d.clear("https://example.com/x.gguf").is_err());
         // An upscaler id is a catalog id like any other.
         let u = &Catalog::get().upscaler[0];
         assert_eq!(d.tasks(&u.id).unwrap()[0].dest, Path::new("/nonexistent/upscalers").join(&u.dest));
+    }
+
+    /// Three files run at once, each with its own flag: cancelling one file
+    /// of a card leaves its other running files and other cards' files going.
+    #[test]
+    fn a_cancel_stops_only_the_files_it_names() {
+        let d = downloads(Path::new("/nonexistent"), Path::new("/nonexistent/upscalers"));
+        let e = klein9();
+        let mine = d.tasks(&e.id).unwrap();
+        assert!(mine.len() >= 2);
+        let u = &Catalog::get().upscaler[0];
+        let other = d.tasks(&u.id).unwrap().remove(0);
+        {
+            let mut st = d.lock();
+            for t in mine.iter().take(2).chain([&other]) {
+                st.running.insert(t.key.clone(), Run { task: Some(t.clone()), ..Run::default() });
+            }
+        }
+        let flag = |k: &str| d.lock().running[k].cancelled;
+        d.cancel(&e.id, Some(1)).unwrap();
+        assert!(!flag(&mine[0].key) && flag(&mine[1].key) && !flag(&other.key));
+        d.cancel(&e.id, None).unwrap();
+        assert!(flag(&mine[0].key) && !flag(&other.key));
+        assert!(d.cancel(&e.id, Some(mine.len())).is_err());
+        // The dialog's rows: one per running file, labelled by card and slot.
+        let v: serde_json::Value = serde_json::from_str(&d.summary()).unwrap();
+        assert_eq!(v["files"].as_array().unwrap().len(), 3);
+        assert!(v["files"].as_array().unwrap().iter().any(|f| f["label"] == format!("{} · {}", e.label, e.slot_label(&e.file[1]))));
+    }
+
+    /// A file shared by several cards is one key: running on one worker, it
+    /// is busy for every other card, so a second worker never fetches it too.
+    #[test]
+    fn a_running_file_is_busy_for_every_card() {
+        let c = Catalog::get();
+        let d = downloads(Path::new("/nonexistent"), Path::new("/nonexistent/upscalers"));
+        let shared = c
+            .entry
+            .iter()
+            .flat_map(|a| c.entry.iter().filter(move |b| b.id != a.id).map(move |b| (a, b)))
+            .find_map(|(a, b)| {
+                let ta = d.tasks(&a.id).unwrap();
+                let tb = d.tasks(&b.id).unwrap();
+                ta.into_iter().find(|t| tb.iter().any(|u| u.key == t.key))
+            })
+            .expect("the catalog has a file two cards share");
+        let mut st = State::default();
+        assert!(!st.busy(&shared.key));
+        st.running.insert(shared.key.clone(), Run::default());
+        assert!(st.busy(&shared.key));
     }
 
     /// An upscaler is had only under its own name and arch: a file there that

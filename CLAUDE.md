@@ -709,6 +709,12 @@ binary); `doctor` warns when missing.
   count as had, so the card offers its successor (LTX-2.5's bf16 encoder).
 - **Own lane, never the job queue**; *Close server* calls `cancel_all`. Cancel keeps
   the `.part`.
+- **`PARALLEL` (3) workers, one FIFO, one key per dest path**: `State.running` is a
+  map of `Run {task, child, cancelled}` — each `fetch` parks and takes back its own
+  child, so a cancel never kills another worker's curl. `State::busy` (running *or*
+  queued) is what keeps a shared file to one fetch. `GET /downloads`
+  (`Downloads::summary`) reads only `.part` lengths, never a scan; `Task.label`/
+  `entry`/`index` exist for it and for `/downloads/cancel {entry, file}`.
 
 **Upscalers are a table of their own** (`[[upscaler]]`, `catalog::Upscaler`): no
 family, `dest` relative to `Config::upscaler_dir`, `.pth`/`.safetensors`, and "have" =

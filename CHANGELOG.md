@@ -8,6 +8,8 @@ What changed in each release of yasdig. Each release's executables are on the
 ### Changed
 
 - **Get models is now Models**, and its introduction is two sentences.
+- **Three files download at once**, so a card's small files no longer wait behind its
+  big one. Cancel can stop a single file.
 
 ## 0.8.0 — 2026-11-08
 

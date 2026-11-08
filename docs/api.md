@@ -528,10 +528,16 @@ needs a Vulkan device and nothing else.
   assembles a video model from.
 - `POST /downloads/start`, `/downloads/cancel`, `/downloads/clear` — `{entry}`, a catalog
   id and nothing else: the page never names a URL or a path. Start queues the entry's
-  files that nothing on disk fills yet; cancel drops queued ones and kills a running
-  curl, **keeping** its `.part` so start resumes it; clear deletes the `.part` files
-  nothing is writing. Answered on the connection thread — downloads have their own lane,
-  not the GPU queue. An unknown id is a 400.
+  files that nothing on disk fills yet; cancel drops queued ones and kills running
+  curls, **keeping** their `.part` so start resumes them — `{entry, file}` cancels only
+  that file (its index in the card, the summary's `file`); clear deletes the `.part`
+  files nothing is writing. Three files download at once. Answered on the connection
+  thread — downloads have their own lane, not the GPU queue. An unknown id is a 400.
+- `GET /downloads` — what is queued, running or failed, without a disk scan:
+  `{finished, got, bytes, files: [{entry, file, label, state, got, bytes, why?}]}`,
+  `state` one of `downloading`, `queued`, `failed`; `got`/`bytes` totals leave failed
+  files out. `finished` counts completed files since start, the page's cue to reload
+  its model lists.
 - `POST /video` — `model` and `shots` (at least one) are required; everything else
   optional:
   ```json
