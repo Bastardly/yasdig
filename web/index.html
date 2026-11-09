@@ -773,11 +773,14 @@
       <input id="vfps" type="number" min="1" max="60">
       <p class="sub unnarrated" id="vgridnote"></p>
       <!-- A narrated clip's reading language (`VideoModel::language`, from
-           `narration::LANGUAGES`); shown only on a narrated model, where the
-           boxes above and below it have nothing to drive. -->
+           the voice model's own list); shown only on a narrated model, where
+           the boxes above and below it have nothing to drive, and the select
+           only when there is a choice (Chatterbox Turbo reads English alone). -->
       <div id="vlangrow" hidden>
-        <label for="vlang" data-help="vlang">Language</label>
-        <select id="vlang"></select>
+        <div id="vlangpick">
+          <label for="vlang" data-help="vlang">Language</label>
+          <select id="vlang"></select>
+        </div>
         <!-- The voice every shot without one of its own reads in
              (`VideoModel::narrator`, an output sound's stem). -->
         <label data-help="vnarrator">Default voice</label>

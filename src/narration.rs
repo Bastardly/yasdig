@@ -7,8 +7,8 @@
 //! sound and the frames agree to the sample. The engine side is
 //! `Engine::narrate` in `pipeline.rs`.
 //!
-//! **Why pieces**: a TTS backbone generates a fixed number of codec frames at
-//! most per input (512 at Qwen3-TTS's 12 Hz is 42 s), and a long input drifts
+//! **Why pieces**: a TTS backbone generates codec frames up to a cap per input
+//! ([`MAX_PIECE_FRAMES`]), and a long input drifts
 //! — speed and pitch wander the further it reads from the speaker reference.
 //! So a shot's words are cut at sentence ends into stretches of about 20 s,
 //! each read on its own with the same voice and seed, and joined with a short
@@ -17,25 +17,73 @@
 use crate::avi::Audio;
 use anyhow::{bail, Result};
 
-/// The languages a narration can be read in, as `(code, name)`: the codes
+/// What a voice model reads when its file lists no languages: the codes
 /// llama.cpp's Qwen3-TTS pipeline maps to its language tokens
-/// (`tts_lang_codes`, `tools/mtmd/mtmd-helper-gen.cpp`). English first: it
-/// is what an unset language reads in.
-pub const LANGUAGES: &[(&str, &str)] = &[
-    ("en", "English"),
+/// (`tts_lang_codes`, `tools/mtmd/mtmd-helper-gen.cpp`) — Qwen3-TTS's GGUF
+/// is the one that lists none. A file that does (`general.languages`,
+/// Chatterbox's) is taken at its word ([`crate::voices::VoiceModel`]).
+pub const QWEN_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "it", "pt", "ru", "zh", "ja", "ko"];
+
+/// A name for every language code a voice model in the catalog reads: the
+/// union of Qwen3-TTS's ten and Chatterbox Multilingual's 23. A code a file
+/// lists beyond these is offered under the code itself.
+pub const NAMES: &[(&str, &str)] = &[
+    ("ar", "Arabic"),
+    ("da", "Danish"),
     ("de", "German"),
-    ("fr", "French"),
+    ("el", "Greek"),
+    ("en", "English"),
     ("es", "Spanish"),
+    ("fi", "Finnish"),
+    ("fr", "French"),
+    ("he", "Hebrew"),
+    ("hi", "Hindi"),
     ("it", "Italian"),
-    ("pt", "Portuguese"),
-    ("ru", "Russian"),
-    ("zh", "Chinese"),
     ("ja", "Japanese"),
     ("ko", "Korean"),
+    ("ms", "Malay"),
+    ("nl", "Dutch"),
+    ("no", "Norwegian"),
+    ("pl", "Polish"),
+    ("pt", "Portuguese"),
+    ("ru", "Russian"),
+    ("sv", "Swedish"),
+    ("sw", "Swahili"),
+    ("tr", "Turkish"),
+    ("zh", "Chinese"),
 ];
 
+/// Whether `code` is a well-formed language code (`en`, `pt-br`): what a
+/// clip's record may hold. Whether *its* voice model reads it is checked when
+/// it speaks, against [`crate::voices::VoiceModel::languages`].
+pub fn is_code(code: &str) -> bool {
+    (2..=8).contains(&code.len()) && code.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+}
+
+/// A voice model's languages as the Language select shows them, `(code,
+/// name)`: English first (what an unset language reads in), the rest by name.
+pub fn offered(codes: &[String]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = codes
+        .iter()
+        .map(|c| {
+            let name = NAMES.iter().find(|(k, _)| k == c).map_or(c.as_str(), |(_, n)| n);
+            (c.clone(), name.to_string())
+        })
+        .collect();
+    out.sort_by(|a, b| (a.0 != "en", &a.1).cmp(&(b.0 != "en", &b.1)));
+    out.dedup_by(|a, b| a.0 == b.0);
+    out
+}
+
+/// The most codec frames one piece may run to, sent as the driver's
+/// `n_predict`: a guard against a reading that never stops, not a length. A
+/// [`PIECE_CHARS`] piece is ~20 s; this is a minute at Chatterbox's 25 frames
+/// a second and two at Qwen3-TTS's 12. The driver's own default (512) would
+/// cut a slow Chatterbox reading of a full piece at 20 s.
+pub const MAX_PIECE_FRAMES: u32 = 1500;
+
 /// The longest piece, in characters: about 20 s of English read at an
-/// ordinary pace (~15 characters a second), well under the 42 s cap.
+/// ordinary pace (~15 characters a second), well under the frame cap.
 pub const PIECE_CHARS: usize = 300;
 
 /// Silence between two pieces of one shot: a breath, not a pause.
@@ -193,6 +241,19 @@ mod tests {
     fn tone(seconds: f32, rate: u32) -> Audio {
         let n = (seconds * rate as f32) as usize;
         Audio { sample_rate: rate, channels: 1, pcm: vec![1u8; n * 2] }
+    }
+
+    #[test]
+    fn languages_are_offered_english_first_then_by_name() {
+        let codes: Vec<String> = ["sv", "en", "da", "xx", "en"].iter().map(|c| c.to_string()).collect();
+        let got = offered(&codes);
+        let names: Vec<&str> = got.iter().map(|(_, n)| n.as_str()).collect();
+        assert_eq!(names, ["English", "Danish", "Swedish", "xx"], "an unnamed code is offered as itself, once");
+        for code in QWEN_LANGUAGES {
+            assert!(NAMES.iter().any(|(c, _)| c == code), "{code} has a name");
+        }
+        assert!(is_code("en") && is_code("pt-br"));
+        assert!(!is_code("EN") && !is_code("e") && !is_code("en/../x"));
     }
 
     #[test]

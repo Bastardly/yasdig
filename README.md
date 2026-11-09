@@ -173,7 +173,7 @@ MiniMax H3 with sound, and LTX-2.3 and LTX-2.5 with sound (distilled, 8 steps, w
 LTX's own ×2 hi-res in the same run) — text or a first frame to video, LoRAs, a live preview, and
 long clips made a shot at a time from each shot's last frame. **Narrated stills**: your
 pictures with a voice reading over them, in the voice of a short recording you pick
-(Qwen3-TTS, ten languages). Clips enlarge (FSR, no flicker) and save to Outputs as video
+(Chatterbox, English or 23 languages; Qwen3-TTS). Clips enlarge (FSR, no flicker) and save to Outputs as video
 files.
 
 **Model files** can be `.safetensors`, `.gguf` or `.ckpt`, and are recognised by what

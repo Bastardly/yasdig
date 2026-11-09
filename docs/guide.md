@@ -998,9 +998,11 @@ Firefox on Linux may have no H.264 encoder; Chrome has.
 
 A clip made of pictures you already have, with a voice reading over them: picture 1
 while the voice explains one thing, picture 2 while it goes on. Get **Models → Voice
-models** (Qwen3-TTS, run by llama.cpp beside the Assistant's models), then pick
+models** (Chatterbox Turbo for English, Chatterbox Multilingual for 23 languages, or
+Qwen3-TTS — run by llama.cpp beside the Assistant's models), then pick
 **Narrated stills** in the Video tab's model list. The Shots strip becomes one row per
-picture. The Generation panel holds the size, the fps, the **Language** and the
+picture. The Generation panel holds the size, the fps, the **Language** (on a model
+that reads more than one) and the
 **Default voice**: a 2–15 s recording of the voice to read in, a sound in Outputs or a
 cast member's voice. *Save as defaults for this model* keeps it. Each row has:
 
@@ -1010,8 +1012,8 @@ cast member's voice. *Save as defaults for this model* keeps it. Each row has:
   fine: it is spoken a few sentences at a time and joined, and the picture stays up as
   long as the words take, plus half a second.
 - **Voice…** — a voice for this row alone, instead of the default (*Add cast…* on the
-  row takes only the member's voice). With no voice anywhere the model picks one, a
-  different one each row.
+  row takes only the member's voice). With no voice anywhere, Chatterbox reads in a
+  voice of its own; Qwen3-TTS makes one up, a different one each row.
 
 Generate reads every row in one run. Each row has its own seed, so *Redo* on a row with
 a new seed is another reading of the same words. Extend, the ×, Download, *Save to

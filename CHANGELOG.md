@@ -10,11 +10,16 @@ What changed in each release of yasdig. Each release's executables are on the
 - **Narrated stills**, a kind of clip on the Video tab: one row per picture (an output,
   a cast member's or an upload) with the words a voice reads over it, in the voice of a
   2–15 s recording you pick as the clip's default voice — a sound in Outputs or a cast
-  member's voice — and any row can have a voice of its own. Each picture stays up as long as its words take. Ten languages. Redo a
+  member's voice — and any row can have a voice of its own. Each picture stays up as long as its words take. English, or 23 languages. Redo a
   row with a new seed for another reading; Extend, Download and Save to output as with
   any clip.
-- **Voice models** on the Models tab: Qwen3-TTS 1.7B, run by llama.cpp like the
-  Assistant's models, about 3 GB on the card.
+- **Voice models** on the Models tab, run by llama.cpp like the Assistant's models:
+  Chatterbox Turbo (English, the most natural reader), Chatterbox Multilingual (23
+  languages) and Qwen3-TTS 1.7B (ten languages, flatter). About 2–3 GB on the card.
+
+### Changed
+
+- The Assistant's llama.cpp is now a later commit (past v0.9.0), for Chatterbox.
 
 ### Fixed
 

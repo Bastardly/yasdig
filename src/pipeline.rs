@@ -2497,6 +2497,16 @@ impl Engine {
         let mmproj = m.mmproj.clone().context("this narrated model has no voice projector: Models → Voices")?;
         let voices_dir = self.cfg.voice_dir();
         let voice = crate::voices::scan(&voices_dir).models.into_iter().find(|v| v.lm == m.diffusion_model);
+        // A language the model can't read is refused before anything runs:
+        // Qwen3-TTS fails on it, Chatterbox Turbo would read it as English.
+        if let (Some(v), Some(l)) = (&voice, &m.language) {
+            if !v.languages.contains(l) {
+                let names = |codes: &[String]| {
+                    crate::narration::offered(codes).into_iter().map(|(_, n)| n).collect::<Vec<_>>().join(", ")
+                };
+                bail!("{} doesn't read {}; it reads {}", v.label, names(std::slice::from_ref(l)), names(&v.languages));
+            }
+        }
         let fps = m.effective_fps();
         let (width, height, _) = m.aligned();
         std::fs::create_dir_all(&self.scratch)?;
@@ -2561,7 +2571,7 @@ impl Engine {
                     text,
                     speaker: voice_of[k].clone(),
                     seed: (seg.seed as u32).wrapping_add(i as u32),
-                    n_predict: 0,
+                    n_predict: crate::narration::MAX_PIECE_FRAMES,
                     out: out.clone(),
                 });
                 outs.push(out);

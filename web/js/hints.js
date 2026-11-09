@@ -219,7 +219,8 @@ const HELP = [
   { ids: ['vnarrator'],
     text: 'The voice the clip is read in: a 2–15 s recording of one person speaking clearly, with no music behind '
       + 'it — from Outputs, a cast member, or this computer. A shot with a voice of its own reads in that one '
-      + 'instead. With none, the voice model picks a voice, a different one each shot.' },
+      + 'instead. With none, the voice model reads in a voice of its own: Chatterbox’s is always the same, '
+      + 'Qwen3-TTS makes up a different one each shot.' },
   { ids: ['vlang'],
     text: 'The language the words are read in. Write them in that language: the voice model reads, it does not '
       + 'translate.' },

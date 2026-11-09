@@ -2422,9 +2422,14 @@ pub struct VideoModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mmproj: Option<PathBuf>,
     /// The language a narrated clip is read in, a code the voice model knows
-    /// (`en`, `de`, …; [`crate::narration::LANGUAGES`]). `None` is English.
+    /// (`en`, `de`, …; [`VideoModel::languages`]). `None` is English.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// What a narrated model's voice model reads
+    /// ([`crate::voices::VoiceModel::languages`]), filled by the scan — never
+    /// stored, since a clip's record outlives the file it was read with.
+    #[serde(skip)]
+    pub languages: Vec<String>,
     /// A narrated clip's default voice: a sound in `work/output/` (a stem),
     /// read by every shot that picks none of its own. `None` lets the voice
     /// model pick one.
@@ -2633,6 +2638,7 @@ impl VideoModel {
             latent_upscaler: None,
             mmproj: None,
             language: None,
+            languages: Vec::new(),
             narrator: None,
             hires: false,
             hires_steps: r.hires_steps,
@@ -2756,8 +2762,8 @@ impl VideoModel {
             }
         }
         if let Some(l) = &self.language {
-            if !crate::narration::LANGUAGES.iter().any(|(code, _)| code == l) {
-                bail!("video '{n}': language '{l}' is not one the voice model reads");
+            if !crate::narration::is_code(l) {
+                bail!("video '{n}': '{l}' is not a language code");
             }
         }
         if let Some(v) = &self.narrator {
@@ -3398,6 +3404,7 @@ impl Config {
                     v.lm.clone(),
                 );
                 m.mmproj = Some(v.mmproj.clone());
+                m.languages = v.languages.clone();
                 m.description = Some(
                     "Each shot is a picture held while the voice model reads its words — no video diffusion.".into(),
                 );

@@ -51,6 +51,10 @@ pub struct GgufMeta {
     pub temp: Option<f32>,
     pub top_p: Option<f32>,
     pub top_k: Option<u32>,
+    /// `general.languages`: the codes the model is made for, where the file
+    /// lists them (Chatterbox's do, Qwen3-TTS's don't) — what a voice model
+    /// offers the narration's Language select ([`crate::voices`]).
+    pub languages: Option<Vec<String>>,
 }
 
 /// A numeric or boolean metadata value, as the few keys read here need.
@@ -88,6 +92,21 @@ fn read_scalar(r: &mut impl Read, ty: u32) -> Result<Option<Scalar>> {
     }))
 }
 
+/// A GGUF array's strings, its type and count already past `r`'s position up
+/// to the element type. `None` (the array skipped) when it holds anything
+/// else, or more than a list of names would.
+fn read_strings(r: &mut impl Read) -> Result<Option<Vec<String>>> {
+    let elem = read_u32(r)?;
+    let count = read_u64(r)?;
+    if elem != 8 || count > 1000 {
+        for _ in 0..count {
+            skip_gguf_value(r, elem)?;
+        }
+        return Ok(None);
+    }
+    (0..count).map(|_| read_gguf_string(r)).collect::<Result<Vec<_>>>().map(Some)
+}
+
 /// Read a GGUF file's metadata block. Stops before the tensor index, which an
 /// agent file is not judged by.
 pub fn read_meta(path: &Path) -> Result<GgufMeta> {
@@ -114,6 +133,10 @@ pub fn read_meta(path: &Path) -> Result<GgufMeta> {
     for _ in 0..kv_count {
         let key = read_gguf_string(&mut r)?;
         let ty = read_u32(&mut r)?;
+        if key == "general.languages" && ty == 9 {
+            m.languages = read_strings(&mut r)?;
+            continue;
+        }
         let wanted = matches!(
             key.as_str(),
             "general.architecture"
@@ -385,6 +408,14 @@ pub(crate) mod tests {
                         s(&mut b, &format!("tok{i}"));
                     }
                 }
+                Kv::List(items) => {
+                    b.extend(9u32.to_le_bytes());
+                    b.extend(8u32.to_le_bytes());
+                    b.extend((items.len() as u64).to_le_bytes());
+                    for t in *items {
+                        s(&mut b, t);
+                    }
+                }
             }
         }
         b
@@ -396,6 +427,7 @@ pub(crate) mod tests {
         F(f32),
         B(bool),
         Strings(usize),
+        List(&'static [&'static str]),
     }
 
     pub(crate) fn lm(arch: &'static str, width: u32) -> Vec<u8> {
@@ -447,6 +479,25 @@ pub(crate) mod tests {
         // A text encoder: an LLM with no chat template.
         std::fs::write(d.join("c.gguf"), gguf(&[("general.architecture", Kv::S("qwen3"))])).unwrap();
         assert!(matches!(identify(&d.join("c.gguf")), AgentFile::Unknown(_)));
+    }
+
+    #[test]
+    fn a_files_languages_are_read_and_other_arrays_skipped() {
+        let d = tmp("langs");
+        std::fs::write(
+            d.join("a.gguf"),
+            gguf(&[
+                ("tokenizer.ggml.tokens", Kv::Strings(3)),
+                ("general.languages", Kv::List(&["en", "da"])),
+                ("general.architecture", Kv::S("gpt2")),
+            ]),
+        )
+        .unwrap();
+        let m = read_meta(&d.join("a.gguf")).unwrap();
+        assert_eq!(m.languages, Some(vec!["en".to_string(), "da".to_string()]));
+        assert_eq!(m.arch.as_deref(), Some("gpt2"), "the keys after the list are still read");
+        std::fs::write(d.join("b.gguf"), lm("qwen35", 2560)).unwrap();
+        assert_eq!(read_meta(&d.join("b.gguf")).unwrap().languages, None);
     }
 
     #[test]

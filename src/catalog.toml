@@ -885,13 +885,56 @@ sha256 = "418a6d8723067cd712235facbbc5cba6c8fbbd413fc1292d2aace5a027d5a42f"
 # and the projector that generates its sound (speaker encoder and codec
 # inside), both GGUF, in a folder of their own under the voices dir — paired
 # by folder like an agent (`voices::scan`). URL, size and sha256
-# (X-Linked-Etag) checked on 2026-11-09; ungated. The sampling is the file's
-# own (`general.sampling.*`: temp 0.9, top_p 1.0, top_k 50), so none here.
+# (X-Linked-Etag) checked on 2026-11-09; ungated. Sampling is each file's own
+# (`general.sampling.*`, which the driver lets win as llama-tts does), so none
+# here. Chatterbox first: compared by ear on 2026-11-09 against Qwen3-TTS
+# (whose llama.cpp clone copies a voice's timbre only, reading flat), Turbo
+# sounded the most natural.
+[[voice]]
+id = "chatterbox-turbo"
+label = "Chatterbox Turbo"
+note = "Reads a narrated clip's words aloud in English, in the voice of a 2–15 s recording you pick, or a voice of its own. The most natural-sounding reader here."
+recommended = true
+card_gb = 2
+
+[[voice.file]]
+slot = "model"
+url = "https://huggingface.co/ggml-org/chatterbox-turbo-GGUF/resolve/main/chatterbox-turbo-Q8_0.gguf"
+dest = "chatterbox-turbo/chatterbox-turbo-Q8_0.gguf"
+bytes = 481791712
+sha256 = "c3b93d3c65327ef5affbdf6c7975475782bb29bc70357c7e863e2d564cadf70f"
+
+[[voice.file]]
+slot = "mmproj"
+url = "https://huggingface.co/ggml-org/chatterbox-turbo-GGUF/resolve/main/mmproj-chatterbox-turbo-F16.gguf"
+dest = "chatterbox-turbo/mmproj-chatterbox-turbo-F16.gguf"
+bytes = 555371392
+sha256 = "de86b2ead959ba7ffc487ac2ba278e99aed0ef3b5bd04f083352b36c9b86738f"
+
+[[voice]]
+id = "chatterbox"
+label = "Chatterbox Multilingual"
+note = "Chatterbox for 23 languages: Arabic, Chinese, Danish, Dutch, English, Finnish, French, German, Greek, Hebrew, Hindi, Italian, Japanese, Korean, Malay, Norwegian, Polish, Portuguese, Russian, Spanish, Swahili, Swedish, Turkish. Reads in the voice of a 2–15 s recording you pick, or a voice of its own."
+card_gb = 2
+
+[[voice.file]]
+slot = "model"
+url = "https://huggingface.co/ggml-org/chatterbox-GGUF/resolve/main/chatterbox-Q8_0.gguf"
+dest = "chatterbox/chatterbox-Q8_0.gguf"
+bytes = 558520640
+sha256 = "8fb23a4008577f4fab96083b04da83789934624b0675aafeb7ed72c2bfa5f8d5"
+
+[[voice.file]]
+slot = "mmproj"
+url = "https://huggingface.co/ggml-org/chatterbox-GGUF/resolve/main/mmproj-chatterbox-F16.gguf"
+dest = "chatterbox/mmproj-chatterbox-F16.gguf"
+bytes = 595185120
+sha256 = "e2bc7506753d8f4ad6f66afe8fb27fdea4256c9a88a37386303e97e0c4a9f492"
+
 [[voice]]
 id = "qwen3-tts-1.7b"
 label = "Qwen3-TTS 1.7B"
-note = "Reads a narrated clip's words aloud in the voice of a 2–15 s recording you pick. Ten languages: English, German, French, Spanish, Italian, Portuguese, Russian, Chinese, Japanese, Korean."
-recommended = true
+note = "Reads a narrated clip's words aloud in the voice of a 2–15 s recording you pick. Ten languages: English, German, French, Spanish, Italian, Portuguese, Russian, Chinese, Japanese, Korean. Its readings are flatter than Chatterbox's."
 card_gb = 3
 
 [[voice.file]]

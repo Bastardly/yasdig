@@ -31,7 +31,8 @@
 // tools/tts/tts.cpp loop over the mtmd audio-generation helper): the model is a
 // TTS backbone plus a projector that generates audio, loaded once; each of
 // `pieces` ({text, speaker?, seed, n_predict, out}) is spoken into its own
-// 16-bit WAV at `out`. Records: `P load`, `P speak <done> <total>`, then
+// 16-bit WAV at `out` — with no speaker, in the model's own voice. Records:
+// `P load`, `P speak <done> <total>`, then
 // `D {"load_ms", "gen_ms", "sample_rate", "seconds"}`.
 //
 // Exit codes: 0 done, 1 internal, 2 bad request, 3 load failed, 4 context too
@@ -193,6 +194,12 @@ int speak(const json & req, common_params & params) {
     const std::string lang = req.value("lang", std::string());
     // tts.cpp: the hidden states go to the audio helper, so embeddings are on.
     params.embedding = true;
+    // llama-tts's own defaults (common/arg.cpp, LLAMA_EXAMPLE_TTS): a light
+    // repeat penalty over everything spoken so far. A file's `general.sampling.*`
+    // still wins at load (common_init_sampler_from_model) — Chatterbox's says
+    // 1.2 — exactly as it does for llama-tts, which is what we compared by ear.
+    params.sampling.penalty_repeat = 1.05f;
+    params.sampling.penalty_last_n = -1;
 
     const int64_t t_load = now_ms();
     auto          init   = common_init_from_params(params);
@@ -219,6 +226,13 @@ int speak(const json & req, common_params & params) {
     auto tmpls = common_chat_templates_init(model, "");
     // A speaker is encoded per piece; the file is decoded once per path.
     std::map<std::string, mtmd::bitmap_ptr> speakers;
+    // A piece with no speaker reads in the model's first predefined voice
+    // where it ships some (Chatterbox's `default`, which needs a voice), as
+    // tts.cpp does; a model with none (Qwen3-TTS) makes one up.
+    mtmd::bitmap_ptr builtin;
+    if (mtmd_gen_audio_get_info(mctx.get()).n_voices > 0) {
+        builtin.reset(mtmd_gen_audio_get_voice(mctx.get(), mtmd_gen_audio_voice_name(mctx.get(), 0)));
+    }
     mtmd_helper::gen_audio gen;
     gen.init(lctx, mctx.get());
 
@@ -235,7 +249,7 @@ int speak(const json & req, common_params & params) {
         if (text.empty() || out.empty()) {
             fail(BAD_REQUEST, "bad_request", "piece " + std::to_string(i + 1) + " has no text or no out");
         }
-        mtmd_bitmap * ref = nullptr;
+        mtmd_bitmap * ref = builtin.get();
         if (!speaker.empty()) {
             auto it = speakers.find(speaker);
             if (it == speakers.end()) {
@@ -268,7 +282,6 @@ int speak(const json & req, common_params & params) {
         inp.prompt_len                = prompt.size();
         inp.speaker_ref               = ref;
         inp.lang                      = lang.c_str();
-        inp.voice                     = "";
         inp.top_k                     = sp.top_k;
         inp.top_p                     = sp.top_p;
         inp.seed                      = sp.seed;

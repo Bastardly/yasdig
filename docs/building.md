@@ -36,11 +36,13 @@ it (the folder is gitignored):
 git clone --recursive https://github.com/leejet/stable-diffusion.cpp
 ```
 
-For the Assistant, put llama.cpp beside it at the tag release builds use (also
-gitignored; without it the build works and has no agent):
+For the Assistant and narrated stills, put llama.cpp beside it at the commit
+release builds use (`LLAMA_CPP_REF` in `release.yml`; also gitignored; without
+it the build works and has no agent and no voice):
 
 ```sh
-git clone --branch v0.8.0 https://github.com/ggml-org/llama.cpp
+git clone https://github.com/ggml-org/llama.cpp
+git -C llama.cpp checkout 2d99adb1083670b5676f01614689453b6d378498
 ```
 
 After that it is only:

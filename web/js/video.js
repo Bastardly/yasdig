@@ -1140,6 +1140,7 @@ function syncNarrated(m, lang, narrator) {
   sel.innerHTML = (m.languages ?? []).map(([code, name]) =>
     `<option value="${esc(code)}">${esc(name)}</option>`).join('');
   sel.value = lang && (m.languages ?? []).some(([c]) => c === lang) ? lang : (m.languages?.[0]?.[0] ?? '');
+  $('vlangpick').hidden = (m.languages ?? []).length < 2;
 }
 
 // The boxes *Save as defaults* writes, as [wire key, box, kind]: what

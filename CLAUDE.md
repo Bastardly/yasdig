@@ -2097,9 +2097,23 @@ from `family` goes on `VideoModelDto`.
     a shot is a picture held while a cloned voice reads its words. No sd-cli: the
     driver's **`"task": "speak"`** (`llm::SpeakRequest`, `LlmRunner::speak`, `PROTOCOL`
     2 — both ends; `Phase::Speaking`) runs Qwen3-TTS through mtmd's `gen_audio`, one
-    WAV per piece. One model per `voices::scan` pair in `models/voices/` (LM arch in
-    `TTS_ARCHES`, projector `clip.has_gen_audio_encoder`; `agents::classify` refuses
-    both), `[[voice]]` cards (`check_pairs`, `Want::Voice`). `plan_narrated`: shot 1's
+    WAV per piece. One model per `voices::scan` pair in `models/voices/` (projector
+    `clip.has_gen_audio_encoder` beside any backbone — Chatterbox Turbo's is a plain
+    `gpt2`; `TTS_ARCHES` only names TTS-only backbones for `agents::classify` to
+    refuse), `[[voice]]` cards (`check_pairs`, `Want::Voice`; Chatterbox Turbo first —
+    the user compared all three by ear 2026-11-09: Qwen3-TTS's llama.cpp clone is
+    speaker-embedding only, timbre without delivery, and reads flat). **Languages are
+    the file's** (`general.languages`, `GgufMeta.languages`; none listed =
+    `narration::QWEN_LANGUAGES`), served per model, refused at speak time when the
+    model doesn't list it (Turbo would read German as English); `#vlangpick` hides at
+    one. **Sampling is the file's**: the driver sets llama-tts's TTS defaults (repeat
+    penalty 1.05 over everything) and `common_init_from_params` lays
+    `general.sampling.*` over whatever the request sent (no `user_sampling_config`
+    bits) — Chatterbox's 1.2 penalty and top_k 1000 are what was heard. A piece with no
+    speaker reads in the model's first predefined voice (Chatterbox needs one); pieces
+    go out with `n_predict` `narration::MAX_PIECE_FRAMES` (the driver's 512 is 20 s at
+    Chatterbox's 25 Hz). Multilingual's guidance sequence is llama.cpp's own
+    (`classifier_free_guidance` doubles `n_seq_max` at init). `plan_narrated`: shot 1's
     picture is `source`, the rest `keyframe`, `cut` = k>0, ≤1 `audio`, `every`/negative
     unused, `frames` 0 until spoken. `Engine::narrate`: one speak run for every new
     shot (a shot's own `audio`, else `VideoModel.narrator`, the panel's *Default voice*

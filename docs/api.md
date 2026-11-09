@@ -601,7 +601,8 @@ needs a Vulkan device and nothing else.
   speech plus 0.5 s — and `audio` holds at most one stem, the voice to speak in (a shot
   without one reads in `narrator`, the default voice: an output sound's stem, `""` for
   none; on `/videos/extend` too, with `language`, else the clip's). `language` is one of the model's `languages`
-  codes (`[[code, name]]`, default `en`). One speak run reads every shot; Stop ends it.
+  codes (`[[code, name]]`, the voice model's own list, default `en`); one it doesn't read is
+  refused when the clip is spoken. One speak run reads every shot; Stop ends it.
   `parts` picks the model's separate files, by name under the models dir as `/video-models`
   lists them; `null` leaves out an optional one (H3's audio VAE, VACE's CLIP-Vision), and
   an absent key keeps the model's own.

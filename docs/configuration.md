@@ -191,13 +191,18 @@ there and what each file is.
 **Voice models** read a [narrated clip](guide.md#narrated-stills)'s words aloud. Like an
 agent, one is a language model and its projector, both GGUF, in a folder of their own,
 here under `models/voices/`; the projector is one with an audio generator
-(`clip.has_gen_audio_encoder`), and the model's architecture is a text-to-speech one
-llama.cpp runs (`qwen3tts`). Models → *Voice models* fetches the card into its own folder.
-Each voice model installed adds a *Narrated stills* entry to the Video tab's model list.
+(`clip.has_gen_audio_encoder`); the model beside it may be any architecture llama.cpp
+runs as text to speech (Qwen3-TTS's `qwen3tts`, Chatterbox's plain `gpt2` or `llama`).
+The languages it reads are the file's `general.languages`; a file that lists none
+(Qwen3-TTS's) reads Qwen3-TTS's ten. Models → *Voice models* fetches a card into its own
+folder. Each voice model installed adds a *Narrated stills* entry to the Video tab's
+model list.
 
 | card | about | files |
 |---|---|---|
-| Qwen3-TTS 1.7B | 3 GB on the card; clones the voice of a 2–15 s recording; ten languages | [ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF](https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF): the `Q8_0` model and the `Q8_0` mmproj |
+| Chatterbox Turbo | 2 GB on the card; English; clones the voice of a 2–15 s recording, or reads in its own; the most natural reader here | [ggml-org/chatterbox-turbo-GGUF](https://huggingface.co/ggml-org/chatterbox-turbo-GGUF): `chatterbox-turbo-Q8_0.gguf` and `mmproj-chatterbox-turbo-F16.gguf` |
+| Chatterbox Multilingual | 2 GB on the card; 23 languages; clones a voice like Turbo | [ggml-org/chatterbox-GGUF](https://huggingface.co/ggml-org/chatterbox-GGUF): `chatterbox-Q8_0.gguf` and `mmproj-chatterbox-F16.gguf` |
+| Qwen3-TTS 1.7B | 3 GB on the card; clones the voice of a 2–15 s recording; ten languages; flatter readings (llama.cpp copies a voice's timbre, not its delivery) | [ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF](https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF): the `Q8_0` model and the `Q8_0` mmproj |
 
 If a model runs out of memory, the error says which memory and when, and offers the
 ways out as buttons — chiefly the **Memory** setting in the *Models* fold: *System RAM*

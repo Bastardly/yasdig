@@ -9,7 +9,10 @@
 //! are, so nothing is read off a filename. Read 2026-11-09 off
 //! `ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF`: the backbone has no chat template
 //! (so the agents' scan never offered it) and carries its author's sampling in
-//! `general.sampling.*`.
+//! `general.sampling.*`. Chatterbox's (`ggml-org/chatterbox-turbo-GGUF`,
+//! `chatterbox-GGUF`, read the same day) is a plain `gpt2` or `llama` backbone
+//! beside a `chatterbox` projector, and lists its languages
+//! (`general.languages`).
 //!
 //! **Paired by folder**, as agents are: a folder with one generating
 //! projector and one backbone is one voice model. The projector is what makes
@@ -53,6 +56,10 @@ pub struct VoiceModel {
     pub temp: Option<f32>,
     pub top_p: Option<f32>,
     pub top_k: Option<u32>,
+    /// The language codes it reads: the backbone's `general.languages` (else
+    /// the projector's), else [`crate::narration::QWEN_LANGUAGES`] — the file
+    /// that lists none.
+    pub languages: Vec<String>,
 }
 
 /// What a scan found: the voice models, and every other file with the reason.
@@ -87,7 +94,7 @@ fn pair_folder(root: &Path, folder: &Path, files: Folder, out: &mut Scan) {
     for (p, m) in files {
         match m {
             Err(e) => out.other.push((p, format!("could not be read ({e})"))),
-            Ok(m) if m.arch.as_deref() == Some("clip") && m.gen_audio == Some(true) => projs.push(p),
+            Ok(m) if m.arch.as_deref() == Some("clip") && m.gen_audio == Some(true) => projs.push((p, m)),
             Ok(m) if m.arch.as_deref() == Some("clip") => {
                 out.other.push((p, "a projector that doesn't generate sound — not a voice model's".into()))
             }
@@ -97,7 +104,7 @@ fn pair_folder(root: &Path, folder: &Path, files: Folder, out: &mut Scan) {
     }
     if lms.len() == 1 && projs.len() == 1 {
         let (lm, m) = lms.remove(0);
-        let mmproj = projs.remove(0);
+        let (mmproj, pm) = projs.remove(0);
         let label = m.name.clone().unwrap_or_else(|| {
             let named = if folder == root { &lm } else { folder };
             named.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
@@ -111,6 +118,9 @@ fn pair_folder(root: &Path, folder: &Path, files: Folder, out: &mut Scan) {
             temp: m.temp,
             top_p: m.top_p,
             top_k: m.top_k,
+            languages: m.languages.or(pm.languages).unwrap_or_else(|| {
+                crate::narration::QWEN_LANGUAGES.iter().map(|c| c.to_string()).collect()
+            }),
         });
         return;
     }
@@ -122,7 +132,7 @@ fn pair_folder(root: &Path, folder: &Path, files: Folder, out: &mut Scan) {
     for (p, _) in lms {
         out.other.push((p, why_lm.into()));
     }
-    for p in projs {
+    for (p, _) in projs {
         out.other.push((p, "a voice projector with no single model beside it to pair with".into()));
     }
 }
@@ -164,6 +174,41 @@ mod tests {
         assert_eq!(v.label, "qwen3-tts");
         assert_eq!(v.mmproj, folder.join("mmproj.gguf"));
         assert_eq!(v.top_k, Some(50));
+        assert_eq!(v.languages, crate::narration::QWEN_LANGUAGES, "a file that lists none reads Qwen3-TTS's ten");
+    }
+
+    #[test]
+    fn a_chatterbox_folder_is_a_voice_that_reads_its_listed_languages() {
+        // Turbo's backbone is a plain gpt2; only the projector says "voice".
+        let root = Path::new("/m/voices");
+        let folder = root.join("chatterbox-turbo");
+        let mut out = Scan::default();
+        let en = Some(vec!["en".to_string()]);
+        pair_folder(
+            root,
+            &folder,
+            vec![
+                (folder.join("turbo.gguf"), Ok(GgufMeta { languages: en.clone(), ..meta("gpt2", None) })),
+                (folder.join("mmproj.gguf"), Ok(meta("clip", Some(true)))),
+            ],
+            &mut out,
+        );
+        assert_eq!(out.other, vec![]);
+        assert_eq!(out.models[0].languages, ["en"]);
+        assert!(!is_voice_file(&meta("gpt2", None)), "gpt2 is no voice model's alone");
+
+        // The projector's list counts when the backbone has none.
+        let mut out = Scan::default();
+        pair_folder(
+            root,
+            &folder,
+            vec![
+                (folder.join("lm.gguf"), Ok(meta("llama", None))),
+                (folder.join("mmproj.gguf"), Ok(GgufMeta { languages: en, ..meta("clip", Some(true)) })),
+            ],
+            &mut out,
+        );
+        assert_eq!(out.models[0].languages, ["en"]);
     }
 
     #[test]

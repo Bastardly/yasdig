@@ -1324,9 +1324,9 @@ struct VideoModelDto {
     /// LTX: the page offers *Hi-res ×2* (with a latent upscaler in its parts).
     ltx: bool,
     /// Narrated stills: each row is a picture, the words a voice reads and
-    /// the voice; [`narration::LANGUAGES`] are what it can be read in.
+    /// the voice; `languages` are what its voice model reads, `(code, name)`.
     narrated: bool,
-    languages: &'static [(&'static str, &'static str)],
+    languages: Vec<(String, String)>,
     /// The memory mode the model runs with, resolved — `memory` beside it is
     /// the raw entry, which an old `offload_to_cpu` key leaves unset.
     memory_mode: String,
@@ -1652,7 +1652,7 @@ fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> 
             family: m.family.as_str(),
             ltx: m.family.is_ltx(),
             narrated: m.family == config::VideoFamily::Narrated,
-            languages: if m.family == config::VideoFamily::Narrated { narration::LANGUAGES } else { &[] },
+            languages: narration::offered(&m.languages),
             size_multiple: m.family.size_multiple(),
             frame_grid: m.family.frame_grid(),
             forced_fps: m.family.forced_fps(),
