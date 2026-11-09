@@ -75,20 +75,26 @@ const MAX = 3;
 let picked = [];
 let voices = [];
 let done = null;
+// This opening's cap, and whether a sound is a speaker's (H3's `<Audio N>`
+// and *Voice of*) — a narrated shot takes one voice and names nobody.
+let limit = MAX;
+let named = true;
 
 function drawSounds() {
   $('soundslist').innerHTML = picked.map((s, i) => `
-    <li><b>&lt;Audio ${i + 1}&gt;</b> <span class="sub">${esc(s)}</span>
+    <li>${named ? `<b>&lt;Audio ${i + 1}&gt;</b> ` : ''}<span class="sub">${esc(s)}</span>
       <button type="button" class="btn" data-play="${esc(s)}">Play</button>
       <button type="button" class="btn" data-drop="${i}">Remove</button>
-      <input type="text" data-voice="${i}" value="${esc(voices[i] ?? '')}" placeholder="Voice of — a name the lines use"
-        aria-label="Whose voice sound ${i + 1} is"></li>`).join('')
+      ${named ? `<input type="text" data-voice="${i}" value="${esc(voices[i] ?? '')}" placeholder="Voice of — a name the lines use"
+        aria-label="Whose voice sound ${i + 1} is">` : ''}</li>`).join('')
     || '<li class="sub">No sounds yet.</li>';
-  $('soundschoose').hidden = $('soundsupload').hidden = picked.length >= MAX;
+  $('soundschoose').hidden = $('soundsupload').hidden = picked.length >= limit;
 }
 
-export function editSounds(stems, onDone, note, voiceOf = []) {
-  picked = [...stems];
+export function editSounds(stems, onDone, note, voiceOf = [], { max = MAX, speakers = true } = {}) {
+  limit = max;
+  named = speakers;
+  picked = [...stems].slice(0, max);
   voices = picked.map((_, i) => voiceOf[i] ?? '');
   done = onDone;
   $('soundsnote').textContent = note;
@@ -114,7 +120,7 @@ export function initSounds() {
   // A cast character's voice is theirs: *Voice of* says so at once.
   const add = (stem, extra) => {
     const who = extra?.cast?.kind === 'character' ? extra.cast.name : '';
-    if (!picked.includes(stem) && picked.length < MAX) { picked.push(stem); voices.push(who); }
+    if (!picked.includes(stem) && picked.length < limit) { picked.push(stem); voices.push(who); }
     drawSounds();
   };
   $('soundschoose').addEventListener('click', () => chooseSound(add));
@@ -122,7 +128,7 @@ export function initSounds() {
     $('soundserr').textContent = '';
     askForSound((s) => {
       add(s.stem);
-      if (s.trimmed) $('soundserr').textContent = `Kept its first ${s.seconds.toFixed(0)} seconds: H3 takes no more.`;
+      if (s.trimmed) $('soundserr').textContent = `Kept its first ${s.seconds.toFixed(0)} seconds, the most a shot's sound can be.`;
     }, (msg) => { $('soundserr').textContent = msg; });
   });
   $('soundsdone').addEventListener('click', () => {

@@ -109,6 +109,8 @@ function progressText() {
   const PHASE = { loading: 'Loading weights', reading: 'Reading', writing: 'Writing', sampling: 'Step' };
   if (p.busy && p.steps) {
     parts.push(p.phase === 'writing' ? `Writing · ${p.step} piece${p.step === 1 ? '' : 's'}`
+      // A narration's voice, a piece of the words at a time (`sd::Phase::Speaking`).
+      : p.phase === 'speaking' ? `Speaking ${p.step}/${p.steps} piece${p.steps === 1 ? '' : 's'}`
       : `${PHASE[p.phase] ?? 'Step'} ${p.step}/${p.steps}`, p.rate);
   }
   return parts.join(' · ');

@@ -20,7 +20,7 @@ use crate::config::{slash_name, Config, ImageFamily, VideoFamily};
 use crate::discover::{DitKind, Found, LtxVersion, Role};
 
 /// What the rail lists under *Installed*, in this order.
-pub const GROUPS: [(&str, &str); 8] = [
+pub const GROUPS: [(&str, &str); 9] = [
     ("checkpoints", "Checkpoints"),
     ("video", "Video models"),
     ("loras", "LoRAs"),
@@ -28,13 +28,14 @@ pub const GROUPS: [(&str, &str); 8] = [
     ("vaes", "VAEs"),
     ("upscalers", "Upscalers"),
     ("agents", "Agent models"),
+    ("voices", "Voice models"),
     ("other", "Other"),
 ];
 
 /// The folders an id may start with. The more specific first: the video,
-/// LoRA, upscaler and agent folders sit inside the models folder by default,
+/// LoRA, upscaler, agent and voice folders sit inside the models folder by default,
 /// and a file there is named from its own.
-const ROOTS: [&str; 5] = ["video", "loras", "upscalers", "agents", "models"];
+const ROOTS: [&str; 6] = ["video", "loras", "upscalers", "agents", "voices", "models"];
 
 fn root_dir(cfg: &Config, root: &str) -> Option<PathBuf> {
     Some(match root {
@@ -43,6 +44,7 @@ fn root_dir(cfg: &Config, root: &str) -> Option<PathBuf> {
         "loras" => cfg.lora_dir(),
         "upscalers" => cfg.upscaler_dir(),
         "agents" => cfg.agent_dir(),
+        "voices" => cfg.voice_dir(),
         _ => return None,
     })
 }
@@ -227,6 +229,18 @@ pub fn list(cfg: &Config) -> Vec<Item> {
         }
     }
     for (path, why) in &scan.other {
+        push(&mut items, item(cfg, path, "other", why.clone(), Vec::new()));
+    }
+    let voices = crate::voices::scan(&cfg.voice_dir());
+    for v in &voices.models {
+        if let Some(mut i) = item(cfg, &v.lm, "voices", "voice model (text to speech)".into(), Vec::new()) {
+            i.label = v.label.clone();
+            i.paths.push(v.mmproj.clone());
+            i.bytes = i.paths.iter().map(|p| bytes(p)).sum();
+            push(&mut items, Some(i));
+        }
+    }
+    for (path, why) in &voices.other {
         push(&mut items, item(cfg, path, "other", why.clone(), Vec::new()));
     }
     // What models.toml points at by hand.

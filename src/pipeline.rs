@@ -500,6 +500,12 @@ pub struct VideoRequest {
     pub memory: Option<String>,
     /// LTX's *Hi-res ×2* ([`VideoModel::hires`]); `None` keeps the model's.
     pub hires: Option<bool>,
+    /// A narrated clip's language ([`VideoModel::language`]); `None` keeps
+    /// the model's.
+    pub language: Option<String>,
+    /// A narrated clip's default voice ([`VideoModel::narrator`]): `None`
+    /// keeps the model's, an empty stem clears it.
+    pub narrator: Option<String>,
     /// The Video tab's *Models* rows: slot key to a file under the models dir,
     /// or `null` to leave an optional part out. Absent keys keep the model's.
     /// See [`Config::apply_video_parts`].
@@ -557,6 +563,12 @@ pub fn resolve_video(cfg: &Config, req: &VideoRequest) -> Result<VideoModel> {
     }
     if let Some(v) = req.vae_tiling {
         m.vae_tiling = v;
+    }
+    if let Some(v) = &req.language {
+        m.language = Some(v.clone()).filter(|l| !l.is_empty());
+    }
+    if let Some(v) = &req.narrator {
+        m.narrator = Some(v.trim().to_string()).filter(|s| !s.is_empty());
     }
     if let Some(v) = req.memory.as_deref().filter(|v| !v.is_empty()) {
         m.memory = Some(v.to_string());
@@ -694,6 +706,10 @@ pub struct ExtendClipRequest {
     pub every: Option<String>,
     /// `None` keeps the clip's own.
     pub negative: Option<String>,
+    /// Narrated stills: the panel's default voice and language as they are
+    /// now (`None` keeps the clip's), so a Redo reads in the voice shown.
+    pub narrator: Option<String>,
+    pub language: Option<String>,
 }
 
 /// Two notes as one, either or both absent.
@@ -2378,7 +2394,13 @@ impl Engine {
         let mut note = None;
         // Every shot carries the same LoRAs, so the first word on them holds.
         let mut lora = None;
-        for k in 0..n {
+        if m.family == crate::config::VideoFamily::Narrated {
+            // No sd-cli: one speak run for every shot, then the stills. All
+            // or nothing — a failure leaves no clip (the guard sweeps it).
+            self.narrate(&id, &m, &[], &mut segments, init.as_deref())?;
+            done = n;
+        }
+        for k in (0..n).filter(|_| m.family != crate::config::VideoFamily::Narrated) {
             // The first shot renders into the clip itself, from the picked
             // first frame; every other one into a folder of its own, from the
             // clip's last frame so far (or from nothing, a cut), and is then
@@ -2454,6 +2476,162 @@ impl Engine {
         Ok(VideoResult { clip, gen_ms, note })
     }
 
+    /// Narrated stills ([`crate::narration`]): `segs` (planned, appended after
+    /// `before`) spoken by the voice model in one driver run, laid end to end,
+    /// and each shot's picture fitted to the clip's size and held for as long
+    /// as its speech. `init` is shot 1's picture when shot 1 is among `segs`.
+    ///
+    /// A shot with no voice of its own reads in the last one before it — one
+    /// recording on shot 1 carries a whole narration. The frames after a
+    /// shot's first are hard links to it, so a minute at 12 fps is one PNG per
+    /// shot on disk; everything downstream (export, Save to output, Enlarge)
+    /// still reads a frame per frame.
+    fn narrate(
+        &mut self,
+        id: &str,
+        m: &VideoModel,
+        before: &[Segment],
+        segs: &mut [Segment],
+        init: Option<&Path>,
+    ) -> Result<()> {
+        let mmproj = m.mmproj.clone().context("this narrated model has no voice projector: Models → Voices")?;
+        let voices_dir = self.cfg.voice_dir();
+        let voice = crate::voices::scan(&voices_dir).models.into_iter().find(|v| v.lm == m.diffusion_model);
+        let fps = m.effective_fps();
+        let (width, height, _) = m.aligned();
+        std::fs::create_dir_all(&self.scratch)?;
+        let staged = |name: String| self.scratch.join(format!("narrate-{id}-{name}"));
+
+        // Every picture found before a word is spoken.
+        let mut stills = Vec::with_capacity(segs.len());
+        for (k, seg) in segs.iter().enumerate() {
+            stills.push(match (&seg.keyframe, k == 0 && before.is_empty()) {
+                (_, true) => init.map(Path::to_path_buf).context("shot 1 has no picture: pick one")?,
+                (Some(stem), false) => self.output_source(stem)?,
+                (None, false) => bail!("shot {} has no picture: pick one", before.len() + k + 1),
+            });
+        }
+
+        // The default voice, held to the shot sounds' lengths, when a shot
+        // will read in it.
+        if let Some(stem) = m.narrator.as_ref().filter(|_| segs.iter().any(|s| s.audio.is_empty())) {
+            let path = self.items.find_audio_output(stem)
+                .with_context(|| format!("the default voice '{stem}' is not in Outputs any more: pick another"))?;
+            let secs = crate::avi::read_wav(&path)?.seconds();
+            let (lo, hi) = REF_AUDIO_SECONDS;
+            if !(lo - 0.05..=hi + 0.05).contains(&secs) {
+                bail!("the default voice '{stem}' is {secs:.1} s; a voice must be {lo:.0}–{hi:.0} s long");
+            }
+        }
+
+        // Every voice copied into scratch once (invariant 8, and the only
+        // place the Windows container may read besides the models). A shot's
+        // own voice is for that shot; the rest read in the default voice.
+        let mut speakers: Vec<(String, PathBuf)> = Vec::new();
+        let mut voice_of = Vec::with_capacity(segs.len());
+        for seg in segs.iter() {
+            let pick = seg.audio.first().or(m.narrator.as_ref());
+            let path = match pick {
+                Some(stem) => match speakers.iter().find(|(s, _)| s == stem) {
+                    Some((_, p)) => Some(p.clone()),
+                    None => {
+                        let src = self.items.find_audio_output(stem).with_context(|| format!("no saved sound '{stem}'"))?;
+                        let dst = staged(format!("voice{}.wav", speakers.len()));
+                        std::fs::copy(&src, &dst).with_context(|| format!("staging the voice '{stem}'"))?;
+                        speakers.push((stem.clone(), dst.clone()));
+                        Some(dst)
+                    }
+                },
+                None => None,
+            };
+            voice_of.push(path);
+        }
+
+        let mut pieces = Vec::new();
+        let mut shot_pieces = Vec::with_capacity(segs.len());
+        for (k, seg) in segs.iter().enumerate() {
+            let texts = crate::narration::pieces(&seg.conditioned);
+            if texts.is_empty() {
+                bail!("shot {}: there is nothing to say", before.len() + k + 1);
+            }
+            let mut outs = Vec::new();
+            for (i, text) in texts.into_iter().enumerate() {
+                let out = staged(format!("{k}-{i}.wav"));
+                pieces.push(crate::llm::Piece {
+                    text,
+                    speaker: voice_of[k].clone(),
+                    seed: (seg.seed as u32).wrapping_add(i as u32),
+                    n_predict: 0,
+                    out: out.clone(),
+                });
+                outs.push(out);
+            }
+            shot_pieces.push(outs);
+        }
+        let sampling = crate::llm::Sampling {
+            temp: voice.as_ref().and_then(|v| v.temp).unwrap_or(0.9),
+            top_p: voice.as_ref().and_then(|v| v.top_p).unwrap_or(1.0),
+            top_k: voice.as_ref().and_then(|v| v.top_k).unwrap_or(50),
+            min_p: 0.0,
+            seed: 0,
+        };
+        let req = crate::llm::SpeakRequest {
+            v: crate::llm::PROTOCOL,
+            task: "speak",
+            model: m.diffusion_model.clone(),
+            mmproj,
+            lang: m.language.clone().unwrap_or_default(),
+            sampling,
+            pieces,
+        };
+        let label = format!("narration, {} shot(s)", segs.len());
+        let spoken = crate::llm::LlmRunner::watched(&self.cfg, &self.monitor).speak(&req, &label);
+        let cleanup = || {
+            for p in req.pieces.iter().map(|p| &p.out).chain(speakers.iter().map(|(_, p)| p)) {
+                let _ = std::fs::remove_file(p);
+            }
+        };
+        let laid = spoken.and_then(|_| {
+            let audio: Vec<Vec<crate::avi::Audio>> = shot_pieces
+                .iter()
+                .map(|outs| outs.iter().map(|p| crate::avi::read_wav(p)).collect::<Result<Vec<_>>>())
+                .collect::<Result<_>>()?;
+            let start = self.videos.frames(id).len() as u32;
+            Ok((crate::narration::lay(&audio, fps, start)?, start))
+        });
+        cleanup();
+        let ((audio, frames), start) = laid?;
+
+        // The soundtrack: this run's after what the clip has.
+        let wav = self.videos.dir(id).join(crate::videos::AUDIO);
+        let joined = match self.videos.audio_path(id) {
+            Some(p) if start > 0 => {
+                let mut had = crate::avi::read_wav(&p)?;
+                if (had.sample_rate, had.channels) != (audio.sample_rate, audio.channels) {
+                    bail!("the clip's sound is {} Hz and this voice model's {} Hz: generate the clip again", had.sample_rate, audio.sample_rate);
+                }
+                had.pcm.extend_from_slice(&audio.pcm);
+                had
+            }
+            _ => audio,
+        };
+
+        // The stills, each held for its shot's frames.
+        let mut at = start;
+        for (k, seg) in segs.iter_mut().enumerate() {
+            let first = self.videos.frame_path(id, at);
+            fit_still(&stills[k], width, height, &first)?;
+            for n in 1..frames[k] {
+                hold_frame(&first, &self.videos.frame_path(id, at + n))?;
+            }
+            seg.start = at;
+            seg.frames = frames[k];
+            at += frames[k];
+        }
+        crate::avi::write_wav(&wav, &joined)?;
+        Ok(())
+    }
+
     /// Each shot's sounds are there and within H3's length: `plan_shots`'
     /// rules over what only the files know, before anything is drawn.
     fn check_sounds(&self, segs: &[Segment]) -> Result<()> {
@@ -2464,12 +2642,12 @@ impl Engine {
                 let path = self.items.find_audio_output(stem).with_context(|| format!("no saved sound '{stem}'"))?;
                 let secs = crate::avi::read_wav(&path)?.seconds();
                 if secs < lo - 0.05 {
-                    bail!("the sound '{stem}' is {secs:.1} s; H3 needs at least {lo:.0} s of one");
+                    bail!("the sound '{stem}' is {secs:.1} s; a shot's sound must be at least {lo:.0} s long");
                 }
                 total += secs;
             }
             if total > hi + 0.05 {
-                bail!("a shot's sounds are {total:.1} s in all; H3 takes at most {hi:.0} s (shot {})", k + 1);
+                bail!("a shot's sounds are {total:.1} s in all; at most {hi:.0} s are followed (shot {})", k + 1);
             }
         }
         Ok(())
@@ -2586,6 +2764,15 @@ impl Engine {
         if !clip.rendered {
             bail!("that clip isn't generated yet: press Generate clip");
         }
+        if clip.video.family == crate::config::VideoFamily::Narrated {
+            if let Some(v) = &req.narrator {
+                clip.video.narrator = Some(v.trim().to_string()).filter(|s| !s.is_empty());
+            }
+            if let Some(l) = &req.language {
+                clip.video.language = Some(l.clone()).filter(|l| !l.is_empty());
+            }
+            clip.video.validate()?;
+        }
         let m = clip.video.clone();
         if req.keep == 0 {
             bail!("shot 1 is the clip: to change it, press Generate clip");
@@ -2632,6 +2819,19 @@ impl Engine {
         let total = planned.len();
         let n = clip.segments.len() + total;
         let mut lora = None;
+        let mut planned = planned;
+        if m.family == crate::config::VideoFamily::Narrated && !planned.is_empty() {
+            // Every new shot in one speak run, appended after the kept ones.
+            match self.narrate(id, &m, &clip.segments, &mut planned, None) {
+                Ok(()) => {
+                    clip.segments.append(&mut planned);
+                    clip.every = every_typed.clone();
+                }
+                Err(e) if !cutting => return Err(e),
+                Err(e) => note = Some(cut_short(&e, 0, total)),
+            }
+            planned.clear();
+        }
         for (j, mut seg) in planned.into_iter().enumerate() {
             let k = clip.segments.len();
             match self.render_shot(id, &m, &seg, &negative, k, n) {
@@ -2696,8 +2896,20 @@ impl Engine {
 
         let t = Instant::now();
         let mut size = (0, 0);
+        // Narrated stills: a shot is one picture held, so it is enlarged once
+        // and held again — a minute at 12 fps is a few FSR passes, not 720.
+        let still = clip.video.family == crate::config::VideoFamily::Narrated;
+        let starts: std::collections::BTreeSet<u32> = clip.segments.iter().map(|s| s.start).collect();
+        let mut held: Option<PathBuf> = None;
         for (i, frame) in frames.iter().enumerate() {
-            size = self.fsr().process(frame, &self.videos.version_frame(id, n, i as u32), factor, filters)?;
+            let to = self.videos.version_frame(id, n, i as u32);
+            match &held {
+                Some(from) if still && !starts.contains(&(i as u32)) => hold_frame(from, &to)?,
+                _ => {
+                    size = self.fsr().process(frame, &to, factor, filters)?;
+                    held = Some(to);
+                }
+            }
         }
         clip.versions.push(crate::videos::ClipVersion {
             n,
@@ -4848,6 +5060,101 @@ fn edit_size(w: u32, h: u32, base: u32) -> (u32, u32) {
 /// what is recorded once drawn — before minutes of render, so a row that
 /// can't run is refused while nothing has. `has_init`: shot 1 has a
 /// first frame, which references can't sit beside.
+/// Frame `to` is `from` again: a hard link where the filesystem has them
+/// (a held still costs no disk), else a copy.
+fn hold_frame(from: &Path, to: &Path) -> Result<()> {
+    if std::fs::hard_link(from, to).is_err() {
+        std::fs::copy(from, to).with_context(|| format!("writing {}", to.display()))?;
+    }
+    Ok(())
+}
+
+/// A narrated shot's picture, fitted inside `width`×`height` without cropping
+/// (Lanczos), centred on black, written as an RGB PNG at `dst` — always
+/// re-encoded, never copied: an upload the page redrew is RGBA, and every
+/// frame of a clip is RGB like sd-cli's.
+fn fit_still(src: &Path, width: u32, height: u32, dst: &Path) -> Result<()> {
+    let img = image::open(src).with_context(|| format!("reading {}", src.display()))?;
+    let (w, h) = still_size((img.width(), img.height()), (width, height));
+    if (img.width(), img.height()) == (width, height) {
+        return img.to_rgb8().save(dst).with_context(|| format!("writing {}", dst.display()));
+    }
+    let fitted = img.resize_exact(w, h, image::imageops::FilterType::Lanczos3).to_rgb8();
+    let mut canvas = image::RgbImage::new(width, height);
+    image::imageops::overlay(&mut canvas, &fitted, i64::from((width - w) / 2), i64::from((height - h) / 2));
+    canvas.save(dst).with_context(|| format!("writing {}", dst.display()))
+}
+
+/// The largest size of `src`'s shape that fits inside `frame`.
+fn still_size(src: (u32, u32), frame: (u32, u32)) -> (u32, u32) {
+    let (sw, sh) = (src.0.max(1) as u64, src.1.max(1) as u64);
+    let (fw, fh) = (frame.0 as u64, frame.1 as u64);
+    if sw * fh >= sh * fw {
+        (fw as u32, ((sh * fw + sw / 2) / sw).clamp(1, fh) as u32)
+    } else {
+        (((sw * fh + sh / 2) / sh).clamp(1, fw) as u32, fh as u32)
+    }
+}
+
+/// [`plan_shots`] for narrated stills: every shot is a cut from its own
+/// picture (shot 1's is the clip's first frame), its words what the voice
+/// reads, at most one sound — the voice — and no references. Its length is
+/// its speech's, known only once spoken, so `frames` is 0 here.
+fn plan_narrated(
+    vars: &variables::Variables,
+    shots: &[ShotSpec],
+    before: &[Segment],
+    has_init: bool,
+) -> Result<Vec<Segment>> {
+    let first = before.len();
+    let mut out = Vec::new();
+    for (j, shot) in shots.iter().enumerate() {
+        let k = first + j;
+        let text = shot.text.trim().to_string();
+        if text.is_empty() {
+            bail!("shot {} is empty: write what the voice says, or remove it", k + 1);
+        }
+        let keyframe = shot.keyframe.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        if k == 0 {
+            if keyframe.is_some() {
+                bail!("shot 1's picture is the clip's first frame: pick it as the first frame instead");
+            }
+            if !has_init {
+                bail!("shot 1 has no picture: pick one for it");
+            }
+        } else {
+            let Some(stem) = keyframe else { bail!("shot {} has no picture: pick one for it", k + 1) };
+            if !workitems::valid_id(stem) {
+                bail!("'{stem}' is not an output image");
+            }
+        }
+        if !shot.references.is_empty() {
+            bail!("shot {}: narrated stills follow no references — pick the shot's picture instead", k + 1);
+        }
+        if shot.audio.len() > 1 {
+            bail!("shot {}: one voice reads a shot", k + 1);
+        }
+        if let Some(bad) = shot.audio.iter().find(|r| !workitems::valid_id(r)) {
+            bail!("'{bad}' is not an output sound");
+        }
+        let seed = if shot.seed < 0 { random_seed().wrapping_add(k as i64) } else { shot.seed };
+        let conditioned = variables::expand(&text, vars, seed)?;
+        out.push(Segment {
+            conditioned,
+            text,
+            seed,
+            start: 0,
+            frames: 0,
+            cut: k > 0,
+            references: Vec::new(),
+            keyframe: if k > 0 { keyframe.map(str::to_string) } else { None },
+            audio: shot.audio.clone(),
+            words: Default::default(),
+        });
+    }
+    Ok(out)
+}
+
 fn plan_shots(
     vars: &variables::Variables,
     m: &VideoModel,
@@ -4859,6 +5166,9 @@ fn plan_shots(
     let first = before.len();
     if first + shots.len() > MAX_SHOTS {
         bail!("a long clip has at most {MAX_SHOTS} shots; this one has {}", first + shots.len());
+    }
+    if m.family == crate::config::VideoFamily::Narrated {
+        return plan_narrated(vars, shots, before, has_init);
     }
     let mut out = Vec::new();
     for (j, shot) in shots.iter().enumerate() {
@@ -5131,6 +5441,8 @@ mod tests {
             vae_tiling: None,
             memory: None,
             hires: None,
+            language: None,
+            narrator: None,
             parts: None,
             loras: None,
             shots: vec![shot("a {animal} walks", -1, Some(30)), shot("it swims", 9, None)],
@@ -5153,6 +5465,43 @@ mod tests {
         req.source = Some("../x".into());
         assert!(super::plan_clip(&cfg, &items, &videos, &req).is_err(), "stems are whitelisted");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Narrated stills: every shot needs its picture (shot 1's is the clip's
+    /// first frame), is a cut, reads its words as typed (no *Every shot*), and
+    /// takes one voice at most; its length waits for the speech.
+    #[test]
+    fn a_narrated_shot_is_a_picture_and_the_words_read_over_it() {
+        let vars = Default::default();
+        let m = video("narrated");
+        let pic = |text: &str, key: Option<&str>, audio: &[&str]| ShotSpec {
+            keyframe: key.map(str::to_string),
+            audio: audio.iter().map(|s| s.to_string()).collect(),
+            ..shot(text, 3, Some(99))
+        };
+        let segs = plan_shots(&vars, &m, &[pic("Once.", None, &["v"]), pic("Then.", Some("b"), &[])], "ignored", &[], true)
+            .unwrap();
+        assert_eq!(segs[0].conditioned, "Once.");
+        assert_eq!((segs[0].cut, segs[1].cut), (false, true));
+        assert_eq!(segs[1].keyframe.as_deref(), Some("b"));
+        assert_eq!((segs[0].frames, segs[1].frames), (0, 0));
+        assert_eq!(segs[1].audio, Vec::<String>::new(), "kept as the row had it; the voice carries over at render");
+
+        let err = |shots: &[ShotSpec], init: bool| plan_shots(&vars, &m, shots, "", &[], init).unwrap_err().to_string();
+        assert!(err(&[pic("x", None, &[])], false).contains("shot 1 has no picture"));
+        assert!(err(&[pic("x", None, &[]), pic("y", None, &[])], true).contains("shot 2 has no picture"));
+        assert!(err(&[pic("x", None, &["a", "b"])], true).contains("one voice"));
+        assert!(err(&[pic("x", Some("k"), &[])], true).contains("first frame"));
+        assert!(err(&[ShotSpec { references: vec!["r".into()], ..pic("x", None, &[]) }], true).contains("references"));
+    }
+
+    /// A still is fitted inside the frame, never cropped, and centred.
+    #[test]
+    fn a_still_fits_inside_the_frame() {
+        assert_eq!(super::still_size((1024, 1024), (1280, 720)), (720, 720));
+        assert_eq!(super::still_size((1920, 1080), (1280, 720)), (1280, 720));
+        assert_eq!(super::still_size((832, 1216), (1280, 720)), (493, 720));
+        assert_eq!(super::still_size((3000, 1000), (1280, 720)), (1280, 427));
     }
 
     /// Each shot keeps its own seed and length — on the family's grid — and

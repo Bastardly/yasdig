@@ -13,7 +13,7 @@
 //           family's grid
 //   clip    the clip on the stage, or null; `segments[k]` is shot k as drawn
 //   chains  whether its family can go on from a last frame
-//   take    what its family takes, {references, sounds} (`sentRow`)
+//   take    what its family takes, {references, sounds, narrated} (`sentRow`)
 //
 // Answers:
 //   done      how many leading rows the clip has, unchanged
@@ -46,8 +46,17 @@ const words = (x, fresh = true) => JSON.stringify([
 // image. Only shot 1 and a cut start fresh, so only they take any. A row
 // holds one or the other now (`castOnRow`, `session::shot_spec`); this is the
 // guard for one saved before, which may hold both.
+// Narrated stills (`take.narrated`): every row is a cut from its own picture
+// with at most one sound, the voice; nothing else is read, and a shot's
+// length is its speech's, so `frames` is null — never compared.
 export const ALL = { references: true, sounds: true };
 export function sentRow(r, k, take = ALL) {
+  if (take.narrated) {
+    return {
+      ...r, frames: null, cut: k > 0, refs: [], audio: (r.audio ?? []).slice(0, 1), key: r.key ?? null,
+      subjects: [], voices: [], cast: [], lines: [], sound: '', music: '',
+    };
+  }
   const fresh = k === 0 || !!r.cut;
   const refs = fresh && take.references ? r.refs ?? [] : [];
   const audio = fresh && take.sounds ? r.audio ?? [] : [];
@@ -71,7 +80,7 @@ export function sentRow(r, k, take = ALL) {
 export function rowMatches(row, seg, k, source = null) {
   return String(row.text ?? '').trim() === String(seg.text ?? '').trim()
     && Number(row.seed) === Number(seg.seed)
-    && Number(row.frames) === Number(seg.frames)
+    && (row.frames == null || Number(row.frames) === Number(seg.frames))
     // Shot 1 starts fresh whatever its row says.
     && (k === 0 || !!row.cut === !!seg.cut)
     && same(row.refs ?? [], seg.references ?? [])

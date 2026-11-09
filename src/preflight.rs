@@ -464,6 +464,18 @@ pub fn check(cfg: &Config) -> Report {
     for (p, why) in &agents.other {
         info.push(format!("  ○ {:<44} {why}", crate::config::slash_name(&cfg.agent_dir(), p)));
     }
+    let voices = crate::voices::scan(&cfg.voice_dir());
+    info.push(format!(
+        "{} voice model(s) for narrated stills in {}",
+        voices.models.len(),
+        cfg.voice_dir().display()
+    ));
+    for v in &voices.models {
+        info.push(format!("  · {:<44} {}", v.name, human_size(v.bytes)));
+    }
+    for (p, why) in &voices.other {
+        info.push(format!("  ○ {:<44} {why}", crate::config::slash_name(&cfg.voice_dir(), p)));
+    }
     let (_, skill_errors) = crate::agent::skills::load(&crate::agent::user_skills_dir(cfg));
     for (p, why) in skill_errors {
         warnings.push(format!("agent skill {} is left out: {why}", p.display()));

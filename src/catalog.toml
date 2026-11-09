@@ -880,3 +880,30 @@ url = "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/mmpro
 dest = "gemma4-26b-a4b/mmproj-F16.gguf"
 bytes = 1193058784
 sha256 = "418a6d8723067cd712235facbbc5cba6c8fbbd413fc1292d2aace5a027d5a42f"
+
+# Voice models for the Video tab's narrated stills: a text-to-speech backbone
+# and the projector that generates its sound (speaker encoder and codec
+# inside), both GGUF, in a folder of their own under the voices dir — paired
+# by folder like an agent (`voices::scan`). URL, size and sha256
+# (X-Linked-Etag) checked on 2026-11-09; ungated. The sampling is the file's
+# own (`general.sampling.*`: temp 0.9, top_p 1.0, top_k 50), so none here.
+[[voice]]
+id = "qwen3-tts-1.7b"
+label = "Qwen3-TTS 1.7B"
+note = "Reads a narrated clip's words aloud in the voice of a 2–15 s recording you pick. Ten languages: English, German, French, Spanish, Italian, Portuguese, Russian, Chinese, Japanese, Korean."
+recommended = true
+card_gb = 3
+
+[[voice.file]]
+slot = "model"
+url = "https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/resolve/main/Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf"
+dest = "qwen3-tts-1.7b/Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf"
+bytes = 1847874400
+sha256 = "ac7931aeb2e7aad1a6ed6602d353a5679c9d096b18ce8204ac730a8408d572e1"
+
+[[voice.file]]
+slot = "mmproj"
+url = "https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/resolve/main/mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf"
+dest = "qwen3-tts-1.7b/mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf"
+bytes = 446422912
+sha256 = "6fd65188839bcd6ecc91b277ad471e22a0edfada4699a0fe82f1165c18cfcce2"

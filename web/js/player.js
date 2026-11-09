@@ -1,4 +1,4 @@
-import { $, esc, ICONS, setPlayIcon } from './dom.js';
+import { $, esc, ICONS, setPlayIcon, decodeFrames, stillsOf } from './dom.js';
 import { openClipView } from './clipview.js';
 
 // ---- The frame player -------------------------------------------------------
@@ -61,20 +61,14 @@ function togglePlay() {
 // Every frame, decoded before the first one is shown. A clip is 33 PNGs off
 // localhost, so this is a fraction of a second — and decoding as we play would
 // show the first pass through at whatever rate the disk managed rather than at
-// the clip's own fps.
+// the clip's own fps. A narrated clip decodes one still per shot.
 async function loadFrames(c) {
   stopPlayback();
   vframes = [];
-  const load = (n) => new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    // A frame that won't decode must not hang the whole clip; it is dropped and
-    // the count below says so.
-    img.onerror = () => resolve(null);
-    img.src = `/videos/${encodeURIComponent(c.id)}/frames/${n}.png`;
-  });
-  const loaded = await Promise.all(
-    Array.from({ length: c.frames }, (_, n) => load(n)));
+  // A frame that won't decode must not hang the whole clip; it is dropped and
+  // the count below says so.
+  const loaded = await decodeFrames(c.frames,
+    (n) => `/videos/${encodeURIComponent(c.id)}/frames/${n}.png`, stillsOf(c));
   // Another clip was opened while these decoded: its own load owns the
   // canvas, and these frames playing under its title would be the wrong clip.
   if (c !== clip) return;

@@ -22,7 +22,9 @@
 //!
 //! The agent's models are `[[agent]]` ([`Agent`]): a language model and its
 //! vision projector, both GGUF, under [`crate::config::Config::agent_dir`], one
-//! folder per agent — which is how `agents::scan` pairs them.
+//! folder per agent — which is how `agents::scan` pairs them. Voice models for
+//! narrated stills are `[[voice]]`, the same shape under
+//! [`crate::config::Config::voice_dir`] (`voices::scan`).
 //!
 //! Video models are a table of their own, `[[video]]`, of the same [`Entry`]
 //! shape: a [`VideoFamily`], its [`VideoFamily::slots`] keys, `"high_noise"`
@@ -55,6 +57,11 @@ pub struct Catalog {
     /// The agent's models: see [`Agent`].
     #[serde(default)]
     pub agent: Vec<Agent>,
+    /// Voice models for narrated stills: the agent card's shape (a model and
+    /// its projector in a folder of their own), under the voices dir
+    /// ([`crate::voices`]). `image_side`, `n_ctx` mean nothing for one.
+    #[serde(default)]
+    pub voice: Vec<Agent>,
 }
 
 /// One agent model: a language model (`slot = "model"`) and, for one that
@@ -300,6 +307,10 @@ impl Catalog {
         self.agent.iter().find(|a| a.id == id)
     }
 
+    pub fn voice(&self, id: &str) -> Option<&Agent> {
+        self.voice.iter().find(|a| a.id == id)
+    }
+
     /// The card whose language model is the file at `path` — at its own dest
     /// under `agents` and its own length, as [`Catalog::distilled`] matches. A
     /// renamed or hand-dropped file has none and runs on the defaults.
@@ -534,15 +545,26 @@ fn parse(src: &str) -> Result<Catalog> {
 }
 
 fn check_agents(c: &Catalog) -> Result<()> {
-    for (i, a) in c.agent.iter().enumerate() {
-        if c.entry(&a.id).is_some() || c.lora(&a.id).is_some() || c.agent[..i].iter().any(|o| o.id == a.id) {
+    check_pairs(c, &c.agent, "agent", 0)?;
+    // A voice model is nothing without its projector: it makes the sound.
+    check_pairs(c, &c.voice, "voice", 1)
+}
+
+/// An `[[agent]]` or `[[voice]]` table: a model and up to one projector (at
+/// least `mmproj` of them), in a folder of their own.
+fn check_pairs(c: &Catalog, list: &[Agent], kind: &str, mmproj: usize) -> Result<()> {
+    for (i, a) in list.iter().enumerate() {
+        let elsewhere = if kind == "voice" { c.agent(&a.id).is_some() } else { false };
+        if c.entry(&a.id).is_some() || c.lora(&a.id).is_some() || elsewhere || list[..i].iter().any(|o| o.id == a.id) {
             bail!("catalog: id {:?} is listed twice", a.id);
         }
+        let n_proj = a.file.iter().filter(|f| f.slot == "mmproj").count();
         if a.file.iter().filter(|f| f.slot == "model").count() != 1
-            || a.file.iter().filter(|f| f.slot == "mmproj").count() > 1
+            || n_proj > 1
+            || n_proj < mmproj
             || a.file.iter().any(|f| !matches!(f.slot.as_str(), "model" | "mmproj"))
         {
-            bail!("catalog: agent {} needs one \"model\" file and at most one \"mmproj\"", a.id);
+            bail!("catalog: {kind} {} needs one \"model\" file and {} \"mmproj\"", a.id, if mmproj > 0 { "one" } else { "at most one" });
         }
         // One folder per agent, of its own: the folder is how the scan pairs
         // a projector with its model.
@@ -550,20 +572,20 @@ fn check_agents(c: &Catalog) -> Result<()> {
         let here = folder(&a.file[0].dest);
         for f in &a.file {
             if !safe_dest(&f.dest, "model") || !f.dest.ends_with(".gguf") || folder(&f.dest) != here || here.as_deref() == Some(Path::new("")) {
-                bail!("catalog: agent {}'s dest {:?} must be a .gguf in the agent's own folder", a.id, f.dest);
+                bail!("catalog: {kind} {}'s dest {:?} must be a .gguf in a folder of its own", a.id, f.dest);
             }
             if !hf_resolve(&f.url) {
-                bail!("catalog: agent {}'s url must be a huggingface.co resolve link: {}", a.id, f.url);
+                bail!("catalog: {kind} {}'s url must be a huggingface.co resolve link: {}", a.id, f.url);
             }
             if f.bytes == 0 || f.sha256.len() != 64 {
-                bail!("catalog: agent {}'s {} needs a size and a sha256", a.id, f.dest);
+                bail!("catalog: {kind} {}'s {} needs a size and a sha256", a.id, f.dest);
             }
         }
-        if c.agent[..i].iter().any(|o| folder(&o.file[0].dest) == here) {
-            bail!("catalog: agents {} and another share a folder", a.id);
+        if list[..i].iter().any(|o| folder(&o.file[0].dest) == here) {
+            bail!("catalog: {kind}s {} and another share a folder", a.id);
         }
         if a.image_side < 224 || a.n_ctx < 2048 {
-            bail!("catalog: agent {}'s image_side or n_ctx is implausibly small", a.id);
+            bail!("catalog: {kind} {}'s image_side or n_ctx is implausibly small", a.id);
         }
     }
     Ok(())

@@ -171,8 +171,10 @@ Not sure where to start? The ones marked *Recommended* there and in the model li
 **Video.** Wan 2.2 (TI2V-5B and the I2V-A14B pair), Wan 2.1 VACE and dense models,
 MiniMax H3 with sound, and LTX-2.3 and LTX-2.5 with sound (distilled, 8 steps, with
 LTX's own ×2 hi-res in the same run) — text or a first frame to video, LoRAs, a live preview, and
-long clips made a shot at a time from each shot's last frame. Clips enlarge (FSR, no
-flicker) and save to Outputs as video files.
+long clips made a shot at a time from each shot's last frame. **Narrated stills**: your
+pictures with a voice reading over them, in the voice of a short recording you pick
+(Qwen3-TTS, ten languages). Clips enlarge (FSR, no flicker) and save to Outputs as video
+files.
 
 **Model files** can be `.safetensors`, `.gguf` or `.ckpt`, and are recognised by what
 is inside them, so file names and folders don't matter. The Models tab fetches the

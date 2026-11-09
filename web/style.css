@@ -168,6 +168,10 @@ html:has(dialog:modal) { overflow: hidden; }
    recommends for author sheets; it applies to every `hidden` toggle on the
    page, all of which mean the same thing. */
 [hidden] { display: none !important; }
+/* A narrated clip is pictures and a voice: the diffusion controls it has no
+   use for go, by a class on the tab rather than each box's own `hidden`,
+   which other code (Turbo, Hi-res, the experts) already writes. */
+#tab-video.narrated .unnarrated { display: none !important; }
 
 /* The page is entirely keyboard-operable and had no focus style but the one on
    the (i) icons. Bone, because it is the state colour. */

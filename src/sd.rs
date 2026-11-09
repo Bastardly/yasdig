@@ -1386,6 +1386,9 @@ pub enum Phase {
     Reading,
     /// The agent writing its reply; `step` counts tokens, `steps` is the cap.
     Writing,
+    /// A voice model reading text aloud ([`crate::llm::LlmRunner::speak`]);
+    /// `step`/`steps` count pieces.
+    Speaking,
 }
 
 impl Phase {
@@ -1405,6 +1408,7 @@ impl Phase {
             Phase::Sampling => "sampling",
             Phase::Reading => "reading",
             Phase::Writing => "writing",
+            Phase::Speaking => "speaking",
         }
     }
 }

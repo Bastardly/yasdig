@@ -212,6 +212,17 @@ const HELP = [
         + 'H3 in 17k+5), so the number is rounded for you. A shot that goes on from '
         + 'the last one adds one frame fewer: its first is the last one’s final '
         + 'frame. A longer shot costs more memory, so a long clip is more shots.' },
+  { ids: ['vnarrated'],
+    text: 'What the voice reads while this shot’s picture is on screen — a sentence or a page. The shot lasts as long as '
+      + 'the reading, with a half-second pause before the next picture. Long text is read a few sentences at a time in '
+      + 'the same voice. A new seed is a new reading of the same words.' },
+  { ids: ['vnarrator'],
+    text: 'The voice the clip is read in: a 2–15 s recording of one person speaking clearly, with no music behind '
+      + 'it — from Outputs, a cast member, or this computer. A shot with a voice of its own reads in that one '
+      + 'instead. With none, the voice model picks a voice, a different one each shot.' },
+  { ids: ['vlang'],
+    text: 'The language the words are read in. Write them in that language: the voice model reads, it does not '
+      + 'translate.' },
   { ids: ['vshotcut'],
     text: 'How the shot begins. Continue draws on from the last shot’s final '
         + 'frame: seamless, but one frame is all that carries over, so a face that '
@@ -547,7 +558,7 @@ const HELP = [
 // reading it at this module's top level only worked while the import cycle
 // happened to evaluate `viewer.js` first.
 let HINTS = null;
-function hintFor(key) {
+export function hintFor(key) {
   if (!HINTS) {
     HINTS = new Map();
     for (const h of HELP) for (const id of h.ids) HINTS.set(id, h.text);

@@ -10,21 +10,59 @@
 //!
 //! The request is a file, not stdin, because the Windows sandbox launcher hands
 //! its child a NUL stdin (`sandbox::confine`).
+//!
+//! The same driver also **speaks** ([`SpeakRequest`], `"task": "speak"`): a
+//! text-to-speech model (llama.cpp's `tools/tts` models — a backbone plus a
+//! projector that generates audio) reads a list of pieces into one WAV each,
+//! loaded once for all of them. Narrated stills are made with it
+//! ([`crate::narration`]).
 
 use crate::config::Config;
 use crate::sd::{self, Monitor, Phase};
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// The driver's protocol version, its first stdout line (`@yasdig-llm 1`) and
+/// The driver's protocol version, its first stdout line (`@yasdig-llm 2`) and
 /// the request's `v`. A driver from another build is refused rather than
-/// half-understood.
-pub const PROTOCOL: u32 = 1;
+/// half-understood. 2: the speak task.
+pub const PROTOCOL: u32 = 2;
+
+/// What one speak run is asked to do: every piece of every shot, read in the
+/// voice of `speaker`, each into its own WAV. Serialized as the request file.
+#[derive(Debug, Clone, Serialize)]
+pub struct SpeakRequest {
+    pub v: u32,
+    /// Always `"speak"`; a request without it is a chat turn.
+    pub task: &'static str,
+    pub model: PathBuf,
+    pub mmproj: PathBuf,
+    /// A language code the model knows (`en`, `de`, …); empty is its default.
+    pub lang: String,
+    pub sampling: Sampling,
+    pub pieces: Vec<Piece>,
+}
+
+/// One stretch of text and the WAV it becomes. `speaker` is the voice to
+/// clone, staged in scratch like every other input (invariant 8), or none for
+/// the model's own voice. Per piece rather than per run so each shot of a
+/// narration can have its own voice in one load.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Piece {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<PathBuf>,
+    /// Each piece its own seed, so a shot's reading changes with its seed and
+    /// no other shot's does.
+    pub seed: u32,
+    /// Generated frames at most; 0 is the driver's default.
+    pub n_predict: u32,
+    pub out: PathBuf,
+}
 
 /// What one turn is asked to do. Serialized as the request file.
 #[derive(Debug, Clone, Serialize)]
@@ -116,6 +154,11 @@ pub struct Stats {
     /// off half way, which the caller refuses.
     #[serde(default)]
     pub stop: String,
+    /// A speak run: the WAVs' sample rate and their length in all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f32>,
 }
 
 /// The conversation didn't fit the context. Typed, because the caller retries
@@ -144,6 +187,8 @@ enum Frame {
     Hello(u32),
     Load(u32, u32),
     Read(u32, u32),
+    /// A speak run: pieces done of all.
+    Speak(u32, u32),
     Text(String),
     Content { content: String, reasoning: String },
     Done(Stats),
@@ -164,6 +209,7 @@ fn parse_frame(line: &str) -> Option<Frame> {
             match what {
                 "load" => Some(Frame::Load(done, total)),
                 "read" => Some(Frame::Read(done, total)),
+                "speak" => Some(Frame::Speak(done, total)),
                 _ => None,
             }
         }
@@ -190,11 +236,6 @@ fn parse_frame(line: &str) -> Option<Frame> {
     }
 }
 
-/// Where a turn's request file goes: scratch, so start and Close server sweep it.
-pub fn request_path(work_dir: &Path) -> PathBuf {
-    crate::pipeline::scratch_dir(work_dir).join("agent-request.json")
-}
-
 pub struct LlmRunner<'a> {
     cfg: &'a Config,
     monitor: Monitor,
@@ -212,6 +253,19 @@ impl<'a> LlmRunner<'a> {
     /// Run one turn. `chat` names the conversation the live text
     /// ([`Monitor::live_text`]) belongs to.
     pub fn run(&self, req: &Request, label: &str, chat: &str) -> Result<Reply> {
+        let body = serde_json::to_vec(req)?;
+        self.drive(&body, "agent-request.json", label, Some(chat), Reader::new(req.n_predict, Who::Agent))
+    }
+
+    /// Read every piece of `req` into its WAV. The pieces' files are the
+    /// caller's to read and remove.
+    pub fn speak(&self, req: &SpeakRequest, label: &str) -> Result<Stats> {
+        let body = serde_json::to_vec(req)?;
+        let reader = Reader::new(req.pieces.len() as u32, Who::Voice);
+        Ok(self.drive(&body, "voice-request.json", label, None, reader)?.stats)
+    }
+
+    fn drive(&self, body: &[u8], file: &str, label: &str, chat: Option<&str>, mut reader: Reader) -> Result<Reply> {
         let bin = self.binary();
         if !bin.is_file() {
             bail!(
@@ -227,11 +281,12 @@ impl<'a> LlmRunner<'a> {
             std::fs::create_dir_all(dir).ok();
         }
         let work = self.cfg.base_dir.join("work");
-        let path = request_path(&work);
+        let path = crate::pipeline::scratch_dir(&work).join(file);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
-        std::fs::write(&path, serde_json::to_vec(req)?).with_context(|| format!("writing {}", path.display()))?;
+        std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+        let who = reader.who.name();
 
         let mut cmd = Command::new(&bin);
         cmd.arg("--request").arg(&path);
@@ -247,7 +302,7 @@ impl<'a> LlmRunner<'a> {
             } else {
                 String::new()
             };
-            format!("failed to launch the agent for {label}{hint}")
+            format!("failed to launch {who} for {label}{hint}")
         })?;
         let stdout = child.stdout.take().expect("stdout was piped");
         let stderr = child.stderr.take().expect("stderr was piped");
@@ -269,8 +324,9 @@ impl<'a> LlmRunner<'a> {
         };
 
         self.monitor.begin(label, child);
-        self.monitor.set_live_text(Some(chat));
-        let mut reader = Reader::new(req.n_predict);
+        if chat.is_some() {
+            self.monitor.set_live_text(chat);
+        }
         let out_tail = sd::drain(stdout, |line| {
             spot(line);
             if let Some(f) = parse_frame(line) {
@@ -280,10 +336,12 @@ impl<'a> LlmRunner<'a> {
             }
         });
         let status = match self.monitor.end() {
-            Some(mut child) => child.wait().with_context(|| format!("waiting for the agent ({label})"))?,
-            None => bail!("the agent ({label}): the child went missing while it ran"),
+            Some(mut child) => child.wait().with_context(|| format!("waiting for {who} ({label})"))?,
+            None => bail!("{who} ({label}): the child went missing while it ran"),
         };
-        self.monitor.set_live_text(None);
+        if chat.is_some() {
+            self.monitor.set_live_text(None);
+        }
         let err_tail = errors.join().unwrap_or_default();
         let _ = std::fs::remove_file(&path);
         reader.finish(Exit {
@@ -316,6 +374,7 @@ struct Exit<'a> {
 /// without a child.
 struct Reader {
     n_predict: u32,
+    who: Who,
     hello: Option<u32>,
     written: u32,
     text: String,
@@ -324,9 +383,26 @@ struct Reader {
     error: Option<Frame>,
 }
 
+/// What the driver was run as, for the messages: a turn of the agent, or a
+/// voice model speaking.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Who {
+    Agent,
+    Voice,
+}
+
+impl Who {
+    fn name(self) -> &'static str {
+        match self {
+            Who::Agent => "the agent",
+            Who::Voice => "the voice model",
+        }
+    }
+}
+
 impl Reader {
-    fn new(n_predict: u32) -> Self {
-        Reader { n_predict, hello: None, written: 0, text: String::new(), content: None, done: None, error: None }
+    fn new(n_predict: u32, who: Who) -> Self {
+        Reader { n_predict, who, hello: None, written: 0, text: String::new(), content: None, done: None, error: None }
     }
 
     fn take(&mut self, f: Frame, mut progress: impl FnMut(Phase, u32, u32), mut text: impl FnMut(&str)) {
@@ -334,6 +410,7 @@ impl Reader {
             Frame::Hello(v) => self.hello = Some(v),
             Frame::Load(d, t) => progress(Phase::Loading, d, t),
             Frame::Read(d, t) => progress(Phase::Reading, d, t),
+            Frame::Speak(d, t) => progress(Phase::Speaking, d, t),
             Frame::Text(t) => {
                 self.written += 1;
                 self.text.push_str(&t);
@@ -348,6 +425,8 @@ impl Reader {
 
     fn finish(self, x: Exit) -> Result<Reply> {
         let label = x.label;
+        let who = self.who.name();
+        let who_oom = self.who;
         let logs = || {
             format!(
                 "--- stderr ---\n{}\n--- stdout (last {} lines) ---\n{}",
@@ -358,14 +437,14 @@ impl Reader {
         };
         if x.blind {
             bail!(
-                "the agent ({label}): no GPU is visible from inside the sandbox (\"{}\"), so it was \
+                "{who} ({label}): no GPU is visible from inside the sandbox (\"{}\"), so it was \
                  stopped before it fell back to the CPU. {} runs it without the sandbox.",
                 sd::NO_GPU,
                 crate::sandbox::TURN_OFF
             );
         }
         if !x.success && x.cancelled {
-            bail!("the agent ({label}) {}", sd::CANCELLED);
+            bail!("{who} ({label}) {}", sd::CANCELLED);
         }
         if let Some(v) = self.hello {
             if v != PROTOCOL {
@@ -381,22 +460,22 @@ impl Reader {
                 return Err(ContextOverflow { need: need.unwrap_or(0), have: have.unwrap_or(0) }.into());
             }
             if kind == "oom" || (kind == "load" && gpu_oom) {
-                bail!(out_of_memory(label, "gpu"));
+                bail!(out_of_memory(who_oom, label, "gpu"));
             }
-            bail!("the agent ({label}): {msg}\n{}", logs());
+            bail!("{who} ({label}): {msg}\n{}", logs());
         }
         if x.killed {
-            bail!(out_of_memory(label, "ram"));
+            bail!(out_of_memory(who_oom, label, "ram"));
         }
         if !x.success {
             if gpu_oom {
-                bail!(out_of_memory(label, "gpu"));
+                bail!(out_of_memory(who_oom, label, "gpu"));
             }
             let code = x.code.map_or("a signal".to_string(), sd::exit_code_text);
-            bail!("the agent ({label}) exited with {code}\n{}", logs());
+            bail!("{who} ({label}) exited with {code}\n{}", logs());
         }
         let Some(stats) = self.done else {
-            bail!("the agent ({label}) ended without finishing its reply\n{}", logs());
+            bail!("{who} ({label}) ended without finishing\n{}", logs());
         };
         let (content, reasoning) = self.content.unwrap_or((self.text, String::new()));
         Ok(Reply { content, reasoning, stats })
@@ -406,12 +485,18 @@ impl Reader {
 /// The message for an agent that didn't fit. Plain words, not the sd OOM box:
 /// the ways out are a smaller agent model or a shorter context, and neither is
 /// a button.
-fn out_of_memory(label: &str, kind: &str) -> String {
+fn out_of_memory(who: Who, label: &str, kind: &str) -> String {
     let what = if kind == "ram" { "system memory" } else { "graphics memory" };
-    format!(
-        "the agent ({label}) ran out of {what}. Pick a smaller agent model beside the Assistant's \
-         Send button, or one whose file is a smaller quantization."
-    )
+    match who {
+        Who::Agent => format!(
+            "the agent ({label}) ran out of {what}. Pick a smaller agent model beside the Assistant's \
+             Send button, or one whose file is a smaller quantization."
+        ),
+        Who::Voice => format!(
+            "the voice model ({label}) ran out of {what}. Pick a voice model whose file is a smaller \
+             quantization (Models → Voices)."
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -423,7 +508,7 @@ mod tests {
     }
 
     fn read(lines: &[&str]) -> Reader {
-        let mut r = Reader::new(100);
+        let mut r = Reader::new(100, Who::Agent);
         for l in lines {
             if let Some(f) = parse_frame(l) {
                 r.take(f, |_, _, _| {}, |_| {});
@@ -434,9 +519,10 @@ mod tests {
 
     #[test]
     fn records_parse_and_anything_else_is_ignored() {
-        assert_eq!(parse_frame("@yasdig-llm 1"), Some(Frame::Hello(1)));
+        assert_eq!(parse_frame("@yasdig-llm 2"), Some(Frame::Hello(2)));
         assert_eq!(parse_frame("P load 40 100"), Some(Frame::Load(40, 100)));
         assert_eq!(parse_frame("P read 2 5"), Some(Frame::Read(2, 5)));
+        assert_eq!(parse_frame("P speak 1 3"), Some(Frame::Speak(1, 3)));
         assert_eq!(parse_frame(r#"T "a\nb \"c\" é""#), Some(Frame::Text("a\nb \"c\" é".into())));
         assert_eq!(parse_frame("load_tensors: offloading 36 layers"), None);
         assert_eq!(parse_frame("T \"cut off"), None);
@@ -451,7 +537,7 @@ mod tests {
     fn a_finished_turn_hands_back_the_templates_parse() {
         let (o, e) = (VecDeque::new(), VecDeque::new());
         let r = read(&[
-            "@yasdig-llm 1",
+            "@yasdig-llm 2",
             r#"T "{\"notes\":"#,
             r#"T "\"x\"}""#,
             r#"C {"content":"{\"notes\":\"x\"}","reasoning":""}"#,
@@ -466,14 +552,14 @@ mod tests {
     #[test]
     fn exit_zero_without_done_is_a_failure() {
         let (o, e) = (VecDeque::new(), VecDeque::new());
-        let err = read(&["@yasdig-llm 1", r#"T "{""#]).finish(exit(&o, &e)).unwrap_err();
+        let err = read(&["@yasdig-llm 2", r#"T "{""#]).finish(exit(&o, &e)).unwrap_err();
         assert!(err.to_string().contains("without finishing"), "{err}");
     }
 
     #[test]
     fn a_context_overflow_is_typed_so_the_caller_can_retry() {
         let (o, e) = (VecDeque::new(), VecDeque::new());
-        let r = read(&["@yasdig-llm 1", r#"E {"kind":"context","msg":"x","need":9000,"have":8192}"#]);
+        let r = read(&["@yasdig-llm 2", r#"E {"kind":"context","msg":"x","need":9000,"have":8192}"#]);
         let err = r.finish(Exit { success: false, code: Some(4), ..exit(&o, &e) }).unwrap_err();
         assert_eq!(err.downcast_ref::<ContextOverflow>(), Some(&ContextOverflow { need: 9000, have: 8192 }));
     }
@@ -481,7 +567,7 @@ mod tests {
     #[test]
     fn stop_wins_over_whatever_the_kill_left_behind() {
         let (o, e) = (VecDeque::new(), VecDeque::new());
-        let err = read(&["@yasdig-llm 1"])
+        let err = read(&["@yasdig-llm 2"])
             .finish(Exit { success: false, code: None, cancelled: true, ..exit(&o, &e) })
             .unwrap_err();
         assert!(err.to_string().ends_with(sd::CANCELLED), "{err}");
@@ -491,7 +577,7 @@ mod tests {
     fn running_out_of_memory_says_what_to_pick_instead() {
         let o = VecDeque::new();
         let e: VecDeque<String> = ["ggml_vulkan: ErrorOutOfDeviceMemory".to_string()].into();
-        let r = read(&["@yasdig-llm 1", r#"E {"kind":"load","msg":"could not load"}"#]);
+        let r = read(&["@yasdig-llm 2", r#"E {"kind":"load","msg":"could not load"}"#]);
         let err = r.finish(Exit { success: false, code: Some(3), ..exit(&o, &e) }).unwrap_err();
         assert!(err.to_string().contains("graphics memory"), "{err}");
         let err = read(&[]).finish(Exit { success: false, code: None, killed: true, ..exit(&o, &o) }).unwrap_err();
@@ -501,8 +587,8 @@ mod tests {
     #[test]
     fn a_driver_from_another_build_is_refused() {
         let (o, e) = (VecDeque::new(), VecDeque::new());
-        let r = read(&["@yasdig-llm 2", r#"D {"stop":"eos"}"#]);
-        assert!(r.finish(exit(&o, &e)).unwrap_err().to_string().contains("protocol 2"));
+        let r = read(&["@yasdig-llm 1", r#"D {"stop":"eos"}"#]);
+        assert!(r.finish(exit(&o, &e)).unwrap_err().to_string().contains("protocol 1"));
     }
 
     #[test]
@@ -522,7 +608,7 @@ mod tests {
             ],
         };
         let v = serde_json::to_value(&req).unwrap();
-        assert_eq!(v["v"], 1);
+        assert_eq!(v["v"], PROTOCOL);
         assert!(v.get("mmproj").is_none());
         assert_eq!(v["messages"][0]["role"], "system");
         assert_eq!(v["messages"][0]["content"][0], serde_json::json!({"type": "text", "text": "be brief"}));

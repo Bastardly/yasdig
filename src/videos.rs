@@ -56,7 +56,7 @@ const FRAME_PATTERN: &str = "frame_%03d.png";
 const CONTAINER: &str = "clip.avi";
 
 /// A clip's soundtrack, beside its frames, when it has one.
-const AUDIO: &str = "audio.wav";
+pub const AUDIO: &str = "audio.wav";
 
 /// Everything needed to put a clip back on screen with the controls that made
 /// it — the `WorkItem` of the video side.
@@ -385,7 +385,11 @@ pub(crate) fn frames_in(dir: &Path) -> Vec<PathBuf> {
                 .is_some_and(|n| n.starts_with("frame_") && n.ends_with(".png"))
         })
         .collect();
-    out.sort();
+    // By number, not name: `frame_%03d` is only three digits wide, so frame
+    // 1000 would sort before 101 — a narrated minute at 12 fps is 720 frames,
+    // and a long clip of twenty shots passes 1000 too.
+    let number = |p: &PathBuf| -> Option<u64> { p.file_stem()?.to_str()?.strip_prefix("frame_")?.parse().ok() };
+    out.sort_by(|a, b| number(a).cmp(&number(b)).then_with(|| a.cmp(b)));
     out
 }
 
@@ -943,6 +947,24 @@ fn sweep_render(dir: &Path) {
 mod tests {
     use super::*;
     use crate::config::{VideoFamily, VideoModel};
+
+    /// Frames come back by number: `frame_%03d` is three digits wide, so a
+    /// clip past 999 frames would otherwise play frame 1000 after 100.
+    #[test]
+    fn frames_are_ordered_by_number_past_a_thousand() {
+        let dir = std::env::temp_dir().join(format!("yasdig-vid-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in [0u32, 99, 100, 101, 999, 1000, 1001] {
+            std::fs::write(dir.join(format!("frame_{n:03}.png")), b"").unwrap();
+        }
+        let names: Vec<String> =
+            frames_in(&dir).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(
+            names,
+            ["frame_000.png", "frame_099.png", "frame_100.png", "frame_101.png", "frame_999.png", "frame_1000.png", "frame_1001.png"]
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     fn model() -> VideoModel {
         let src = r#"

@@ -594,6 +594,14 @@ needs a Vulkan device and nothing else.
   with a speaker ID per name by first line across the clip (kept on an extend), who
   stays silent, `N/A` for no sound or music, and on a shot with references or sounds
   each `<Subject N>` and `<Audio N>` defined. Recorded on the clip's segments.
+  On a narrated-stills model (`narrated: true` on `/video-models`, family `narrated`) a
+  shot is a picture and the words a voice reads over it: shot 1's picture is `source`,
+  every later shot's its `keyframe` (each required), the shot's text is read as typed
+  (`every` and `negative` are not used), `frames` is ignored — a shot lasts as long as its
+  speech plus 0.5 s — and `audio` holds at most one stem, the voice to speak in (a shot
+  without one reads in `narrator`, the default voice: an output sound's stem, `""` for
+  none; on `/videos/extend` too, with `language`, else the clip's). `language` is one of the model's `languages`
+  codes (`[[code, name]]`, default `en`). One speak run reads every shot; Stop ends it.
   `parts` picks the model's separate files, by name under the models dir as `/video-models`
   lists them; `null` leaves out an optional one (H3's audio VAE, VACE's CLIP-Vision), and
   an absent key keeps the model's own.

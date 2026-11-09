@@ -994,6 +994,29 @@ chat, without sound, at most 480 px wide; and **AVI (original)** is the file yas
 soft, and *Half size* helps. The sound goes in as Opus, which some Apple players skip.
 Firefox on Linux may have no H.264 encoder; Chrome has.
 
+### Narrated stills
+
+A clip made of pictures you already have, with a voice reading over them: picture 1
+while the voice explains one thing, picture 2 while it goes on. Get **Models → Voice
+models** (Qwen3-TTS, run by llama.cpp beside the Assistant's models), then pick
+**Narrated stills** in the Video tab's model list. The Shots strip becomes one row per
+picture. The Generation panel holds the size, the fps, the **Language** and the
+**Default voice**: a 2–15 s recording of the voice to read in, a sound in Outputs or a
+cast member's voice. *Save as defaults for this model* keeps it. Each row has:
+
+- **Picture** — an output, a cast member's picture or an upload, picked like a first
+  frame. Every row needs one. It is fitted inside the clip's size on black, never cropped.
+- **What the voice says** — read as written, in the panel's **Language**. Long text is
+  fine: it is spoken a few sentences at a time and joined, and the picture stays up as
+  long as the words take, plus half a second.
+- **Voice…** — a voice for this row alone, instead of the default (*Add cast…* on the
+  row takes only the member's voice). With no voice anywhere the model picks one, a
+  different one each row.
+
+Generate reads every row in one run. Each row has its own seed, so *Redo* on a row with
+a new seed is another reading of the same words. Extend, the ×, Download, *Save to
+output* and Enlarge work as on any clip; Enlarge sharpens each picture once.
+
 ## The agent
 
 The **Assistant** panel (on the Image and Video tabs' rails) is a chat with a small

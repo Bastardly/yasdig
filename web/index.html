@@ -637,7 +637,7 @@
   <nav class="wsrail" aria-label="Video">
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-prompt">Shots</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-gen">Generation</button>
-    <button type="button" class="btn btn-choice railbtn" data-panel="vid-adv">Advanced</button>
+    <button type="button" class="btn btn-choice railbtn unnarrated" data-panel="vid-adv">Advanced</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-info">Info</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-current">Current</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-favorites">Favorites</button>
@@ -682,7 +682,7 @@
       <!-- What every shot shares: set once, so it folds away and its line
            says what it holds. Capped in width, since the panel widens for
            the shot strip below and a sentence across 1900 px is unreadable. -->
-      <details class="fold shotcommon" id="vfold-every" open>
+      <details class="fold shotcommon unnarrated" id="vfold-every" open>
         <summary>For every shot <span class="foldstate" id="vsum-every"></span></summary>
         <label for="veverytext" data-help="vevery">Every shot</label>
         <prompt-box>
@@ -739,9 +739,11 @@
       <div class="checks" id="vturborow" hidden>
         <label data-help="turbo"><input type="checkbox" id="vturbo"> <span id="vturbolabel">Turbo</span></label>
       </div>
-      <label data-help="vloras">LoRAs</label>
-      <div id="vloras"></div>
-      <button type="button" id="vloraadd" class="btn spaced">+ Add LoRA</button>
+      <div class="unnarrated">
+        <label data-help="vloras">LoRAs</label>
+        <div id="vloras"></div>
+        <button type="button" id="vloraadd" class="btn spaced">+ Add LoRA</button>
+      </div>
 
       <!-- The Image tab's size row: snapped to the model's multiple on change
            (`snapSize`), so the boxes say what runs. -->
@@ -769,9 +771,23 @@
            clip's. -->
       <label for="vfps">fps</label>
       <input id="vfps" type="number" min="1" max="60">
-      <p class="sub" id="vgridnote"></p>
+      <p class="sub unnarrated" id="vgridnote"></p>
+      <!-- A narrated clip's reading language (`VideoModel::language`, from
+           `narration::LANGUAGES`); shown only on a narrated model, where the
+           boxes above and below it have nothing to drive. -->
+      <div id="vlangrow" hidden>
+        <label for="vlang" data-help="vlang">Language</label>
+        <select id="vlang"></select>
+        <!-- The voice every shot without one of its own reads in
+             (`VideoModel::narrator`, an output sound's stem). -->
+        <label data-help="vnarrator">Default voice</label>
+        <div class="btnrow">
+          <button type="button" id="vnarrator" class="btn">Pick a voice…</button>
+          <button type="button" id="vnarratorclear" class="btn" hidden>Clear</button>
+        </div>
+      </div>
 
-      <div class="row">
+      <div class="row unnarrated">
         <div>
           <label for="vsteps">Steps</label>
           <input id="vsteps" type="number" min="1" max="100">

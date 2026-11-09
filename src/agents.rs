@@ -43,6 +43,9 @@ pub struct GgufMeta {
     /// `clip.vision.projection_dim`; see the module comment for why it is only
     /// a tiebreak.
     pub projection_dim: Option<u64>,
+    /// `clip.has_gen_audio_encoder`: a projector that *makes* sound — a voice
+    /// model's, see [`crate::voices`].
+    pub gen_audio: Option<bool>,
     /// The model author's own sampling, where the file carries it
     /// (`general.sampling.*` — Gemma 4's do).
     pub temp: Option<f32>,
@@ -117,6 +120,7 @@ pub fn read_meta(path: &Path) -> Result<GgufMeta> {
                 | "general.name"
                 | "tokenizer.chat_template"
                 | "clip.has_vision_encoder"
+                | "clip.has_gen_audio_encoder"
                 | "clip.projector_type"
                 | "clip.vision.projection_dim"
                 | "general.sampling.temp"
@@ -134,6 +138,7 @@ pub fn read_meta(path: &Path) -> Result<GgufMeta> {
             ("general.name", Scalar::Text(s)) => m.name = Some(s),
             ("tokenizer.chat_template", Scalar::Text(s)) => m.chat_template = !s.trim().is_empty(),
             ("clip.has_vision_encoder", Scalar::Bool(b)) => m.has_vision = Some(b),
+            ("clip.has_gen_audio_encoder", Scalar::Bool(b)) => m.gen_audio = Some(b),
             ("clip.projector_type", Scalar::Text(s)) => m.projector_type = Some(s),
             ("clip.vision.projection_dim", Scalar::Int(n)) => m.projection_dim = Some(n),
             ("general.sampling.temp", Scalar::Float(x)) => m.temp = Some(x),
@@ -164,10 +169,19 @@ pub enum AgentFile {
 /// `discover::identify` — a download that finishes is the same path with a new
 /// length, and is read again.
 pub fn identify(path: &Path) -> AgentFile {
+    match meta(path) {
+        Ok(m) => classify(m),
+        Err(e) => AgentFile::Unknown(format!("could not be read ({e})")),
+    }
+}
+
+/// [`read_meta`], memoized on `(path, length, mtime)` — shared by this scan and
+/// the voices' ([`crate::voices`]).
+pub(crate) fn meta(path: &Path) -> Result<GgufMeta, String> {
     use std::collections::HashMap;
     use std::sync::{LazyLock, Mutex};
     use std::time::SystemTime;
-    type Memo = HashMap<PathBuf, (u64, SystemTime, AgentFile)>;
+    type Memo = HashMap<PathBuf, (u64, SystemTime, Result<GgufMeta, String>)>;
     static MEMO: LazyLock<Mutex<Memo>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
     let stamp = std::fs::metadata(path).ok().and_then(|m| Some((m.len(), m.modified().ok()?)));
@@ -178,17 +192,19 @@ pub fn identify(path: &Path) -> AgentFile {
             }
         }
     }
-    let file = match read_meta(path) {
-        Ok(m) => classify(m),
-        Err(e) => AgentFile::Unknown(format!("could not be read ({e})")),
-    };
+    let got = read_meta(path).map_err(|e| e.to_string());
     if let Some((len, mtime)) = stamp {
-        MEMO.lock().unwrap().insert(path.to_path_buf(), (len, mtime, file.clone()));
+        MEMO.lock().unwrap().insert(path.to_path_buf(), (len, mtime, got.clone()));
     }
-    file
+    got
 }
 
 fn classify(m: GgufMeta) -> AgentFile {
+    if crate::voices::is_voice_file(&m) {
+        return AgentFile::Unknown(
+            "part of a voice model (text to speech), which belongs in the voices folder, not the agents'".into(),
+        );
+    }
     match m.arch.as_deref() {
         Some("clip") if m.has_vision == Some(false) => {
             AgentFile::Unknown("a projector without a vision encoder (audio only), which the agent can't use".into())
@@ -255,7 +271,7 @@ pub fn scan(dir: &Path) -> Scan {
     out
 }
 
-fn walk(dir: &Path, depth: u32, f: &mut dyn FnMut(&Path)) {
+pub(crate) fn walk(dir: &Path, depth: u32, f: &mut dyn FnMut(&Path)) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
     entries.sort();
@@ -270,7 +286,7 @@ fn walk(dir: &Path, depth: u32, f: &mut dyn FnMut(&Path)) {
     }
 }
 
-fn len(p: &Path) -> u64 {
+pub(crate) fn len(p: &Path) -> u64 {
     std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
 }
 

@@ -143,6 +143,7 @@ mod inventory;
 mod jobs;
 mod layout;
 mod llm;
+mod narration;
 mod notes;
 mod pipeline;
 mod pngmeta;
@@ -156,6 +157,7 @@ mod startup;
 mod sr;
 mod variables;
 mod videos;
+mod voices;
 mod web;
 mod workitems;
 
@@ -1321,6 +1323,10 @@ struct VideoModelDto {
     sounds: bool,
     /// LTX: the page offers *Hi-res ×2* (with a latent upscaler in its parts).
     ltx: bool,
+    /// Narrated stills: each row is a picture, the words a voice reads and
+    /// the voice; [`narration::LANGUAGES`] are what it can be read in.
+    narrated: bool,
+    languages: &'static [(&'static str, &'static str)],
     /// The memory mode the model runs with, resolved — `memory` beside it is
     /// the raw entry, which an old `offload_to_cpu` key leaves unset.
     memory_mode: String,
@@ -1645,6 +1651,8 @@ fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> 
             parts: cfg.video_part_views(&m, &scan),
             family: m.family.as_str(),
             ltx: m.family.is_ltx(),
+            narrated: m.family == config::VideoFamily::Narrated,
+            languages: if m.family == config::VideoFamily::Narrated { narration::LANGUAGES } else { &[] },
             size_multiple: m.family.size_multiple(),
             frame_grid: m.family.frame_grid(),
             forced_fps: m.family.forced_fps(),
@@ -1746,6 +1754,10 @@ struct VideoDto {
     #[serde(default)]
     hires: Option<bool>,
     #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
+    narrator: Option<String>,
+    #[serde(default)]
     parts: Option<std::collections::BTreeMap<String, Option<String>>>,
     #[serde(default)]
     loras: Option<Vec<config::VideoLora>>,
@@ -1772,6 +1784,8 @@ impl VideoDto {
             vae_tiling: self.vae_tiling,
             memory: self.memory,
             hires: self.hires,
+            language: self.language,
+            narrator: self.narrator,
             parts: self.parts,
             loras: self.loras,
             shots: self.shots.into_iter().map(ShotDto::spec).collect(),
@@ -1854,6 +1868,10 @@ fn handle_extend_clip(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -
         every: Option<String>,
         #[serde(default)]
         negative: Option<String>,
+        #[serde(default)]
+        narrator: Option<String>,
+        #[serde(default)]
+        language: Option<String>,
     }
     match parse_json::<Dto>(conn, body)? {
         Some(dto) => enqueue_wait(
@@ -1867,6 +1885,8 @@ fn handle_extend_clip(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -
                 shots: dto.shots.into_iter().map(ShotDto::spec).collect(),
                 every: dto.every,
                 negative: dto.negative,
+                narrator: dto.narrator,
+                language: dto.language,
             }),
             false,
             500,

@@ -155,3 +155,30 @@ test("a row holds what every model takes, and sends its model's part", () => {
   assert.equal(shotState(rs, c, true, { references: false, sounds: false }).action, 'none');
   assert.equal(shotState(rs, c, true).action, 'redo', 'on H3 it would follow the references instead');
 });
+
+test('a narrated row is its picture, its words and its voice; its length is the speech', () => {
+  const take = { references: false, sounds: false, narrated: true };
+  // As drawn: lengths from the speech, each shot after the first a cut from its picture.
+  const c = {
+    source: 'p1',
+    segments: [
+      { text: 'Once there was a crab.', seed: 4, frames: 41, start: 0, cut: false, audio: ['voice'] },
+      { text: 'It lived by the sea.', seed: 5, frames: 30, start: 41, cut: true, keyframe: 'p2', audio: [] },
+    ],
+  };
+  const r = [
+    { text: 'Once there was a crab.', seed: 4, frames: 81, cut: false, key: 'p1', audio: ['voice'], refs: ['x'] },
+    { text: 'It lived by the sea.', seed: 5, frames: 81, cut: false, key: 'p2', audio: [] },
+  ];
+  assert.equal(shotState(r, c, true, take).action, 'none', 'the Frames box and a stray continue never count');
+  const sent = sentRow(r[1], 1, take);
+  assert.equal(sent.cut, true);
+  assert.equal(sent.key, 'p2');
+  assert.deepEqual(sent.refs, []);
+  for (const change of [{ key: 'p3' }, { audio: ['other'] }, { text: 'It lived in the sea.' }, { seed: 6 }]) {
+    const s = shotState([r[0], { ...r[1], ...change }], c, true, take);
+    assert.equal(s.action, 'redo', JSON.stringify(change));
+    assert.equal(s.done, 1);
+  }
+  assert.deepEqual(sentRow({ ...r[0], audio: ['a', 'b'] }, 0, take).audio, ['a'], 'one voice');
+});

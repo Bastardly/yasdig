@@ -35,12 +35,14 @@ How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the detail
   src/foldscale.rs fold a scaled-fp8 GGUF's per-tensor scales into its weights
   src/preflight.rs startup environment checks, shared with `doctor`
   src/sd.rs        sd-cli subprocess wrapper (txt2img + img2img + vid_gen)
-  src/llm.rs       the agent's llama.cpp driver as a subprocess: one turn, framed stdout
+  src/llm.rs       the agent's llama.cpp driver as a subprocess: one turn (or one narration), framed stdout
   src/agents.rs    the agent's models: GGUF headers read, model and projector paired by folder
+  src/voices.rs    voice models for narrated stills (TTS model + audio projector), paired the same way
+  src/narration.rs narrated stills: words split into pieces, speech laid on the frame grid
   src/agent/       the Assistant panels: chats (chat.rs), the knob table and its whitelist (knobs.rs,
                    toolkit.rs), the reply grammar (schema.rs), what a turn is shown
                    (context.rs), the bounded workflow (session.rs), skills, routes
-  llm/             yasdig-llm.cpp: one chat turn over llama.cpp's libraries, built by build.rs
+  llm/             yasdig-llm.cpp: one chat turn, or a narration spoken, over llama.cpp's libraries, built by build.rs
   src/sandbox.rs   keeps sd-cli off the network: seccomp (Linux), AppContainer (Windows)
   src/settings.rs  user/settings.toml and user/model-settings.toml
   src/pipeline.rs  orchestrate sd -> fsr -> escalations, with timings + result cache

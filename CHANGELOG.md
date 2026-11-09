@@ -3,6 +3,24 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### Added
+
+- **Narrated stills**, a kind of clip on the Video tab: one row per picture (an output,
+  a cast member's or an upload) with the words a voice reads over it, in the voice of a
+  2–15 s recording you pick as the clip's default voice — a sound in Outputs or a cast
+  member's voice — and any row can have a voice of its own. Each picture stays up as long as its words take. Ten languages. Redo a
+  row with a new seed for another reading; Extend, Download and Save to output as with
+  any clip.
+- **Voice models** on the Models tab: Qwen3-TTS 1.7B, run by llama.cpp like the
+  Assistant's models, about 3 GB on the card.
+
+### Fixed
+
+- A clip past 1000 frames played and saved its frames out of order (frame 1000 sorted
+  before 101).
+
 ## 0.9.0 — 2026-11-08
 
 ### Changed

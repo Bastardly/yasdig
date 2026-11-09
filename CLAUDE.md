@@ -874,7 +874,8 @@ checked 2026-10-28: a chat's own copy of the tab's settings and board was what e
 handoff lost things between). A turn is one run of our driver on the job queue; nothing
 stays loaded.
 
-**The driver, not llama.cpp's CLIs** (checked at v0.8.0): `llama-mtmd-cli` is one-shot
+**The driver, not llama.cpp's CLIs** (checked at v0.8.0; it also speaks narrated
+stills, *Video* below): `llama-mtmd-cli` is one-shot
 only with both `-p` and `--image` and takes no conversation; `llama-cli` talks to an
 in-process llama-server over loopback TCP, which seccomp and the AppContainer refuse.
 `yasdig-llm` is mtmd-cli's evaluation loop with the history from a **request file**
@@ -2092,6 +2093,30 @@ from `family` goes on `VideoModelDto`.
     JPEG) handle either. Frames come out of the AVI (`/outputs/{stem}/frames/{k}.jpg`,
     one parsed file cached, `OUTPUT_CLIP`). The source picker filters `video`, and
     Refine & adjust's ←/→ steps over them.
+  - **Narrated stills** (`VideoFamily::Narrated`, `src/narration.rs`, `src/voices.rs`):
+    a shot is a picture held while a cloned voice reads its words. No sd-cli: the
+    driver's **`"task": "speak"`** (`llm::SpeakRequest`, `LlmRunner::speak`, `PROTOCOL`
+    2 — both ends; `Phase::Speaking`) runs Qwen3-TTS through mtmd's `gen_audio`, one
+    WAV per piece. One model per `voices::scan` pair in `models/voices/` (LM arch in
+    `TTS_ARCHES`, projector `clip.has_gen_audio_encoder`; `agents::classify` refuses
+    both), `[[voice]]` cards (`check_pairs`, `Want::Voice`). `plan_narrated`: shot 1's
+    picture is `source`, the rest `keyframe`, `cut` = k>0, ≤1 `audio`, `every`/negative
+    unused, `frames` 0 until spoken. `Engine::narrate`: one speak run for every new
+    shot (a shot's own `audio`, else `VideoModel.narrator`, the panel's *Default voice*
+    — no carrying over from the shot before; `/videos/extend` sends the panel's
+    `narrator`/`language` so a Redo reads as shown; pieces ≤300 chars at sentence ends,
+    `narration::pieces`), `narration::lay` pads each shot to whole frames **measured
+    from the clip's start** (rounding never accumulates), the still fitted *contain* on
+    black as RGB (`fit_still`; canvas uploads are RGBA), frame 1 written, the rest
+    **hard links** (`hold_frame`, copy fallback) — Enlarge's FSR path processes each
+    segment's first frame and links the rest too. `chains()` is true (Extend/Redo
+    work) but `VideoView` and skills leave it out of films and Enhance. Page:
+    `narrateRow` relabels the row, `sentRow` with `take.narrated` sends `frames: null`
+    (`rowMatches` skips it), `.unnarrated` + `#tab-video.narrated` hide the diffusion
+    controls, `#vlang`; both players decode **one still per segment**
+    (`decodeFrames`/`stillsOf` in dom.js) — 720 frames would be 720 decodes.
+  - **`frames_in` sorts by number**: `frame_%03d` is three digits, so frame 1000 sorted
+    before 101 (`frames_are_ordered_by_number_past_a_thousand`).
 - **Convert** (`src/convert.rs`, `-M convert`; the Models tab's `#panel-gm-convert`,
   static markup, its rail button in the Tools fold after Installed (`build()`) — file, type, the
   button; role/estimate/dest are the selects' `title`s): a file's on-disk type isn't its run

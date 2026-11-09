@@ -102,6 +102,11 @@ pub struct SdConfig {
     /// text encoder wherever its width fits a slot.
     #[serde(default)]
     pub agent_dir: Option<String>,
+    /// Directory holding voice models (text to speech, [`crate::voices`]) for
+    /// narrated stills. Defaults to `voices/` inside [`SdConfig::models_dir`];
+    /// left out of the image and agent scans.
+    #[serde(default)]
+    pub voice_dir: Option<String>,
 }
 
 /// `[llm]` in `models.toml`.
@@ -124,6 +129,7 @@ impl Default for SdConfig {
             lora_dir: None,
             upscaler_dir: None,
             agent_dir: None,
+            voice_dir: None,
         }
     }
 }
@@ -1805,6 +1811,14 @@ pub enum VideoFamily {
     /// projection inside — so one file fewer than 2.3.
     #[serde(rename = "ltx_2_5")]
     Ltx25,
+    /// Narrated stills: no diffusion at all. Each shot is a picture held while
+    /// a text-to-speech model reads its words in a cloned voice
+    /// ([`crate::narration`]); the "model" is the voice model
+    /// ([`crate::voices`]), its backbone in `diffusion_model` and its projector
+    /// in [`VideoModel::mmproj`]. A shot lasts as long as its speech, so the
+    /// frame grid is every frame and Frames is never asked.
+    #[serde(rename = "narrated")]
+    Narrated,
 }
 
 impl VideoFamily {
@@ -1815,7 +1829,7 @@ impl VideoFamily {
     /// `match` in this impl is exhaustive, so a new variant cannot be added
     /// without at least being *considered* everywhere it matters. The LoRA
     /// listing reads it too, for the families a LoRA fits.
-    pub const ALL: [VideoFamily; 7] = [
+    pub const ALL: [VideoFamily; 8] = [
         VideoFamily::Wan22Ti2v5b,
         VideoFamily::Wan22A14b,
         VideoFamily::WanDense,
@@ -1823,6 +1837,7 @@ impl VideoFamily {
         VideoFamily::MinimaxH3,
         VideoFamily::Ltx23,
         VideoFamily::Ltx25,
+        VideoFamily::Narrated,
     ];
 
     /// Either LTX-2 release: one architecture, so one set of rules for the
@@ -1842,6 +1857,9 @@ impl VideoFamily {
         match self {
             VideoFamily::Wan22Ti2v5b | VideoFamily::MinimaxH3 | VideoFamily::Ltx23 | VideoFamily::Ltx25 => 32,
             VideoFamily::Wan22A14b | VideoFamily::Wan21Vace | VideoFamily::WanDense => 16,
+            // Any size: the stills are fitted, nothing is diffused. 2 keeps
+            // H.264's 4:2:0 chroma whole for the page's Download.
+            VideoFamily::Narrated => 2,
         }
     }
 
@@ -1869,6 +1887,7 @@ impl VideoFamily {
                 f + (5 + 17 - f % 17) % 17
             }
             VideoFamily::Ltx23 | VideoFamily::Ltx25 => (frames.max(1) - 1) / 8 * 8 + 1,
+            VideoFamily::Narrated => frames.max(1),
             _ => (frames.max(1) - 1) / 4 * 4 + 1,
         }
     }
@@ -1892,6 +1911,12 @@ impl VideoFamily {
             VideoFamily::Ltx23 | VideoFamily::Ltx25 => FrameGrid {
                 multiple: 8,
                 offset: 1,
+                min: 1,
+                round_up: false,
+            },
+            VideoFamily::Narrated => FrameGrid {
+                multiple: 1,
+                offset: 0,
                 min: 1,
                 round_up: false,
             },
@@ -1925,10 +1950,17 @@ impl VideoFamily {
     /// from its own last one — a long clip's shots. Not
     /// VACE, which reads `-i` as a reference image, nor the dense family, whose
     /// text-to-video checkpoints ignore it (`src/pipeline/video.cpp`).
+    /// Narrated stills "chain" in the sense that matters here: a clip of many
+    /// shots, each a cut from its own picture.
     pub fn chains(self) -> bool {
         matches!(
             self,
-            VideoFamily::Wan22Ti2v5b | VideoFamily::Wan22A14b | VideoFamily::MinimaxH3 | VideoFamily::Ltx23 | VideoFamily::Ltx25
+            VideoFamily::Wan22Ti2v5b
+                | VideoFamily::Wan22A14b
+                | VideoFamily::MinimaxH3
+                | VideoFamily::Ltx23
+                | VideoFamily::Ltx25
+                | VideoFamily::Narrated
         )
     }
 
@@ -2023,6 +2055,19 @@ impl VideoFamily {
                 negative: Some(LTX_NEGATIVE),
                 hires_steps: Some(if self == VideoFamily::Ltx23 { 4 } else { 6 }),
             },
+            // Only `fps` means anything: 12 is smooth enough for a held still
+            // (and for the pan a later version may add) and keeps the frame
+            // count of a minute's narration at 720.
+            VideoFamily::Narrated => FamilyRecipe {
+                fps: 12,
+                steps: 1,
+                cfg_scale: 1.0,
+                high_noise_steps: None,
+                flow_shift: None,
+                memory: "auto",
+                negative: None,
+                hires_steps: None,
+            },
         }
     }
 
@@ -2036,6 +2081,7 @@ impl VideoFamily {
             VideoFamily::MinimaxH3 => "MiniMax H3",
             VideoFamily::Ltx23 => "LTX-2.3",
             VideoFamily::Ltx25 => "LTX-2.5",
+            VideoFamily::Narrated => "Narrated stills",
         }
     }
 
@@ -2195,6 +2241,8 @@ impl VideoFamily {
             VideoFamily::MinimaxH3 => &[H3_VAE, H3_LLM, H3_AUDIO_VAE],
             VideoFamily::Ltx23 => &[LTX23_VAE, LTX23_LLM, LTX23_CONNECTORS, LTX23_AUDIO_VAE, LTX23_UPSCALER],
             VideoFamily::Ltx25 => &[LTX25_VAE, LTX25_LLM, LTX25_AUDIO_VAE, LTX25_UPSCALER],
+            // The voice model is two files found by [`crate::voices`], not parts.
+            VideoFamily::Narrated => &[],
         }
     }
 
@@ -2209,6 +2257,7 @@ impl VideoFamily {
             VideoFamily::MinimaxH3 => "minimax_h3",
             VideoFamily::Ltx23 => "ltx_2_3",
             VideoFamily::Ltx25 => "ltx_2_5",
+            VideoFamily::Narrated => "narrated",
         }
     }
 }
@@ -2368,6 +2417,19 @@ pub struct VideoModel {
     /// doesn't run it: [`VideoModel::hires`] does.
     #[serde(default)]
     pub latent_upscaler: Option<PathBuf>,
+    /// A narrated clip's voice projector ([`VideoFamily::Narrated`]; its
+    /// backbone is `diffusion_model`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmproj: Option<PathBuf>,
+    /// The language a narrated clip is read in, a code the voice model knows
+    /// (`en`, `de`, …; [`crate::narration::LANGUAGES`]). `None` is English.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// A narrated clip's default voice: a sound in `work/output/` (a stem),
+    /// read by every shot that picks none of its own. `None` lets the voice
+    /// model pick one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narrator: Option<String>,
     /// Draw small, enlarge the latent ×2 with `latent_upscaler`, refine at
     /// twice the size: sd.cpp's LTX hi-res, inside the one run. `width`/
     /// `height` stay the first pass's size; the clip comes out at twice it.
@@ -2569,6 +2631,9 @@ impl VideoModel {
             clip_vision: None,
             embeddings_connectors: None,
             latent_upscaler: None,
+            mmproj: None,
+            language: None,
+            narrator: None,
             hires: false,
             hires_steps: r.hires_steps,
             sigmas: None,
@@ -2690,6 +2755,19 @@ impl VideoModel {
                 bail!("video '{n}': vace_strength is {s}, must be between 0 and 1");
             }
         }
+        if let Some(l) = &self.language {
+            if !crate::narration::LANGUAGES.iter().any(|(code, _)| code == l) {
+                bail!("video '{n}': language '{l}' is not one the voice model reads");
+            }
+        }
+        if let Some(v) = &self.narrator {
+            if !crate::workitems::valid_id(v) {
+                bail!("video '{n}': '{v}' is not an output sound");
+            }
+        }
+        if self.family == VideoFamily::Narrated && self.mmproj.is_none() {
+            bail!("video '{n}': a narrated model needs its voice projector (mmproj)");
+        }
         if self.hires && !self.family.is_ltx() {
             bail!("video '{n}': hi-res ×2 is LTX's latent upscaler; {} has none", self.family.label());
         }
@@ -2746,13 +2824,14 @@ impl VideoModel {
         [
             Some(&self.diffusion_model),
             self.high_noise_diffusion_model.as_ref(),
-            Some(&self.vae),
+            (self.family != VideoFamily::Narrated).then_some(&self.vae),
             self.t5xxl.as_ref(),
             self.llm.as_ref(),
             self.audio_vae.as_ref(),
             self.clip_vision.as_ref(),
             self.embeddings_connectors.as_ref(),
             self.latent_upscaler.as_ref(),
+            self.mmproj.as_ref(),
         ]
         .into_iter()
         .flatten()
@@ -2910,7 +2989,7 @@ impl Config {
     pub fn scan_images(&self) -> Vec<crate::discover::Found> {
         let models = self.models_dir();
         let video = self.video_dir();
-        let skip = [video.clone(), self.lora_dir(), self.upscaler_dir(), self.agent_dir()];
+        let skip = [video.clone(), self.lora_dir(), self.upscaler_dir(), self.agent_dir(), self.voice_dir()];
         let mut found = crate::discover::scan_excluding(&models, &skip);
         if video.starts_with(&models) {
             let fits_a_slot =
@@ -2952,6 +3031,14 @@ impl Config {
         }
     }
 
+    /// Directory holding voice models ([`SdConfig::voice_dir`]).
+    pub fn voice_dir(&self) -> PathBuf {
+        match &self.sd.voice_dir {
+            Some(d) => self.resolve(d),
+            None => self.models_dir().join("voices"),
+        }
+    }
+
     /// The folders sd-cli and the agent's driver reach from inside their
     /// sandbox (on Windows the one container is granted these and nothing
     /// else): `work/`, where every run reads its inputs and writes its outputs
@@ -2966,6 +3053,7 @@ impl Config {
             self.lora_dir(),
             self.upscaler_dir(),
             self.agent_dir(),
+            self.voice_dir(),
         ]
         .into_iter()
         .map(|path| Root { path, write: true })
@@ -3290,8 +3378,37 @@ impl Config {
                 out.push(m);
             }
         }
+        out.extend(self.narrated_models());
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
+    }
+
+    /// One *Narrated stills* model per voice model in the voices folder
+    /// ([`crate::voices::scan`]), named for it so the select says which voice
+    /// model reads. Never shadowed by a `[[video]]` entry: it has no file
+    /// sd-cli loads.
+    fn narrated_models(&self) -> Vec<VideoModel> {
+        crate::voices::scan(&self.voice_dir())
+            .models
+            .into_iter()
+            .map(|v| {
+                let mut m = VideoModel::discovered(
+                    format!("Narrated stills ({})", v.label),
+                    VideoFamily::Narrated,
+                    v.lm.clone(),
+                );
+                m.mmproj = Some(v.mmproj.clone());
+                m.description = Some(
+                    "Each shot is a picture held while the voice model reads its words — no video diffusion.".into(),
+                );
+                m.width = 1280;
+                m.height = 720;
+                m.negative_prompt = String::new();
+                m.vae_tiling = false;
+                m.exists = m.missing().is_empty();
+                m
+            })
+            .collect()
     }
 
     /// Resolve one entry's component paths and check they're on disk.
@@ -3308,6 +3425,7 @@ impl Config {
             &mut m.clip_vision,
             &mut m.embeddings_connectors,
             &mut m.latent_upscaler,
+            &mut m.mmproj,
             &mut m.lora_dir,
         ]
         .into_iter()
@@ -4682,13 +4800,21 @@ lora_dir = "adapters"
     /// isn't an output stem.
     /// Layout boxes are MOSS-Image's alone, and checked by the layout's own
     /// rules on the way in.
-    /// Only a family whose `-i` is a first frame can go on from a clip's last.
+    /// Only a family whose `-i` is a first frame can go on from a clip's last —
+    /// and narrated stills, every shot a cut from its own picture.
     #[test]
     fn only_a_first_frame_family_chains() {
         let chains: Vec<_> = VideoFamily::ALL.iter().filter(|f| f.chains()).collect();
         assert_eq!(
             chains,
-            [&VideoFamily::Wan22Ti2v5b, &VideoFamily::Wan22A14b, &VideoFamily::MinimaxH3, &VideoFamily::Ltx23, &VideoFamily::Ltx25]
+            [
+                &VideoFamily::Wan22Ti2v5b,
+                &VideoFamily::Wan22A14b,
+                &VideoFamily::MinimaxH3,
+                &VideoFamily::Ltx23,
+                &VideoFamily::Ltx25,
+                &VideoFamily::Narrated
+            ]
         );
     }
 

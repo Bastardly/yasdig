@@ -1,4 +1,4 @@
-import { $, esc, getJSON, post, setPlayIcon } from './dom.js';
+import { $, esc, getJSON, post, setPlayIcon, decodeFrames, stillsOf } from './dom.js';
 import { S } from './state.js';
 import { setBusy, setIdle } from './busy.js';
 import { soonJobs } from './jobs.js';
@@ -105,15 +105,10 @@ function frameCount() {
   return isClip() ? view.clip.frames : view.info.frames;
 }
 
+// An enlarged version of narrated stills is still a still per shot.
 async function decode(v) {
-  const n = frameCount();
-  const load = (k) => new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = frameUrl(v, k);
-  });
-  return (await Promise.all(Array.from({ length: n }, (_, k) => load(k)))).filter(Boolean);
+  const stills = isClip() ? stillsOf(view.clip) : null;
+  return (await decodeFrames(frameCount(), (k) => frameUrl(v, k), stills)).filter(Boolean);
 }
 
 function stop() {

@@ -27,6 +27,13 @@
 //                                  (kind "crash" on Windows: the exception and
 //                                  the module it happened in, then the OS's code)
 //
+// A request with "task": "speak" reads text aloud instead (llama.cpp's
+// tools/tts/tts.cpp loop over the mtmd audio-generation helper): the model is a
+// TTS backbone plus a projector that generates audio, loaded once; each of
+// `pieces` ({text, speaker?, seed, n_predict, out}) is spoken into its own
+// 16-bit WAV at `out`. Records: `P load`, `P speak <done> <total>`, then
+// `D {"load_ms", "gen_ms", "sample_rate", "seconds"}`.
+//
 // Exit codes: 0 done, 1 internal, 2 bad request, 3 load failed, 4 context too
 // small, 5 out of memory (125 is the sandbox launcher's, never ours).
 
@@ -47,6 +54,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -64,7 +72,7 @@ using json = nlohmann::ordered_json;
 
 namespace {
 
-constexpr int PROTOCOL = 1;
+constexpr int PROTOCOL = 2;
 
 // TOO_LONG, not CONTEXT: windows.h has a CONTEXT (the thread register record).
 enum Exit { OK = 0, INTERNAL = 1, BAD_REQUEST = 2, LOAD = 3, TOO_LONG = 4, OOM = 5 };
@@ -171,6 +179,160 @@ bool on_load(float progress, void * user) {
     return true;
 }
 
+// The speak task (see the header). `params` already holds the model, the
+// context size and the load-progress callback.
+int speak(const json & req, common_params & params) {
+    params.mmproj.path = req.value("mmproj", std::string());
+    if (params.mmproj.path.empty()) {
+        fail(BAD_REQUEST, "bad_request", "a voice model needs its projector (mmproj)");
+    }
+    const json pieces = req.value("pieces", json::array());
+    if (pieces.empty()) {
+        fail(BAD_REQUEST, "bad_request", "nothing to speak");
+    }
+    const std::string lang = req.value("lang", std::string());
+    // tts.cpp: the hidden states go to the audio helper, so embeddings are on.
+    params.embedding = true;
+
+    const int64_t t_load = now_ms();
+    auto          init   = common_init_from_params(params);
+    llama_model *   model = init->model();
+    llama_context * lctx  = init->context();
+    if (!model || !lctx) {
+        fail(LOAD, "load", "llama.cpp could not load " + params.model.path);
+    }
+    mtmd_helper_log_set(log_now, nullptr);
+    mtmd_context_params mp = mtmd_context_params_default();
+    mp.use_gpu             = true;
+    mp.print_timings       = false;
+    mp.n_threads           = params.cpuparams.n_threads;
+    mp.warmup              = false;
+    mtmd::context_ptr mctx(mtmd_init_from_file(params.mmproj.path.c_str(), model, mp));
+    if (!mctx) {
+        fail(LOAD, "load", "llama.cpp could not load the voice projector " + params.mmproj.path);
+    }
+    if (mtmd_gen_audio_get_info(mctx.get()).type == MTMD_GEN_AUDIO_TYPE_NONE) {
+        fail(LOAD, "load", params.mmproj.path + " does not generate audio: it is not a voice model's projector");
+    }
+    const int64_t load_ms = now_ms() - t_load;
+
+    auto tmpls = common_chat_templates_init(model, "");
+    // A speaker is encoded per piece; the file is decoded once per path.
+    std::map<std::string, mtmd::bitmap_ptr> speakers;
+    mtmd_helper::gen_audio gen;
+    gen.init(lctx, mctx.get());
+
+    const int64_t t_gen      = now_ms();
+    int32_t       rate       = 0;
+    int64_t       samples    = 0;
+    const size_t  n_pieces   = pieces.size();
+    for (size_t i = 0; i < n_pieces; i++) {
+        record("P", "speak " + std::to_string(i) + " " + std::to_string(n_pieces));
+        const json &      p       = pieces[i];
+        const std::string text    = p.value("text", std::string());
+        const std::string out     = p.value("out", std::string());
+        const std::string speaker = p.value("speaker", std::string());
+        if (text.empty() || out.empty()) {
+            fail(BAD_REQUEST, "bad_request", "piece " + std::to_string(i + 1) + " has no text or no out");
+        }
+        mtmd_bitmap * ref = nullptr;
+        if (!speaker.empty()) {
+            auto it = speakers.find(speaker);
+            if (it == speakers.end()) {
+                auto w = mtmd_helper_bitmap_init_from_file(mctx.get(), speaker.c_str(), false, mtmd_helper_init_opt_default());
+                if (!w.bitmap) {
+                    fail(BAD_REQUEST, "bad_request", "can't read the voice " + speaker);
+                }
+                it = speakers.emplace(speaker, mtmd::bitmap_ptr(w.bitmap)).first;
+            }
+            ref = it->second.get();
+        }
+
+        // Every piece starts from an empty sequence and a sampler of its own
+        // seed, so a piece reads the same whatever was spoken before it.
+        llama_memory_seq_rm(llama_get_memory(lctx), 0, -1, -1);
+        common_params_sampling sp = params.sampling;
+        sp.seed                   = p.value("seed", (uint32_t) LLAMA_DEFAULT_SEED);
+        common_sampler * smpl     = common_sampler_init(model, sp);
+        if (!smpl) {
+            fail(INTERNAL, "internal", "the sampler could not be built");
+        }
+
+        std::string prompt = common_chat_get_tts_prompt(tmpls.get(), text, lang, "");
+        if (prompt.empty()) {
+            prompt = text;
+        }
+        mtmd_helper_gen_audio_inp inp = mtmd_helper_gen_audio_inp_default();
+        inp.seq_id                    = 0;
+        inp.prompt                    = prompt.c_str();
+        inp.prompt_len                = prompt.size();
+        inp.speaker_ref               = ref;
+        inp.lang                      = lang.c_str();
+        inp.voice                     = "";
+        inp.top_k                     = sp.top_k;
+        inp.top_p                     = sp.top_p;
+        inp.seed                      = sp.seed;
+        gen.reset();
+        if (gen.set_input(&inp) != 0) {
+            fail(BAD_REQUEST, "bad_request", "the voice model refused piece " + std::to_string(i + 1) +
+                                                 " (an unknown language, or a voice it can't read)");
+        }
+        for (;;) {
+            int32_t ret = gen.step_prompt(params.n_batch);
+            if (ret < 0) {
+                fail(INTERNAL, "internal", "reading piece " + std::to_string(i + 1) + " failed");
+            }
+            if (ret == 0) {
+                break;
+            }
+        }
+        const int max_new = p.value("n_predict", 0) > 0 ? p.value("n_predict", 0) : 512;
+        llama_token sampled = common_sampler_sample(smpl, lctx, -1);
+        common_sampler_accept(smpl, sampled, true);
+        const float * h_state = llama_get_embeddings_ith(lctx, -1);
+        bool          stop    = false;
+        for (int n = 0; !stop && n < max_new; n++) {
+            const float * h_next = nullptr;
+            if (gen.step_gen(sampled, h_state, &h_next, &stop) != 0) {
+                fail(INTERNAL, "internal", "speaking piece " + std::to_string(i + 1) + " failed at frame " +
+                                               std::to_string(n));
+            }
+            if (!h_next) {
+                break;
+            }
+            h_state = h_next;
+            sampled = common_sampler_sample(smpl, lctx, -1);
+            common_sampler_accept(smpl, sampled, true);
+        }
+        common_sampler_free(smpl);
+
+        const char * data     = nullptr;
+        size_t       data_len = 0;
+        int64_t      n        = 0;
+        if (gen.get_output(&rate, &data, &data_len, &n) != 0) {
+            fail(INTERNAL, "internal", "turning piece " + std::to_string(i + 1) + " into sound failed");
+        }
+        samples += n;
+        FILE * f = fopen(out.c_str(), "wb");
+        if (!f) {
+            fail(INTERNAL, "internal", "can't write " + out);
+        }
+        const bool ok = fwrite(data, 1, data_len, f) == data_len;
+        fclose(f);
+        if (!ok) {
+            fail(INTERNAL, "internal", "can't write " + out);
+        }
+    }
+    record("P", "speak " + std::to_string(n_pieces) + " " + std::to_string(n_pieces));
+    record("D", json{ { "load_ms", load_ms },
+                      { "gen_ms", now_ms() - t_gen },
+                      { "sample_rate", rate },
+                      { "seconds", rate > 0 ? (double) samples / rate : 0.0 },
+                      { "stop", "eos" } }
+                    .dump());
+    return OK;
+}
+
 }  // namespace
 
 int main(int argc, char ** argv) {
@@ -247,6 +409,13 @@ int main(int argc, char ** argv) {
     }
     if (params.model.path.empty()) {
         fail(BAD_REQUEST, "bad_request", "no model in the request");
+    }
+    const std::string task = req.value("task", std::string("chat"));
+    if (task == "speak") {
+        return speak(req, params);
+    }
+    if (task != "chat") {
+        fail(BAD_REQUEST, "bad_request", "unknown task " + task);
     }
 
     const int64_t t_load = now_ms();

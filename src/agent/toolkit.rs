@@ -212,7 +212,10 @@ impl VideoView {
             name: m.name.clone(),
             family: m.family.as_str(),
             label: m.family.label(),
-            chains: m.family.chains(),
+            // A narrated model "chains" (shots of their own pictures) but a
+            // storyboard's rows describe motion, not what a voice reads, so a
+            // film is never made on one.
+            chains: m.family.chains() && m.family != crate::config::VideoFamily::Narrated,
             references: m.family.takes_references(),
             sounds: m.family.takes_references() && m.audio_vae.is_some(),
             width: m.width,

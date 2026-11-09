@@ -75,6 +75,9 @@ enum Want {
     /// One of an agent card's files: checked to be a language model or a
     /// projector, as its slot says.
     Agent { id: String, index: usize },
+    /// One of a voice card's files: the backbone, or the projector that
+    /// generates sound ([`crate::voices`]).
+    Voice { id: String, index: usize },
 }
 
 fn key(path: &Path) -> String {
@@ -132,6 +135,8 @@ struct Inner {
     loras: PathBuf,
     /// Where an [`Agent`]'s files go — `Config::agent_dir`.
     agents: PathBuf,
+    /// Where a voice card's files go — `Config::voice_dir`.
+    voices: PathBuf,
     state: Mutex<State>,
     wake: Condvar,
 }
@@ -144,6 +149,7 @@ impl Downloads {
             upscalers: cfg.upscaler_dir(),
             loras: cfg.lora_dir(),
             agents: cfg.agent_dir(),
+            voices: cfg.voice_dir(),
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
         }));
@@ -222,13 +228,33 @@ impl Downloads {
                     let dest = self.0.agents.join(&f.dest);
                     Task {
                         key: key(&dest),
-                        label: format!("{} · {}", a.label, agent_slot_label(f)),
+                        label: format!("{} · {}", a.label, pair_slot_label(false, f)),
                         entry: a.id.clone(),
                         index,
                         dest,
                         url: f.url.clone(),
                         bytes: f.bytes,
                         want: Want::Agent { id: a.id.clone(), index },
+                    }
+                })
+                .collect());
+        }
+        if let Some(a) = c.voice(id) {
+            return Ok(a
+                .file
+                .iter()
+                .enumerate()
+                .map(|(index, f)| {
+                    let dest = self.0.voices.join(&f.dest);
+                    Task {
+                        key: key(&dest),
+                        label: format!("{} · {}", a.label, pair_slot_label(true, f)),
+                        entry: a.id.clone(),
+                        index,
+                        dest,
+                        url: f.url.clone(),
+                        bytes: f.bytes,
+                        want: Want::Voice { id: a.id.clone(), index },
                     }
                 })
                 .collect());
@@ -262,7 +288,10 @@ impl Downloads {
                 }
                 Want::Lora { id } => lora_is(&t.dest, c.lora(id).expect("tasks come from the catalog")),
                 Want::Agent { id, index } => {
-                    agent_file_is(&t.dest, &c.agent(id).expect("tasks come from the catalog").file[*index])
+                    pair_file_is(false, &t.dest, &c.agent(id).expect("tasks come from the catalog").file[*index])
+                }
+                Want::Voice { id, index } => {
+                    pair_file_is(true, &t.dest, &c.voice(id).expect("tasks come from the catalog").file[*index])
                 }
             };
             if busy || had {
@@ -494,8 +523,14 @@ impl Downloads {
             }
             Want::Agent { id, index } => {
                 let f = &Catalog::get().agent(id).expect("tasks come from the catalog").file[*index];
-                if !agent_file_is(dest, f) {
-                    bail!("downloaded, but it reads as {} — not {}", agent_file_describe(dest), agent_slot_label(f));
+                if !pair_file_is(false, dest, f) {
+                    bail!("downloaded, but it reads as {} — not {}", pair_file_describe(false, dest), pair_slot_label(false, f));
+                }
+            }
+            Want::Voice { id, index } => {
+                let f = &Catalog::get().voice(id).expect("tasks come from the catalog").file[*index];
+                if !pair_file_is(true, dest, f) {
+                    bail!("downloaded, but it reads as {} — not {}", pair_file_describe(true, dest), pair_slot_label(true, f));
                 }
             }
             Want::Lora { id } => {
@@ -565,7 +600,22 @@ impl Downloads {
                 card_gb: Some(a.card_gb),
                 note: &a.note,
                 bytes: a.bytes(),
-                files: a.file.iter().map(|f| agent_state(&self.0.agents, f, &st)).collect(),
+                files: a.file.iter().map(|f| pair_state(false, &self.0.agents, f, &st)).collect(),
+            })
+            .collect();
+        let voices = c
+            .voice
+            .iter()
+            .map(|a: &'static Agent| EntryView {
+                id: &a.id,
+                family: "voice",
+                family_label: "Voice",
+                label: &a.label,
+                recommended: Catalog::agent_recommended(a, vram),
+                card_gb: Some(a.card_gb),
+                note: &a.note,
+                bytes: a.bytes(),
+                files: a.file.iter().map(|f| pair_state(true, &self.0.voices, f, &st)).collect(),
             })
             .collect();
         CatalogView {
@@ -576,10 +626,12 @@ impl Downloads {
             upscaler_dir: self.0.upscalers.display().to_string(),
             video_dir: self.0.videos.display().to_string(),
             agent_dir: self.0.agents.display().to_string(),
+            voice_dir: self.0.voices.display().to_string(),
             entries,
             videos,
             upscalers,
             agents,
+            voices,
         }
     }
 }
@@ -595,6 +647,7 @@ pub struct CatalogView {
     upscaler_dir: String,
     video_dir: String,
     agent_dir: String,
+    voice_dir: String,
     entries: Vec<EntryView>,
     /// Video models. Their own
     /// list for the reason `upscalers` has one.
@@ -604,6 +657,8 @@ pub struct CatalogView {
     upscalers: Vec<EntryView>,
     /// The Agent tab's models, apart for the same reason.
     agents: Vec<EntryView>,
+    /// Voice models for narrated stills, apart likewise.
+    voices: Vec<EntryView>,
 }
 
 #[derive(Serialize)]
@@ -758,21 +813,43 @@ fn lora_state(dir: &Path, l: &'static Lora, st: &State) -> FileView {
 /// An agent card's file is had when its own `dest` is there, whole, and its
 /// header says it is what the slot holds — the folder is the pairing, so a
 /// same-kind file elsewhere is not this one.
-fn agent_file_is(dest: &Path, f: &AgentFile) -> bool {
+/// The same for a voice card's file (`voice`): the projector must generate
+/// sound, the model be any backbone ([`crate::voices`]).
+fn pair_file_is(voice: bool, dest: &Path, f: &AgentFile) -> bool {
     use crate::agents::AgentFile as A;
-    std::fs::metadata(dest).is_ok_and(|m| m.is_file() && m.len() == f.bytes)
-        && matches!(
-            (crate::agents::identify(dest), f.slot.as_str()),
-            (A::Lm(_), "model") | (A::Projector(_), "mmproj")
-        )
+    if !std::fs::metadata(dest).is_ok_and(|m| m.is_file() && m.len() == f.bytes) {
+        return false;
+    }
+    if voice {
+        let Ok(m) = crate::agents::meta(dest) else { return false };
+        let proj = m.arch.as_deref() == Some("clip");
+        return if f.slot == "mmproj" { proj && m.gen_audio == Some(true) } else { m.arch.is_some() && !proj };
+    }
+    matches!(
+        (crate::agents::identify(dest), f.slot.as_str()),
+        (A::Lm(_), "model") | (A::Projector(_), "mmproj")
+    )
 }
 
-fn agent_slot_label(f: &AgentFile) -> &'static str {
-    if f.slot == "mmproj" { "Vision projector" } else { "Language model" }
+fn pair_slot_label(voice: bool, f: &AgentFile) -> &'static str {
+    match (voice, f.slot == "mmproj") {
+        (false, true) => "Vision projector",
+        (false, false) => "Language model",
+        (true, true) => "Voice projector",
+        (true, false) => "Voice model",
+    }
 }
 
-fn agent_file_describe(dest: &Path) -> String {
+fn pair_file_describe(voice: bool, dest: &Path) -> String {
     use crate::agents::AgentFile as A;
+    if voice {
+        return match crate::agents::meta(dest) {
+            Ok(m) if m.arch.as_deref() == Some("clip") && m.gen_audio == Some(true) => "a voice projector".into(),
+            Ok(m) if m.arch.as_deref() == Some("clip") => "a projector that doesn't generate sound".into(),
+            Ok(m) => format!("a {} model", m.arch.unwrap_or_else(|| "GGUF".into())),
+            Err(e) => format!("unreadable ({e})"),
+        };
+    }
     match crate::agents::identify(dest) {
         A::Lm(m) => format!("a {} language model", m.arch.unwrap_or_default()),
         A::Projector(_) => "a vision projector".to_string(),
@@ -780,14 +857,14 @@ fn agent_file_describe(dest: &Path) -> String {
     }
 }
 
-/// [`file_state`] for an agent card's file, under the agents dir.
-fn agent_state(dir: &Path, f: &'static AgentFile, st: &State) -> FileView {
+/// [`file_state`] for an agent or voice card's file, under its dir.
+fn pair_state(voice: bool, dir: &Path, f: &'static AgentFile, st: &State) -> FileView {
     let dest = dir.join(&f.dest);
     let k = key(&dest);
     let got = std::fs::metadata(part_of(&dest)).map(|m| m.len()).unwrap_or(0);
     let mut v = FileView {
         slot: f.slot.clone(),
-        slot_label: agent_slot_label(f).to_string(),
+        slot_label: pair_slot_label(voice, f).to_string(),
         dest: f.dest.clone(),
         bytes: f.bytes,
         page: f.page(),
@@ -802,12 +879,12 @@ fn agent_state(dir: &Path, f: &'static AgentFile, st: &State) -> FileView {
     } else if st.queue.iter().any(|t| t.key == k) {
         v.state = "queued";
         v.got = got;
-    } else if agent_file_is(&dest, f) {
+    } else if pair_file_is(voice, &dest, f) {
         v.state = "have";
         v.name = Some(f.dest.clone());
     } else if dest.exists() {
         v.state = "wrong";
-        v.why = Some(format!("{} is there, and reads as {}", f.dest, agent_file_describe(&dest)));
+        v.why = Some(format!("{} is there, and reads as {}", f.dest, pair_file_describe(voice, &dest)));
     } else if let Some(why) = st.failed.get(&k) {
         v.state = "failed";
         v.got = got;
@@ -1104,6 +1181,7 @@ mod tests {
             upscalers: upscalers.to_path_buf(),
             loras: models.join("loras"),
             agents: models.join("agents"),
+            voices: models.join("voices"),
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
         }))

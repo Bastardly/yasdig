@@ -304,7 +304,8 @@ mod tests {
             .iter()
             .filter(|f| f.runnable() && !f.fill_only())
             .map(|f| f.as_str())
-            .chain(VideoFamily::ALL.iter().map(|f| f.as_str()));
+            // A narration's words are read as typed: no Enhance.
+            .chain(VideoFamily::ALL.iter().filter(|f| **f != VideoFamily::Narrated).map(|f| f.as_str()));
         for f in fams {
             let (_, used, dropped) = select_enhance(&all, f);
             assert!(used.first().is_some_and(|u| u.starts_with("enhance-")), "{f} gets {used:?}");

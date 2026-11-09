@@ -10,7 +10,7 @@ import { shotState, rowMatches, sentRow, ALL } from './shots.js';
 import { editRefs } from './refs.js';
 import { chooseCastEntry } from './castpicks.js';
 import { editSounds } from './sounds.js';
-import { wireHints } from './hints.js';
+import { wireHints, hintFor } from './hints.js';
 import { choosePicture, upload } from './source-slot.js';
 import { linesText, parseLines } from './lines.js';
 import { partRows } from './parts.js';
@@ -317,6 +317,11 @@ function drawRowCast(el) {
 const framed = (el) => videoTakes().references && !!el.dataset.key;
 function castOnRow(el, c) {
   const take = videoTakes();
+  // A narrated shot takes a character's voice to be read in, and nothing else.
+  if (take.narrated) {
+    if (c.voice) el.dataset.audio = JSON.stringify([c.voice]);
+    return false;
+  }
   if (!take.references || framed(el)) c = { ...c, stem: null, voice: null };
   else if (!take.sounds) c = { ...c, voice: null };
   const refs = json(el, 'refs');
@@ -479,7 +484,7 @@ const wordsOf = (s) => ({
 });
 
 // What a model takes of a row (`sentRow`), from its `/video-models` entry.
-const takeOf = (m) => ({ references: !!m?.references, sounds: !!m?.sounds });
+const takeOf = (m) => ({ references: !!m?.references, sounds: !!m?.sounds, narrated: !!m?.narrated });
 
 // The wire's shape for a row, what a model that takes `take` takes of it; a
 // blank Frames box is the model's. Shot 1's image goes as the clip's `source`.
@@ -502,6 +507,7 @@ const chains = (c) => !!c && videoModels.some((m) => m.family === c.video?.famil
 // change, never as drawn).
 const clipTake = (c) => {
   const m = videoModels.find((v) => v.family === c?.video?.family);
+  if (!m && c?.video?.family === 'narrated') return { references: false, sounds: false, narrated: true };
   return m ? takeOf(m) : ALL;
 };
 
@@ -775,6 +781,49 @@ function rowsSeconds(m) {
 
 // The marks, each row's start switch, references button and ×, the footer's
 // press, and what the shots add up to.
+// A row on a narrated model is a picture, the words a voice reads, and the
+// voice: every row is a cut from its own picture, its length its speech's
+// (no Frames), and nothing a video model reads is shown. `a` is how many
+// sounds it holds (its own voice, if any; the rest read in the panel's
+// default voice). On any other model it puts back what it took.
+function narrateRow(el, i, on, a) {
+  const show = (sel, yes) => { for (const e of el.querySelectorAll(sel)) e.hidden = !yes; };
+  el.querySelector('.shotkeylabel').textContent = on ? 'Picture' : 'Start from image';
+  const said = el.querySelector('label[data-help="vprompt"]');
+  said.firstChild.textContent = on ? 'What the voice says' : 'Prompt';
+  const tip = said.querySelector('.hint');
+  if (tip) tip.dataset.tip = hintFor(on ? 'vnarrated' : 'vprompt');
+  const ta = el.querySelector('textarea');
+  ta.dataset.placeholder ??= ta.placeholder;
+  ta.placeholder = on ? 'The words read over this picture — as long as you like.' : ta.dataset.placeholder;
+  show('label[data-help="vshotframes"], .shotframes, .shotenhancerow', !on);
+  if (!on) return;
+  el.classList.add('fresh');
+  show('.shotstart, .shotrefs, .shotwhy, .shotsoundrows, .shotcastrow', false);
+  const key = el.dataset.key || '';
+  show('.shotkey, .shotkeylabel, .shotkeyup', true);
+  show('.shotkeythumb, .shotkeyclear', !!key);
+  if (key) el.querySelector('.shotkeythumb').src = `/outputs/${encodeURIComponent(key)}/thumb.png`;
+  const voice = el.querySelector('.shotsounds');
+  voice.hidden = false;
+  voice.textContent = a ? 'Own voice' : 'Voice…';
+  voice.title = a ? 'This shot reads in its own voice, not the default one'
+    : narratorStem() ? 'Read in the default voice (Generation) — or pick one for this shot alone'
+      : 'No default voice (Generation): pick one there, or one for this shot alone';
+}
+
+// The narrated clip's default voice: an output sound's stem, held on its
+// button, read by every shot with no voice of its own.
+const narratorStem = () => $('vnarrator').dataset.stem || '';
+
+function setNarrator(stem) {
+  const b = $('vnarrator');
+  b.dataset.stem = stem || '';
+  b.textContent = stem || 'Pick a voice…';
+  b.title = stem ? 'Pick another default voice' : '';
+  $('vnarratorclear').hidden = !stem;
+}
+
 function syncShots() {
   const m = currentVideoModel();
   const live = liveRows();
@@ -838,6 +887,7 @@ function syncShots() {
     x.title = i === lastDone ? 'Cut this shot off the clip — its text stays, to draw it again' : 'Remove this shot';
     const extras = el.querySelector('.shotboard');
     extras.innerHTML = board?.rowExtras(live.findIndex((r) => r.i === i), refsOk) ?? '';
+    narrateRow(el, i, !!m?.narrated, a);
   });
   const foot = st.action === 'extend' || st.action === 'redo';
   $('vextend').hidden = !foot || busy;
@@ -860,6 +910,9 @@ function syncShots() {
   if (!m) { note.textContent = ''; return; }
   if (busy) {
     note.textContent = 'A change to this clip is queued or drawing; its shots can be changed again when it lands.';
+  } else if (m.narrated && !st.action.match(/redo|extend/)) {
+    note.textContent = `${live.length || 1} shot${live.length > 1 ? 's' : ''}, each held as long as its words take to say. `
+      + 'A shot with no voice of its own is read in the last one above it.';
   } else if (live.length > 1 && !m.chains) {
     note.textContent = `${m.name} can't go on from a clip's last frame, so it makes one clip at a time — `
       + 'TI2V-5B, A14B and H3 can.';
@@ -951,7 +1004,10 @@ function syncVideoSummaries() {
   const name = $('vmodel').value;
   const picked = partsDeparted();
   const loras = videoLoras.get();
-  $('vsum-gen').textContent = name
+  $('vsum-gen').textContent = name && m?.narrated
+    ? `— ${$('vw').value}×${$('vh').value} · ${$('vfps').value} fps · ${$('vlang').selectedOptions[0]?.textContent ?? ''}`
+      + ` · ${narratorStem() ? `voice: ${narratorStem()}` : 'no default voice'}`
+    : name
     ? `— ${name} · ${$('vw').value}×${$('vh').value}${!$('vhiresrow').hidden && $('vhires').checked ? ' · Hi-res ×2' : ''} · ${$('vsteps').value} steps`
       + (picked.length ? ` · own ${picked.join(', ')}` : '')
       + (loras.length ? ` · LoRA: ${loras.map((l) => l.name.split('/').pop().replace(/\.[^.]+$/, '')).join(', ')}` : '') : '';
@@ -1063,10 +1119,27 @@ function syncVideo() {
   $('vhcfg').value = m.high_noise_cfg_scale ?? '';
   $('vhcfg').placeholder = m.cfg_scale;
   $('vclearmodel').hidden = !m.tuned;
+  syncNarrated(m, m.language, m.narrator);
   syncReady();
   syncVideoNote();
   syncShots();
   syncVideoSummaries();
+}
+
+// A narrated model keeps size, fps and a reading language; the rest of the
+// panel drives diffusion, which it doesn't run (`.unnarrated`, by CSS). The
+// select is filled from the model's list, the language it is set to picked.
+function syncNarrated(m, lang, narrator) {
+  const on = !!m?.narrated;
+  $('tab-video').classList.toggle('narrated', on);
+  $('vlangrow').hidden = !on;
+  if (!on) return;
+  setNarrator(narrator);
+  if ($('vfold-adv').open) $('vfold-adv').open = false;
+  const sel = $('vlang');
+  sel.innerHTML = (m.languages ?? []).map(([code, name]) =>
+    `<option value="${esc(code)}">${esc(name)}</option>`).join('');
+  sel.value = lang && (m.languages ?? []).some(([c]) => c === lang) ? lang : (m.languages?.[0]?.[0] ?? '');
 }
 
 // The boxes *Save as defaults* writes, as [wire key, box, kind]: what
@@ -1078,7 +1151,8 @@ const VIDEO_KNOBS = [
   ['flow_shift', 'vshift', 'blank'], ['high_noise_steps', 'vhsteps', 'moe'],
   ['high_noise_cfg_scale', 'vhcfg', 'moe'], ['vae_tiling', 'vtiling', 'check'],
   ['memory', 'vmemory', 'text'], ['negative_prompt', 'vnegative', 'text'],
-  ['hires', 'vhires', 'ltx'],
+  ['hires', 'vhires', 'ltx'], ['language', 'vlang', 'narrated'],
+  ['narrator', 'vnarrator', 'narrated'],
 ];
 
 async function saveVideoDefaults(clear) {
@@ -1088,6 +1162,12 @@ async function saveVideoDefaults(clear) {
   for (const [key, id, kind] of VIDEO_KNOBS) {
     if (clear) { values[key] = null; continue; }
     if (kind === 'moe' && !m.is_moe) continue;
+    if (kind === 'narrated') {
+      if (m.narrated) values[key] = (id === 'vnarrator' ? narratorStem() : $(id).value) || null;
+      continue;
+    }
+    // Nothing else of the diffusion's is shown on a narrated model.
+    if (m.narrated && !['width', 'height', 'fps'].includes(key)) continue;
     // Turbo's steps and CFG are its LoRA's: saved, unticking would put them back.
     if ((key === 'steps' || key === 'cfg_scale') && vTurboOn() && !clear) continue;
     // A new row's length: the first shot's.
@@ -1185,6 +1265,9 @@ function vidPayload(rows) {
     vae_tiling: $('vtiling').checked,
     memory: $('vmemory').value || null,
     hires: m && m.ltx ? $('vhires').checked : null,
+    language: m?.narrated ? $('vlang').value || null : null,
+    // Empty clears it: the button is the whole answer, the model's saved one included.
+    narrator: m?.narrated ? narratorStem() : null,
     parts: videoParts.picked(),
     // Always sent, `[]` included: the picker is the whole answer.
     loras: videoLoras.get(),
@@ -1331,6 +1414,10 @@ function cutLastShot() {
 // everywhere, and its rows if it is still on the stage.
 async function runOnClip(body, rows) {
   $('verr').textContent = '';
+  // Narrated: read in the voice and language the panel shows now.
+  if (currentVideoModel()?.narrated && clip?.video?.family === 'narrated') {
+    body = { ...body, narrator: narratorStem(), language: $('vlang').value || null };
+  }
   busyClips.add(body.id);
   began();
   try {
@@ -1599,6 +1686,7 @@ function applyClip(c) {
   // Memory is not restored, for the image tab's reason: it is how a run fits
   // on this machine now, not part of the clip.
   $('vmoe').hidden = !(currentVideoModel() || {}).is_moe;
+  syncNarrated(currentVideoModel(), v.language, v.narrator);
   $('vhsteps').value = v.high_noise_steps ?? '';
   $('vhcfg').value = v.high_noise_cfg_scale ?? '';
   $('vsentnote').textContent = '';
@@ -1774,6 +1862,17 @@ export function initVideo() {
         + 'them. The shot starts fresh, a new camera shot, since H3 cannot follow references and go on from '
         + 'a frame at once. Name who each one is, as the shot\'s words and lines do.', had.map((_, k) => was[k]?.name ?? ''));
       return;
+    } else if (e.target.closest('.shotsounds') && currentVideoModel()?.narrated) {
+      editSounds(JSON.parse(row.dataset.audio || '[]'), (stems) => {
+        row.dataset.audio = JSON.stringify(stems);
+        row.dataset.voices = '[]';
+        syncShots();
+        syncVideoSummaries();
+        keepDraft();
+      }, `A voice for shot ${i + 1} alone, instead of the default voice: a 2–15 s recording of one person `
+        + 'speaking clearly, with no music behind it — from Outputs, a cast member, or this computer.',
+      [], { max: 1, speakers: false });
+      return;
     } else if (e.target.closest('.shotsounds')) {
       editSounds(JSON.parse(row.dataset.audio || '[]'), (stems, voices) => {
         row.dataset.audio = JSON.stringify(stems);
@@ -1858,6 +1957,19 @@ export function initVideo() {
       syncVideoNote();
     });
   }
+  // The default voice: the rows' own sound dialog, one sound, no speakers.
+  const narratorPicked = (stem) => {
+    setNarrator(stem);
+    syncShots();
+    syncVideoSummaries();
+  };
+  $('vnarrator').addEventListener('click', () => {
+    editSounds([narratorStem()].filter(Boolean), (stems) => narratorPicked(stems[0] ?? ''),
+      'The voice the clip is read in: a 2–15 s recording of one person speaking clearly, with no music '
+        + 'behind it — from Outputs, a cast member, or this computer. A shot with a voice of its own reads '
+        + 'in that one instead.', [], { max: 1, speakers: false });
+  });
+  $('vnarratorclear').addEventListener('click', () => narratorPicked(''));
   $('vswapwh').addEventListener('click', () => {
     [$('vw').value, $('vh').value] = [$('vh').value, $('vw').value];
     $('vw').dispatchEvent(new Event('input', { bubbles: true }));

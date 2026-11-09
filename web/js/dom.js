@@ -126,3 +126,27 @@ export function followPointer(el, e, move, end) {
   for (const t of ['pointerup', 'pointercancel']) window.addEventListener(t, off, true);
   try { el.setPointerCapture(e.pointerId); } catch { /* the window listeners still end it */ }
 }
+
+// A clip's frames, decoded before any is drawn (so the first pass plays at the
+// clip's own rate). A narrated clip's shot is one still repeated — hard links
+// on disk — so with `stills` (its segments) one picture is decoded per shot and
+// the same object fills each of its frames: a minute at 12 fps is a handful of
+// pictures, not 720. A frame that won't decode is `null`.
+export async function decodeFrames(n, url, stills) {
+  const load = (k) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url(k);
+  });
+  if (!stills?.length) return Promise.all(Array.from({ length: n }, (_, k) => load(k)));
+  const out = new Array(n).fill(null);
+  await Promise.all(stills.map(async (s) => {
+    const img = await load(s.start);
+    for (let f = s.start; f < Math.min(n, s.start + s.frames); f++) out[f] = img;
+  }));
+  return out;
+}
+
+// The segments to decode one still from each, when the clip is narrated stills.
+export const stillsOf = (c) => (c?.video?.family === 'narrated' ? c.segments : null);

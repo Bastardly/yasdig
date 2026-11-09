@@ -96,7 +96,7 @@ function pages(e) {
 
 // The categories whose cards have no families to tell apart: one rail button
 // and one panel.
-const SINGLE = { upscaler: 'Upscalers', agent: 'Agent models' };
+const SINGLE = { upscaler: 'Upscalers', agent: 'Agent models', voice: 'Voice models' };
 
 // A family's first card, once each: the nav buttons, and the anchor
 // `openModels` scrolls to.
@@ -114,6 +114,8 @@ const categories = () => [
     where: 'Everything is here. Pick it under Output upscale, or in Refine & adjust’s Scale.' },
   { id: 'agent', title: 'Agent models', entries: view.agents ?? [],
     where: 'Everything is here. Pick it beside the Assistant panel’s Send button, on the Image or Video tab.' },
+  { id: 'voice', title: 'Voice models', entries: view.voices ?? [],
+    where: 'Everything is here. Pick Narrated stills in the Video tab’s model list.' },
 ].filter((c) => c.entries.length);
 
 function card(e, where) {
@@ -252,7 +254,7 @@ async function deleteItem(id, row) {
       ? `\n\n${many} ${it.families.length > 1 ? 'use' : 'uses'} it, and would need it again.` : '';
   const hand = it.named_by.length
     ? `\n\nmodels.toml names it in ${it.named_by.join(', ')}; yasdig doesn't edit that file.` : '';
-  const files = it.group === 'agents' ? ' (the model and its projector)' : '';
+  const files = it.group === 'agents' || it.group === 'voices' ? ' (the model and its projector)' : '';
   if (!confirm(`Delete ${it.name}${files} (${gb(it.bytes)})?${uses}${hand}\n\nThis can't be undone.`)) return;
   const err = row?.querySelector('[data-itemerr]');
   if (err) err.textContent = '';
@@ -296,6 +298,7 @@ function draw() {
       + 'by hand (docs/configuration.md, Get a model) into the folders each card names.';
   if (view.videos?.length) $('gmdir').innerHTML += ` Video models go in <code>${esc(view.video_dir)}</code>.`;
   if (view.agents?.length) $('gmdir').innerHTML += ` Agent models go in <code>${esc(view.agent_dir)}</code>.`;
+  if (view.voices?.length) $('gmdir').innerHTML += ` Voice models go in <code>${esc(view.voice_dir)}</code>.`;
   // What the recommendations were picked for, when the server could read it.
   if (view.vram) $('gmdir').innerHTML += ` <b>Recommended</b> is picked for this GPU’s ${vramGb(view.vram)}.`;
   if (!wsPanels) build();

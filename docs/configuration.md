@@ -23,10 +23,10 @@ not in their queue. **Help → Intro to models** explains what the files are and
 to find more.
 
 **Installed**, at the top of the same rail, lists what is already on disk by kind —
-checkpoints, video models, LoRAs, text encoders, VAEs, upscalers, agent models, and
-*Other* for files that can't be used here, with the reason — each with its size and
+checkpoints, video models, LoRAs, text encoders, VAEs, upscalers, agent models, voice
+models, and *Other* for files that can't be used here, with the reason — each with its size and
 the families it serves, read from its header like everything else. **Delete** removes
-the file (an agent's model and projector together, and any half-downloaded `.part`),
+the file (an agent's or a voice's model and projector together, and any half-downloaded `.part`),
 after a confirm that names the families that use it; it is refused while a job is
 queued or running, or while that file downloads. Settings saved for a deleted model
 are set aside in `user/model-settings.removed.toml` as on a start that finds a model
@@ -188,6 +188,17 @@ there and what each file is.
 | Ministral 3 14B | 11 GB: for 16–24 GB | [mistralai/Ministral-3-14B-Instruct-2512-GGUF](https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512-GGUF): the same two |
 | Gemma 4 26B A4B | 19 GB, quick for its size (4B active) | [unsloth/gemma-4-26B-A4B-it-GGUF](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF): `gemma-4-26B-A4B-it-UD-Q4_K_M.gguf` and `mmproj-F16.gguf` |
 
+**Voice models** read a [narrated clip](guide.md#narrated-stills)'s words aloud. Like an
+agent, one is a language model and its projector, both GGUF, in a folder of their own,
+here under `models/voices/`; the projector is one with an audio generator
+(`clip.has_gen_audio_encoder`), and the model's architecture is a text-to-speech one
+llama.cpp runs (`qwen3tts`). Models → *Voice models* fetches the card into its own folder.
+Each voice model installed adds a *Narrated stills* entry to the Video tab's model list.
+
+| card | about | files |
+|---|---|---|
+| Qwen3-TTS 1.7B | 3 GB on the card; clones the voice of a 2–15 s recording; ten languages | [ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF](https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF): the `Q8_0` model and the `Q8_0` mmproj |
+
 If a model runs out of memory, the error says which memory and when, and offers the
 ways out as buttons — chiefly the **Memory** setting in the *Models* fold: *System RAM*
 keeps the weights in RAM and leaves the card for the work, *Stream from SSD* re-reads
@@ -295,7 +306,9 @@ where it says something:
   the models dir). See [Upscalers](guide.md#upscalers).
 - `[sd].agent_dir` — folder of the Assistant's models (default `agents/` inside the
   models dir), left out of the checkpoint scan. See [Agent models](#get-a-model).
-- `[llm].binary` — path to the agent's driver, `yasdig-llm`. Leave it out to use the one
+- `[sd].voice_dir` — folder of voice models for narrated clips (default `voices/` inside
+  the models dir), left out of the checkpoint scan.
+- `[llm].binary` — path to the agent's driver (which also speaks narrated clips), `yasdig-llm`. Leave it out to use the one
   built into a release executable; a checkout sets it to `llama.cpp/build-yasdig/bin/`.
 - The port and address are not here any more: they are in `startup.toml`, beside this
   file (see [Run](#run)). A `[server]` block left over from before is copied there on
