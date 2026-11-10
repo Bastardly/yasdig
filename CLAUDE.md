@@ -24,6 +24,7 @@ cargo run --release -- fsr-selftest         # full wgpu path, no sd.cpp or check
 cargo run --release -- fsr in.png out.png [scale] [sharpness] [clarity]
 cargo run --release -- upscale in.png out.png <model> [factor]  # model enlarge + consistency dB
 cargo run --release -- sr-selftest          # `src/sr/` shader ops vs CPU references, matmul TFLOPS
+cargo run --release -- agent-check [agent]  # seven scored agent turns (`agent/check.rs`): run before and after a skill edit
 cargo run --release -- fold-scales f.gguf   # fold a scaled-fp8 GGUF's scales into its weights, in place
 node --test 'web/js/*.test.js'              # prompt-weight maths, OOM box choices, module graph evaluates.
                                             #   Node's built-in runner; no npm/package.json; runtime needs no Node.
@@ -892,6 +893,14 @@ template, the JSON-schema grammar and the thinking split.
   `llama_process`; the CMake options `llm/CMakeLists.txt` forces (`LLAMA_BUILD_MTMD`,
   `LLAMA_OPENSSL`, `LLAMA_SUBPROCESS`, `MTMD_VIDEO`) and the targets `llama-common`, `mtmd`.
   `docs/building.md`'s clone tag and `release.yml` together.
+- **A turn's first try reserves `n_predict(mode)`, not the grammar's worst case**
+  (`schema::max_tokens`: a chat draw can run to ~1,600 tokens, a 20-shot story past
+  5,000): the driver refuses `prompt + n_predict > n_ctx` up front, so every token
+  reserved is history lost. A reply that stops on `length` is run once more with
+  `max_tokens` (capped at half the context, history refitted); Enhance re-asks once.
+- **`Msg::Agent.did` is the reply's `action` word**, replayed in `context::messages`
+  between `notes` and `reply` (the order a reply is written in). `action` is the id of
+  an escalation, an older field.
 - **`serde_json`'s `preserve_order` is load-bearing**: llama.cpp's grammar follows the
   schema's property order, and `notes` (the scratchpad) must come first.
 
@@ -1835,6 +1844,15 @@ from `family` goes on `VideoModelDto`.
     Absent `Origin` passes — the takeover and every older build send none, and send
     `Host: localhost` with no port, so `Host` is compared by name only. A destructive
     default must stay off: `/shutdown` clears only on an explicit `"clear": true`.
+    **Bound to every interface, `Host` must be a name public DNS can't hold** (an IP
+    literal, one label, `.local`) or one of `startup.toml`'s `[server] names`
+    (`http::host_allowed`); the 403 says which name to add.
+  - **The page carries a CSP** (`web::HEADERS`: `script-src 'self'`), the net under
+    the hand-written `esc`s. So **no inline script, `on*=` attribute or `javascript:`
+    URL anywhere**, in `index.html` or in a string a module builds — it would silently
+    not run (`the_pages_headers_are_whole_lines_and_the_page_fits_its_policy` covers
+    the markup only). Styles keep `'unsafe-inline'`. Every answer is `nosniff` and
+    `Cross-Origin-Resource-Policy: same-origin`.
   - **The read timeout covers the request only** (`set_read_timeout(None)` once the
     body is in); a minutes-long render waits on a channel, not the socket. The 413
     drains the body, or the reset swallows it.
@@ -1859,7 +1877,16 @@ from `family` goes on `VideoModelDto`.
   (`sandbox::TURN_OFF`).
   - **Linux**: seccomp in `pre_exec` (namespaces fail on Ubuntu's AppArmor). The
     filter's jump offsets are checked by a BPF interpreter in its tests — renumber
-    them with it.
+    them with it. **And Landlock, writes only** (`imp::landlock`): the ruleset is made
+    in the parent per spawn (it allocates) and entered in `pre_exec` before the
+    filter. Writable: the `write` roots, symlinked folders under them (`linked_dirs`,
+    three levels), `/dev` (open only) and `/dev/shm`. Reads are deliberately open (a
+    driver's ICDs and configs differ per distro). **A new place a child writes must
+    be under a root** — as on Windows; `XDG_CACHE_HOME`/`MESA_SHADER_CACHE_DIR` are
+    pointed at `work/gpu-cache/` for that. Best effort: no Landlock in the kernel
+    means the network block alone, and `doctor` says which. Path-named `AF_UNIX`
+    (the session D-Bus) is still reachable; closing it means refusing `connect` in
+    the filter, untried on a GPU run.
   - **Windows**: an AppContainer (`yasdig.sd-cli`, zero capabilities). `confine`
     rewrites the command into `yasdig.exe sandbox-run <sd-cli> <args…>`, since std
     can't pass process attributes on stable; **the `sandbox::HELPER` dispatch must

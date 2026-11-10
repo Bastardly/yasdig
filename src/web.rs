@@ -132,13 +132,46 @@ pub fn serve(conn: &mut http::Connection, web_dir: Option<&Path>, file: &WebFile
         },
         None => std::borrow::Cow::Borrowed(file.bytes),
     };
-    conn.respond_with(200, file.content_type, "Cache-Control: no-cache
-", &body)
+    conn.respond_with(200, file.content_type, HEADERS, &body)
 }
+
+/// The page's own headers: `no-cache` (above), and a content security policy.
+///
+/// The page draws what it did not write — a dropped PNG's settings, model
+/// file names, GGUF metadata, sd-cli's errors, the agent's replies — through
+/// `innerHTML`, each escaped by hand (`esc`). The server has no login, so a
+/// script that got through one missed `esc` would have every route. The
+/// policy is the net under that: scripts run only from this server's own
+/// files, never inline and never from a string, so injected markup is inert.
+///
+/// It can be this strict because `index.html` has no inline script, handler
+/// or `style` attribute. Styles keep `'unsafe-inline'` (the modules build a
+/// few `style="…"` strings, and a style can't call a route). `data:` and
+/// `blob:` are the results (base64 in JSON), the previews and the exports.
+const HEADERS: &str = "Cache-Control: no-cache\r\n\
+Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' data: blob:; \
+object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'\r\n";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Header lines end in CRLF (one once ended in a bare LF), and the page
+    /// has nothing the policy would block: no inline script or handler.
+    #[test]
+    fn the_pages_headers_are_whole_lines_and_the_page_fits_its_policy() {
+        assert!(HEADERS.ends_with("\r\n"));
+        for line in HEADERS.split_inclusive('\n') {
+            assert!(line.ends_with("\r\n") && !line[..line.len() - 2].contains(['\r', '\n']), "{line:?}");
+        }
+        let page = include_str!("../web/index.html");
+        assert_eq!(page.matches("<script").count(), 1, "one module script, no inline ones");
+        assert!(page.contains(r#"<script type="module" src="js/app.js"></script>"#));
+        for handler in [" onclick=", " onchange=", " oninput=", " onload=", " onerror=", "javascript:"] {
+            assert!(!page.contains(handler), "{handler} would be blocked by the policy");
+        }
+    }
 
     /// The whitelist is the whole traversal guard on this route, so the two
     /// things it must do are: answer the names in the table, and answer nothing

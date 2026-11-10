@@ -414,8 +414,16 @@ The port is in `startup.toml`, beside `models.toml` — created on the first sta
 | any other yasdig — another folder, or an older build of this one | asks it to close (without its clear-on-close), then takes the port |
 | any other program | leaves it alone, and uses the next free port, saying which |
 
+With `host = "0.0.0.0"` the page is open to your network, and answers to this
+computer's IP address, a one-word name (`http://studio:8080/`) and `.local` names. Any
+other name you reach it by goes in `names = ["studio.lan"]` under `[server]`; a request
+for a name not listed is refused, saying so. This is what stops a website you visit
+from pointing a name of its own at your yasdig.
+
 `startup.toml` also holds `[sandbox] enabled`: sd-cli runs with no network access
-(seccomp on Linux, an AppContainer on Windows). Set it to `false`, then restart, only
+(seccomp on Linux, an AppContainer on Windows), and may write only inside yasdig's
+`work/` and model folders (on Linux through Landlock, kernel 5.13 or later; a model
+folder that is a symlink to another place is included). Set it to `false`, then restart, only
 when sd-cli can't run that way on this computer — `yasdig doctor` says whether it
 does. The environment variable `YASDIG_NO_SANDBOX=1` does the same for one start. A
 `startup.toml` from before this has no `[sandbox]` table, which means on.

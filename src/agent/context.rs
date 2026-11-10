@@ -210,6 +210,16 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                 "\n\nThe prompt is not yours to change; pictures are drawn from the current one."
             });
             if turn.mode == Mode::Chat {
+                // On its own, not only as `Now:` at the end of a settings
+                // line: `agent-check` had a 26B model read past it there and
+                // ask for the prompt instead of comparing on it.
+                match t.knob("prompt").and_then(|k| k.value.as_str()).map(str::trim).filter(|p| !p.is_empty()) {
+                    Some(p) => s.push_str(&format!(
+                        "\n\nThe current prompt, already set — what \"this prompt\", \"it\" or \"the picture\" mean \
+                         when the person names no other. Never ask for it:\n{p}"
+                    )),
+                    None => s.push_str("\n\nThere is no prompt yet."),
+                }
                 s.push_str(&format!(
                     "\n\nWhat you do this turn is your `action`, chosen from what the person asked. Start \
                      `notes` by naming it: talk, a drawing, a description, an improvement or a comparison.\n\
@@ -338,11 +348,19 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                 }
                 push(&mut out, Role::User, parts);
             }
-            Msg::Agent { notes, reply, prompt, .. } => {
-                let mut v = serde_json::json!({ "notes": notes, "reply": reply });
+            Msg::Agent { notes, reply, prompt, did, .. } => {
+                // In the order a reply is written (`preserve_order`): notes,
+                // what it chose to do, then the rest. Without the action a
+                // model never saw that it had drawn or proposed a comparison,
+                // and its own history had another shape than its reply.
+                let mut v = serde_json::json!({ "notes": notes });
+                if let Some(a) = did {
+                    v["action"] = serde_json::Value::String(a.clone());
+                }
                 if let Some(p) = prompt {
                     v["prompt"] = serde_json::Value::String(p.clone());
                 }
+                v["reply"] = serde_json::Value::String(reply.clone());
                 push(&mut out, Role::Assistant, vec![Part::Text { text: v.to_string() }]);
             }
             Msg::Batch { round, summary, images, .. } => {
@@ -583,7 +601,7 @@ mod tests {
         c.messages = vec![
             Msg::User { n: 0, ms: 0, text: "a fox in a hat".into(), images: vec![] },
             Msg::Agent { n: 1, ms: 0, mode: Mode::Plan, reply: "On it.".into(), notes: "need hat".into(), checks: vec![],
-                         keepers: vec![], passed: vec![], changes: vec![], action: None, prompt: None, negative: None,
+                         keepers: vec![], passed: vec![], changes: vec![], action: None, did: Some("draw".into()), prompt: None, negative: None,
                          skills: vec![], stats: Default::default() },
             Msg::Batch { n: 2, ms: 0, round: 1, settings_rev: 0, summary: "prompt 'a fox', CFG 6".into(), size: 2, images: vec![img("a"), img("b")] },
             Msg::Note { n: 3, ms: 0, text: "Stopped.".into() },
@@ -622,6 +640,8 @@ mod tests {
         let last = &m[3].content;
         let text: String = last.iter().filter_map(|p| match p { Part::Text { text } => Some(text.as_str()), _ => None }).collect();
         assert!(text.contains("Round 1") && text.contains("Stopped.") && text.contains("try again"), "{text}");
+        // Its own turn comes back in the order it was written, action included.
+        assert!(matches!(&m[2].content[0], Part::Text { text } if text == r#"{"notes":"need hat","action":"draw","reply":"On it."}"#));
     }
 
     #[test]
@@ -658,6 +678,7 @@ mod tests {
         let blind = system(&toolkit(), &turn(Mode::Chat, vec![]));
         assert!(blind.contains("\"improve\"") && blind.contains("\"compare\"") && !blind.contains("\"describe\""));
         assert!(blind.contains("What is the best CFG?") && blind.contains("Start `notes` by naming it"));
+        assert!(blind.contains("The current prompt, already set") && blind.contains("Never ask for it:\na fox"));
         let seeing = system(&toolkit(), &turn(Mode::Chat, vec!["/w/a.png".into()]));
         assert!(seeing.contains("\"describe\""));
     }

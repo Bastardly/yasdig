@@ -1641,6 +1641,7 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
         passed,
         changes: change_ids,
         action: action_id,
+        did: r.action.clone().filter(|_| matches!(mode, Mode::Chat | Mode::Critique)),
         prompt: r.prompt.map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
         negative: r.negative.map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
         skills,

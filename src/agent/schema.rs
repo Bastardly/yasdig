@@ -197,6 +197,44 @@ pub fn board_models(t: &Toolkit) -> Option<Vec<String>> {
     (t.knob("model").is_some_and(|k| k.allowed) && t.models.len() > 1).then(|| t.model_names())
 }
 
+/// The most characters a reply under `schema` can run to: every string at its
+/// `maxLength`, every array full, the longest `anyOf` branch. Keys, quotes
+/// and punctuation are counted roughly.
+fn max_chars(schema: &Value) -> usize {
+    if let Some(branches) = schema.get("anyOf").and_then(Value::as_array) {
+        return branches.iter().map(max_chars).max().unwrap_or(0);
+    }
+    if let Some(names) = schema.get("enum").and_then(Value::as_array) {
+        return names.iter().map(|n| n.to_string().len()).max().unwrap_or(0);
+    }
+    if let Some(c) = schema.get("const") {
+        return c.to_string().len();
+    }
+    match schema.get("type").and_then(Value::as_str) {
+        Some("string") => schema.get("maxLength").and_then(Value::as_u64).unwrap_or(1000) as usize + 2,
+        Some("array") => {
+            let n = schema.get("maxItems").and_then(Value::as_u64).unwrap_or(8) as usize;
+            2 + n * (schema.get("items").map_or(0, max_chars) + 1)
+        }
+        Some("object") => {
+            2 + schema.get("properties").and_then(Value::as_object).map_or(0, |p| {
+                p.iter().map(|(k, v)| k.len() + 4 + max_chars(v)).sum()
+            })
+        }
+        // A number, a boolean, null.
+        _ => 12,
+    }
+}
+
+/// What a reply under `schema` may cost at its longest, in tokens (the same
+/// three characters a token `context::text_tokens` counts with). A turn is
+/// first run with less — a reply is usually a fraction of this, and every
+/// token reserved for it is one the history loses — and given this much only
+/// when the first try was cut off.
+pub fn max_tokens(schema: &Value) -> u32 {
+    (max_chars(schema) / 3 + 16) as u32
+}
+
 /// The reply's schema for one turn. `batch` is how many pictures the turn
 /// shows (a critique's round, a chat's attachments) — for a verdict, how many
 /// values were compared — and `checks` how many questions each is judged by.
@@ -388,6 +426,19 @@ mod tests {
     /// A chat reply's two shapes: talking, and drawing.
     fn branches(s: &Value) -> (&Value, &Value) {
         (&s["anyOf"][0], &s["anyOf"][1])
+    }
+
+    /// The grammar allows more than a turn's first try reserves: a drawing
+    /// with every text at its cap is past 1024 tokens, which is why a cut-off
+    /// reply is run again with `max_tokens`.
+    #[test]
+    fn the_longest_reply_is_counted_off_the_schema() {
+        let s = json!({ "type": "object", "properties": { "a": text(300), "b": { "type": "array", "items": text(30), "maxItems": 3 } } });
+        assert_eq!(max_chars(&s), 2 + (1 + 4 + 302) + (1 + 4 + 2 + 3 * 33));
+        assert_eq!(max_chars(&json!({ "anyOf": [text(10), text(50)] })), 52);
+        let t = toolkit(&Rules::default(), &Locks::default());
+        assert!(max_tokens(&output(Mode::Chat, &t, 0, 0, false)) > 1024);
+        assert!(max_tokens(&output(Mode::Verdict, &t, 3, 2, false)) < 1024);
     }
 
     #[test]

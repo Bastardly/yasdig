@@ -473,6 +473,10 @@ pub enum Msg {
         changes: Vec<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<u64>,
+        /// The reply's own `action` word ("draw", "compare", "done"…), where
+        /// its mode has one: what a later turn is shown this one did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        did: Option<String>,
         /// A Describe turn's prompt.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt: Option<String>,

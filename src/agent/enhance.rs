@@ -408,6 +408,8 @@ pub fn run(cfg: &Config, monitor: &Monitor, req: &Request) -> Result<Enhanced> {
         }
         r => r?,
     };
+    // Cut off: a model that rambled. Once more, on another seed.
+    let reply = if reply.stats.stop == "length" { runner.run(&ask(req), &model.label, "enhance")? } else { reply };
     if reply.stats.stop == "length" {
         bail!("the enhanced prompt ran past {N_PREDICT} tokens and was cut off");
     }

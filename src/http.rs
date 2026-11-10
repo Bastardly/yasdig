@@ -93,14 +93,15 @@ pub struct Request {
 ///   `Host: localhost` with none, and the name is what an attacker can't fake.
 ///
 /// `bound` is `startup.toml`'s host. Bound to every interface (`0.0.0.0`,
-/// `::`), the server is reachable by whatever name the LAN uses for this
-/// machine, so `Host` is not checked — the `Origin` rule still is.
-pub fn allowed(method: &str, origin: Option<&str>, host: Option<&str>, bound: &str) -> bool {
-    let any_host = matches!(bound, "0.0.0.0" | "::" | "[::]");
-    if let Some(h) = host {
-        if !any_host && !is_local_name(hostname(h), bound) {
-            return false;
-        }
+/// `::`), the server is reached by whatever the LAN calls this machine — and
+/// rebinding works there too, with the page's whole API, since the hostile
+/// page's `Origin` matches its `Host`. What rebinding needs is a name in
+/// public DNS, so the names taken are the ones that can't be one: an IP
+/// address, a single label (`studio`), mDNS's `.local`, and `names`,
+/// `startup.toml`'s own list for anything else (`studio.lan`).
+pub fn allowed(method: &str, origin: Option<&str>, host: Option<&str>, bound: &str, names: &[String]) -> bool {
+    if !host_allowed(host, bound, names) {
+        return false;
     }
     if method == "GET" {
         return true;
@@ -111,6 +112,23 @@ pub fn allowed(method: &str, origin: Option<&str>, host: Option<&str>, bound: &s
         // `Host` the browser sent with it.
         Some(o) => host.is_some_and(|h| o.eq_ignore_ascii_case(&format!("http://{h}"))),
     }
+}
+
+/// The `Host` half of [`allowed`], apart so a refusal can say which it was.
+pub fn host_allowed(host: Option<&str>, bound: &str, names: &[String]) -> bool {
+    let Some(h) = host else {
+        return true;
+    };
+    let name = hostname(h);
+    if is_local_name(name, bound) || names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+        return true;
+    }
+    let any_host = matches!(bound, "0.0.0.0" | "::" | "[::]");
+    any_host
+        && (name.parse::<std::net::Ipv4Addr>().is_ok()
+            || name.strip_prefix('[').and_then(|n| n.strip_suffix(']')).is_some_and(|n| n.parse::<std::net::Ipv6Addr>().is_ok())
+            || (!name.is_empty() && !name.contains('.'))
+            || name.len() > 6 && name[name.len() - 6..].eq_ignore_ascii_case(".local"))
 }
 
 /// `Host` without its port. `[::1]:8080` keeps its brackets.
@@ -242,6 +260,10 @@ impl Connection {
         self.respond_with(status, content_type, "", body)
     }
 
+    /// Every answer says `nosniff` (a PNG or JSON is never guessed to be a
+    /// page) and `Cross-Origin-Resource-Policy: same-origin`: another website
+    /// can't embed an output as an `<img>` or probe which stems exist.
+    ///
     /// `extra` is zero or more complete header lines, each ending in CRLF. It
     /// exists for the two static files, which are the only responses that want
     /// a caching header; everything else is generated per request.
@@ -268,6 +290,8 @@ impl Connection {
              Content-Type: {content_type}\r\n\
              Content-Length: {}\r\n\
              Connection: close\r\n\
+             X-Content-Type-Options: nosniff\r\n\
+             Cross-Origin-Resource-Policy: same-origin\r\n\
              {extra}\r\n",
             body.len()
         );
@@ -281,7 +305,7 @@ impl Connection {
 
 #[cfg(test)]
 mod tests {
-    use super::{allowed, body_limit, Connection, MAX_BODY, MAX_UPLOAD, READ_TIMEOUT};
+    use super::{body_limit, Connection, MAX_BODY, MAX_UPLOAD, READ_TIMEOUT};
     use std::io::{Read, Write};
 
     /// Serve one request on a fresh port: `answer` gets the connection after
@@ -309,6 +333,7 @@ mod tests {
     #[test]
     fn only_this_servers_own_page_may_post() {
         let lo = "127.0.0.1";
+        let allowed = |m, o, h, bound| super::allowed(m, o, h, bound, &[]);
         // The page.
         assert!(allowed("POST", Some("http://127.0.0.1:8080"), Some("127.0.0.1:8080"), lo));
         assert!(allowed("POST", Some("http://localhost:8081"), Some("localhost:8081"), lo));
@@ -326,12 +351,32 @@ mod tests {
         assert!(!allowed("POST", Some("http://evil.example:8080"), Some("evil.example:8080"), lo));
         // A cross-site GET can't read the answer without CORS, so it passes.
         assert!(allowed("GET", Some("https://evil.example"), Some("127.0.0.1:8080"), lo));
-        // Open to the LAN: any name for this machine, still same-origin only.
-        let any = "0.0.0.0";
-        assert!(allowed("POST", Some("http://studio.lan:8080"), Some("studio.lan:8080"), any));
-        assert!(!allowed("POST", Some("https://evil.example"), Some("studio.lan:8080"), any));
+        // A LAN address is not a name for a server kept to this computer.
+        assert!(!allowed("GET", None, Some("192.168.1.20:8080"), lo));
         // A configured name is local too.
         assert!(allowed("GET", None, Some("studio.lan:8080"), "studio.lan"));
+    }
+
+    /// Open to the LAN, rebinding is still refused: the names taken are the
+    /// ones public DNS can't hold, and the ones `startup.toml` lists.
+    #[test]
+    fn open_to_the_network_takes_only_names_that_cannot_be_rebound() {
+        let any = "0.0.0.0";
+        fn allowed(m: &str, o: Option<&str>, h: Option<&str>) -> bool {
+            super::allowed(m, o, h, "0.0.0.0", &["studio.lan".to_string()])
+        }
+        for h in ["192.168.1.20:8080", "[fe80::1]:8080", "studio:8080", "Studio.local:8080", "studio.lan:8080", "localhost:8080"] {
+            let origin = format!("http://{h}");
+            assert!(allowed("POST", Some(&origin), Some(h)), "{h}");
+        }
+        for h in ["evil.example:8080", "127.0.0.1.evil.example:8080", "studio.lan.evil.example", ".local", "evil.local.example"] {
+            assert!(!allowed("GET", None, Some(h)), "{h}");
+            let origin = format!("http://{h}");
+            assert!(!allowed("POST", Some(&origin), Some(h)), "{h}");
+        }
+        // Still same-origin only.
+        assert!(!allowed("POST", Some("https://evil.example"), Some("studio.lan:8080")));
+        assert!(!super::allowed("GET", None, Some("studio.lan:8080"), any, &[]));
     }
 
     /// The 413 has to reach the browser. Closing with the body unread sends a
@@ -420,6 +465,8 @@ mod tests {
              Content-Type: text/css; charset=utf-8\r\n\
              Content-Length: 3\r\n\
              Connection: close\r\n\
+             X-Content-Type-Options: nosniff\r\n\
+             Cross-Origin-Resource-Policy: same-origin\r\n\
              Cache-Control: no-cache\r\n\
              \r\na{}"
         );

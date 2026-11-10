@@ -4,7 +4,12 @@ yasdig is a local web server; the page is one client of these routes, and anythi
 
 ## Command-line tools
 
-Six subcommands, all of which skip the server. `llm-selftest` runs one agent turn —
+Seven subcommands, all of which skip the server. `agent-check` asks an agent model
+seven fixed things through the Assistant's real instructions — draw, count, answer
+without drawing, propose a session, propose a comparison, write checks, judge a test
+picture — and says which it got right: what that model can be trusted with, and whether
+an edit to a skill in `user/skills/` made it better or worse (the seeds are fixed, so
+two runs agree). `llm-selftest` runs one agent turn —
 the driver, its sandbox, the GPU and the reply grammar — with an agent model (its name,
 or `-` for the first installed) and, given a picture, asks it to describe it; it prints
 the reply, whether it was the asked-for JSON, and the load, read and write times. `upscale` runs the initial enlarge
@@ -20,6 +25,7 @@ yasdig doctor [models.toml]      # run the startup checks and report, without st
 yasdig upscale in.png out.png <model> [factor=2.0] [models.toml]  # the model enlarge alone
 yasdig fold-scales <file.gguf>...  # fold a scaled-fp8 GGUF's scales into its weights
 yasdig llm-selftest [agent|-] [picture.png] [models.toml]  # one agent turn, no server
+yasdig agent-check [agent|-] [models.toml]  # seven scored turns: what this agent model gets right
 yasdig fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]  # no colour knobs: UI only
 yasdig fsr-selftest [out.png]    # synthesize patterns and check the filters
 yasdig sr-selftest               # the upscaler shaders against CPU references, plus speed

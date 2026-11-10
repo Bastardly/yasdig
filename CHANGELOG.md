@@ -17,12 +17,30 @@ What changed in each release of yasdig. Each release's executables are on the
   Chatterbox Turbo (English, the most natural reader), Chatterbox Multilingual (23
   languages) and Qwen3-TTS 1.7B (ten languages, flatter). About 2–3 GB on the card.
 
+- `yasdig agent-check [agent]`: seven fixed requests put to an Assistant model through
+  its real instructions, scored — which of drawing, counting, comparing, writing checks
+  and judging a picture that model gets right.
+
 ### Changed
 
 - The Assistant's llama.cpp is now a later commit (past v0.9.0), for Chatterbox.
+- **Linux: the programs that load models can no longer write outside yasdig's folders**
+  (Landlock, kernel 5.13+), beside having no network. Their GPU shader cache moves to
+  `work/gpu-cache/`, so the first run after this compiles its shaders again.
+- **Opened to the network** (`host = "0.0.0.0"`), the page now answers only to an IP
+  address, a one-word name, a `.local` name, or a name listed in `names` under
+  `[server]` in `startup.toml` — a website could otherwise point a name of its own at
+  it. If you reach yasdig as `something.lan`, add that name.
+- The page is served with a content security policy: only yasdig's own scripts run on
+  it, whatever text a model file, a PNG or the Assistant puts on screen.
+- An Assistant reply that was cut off for length is tried once more with room for the
+  longest reply its format allows, instead of failing the turn; Enhance tries again too.
+- The Assistant is shown what it did in its earlier turns (drew, proposed a comparison),
+  not only what it said.
 
 ### Fixed
 
+- The page's files were sent with one malformed header line (a bare line feed).
 - A clip past 1000 frames played and saved its frames out of order (frame 1000 sorted
   before 101).
 

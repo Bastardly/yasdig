@@ -18,7 +18,10 @@ How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the detail
 - **sd-cli has no network** (Linux and Windows). It parses downloaded model files in
   C++, so a crafted file exploiting a loader bug is the one way a model could act.
   On Linux a seccomp filter installed between fork and exec (`src/sandbox.rs`)
-  refuses it every internet socket, for itself and anything it starts. On Windows it
+  refuses it every internet socket, for itself and anything it starts, and Landlock
+  (Linux 5.13+) lets it write only under `work/` and the model folders — reads stay
+  open, since a GPU driver's files are in different places on every distro. Its shader
+  cache moves to `work/gpu-cache/` for that reason. On Windows it
   runs in an AppContainer with no capabilities — no internet, LAN or loopback — and
   can open only the folders yasdig grants it (`work/`, the model folders, sd-cli's
   own); yasdig re-runs itself as a small launcher (`yasdig sandbox-run`) to start it

@@ -18,6 +18,11 @@
 //! is `EACCES`. `io_uring_setup` is refused too, since `IORING_OP_SOCKET`
 //! creates sockets without a `socket` syscall. sd-cli uses none of these.
 //!
+//! **And it writes only inside yasdig's folders** (Landlock, `imp::landlock`,
+//! Linux 5.13+): the same loader bug could otherwise write a shell profile and
+//! run unconfined at the next login. Reads are left open, and so are path-named
+//! `AF_UNIX` sockets (the session D-Bus is one), which neither filter reaches.
+//!
 //! **Windows: an AppContainer with no capabilities** — Windows' own app
 //! sandbox, and the only one that needs no admin rights (a WFP filter or a
 //! firewall rule do; a job object can't touch the network). With no
@@ -94,8 +99,15 @@ pub fn kernel_ready() -> Option<bool> {
     imp::kernel_ready()
 }
 
+/// Whether the child's writes are held to its [`Root`]s as well: always in
+/// the Windows container; on Linux where the kernel has Landlock (5.13+).
+pub fn files_confined() -> bool {
+    imp::files_confined()
+}
+
 /// A folder sd-cli must reach from inside: Windows grants it to the container
-/// (with everything below it); Linux has no file side.
+/// (with everything below it); on Linux the writable ones are the only places
+/// it may write (`imp::landlock`), and reads are not confined.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Root {
     pub path: PathBuf,
@@ -223,9 +235,206 @@ mod imp {
         /* 13 */ op(RET, 0, 0, libc::SECCOMP_RET_KILL_PROCESS),
     ];
 
-    pub fn confine(mut cmd: Command, _: &[super::Root]) -> anyhow::Result<Command> {
-        apply(&mut cmd);
+    pub fn confine(mut cmd: Command, roots: &[super::Root]) -> anyhow::Result<Command> {
+        // The drivers' shader caches, moved inside: `~/.cache` is outside what
+        // the child may write, and without a cache Mesa compiles every
+        // pipeline again on every run. Under `work/`, the first root.
+        if let Some(work) = roots.iter().find(|r| r.write) {
+            let cache = work.path.join("gpu-cache");
+            if std::fs::create_dir_all(&cache).is_ok() {
+                cmd.env("XDG_CACHE_HOME", &cache).env("MESA_SHADER_CACHE_DIR", &cache);
+            }
+        }
+        let mut writable: Vec<std::path::PathBuf> = roots.iter().filter(|r| r.write).map(|r| r.path.clone()).collect();
+        for at in 0..writable.len() {
+            let root = writable[at].clone();
+            linked_dirs(&root, 0, &mut writable);
+        }
+        let writable: Vec<&std::path::Path> = writable.iter().map(|p| p.as_path()).collect();
+        let files = landlock::ruleset(&writable);
+        apply(&mut cmd, files);
         Ok(cmd)
+    }
+
+    /// Folders reached through a symlink under `dir` — `models/sdxl` pointing
+    /// at another program's model folder is common — which Landlock, going by
+    /// where a file really is, would otherwise leave read-only: Convert
+    /// writes beside its source. Three levels down, by `d_type` (no stat per
+    /// file), so `work/`'s thousands of frames cost nothing.
+    fn linked_dirs(dir: &std::path::Path, depth: usize, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let Ok(t) = e.file_type() else {
+                continue;
+            };
+            if t.is_symlink() {
+                if let Ok(target) = std::fs::canonicalize(e.path()) {
+                    if target.is_dir() && !out.contains(&target) && out.len() < 64 {
+                        out.push(target.clone());
+                        if depth < 2 {
+                            linked_dirs(&target, depth + 1, out);
+                        }
+                    }
+                }
+            } else if t.is_dir() && depth < 2 {
+                linked_dirs(&e.path(), depth + 1, out);
+            }
+        }
+    }
+
+    /// The file side: Landlock (Linux 5.13+), which like seccomp needs only
+    /// `no_new_privs`.
+    ///
+    /// **Writes only.** The child may create, change, rename and delete only
+    /// under the folders it is handed (`Config::sandbox_roots`: `work/` and
+    /// the model folders), plus the device nodes a GPU driver opens
+    /// read-write. Without it a loader bug's code could not phone home but
+    /// could still write `~/.bashrc` and run unconfined at the next login.
+    /// Reads stay open: a driver reads ICDs, configs and libraries from
+    /// places that differ per distro, and a whitelist that misses one is a
+    /// GPU that silently isn't found.
+    ///
+    /// Being in a Landlock domain also stops the child `ptrace`-ing (or
+    /// writing `/proc/<pid>/mem` of) anything outside it, and from ABI 6
+    /// (Linux 6.12) it may not signal processes outside or connect to their
+    /// abstract unix sockets.
+    ///
+    /// **Best effort where seccomp is not**: a kernel without Landlock (or
+    /// with it left out of `lsm=`) runs the child with the network block
+    /// alone, and `doctor` says which it is.
+    pub(super) mod landlock {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::Path;
+
+        // linux/landlock.h; not in the libc crate.
+        const CREATE_RULESET_VERSION: u32 = 1;
+        const RULE_PATH_BENEATH: u32 = 1;
+        const WRITE_FILE: u64 = 1 << 1;
+        const REMOVE_DIR: u64 = 1 << 4;
+        const REMOVE_FILE: u64 = 1 << 5;
+        const MAKE_CHAR: u64 = 1 << 6;
+        const MAKE_DIR: u64 = 1 << 7;
+        const MAKE_REG: u64 = 1 << 8;
+        const MAKE_SOCK: u64 = 1 << 9;
+        const MAKE_FIFO: u64 = 1 << 10;
+        const MAKE_BLOCK: u64 = 1 << 11;
+        const MAKE_SYM: u64 = 1 << 12;
+        /// ABI 2: rename and link across folders (refused outright before it).
+        const REFER: u64 = 1 << 13;
+        /// ABI 3.
+        const TRUNCATE: u64 = 1 << 14;
+        const SCOPE_ABSTRACT_UNIX_SOCKET: u64 = 1 << 0;
+        const SCOPE_SIGNAL: u64 = 1 << 1;
+
+        #[repr(C)]
+        struct RulesetAttr {
+            handled_access_fs: u64,
+            /// ABI 4.
+            handled_access_net: u64,
+            /// ABI 6.
+            scoped: u64,
+        }
+
+        #[repr(C, packed)]
+        struct PathBeneath {
+            allowed_access: u64,
+            parent_fd: i32,
+        }
+
+        /// The kernel's Landlock ABI, 0 when it has none.
+        pub fn abi() -> u32 {
+            // SAFETY: a version query; no pointer is read.
+            let v = unsafe {
+                libc::syscall(libc::SYS_landlock_create_ruleset, std::ptr::null::<u8>(), 0usize, CREATE_RULESET_VERSION)
+            };
+            v.max(0) as u32
+        }
+
+        /// Every write right this ABI knows.
+        fn writes(abi: u32) -> u64 {
+            let mut w = WRITE_FILE
+                | REMOVE_DIR
+                | REMOVE_FILE
+                | MAKE_CHAR
+                | MAKE_DIR
+                | MAKE_REG
+                | MAKE_SOCK
+                | MAKE_FIFO
+                | MAKE_BLOCK
+                | MAKE_SYM;
+            if abi >= 2 {
+                w |= REFER;
+            }
+            if abi >= 3 {
+                w |= TRUNCATE;
+            }
+            w
+        }
+
+        fn allow(ruleset: &OwnedFd, path: &Path, access: u64) {
+            let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+                return;
+            };
+            // SAFETY: `c` is a NUL-terminated path; the fd is owned below.
+            let fd = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+            if fd < 0 {
+                // Not there (a model folder never made): nothing to allow.
+                return;
+            }
+            // SAFETY: just opened, ours alone.
+            let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+            let rule = PathBeneath { allowed_access: access, parent_fd: fd.as_raw_fd() };
+            // SAFETY: `rule` is the struct the rule type names and outlives the call.
+            unsafe {
+                libc::syscall(libc::SYS_landlock_add_rule, ruleset.as_raw_fd(), RULE_PATH_BENEATH, &rule as *const PathBeneath, 0u32);
+            }
+        }
+
+        /// A ruleset that lets writes land only under `writable` and the
+        /// device nodes, made in the parent (it allocates) for the child to
+        /// enter between fork and exec. `None` without Landlock.
+        pub fn ruleset(writable: &[&Path]) -> Option<OwnedFd> {
+            let abi = abi();
+            if abi == 0 {
+                return None;
+            }
+            let all = writes(abi);
+            let attr = RulesetAttr {
+                handled_access_fs: all,
+                handled_access_net: 0,
+                scoped: if abi >= 6 { SCOPE_ABSTRACT_UNIX_SOCKET | SCOPE_SIGNAL } else { 0 },
+            };
+            // An older kernel takes only the fields it knows, by size.
+            let size: usize = if abi >= 6 { 24 } else if abi >= 4 { 16 } else { 8 };
+            // SAFETY: `attr` is at least `size` bytes and outlives the call.
+            let fd = unsafe { libc::syscall(libc::SYS_landlock_create_ruleset, &attr as *const RulesetAttr, size, 0u32) };
+            if fd < 0 {
+                return None;
+            }
+            // SAFETY: a new fd, ours alone (close-on-exec by the kernel).
+            let ruleset = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+            for dir in writable {
+                allow(&ruleset, dir, all);
+            }
+            // Device nodes are opened read-write (the GPU's render node,
+            // /dev/null); nothing is created there but shared memory.
+            let open_only = WRITE_FILE | if abi >= 3 { TRUNCATE } else { 0 };
+            allow(&ruleset, Path::new("/dev"), open_only);
+            allow(&ruleset, Path::new("/dev/shm"), all & !REFER);
+            Some(ruleset)
+        }
+
+        /// Enter the ruleset. Async-signal-safe: one syscall.
+        pub fn enter(ruleset: &OwnedFd) -> std::io::Result<()> {
+            // SAFETY: a syscall on an fd we hold.
+            if unsafe { libc::syscall(libc::SYS_landlock_restrict_self, ruleset.as_raw_fd(), 0u32) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
     }
 
     pub fn probe() -> Option<Result<super::Probe, String>> {
@@ -237,14 +446,21 @@ mod imp {
         std::process::exit(super::SANDBOX_FAILED)
     }
 
-    pub fn apply(cmd: &mut Command) {
+    /// `files` is [`landlock::ruleset`]'s, entered before the seccomp filter
+    /// goes on. It was made for this child, so entering it must work: a
+    /// failure fails the spawn rather than running with less.
+    pub fn apply(cmd: &mut Command, files: Option<std::os::fd::OwnedFd>) {
         // SAFETY: runs between fork and exec, so it may only make
-        // async-signal-safe calls: two `prctl`s on a static, no allocation
-        // (`last_os_error` is the `Os` variant, a plain integer).
+        // async-signal-safe calls: two `prctl`s on a static and one syscall
+        // on an fd made beforehand, no allocation (`last_os_error` is the
+        // `Os` variant, a plain integer).
         unsafe {
-            cmd.pre_exec(|| {
+            cmd.pre_exec(move || {
                 if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
                     return Err(std::io::Error::last_os_error());
+                }
+                if let Some(ruleset) = &files {
+                    landlock::enter(ruleset)?;
                 }
                 let prog = libc::sock_fprog {
                     len: FILTER.len() as u16,
@@ -263,6 +479,10 @@ mod imp {
         let has = |a: &str| avail.split_whitespace().any(|w| w == a);
         Some(has("errno") && has("kill_process") && has("allow"))
     }
+
+    pub fn files_confined() -> bool {
+        landlock::abi() > 0
+    }
 }
 
 #[cfg(not(any(windows, all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))))]
@@ -274,6 +494,9 @@ mod imp {
     }
     pub fn kernel_ready() -> Option<bool> {
         None
+    }
+    pub fn files_confined() -> bool {
+        false
     }
     pub fn probe() -> Option<Result<super::Probe, String>> {
         None
@@ -851,7 +1074,7 @@ mod tests {
             let mut cmd = Command::new("bash");
             cmd.args(["-c", &script]).stderr(std::process::Stdio::null());
             if confined {
-                apply(&mut cmd);
+                apply(&mut cmd, None);
             }
             cmd.status()
         };
@@ -864,8 +1087,45 @@ mod tests {
 
         let mut ok = Command::new("sh");
         ok.args(["-c", "true"]);
-        apply(&mut ok);
+        apply(&mut ok, None);
         assert!(ok.status().unwrap().success(), "a confined child otherwise runs");
+    }
+
+    /// Against the real kernel: a confined child writes, renames and deletes
+    /// under its root and opens /dev/null, and can't create a file beside the
+    /// root or change one that is already there.
+    #[test]
+    fn a_confined_child_writes_only_under_its_roots() {
+        if super::imp::landlock::abi() == 0 {
+            eprintln!("skipped: this kernel has no Landlock");
+            return;
+        }
+        let base = std::env::temp_dir().join(format!("yasdig-landlock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (inside, outside) = (base.join("work"), base.join("home"));
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("bashrc"), "mine").unwrap();
+        let sh = |script: &str| {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", script]).current_dir(&base).stderr(std::process::Stdio::null());
+            let cmd = super::imp::confine(cmd, &[super::Root { path: inside.clone(), write: true }]).unwrap();
+            let mut cmd = cmd;
+            cmd.status().unwrap().success()
+        };
+        assert!(sh("echo x > work/a.part && mv work/a.part work/a && mkdir work/d && mv work/a work/d/a && rm work/d/a"));
+        assert!(sh("echo x > /dev/null && cat home/bashrc > work/copy"), "reads and device nodes stay open");
+        assert!(!sh("echo x > home/new"), "no new file outside");
+        assert!(!sh("echo x >> home/bashrc"), "no change to a file outside");
+        assert!(!sh("rm home/bashrc") && !sh("mv work/copy home/copy"), "no delete, no move out");
+        assert_eq!(std::fs::read_to_string(outside.join("bashrc")).unwrap(), "mine");
+        assert!(inside.join("gpu-cache").is_dir(), "the shader cache moved inside");
+        // A folder linked into a root is written through the link.
+        let elsewhere = base.join("comfy");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, inside.join("sdxl")).unwrap();
+        assert!(sh("echo x > work/sdxl/converted.gguf") && elsewhere.join("converted.gguf").exists());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
 

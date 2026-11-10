@@ -148,7 +148,14 @@ pub fn check(cfg: &Config) -> Report {
             }
         )),
         (Some(true), false) => match crate::sandbox::probe() {
-            None => info.push("sd-cli network sandbox: on (seccomp; no internet sockets)".into()),
+            None => info.push(format!(
+                "sd-cli network sandbox: on (seccomp; no internet sockets). Files: {}",
+                if crate::sandbox::files_confined() {
+                    "it writes only under work/ and the model folders (Landlock)"
+                } else {
+                    "not confined (this kernel has no Landlock; Linux 5.13+ with it in lsm=)"
+                }
+            )),
             Some(Ok(crate::sandbox::Probe::Held)) => info.push(
                 "sd-cli network sandbox: on (AppContainer; a test connection from inside was refused)".into(),
             ),

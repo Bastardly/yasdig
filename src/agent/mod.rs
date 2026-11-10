@@ -10,6 +10,7 @@
 //! [`session`]'s, decided without a GPU.
 
 pub mod chat;
+pub mod check;
 pub mod context;
 pub mod enhance;
 pub mod knobs;
@@ -366,8 +367,11 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
     let mut tk = tk;
     tk.vision = model.vision();
     let schema = schema::output(mode, &tk, shown, checks.len() as u32, sweep.is_some());
-    let n_predict = n_predict(mode);
-    let budget = (tune.n_ctx.saturating_sub(n_predict) as usize).saturating_sub(64);
+    // A reply is usually a few hundred tokens, so that is what the first try
+    // reserves; the grammar allows several times it (`schema::max_tokens`), and
+    // a try that was cut off is run once more with room for all of it.
+    let mut n_predict = n_predict(mode);
+    let mut grown = false;
 
     let runner = LlmRunner::watched(&cfg, engine.monitor());
     let mut side = tune.image_side;
@@ -388,6 +392,7 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
             cast: chat.cast.as_ref(),
             cast_shown: try_shown.is_some(),
         };
+        let budget = (tune.n_ctx.saturating_sub(n_predict) as usize).saturating_sub(64);
         let keep = context::fit_history(chat, &tk, &base, side, budget).min(history_cap);
         let turn = context::Turn { history: keep, ..base.clone() };
         let req = Request {
@@ -402,6 +407,18 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
             messages: context::messages(chat, &tk, &turn),
         };
         match runner.run(&req, &model.label, &chat.id) {
+            // Cut off at `n_predict`: half a JSON object. Once more with
+            // what the schema can run to, up to half the context (the history
+            // is refitted to what is left), on a new seed.
+            Ok(r) if r.stats.stop == "length" && !grown => {
+                grown = true;
+                let roomy = schema::max_tokens(&schema).max(n_predict + n_predict / 2).min(tune.n_ctx / 2);
+                if roomy <= n_predict {
+                    break r;
+                }
+                eprintln!("[yasdig] the agent's reply was cut off at {n_predict} tokens; trying again with {roomy}");
+                n_predict = roomy;
+            }
             Ok(r) => break r,
             // Once, with half the history and smaller pictures: the estimate
             // is an estimate, and the template's own wrapping varies.

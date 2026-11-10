@@ -122,7 +122,8 @@ could have a bug a crafted file exploits to run code on your computer. So the pr
 that load and run every model — the image models' and the Assistant's — are started unable to open an internet connection —
 nor can anything it starts — and the lock can't be lifted from inside. Even a file
 that broke in couldn't send your pictures or anything else anywhere, or fetch more.
-On Windows it also can't open your files outside yasdig's own folders.
+On Windows it also can't open your files outside yasdig's own folders; on Linux it can
+read them but can't write or delete anything outside yasdig's own folders.
 
 **Saved pictures carry their settings.** *Save to output* and *Download* write the
 prompt, model names and settings into the PNG, so others can recreate your picture

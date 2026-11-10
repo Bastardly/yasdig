@@ -432,6 +432,7 @@ fn run(args: &[String]) -> Result<()> {
         Some("upscale") => return run_upscale_cli(&args[2..]),
         Some("fold-scales") => return run_fold_scales(&args[2..]),
         Some("llm-selftest") => return run_llm_selftest(&args[2..]),
+        Some("agent-check") => return run_agent_check(&args[2..]),
         _ => {}
     }
 
@@ -642,9 +643,9 @@ fn run(args: &[String]) -> Result<()> {
         let cfg = cfg.clone();
         let web_dir = web_dir.clone();
         let monitor = monitor.clone();
-        let bound = startup.server.host.clone();
+        let server = startup.server.clone();
         std::thread::spawn(move || {
-            if let Err(e) = handle_conn(stream, &lanes, &cfg, web_dir.as_deref(), &monitor, &bound) {
+            if let Err(e) = handle_conn(stream, &lanes, &cfg, web_dir.as_deref(), &monitor, &server) {
                 eprintln!("[yasdig] connection error: {e:#}");
             }
         });
@@ -820,23 +821,30 @@ fn handle_conn(
     cfg: &Config,
     web_dir: Option<&std::path::Path>,
     monitor: &Monitor,
-    bound: &str,
+    server: &startup::Server,
 ) -> Result<()> {
     let mut conn = http::Connection::new(stream)?;
     let req = match conn.read_request()? {
         Some(r) => r,
         None => return Ok(()),
     };
-    if !http::allowed(&req.method, req.origin.as_deref(), req.host.as_deref(), bound) {
+    if !http::allowed(&req.method, req.origin.as_deref(), req.host.as_deref(), &server.host, &server.names) {
         eprintln!(
             "[yasdig] refused {} {} from origin {:?}, host {:?}",
             req.method, req.path, req.origin, req.host
         );
-        return conn.respond(
-            403,
-            "application/json",
-            error_json("refused: this request came from another website").as_bytes(),
-        );
+        // Asked for by a name it doesn't know as its own: someone on the
+        // network using the router's name for this machine, told what to do.
+        let msg = if http::host_allowed(req.host.as_deref(), &server.host, &server.names) {
+            "refused: this request came from another website".to_string()
+        } else {
+            format!(
+                "refused: yasdig doesn't know {:?} as a name for this computer. Use its IP address, or add the \
+                 name to `names` under [server] in startup.toml and restart.",
+                req.host.as_deref().unwrap_or("")
+            )
+        };
+        return conn.respond(403, "application/json", error_json(&msg).as_bytes());
     }
 
     // A handler that panics — a model file the parsers didn't expect, say —
@@ -4058,6 +4066,14 @@ fn run_llm_selftest(args: &[String]) -> Result<()> {
     let cfg = Config::load(&config_path).with_context(|| format!("loading {}", config_path.display()))?;
     let name = args.first().map(String::as_str).filter(|n| *n != "-");
     agent::selftest(&cfg, name, args.get(1).map(std::path::Path::new))
+}
+
+/// `yasdig agent-check [agent|-] [models.toml]`: fixed turns through the real
+/// instructions and grammar, scored — see `agent::check`.
+fn run_agent_check(args: &[String]) -> Result<()> {
+    let config_path = home::config_path(args.get(1).map(String::as_str))?;
+    let cfg = Config::load(&config_path).with_context(|| format!("loading {}", config_path.display()))?;
+    agent::check::run(&cfg, args.first().map(String::as_str).filter(|n| *n != "-"))
 }
 
 fn run_upscale_cli(args: &[String]) -> Result<()> {

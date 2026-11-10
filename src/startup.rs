@@ -53,11 +53,16 @@ pub struct Server {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// Other names this computer is reached by (`http::allowed`): open to
+    /// the network, only an IP address, a one-word name and `.local` are
+    /// taken unasked.
+    #[serde(default)]
+    pub names: Vec<String>,
 }
 
 impl Default for Server {
     fn default() -> Self {
-        Server { host: default_host(), port: default_port() }
+        Server { host: default_host(), port: default_port(), names: Vec::new() }
     }
 }
 
@@ -77,6 +82,11 @@ fn template(s: &Server) -> String {
          # your network — there is no password, so only on one you trust.\n\
          host = {host:?}\n\
          \n\
+         # Opened to your network, the page answers to this computer's IP\n\
+         # address, a one-word name (http://studio:8080/) and .local names.\n\
+         # Any other name you use for it goes here: names = [\"studio.lan\"]\n\
+         names = {names:?}\n\
+         \n\
          # The port the page is on: http://127.0.0.1:<port>/\n\
          # If another yasdig is using it (an older build, or another folder),\n\
          # that one is closed and this one takes over. If some other program\n\
@@ -90,6 +100,7 @@ fn template(s: &Server) -> String {
          # (`yasdig doctor` says so).\n\
          enabled = true\n",
         host = s.host,
+        names = s.names,
         port = s.port,
     )
 }
@@ -299,7 +310,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
 
-        let old = Server { host: "127.0.0.1".into(), port: 9123 };
+        let old = Server { host: "127.0.0.1".into(), port: 9123, names: vec![] };
         assert_eq!(load(&root, Some(&old)).unwrap().server, old);
 
         // A second start never rewrites it, whatever models.toml says now.
