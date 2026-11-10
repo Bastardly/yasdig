@@ -149,7 +149,7 @@ pub fn check(cfg: &Config) -> Report {
         )),
         (Some(true), false) => match crate::sandbox::probe() {
             None => info.push(format!(
-                "sd-cli network sandbox: on (seccomp; no internet sockets). Files: {}",
+                "sd-cli network sandbox: on (seccomp; no internet sockets, no connections to local services). Files: {}",
                 if crate::sandbox::files_confined() {
                     "it writes only under work/ and the model folders (Landlock)"
                 } else {

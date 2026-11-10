@@ -309,7 +309,7 @@ impl<'a> LlmRunner<'a> {
         // As for sd-cli: a loader that finds no GPU inside the Windows container
         // falls back to the CPU and takes forever, so the line stops the turn.
         let blind = Arc::new(AtomicBool::new(false));
-        let watch = cfg!(windows) && crate::sandbox::enabled();
+        let watch = crate::sandbox::enabled();
         let spot = {
             let (blind, monitor) = (blind.clone(), self.monitor.clone());
             move |line: &str| {

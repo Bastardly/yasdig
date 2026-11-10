@@ -18,10 +18,17 @@
 //! is `EACCES`. `io_uring_setup` is refused too, since `IORING_OP_SOCKET`
 //! creates sockets without a `socket` syscall. sd-cli uses none of these.
 //!
+//! **And no `connect` at all.** A local socket is still a way out: the session
+//! D-Bus is one, and systemd's user manager behind it starts any program asked
+//! for — outside the sandbox. The sockets left above are for what creates and
+//! binds (libudev's netlink monitor), not for talking to a service; sd-cli and
+//! the agent's driver connect to nothing. A GPU driver that did would lose the
+//! card, which stops the run with the reason (`sd::NO_GPU`) rather than
+//! falling back to the CPU.
+//!
 //! **And it writes only inside yasdig's folders** (Landlock, `imp::landlock`,
 //! Linux 5.13+): the same loader bug could otherwise write a shell profile and
-//! run unconfined at the next login. Reads are left open, and so are path-named
-//! `AF_UNIX` sockets (the session D-Bus is one), which neither filter reaches.
+//! run unconfined at the next login. Reads are left open.
 //!
 //! **Windows: an AppContainer with no capabilities** — Windows' own app
 //! sandbox, and the only one that needs no admin rights (a WFP filter or a
@@ -218,21 +225,22 @@ mod imp {
     // `seccomp_data`: nr at 0, arch at 4, args[0]'s low half at 16
     // (little-endian; the kernel reads `domain` as an int).
     const DENY: u32 = libc::SECCOMP_RET_ERRNO | libc::EACCES as u32;
-    pub(super) static FILTER: [libc::sock_filter; 14] = [
+    pub(super) static FILTER: [libc::sock_filter; 15] = [
         /* 0 */ op(LD, 0, 0, 4),
-        /* 1 */ op(JEQ, 0, 11, ARCH), // foreign arch → 13
+        /* 1 */ op(JEQ, 0, 12, ARCH), // foreign arch → 14
         /* 2 */ op(LD, 0, 0, 0),
-        /* 3 */ op(JGE, 7, 0, X32_BIT), // → 11
-        /* 4 */ op(JEQ, 3, 0, libc::SYS_socket as u32), // → 8
-        /* 5 */ op(JEQ, 2, 0, libc::SYS_socketpair as u32), // → 8
-        /* 6 */ op(JEQ, 4, 0, libc::SYS_io_uring_setup as u32), // → 11
-        /* 7 */ op(RET, 0, 0, libc::SECCOMP_RET_ALLOW),
-        /* 8 */ op(LD, 0, 0, 16),
-        /* 9 */ op(JEQ, 2, 0, libc::AF_UNIX as u32), // → 12
-        /* 10 */ op(JEQ, 1, 0, libc::AF_NETLINK as u32), // → 12
-        /* 11 */ op(RET, 0, 0, DENY),
-        /* 12 */ op(RET, 0, 0, libc::SECCOMP_RET_ALLOW),
-        /* 13 */ op(RET, 0, 0, libc::SECCOMP_RET_KILL_PROCESS),
+        /* 3 */ op(JGE, 8, 0, X32_BIT), // → 12
+        /* 4 */ op(JEQ, 4, 0, libc::SYS_socket as u32), // → 9
+        /* 5 */ op(JEQ, 3, 0, libc::SYS_socketpair as u32), // → 9
+        /* 6 */ op(JEQ, 5, 0, libc::SYS_io_uring_setup as u32), // → 12
+        /* 7 */ op(JEQ, 4, 0, libc::SYS_connect as u32), // → 12
+        /* 8 */ op(RET, 0, 0, libc::SECCOMP_RET_ALLOW),
+        /* 9 */ op(LD, 0, 0, 16),
+        /* 10 */ op(JEQ, 2, 0, libc::AF_UNIX as u32), // → 13
+        /* 11 */ op(JEQ, 1, 0, libc::AF_NETLINK as u32), // → 13
+        /* 12 */ op(RET, 0, 0, DENY),
+        /* 13 */ op(RET, 0, 0, libc::SECCOMP_RET_ALLOW),
+        /* 14 */ op(RET, 0, 0, libc::SECCOMP_RET_KILL_PROCESS),
     ];
 
     pub fn confine(mut cmd: Command, roots: &[super::Root]) -> anyhow::Result<Command> {
@@ -1057,6 +1065,13 @@ mod tests {
             assert_eq!(verdict(socket, a, fam as u32), libc::SECCOMP_RET_ALLOW);
         }
         assert_eq!(verdict(libc::SYS_io_uring_setup as u32, a, 0), deny);
+        // Whatever the socket: the first argument is an fd, not a family.
+        for fd in [3, libc::AF_UNIX as u32, libc::AF_NETLINK as u32] {
+            assert_eq!(verdict(libc::SYS_connect as u32, a, fd), deny, "connect on fd {fd}");
+        }
+        for nr in [libc::SYS_bind, libc::SYS_sendto, libc::SYS_recvmsg] {
+            assert_eq!(verdict(nr as u32, a, 3), libc::SECCOMP_RET_ALLOW);
+        }
         assert_eq!(verdict(0x4000_0000 + socket, a, libc::AF_INET as u32), deny);
         for nr in [libc::SYS_openat, libc::SYS_read, libc::SYS_mmap, libc::SYS_ioctl] {
             assert_eq!(verdict(nr as u32, a, libc::AF_INET as u32), libc::SECCOMP_RET_ALLOW);
@@ -1089,6 +1104,38 @@ mod tests {
         ok.args(["-c", "true"]);
         apply(&mut ok, None);
         assert!(ok.status().unwrap().success(), "a confined child otherwise runs");
+    }
+
+    /// Against the real kernel: a local socket (the session D-Bus is one) is
+    /// connected to unconfined and refused confined.
+    #[test]
+    fn a_confined_child_cannot_connect_to_a_local_socket() {
+        let dir = std::env::temp_dir().join(format!("yasdig-unix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bus");
+        let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        // curl (already what downloads run), not answered: unconfined it
+        // connects and times out (28), confined it can't connect (7).
+        let run = |confined: bool| {
+            let mut cmd = Command::new("curl");
+            cmd.args(["-s", "-o", "/dev/null", "--max-time", "1", "--unix-socket"])
+                .arg(&path)
+                .arg("http://localhost/")
+                .stderr(std::process::Stdio::null());
+            if confined {
+                apply(&mut cmd, None);
+            }
+            cmd.status().map(|s| s.code())
+        };
+        match run(false) {
+            Ok(open) => {
+                assert_eq!(open, Some(28), "the unconfined connect should arrive and wait");
+                assert_eq!(run(true).unwrap(), Some(7), "the confined connect must be refused");
+            }
+            Err(_) => eprintln!("skipped: no curl to try a connection with"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Against the real kernel: a confined child writes, renames and deletes

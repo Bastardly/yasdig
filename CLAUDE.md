@@ -1884,9 +1884,12 @@ from `family` goes on `VideoModelDto`.
     driver's ICDs and configs differ per distro). **A new place a child writes must
     be under a root** — as on Windows; `XDG_CACHE_HOME`/`MESA_SHADER_CACHE_DIR` are
     pointed at `work/gpu-cache/` for that. Best effort: no Landlock in the kernel
-    means the network block alone, and `doctor` says which. Path-named `AF_UNIX`
-    (the session D-Bus) is still reachable; closing it means refusing `connect` in
-    the filter, untried on a GPU run.
+    means the network block alone, and `doctor` says which. **The filter refuses
+    every `connect`** (the session D-Bus is a path-named `AF_UNIX` socket, and
+    systemd behind it starts programs outside); `socket`/`bind` on `AF_UNIX` and
+    `AF_NETLINK` stay for libudev. A driver that needs to connect loses the card:
+    `sd::NO_GPU` is watched on Linux too and stops the run. Phase 2, if a driver
+    needs it: a Settings switch for this one rule.
   - **Windows**: an AppContainer (`yasdig.sd-cli`, zero capabilities). `confine`
     rewrites the command into `yasdig.exe sandbox-run <sd-cli> <args…>`, since std
     can't pass process attributes on stable; **the `sandbox::HELPER` dispatch must

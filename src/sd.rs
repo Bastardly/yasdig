@@ -803,11 +803,12 @@ impl<'a> SdRunner<'a> {
             })?;
         let stdout = child.stdout.take().expect("stdout was piped");
         let stderr = child.stderr.take().expect("stderr was piped");
-        // A Vulkan loader that finds no GPU from inside the Windows container
-        // isn't an error to sd.cpp: it falls back to the CPU and takes an hour.
+        // A Vulkan loader that finds no GPU from inside the sandbox (the
+        // Windows container; on Linux a driver that needs a `connect` the
+        // filter refuses) isn't an error to sd.cpp: it falls back to the CPU and takes an hour.
         // So that line stops the run, and the error says it was the sandbox.
         let blind = Arc::new(AtomicBool::new(false));
-        let watch = cfg!(windows) && crate::sandbox::enabled();
+        let watch = crate::sandbox::enabled();
         let spot = {
             let (blind, monitor) = (blind.clone(), self.monitor.clone());
             move |line: &str| {

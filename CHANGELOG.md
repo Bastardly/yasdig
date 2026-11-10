@@ -25,7 +25,10 @@ What changed in each release of yasdig. Each release's executables are on the
 - The Assistant's llama.cpp is now a later commit (past v0.9.0), for Chatterbox.
 - **Linux: the programs that load models can no longer write outside yasdig's folders**
   (Landlock, kernel 5.13+), beside having no network. Their GPU shader cache moves to
-  `work/gpu-cache/`, so the first run after this compiles its shaders again.
+  `work/gpu-cache/`, so the first run after this compiles its shaders again. They can't
+  connect to local services either (the desktop's D-Bus could be asked to start a
+  program outside the sandbox); if a graphics driver needs that and the card isn't
+  found, the run stops and says so instead of falling back to the CPU.
 - **Opened to the network** (`host = "0.0.0.0"`), the page now answers only to an IP
   address, a one-word name, a `.local` name, or a name listed in `names` under
   `[server]` in `startup.toml` — a website could otherwise point a name of its own at
