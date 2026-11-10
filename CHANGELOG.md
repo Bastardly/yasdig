@@ -3,6 +3,13 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## 0.10.1 — 2026-11-10
+
+### Fixed
+
+- v0.10.0 did not build for Windows, so it was never published; this is that release.
+  Everything listed under 0.10.0 below is new here.
+
 ## 0.10.0 — 2026-11-10
 
 ### Added
