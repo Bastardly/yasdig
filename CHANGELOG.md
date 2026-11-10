@@ -16,7 +16,6 @@ What changed in each release of yasdig. Each release's executables are on the
 - **Voice models** on the Models tab, run by llama.cpp like the Assistant's models:
   Chatterbox Turbo (English, the most natural reader), Chatterbox Multilingual (23
   languages) and Qwen3-TTS 1.7B (ten languages, flatter). About 2–3 GB on the card.
-
 - `yasdig agent-check [agent]`: seven fixed requests put to an Assistant model through
   its real instructions, scored — which of drawing, counting, comparing, writing checks
   and judging a picture that model gets right.
@@ -40,6 +39,8 @@ What changed in each release of yasdig. Each release's executables are on the
 
 ### Fixed
 
+- Asked about "this prompt" in a new chat ("which CFG works best for this prompt?"), the
+  Assistant could ask for the prompt instead of using the one already set.
 - The page's files were sent with one malformed header line (a bare line feed).
 - A clip past 1000 frames played and saved its frames out of order (frame 1000 sorted
   before 101).
