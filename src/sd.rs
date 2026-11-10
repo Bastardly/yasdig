@@ -783,7 +783,7 @@ impl<'a> SdRunner<'a> {
         }
         // After the arguments are read: on Windows this is a new command, the
         // launcher's, with sd-cli's own as its arguments.
-        let mut cmd = crate::sandbox::confine(cmd, &self.cfg.sandbox_roots())?;
+        let mut cmd = crate::sandbox::confine(cmd, &self.cfg.sandbox_roots(), self.cfg.settings().sandbox_block_local)?;
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd
             .spawn()
@@ -879,9 +879,8 @@ impl<'a> SdRunner<'a> {
         if blind.load(Ordering::SeqCst) {
             bail!(
                 "sd-cli {label}: no GPU is visible from inside the sandbox sd-cli runs in \
-                 (\"{NO_GPU}\"), so it was stopped before it fell back to the CPU. \
-                 {} runs sd-cli without the sandbox.",
-                crate::sandbox::TURN_OFF
+                 (\"{NO_GPU}\"), so it was stopped before it fell back to the CPU. {}",
+                crate::sandbox::no_gpu_fix(self.cfg.settings().sandbox_block_local)
             );
         }
         if !status.success() {

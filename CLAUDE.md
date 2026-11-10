@@ -1888,8 +1888,10 @@ from `family` goes on `VideoModelDto`.
     every `connect`** (the session D-Bus is a path-named `AF_UNIX` socket, and
     systemd behind it starts programs outside); `socket`/`bind` on `AF_UNIX` and
     `AF_NETLINK` stay for libudev. A driver that needs to connect loses the card:
-    `sd::NO_GPU` is watched on Linux too and stops the run. Phase 2, if a driver
-    needs it: a Settings switch for this one rule.
+    `sd::NO_GPU` is watched on Linux too and stops the run, naming
+    `Settings::sandbox_block_local` (page-level, Settings → General → Advanced, read
+    per spawn and passed to `confine`): off swaps in `FILTER_LOCAL`, the same filter
+    with instruction 7's jumps falling through, so offsets are shared.
   - **Windows**: an AppContainer (`yasdig.sd-cli`, zero capabilities). `confine`
     rewrites the command into `yasdig.exe sandbox-run <sd-cli> <args…>`, since std
     can't pass process attributes on stable; **the `sandbox::HELPER` dispatch must

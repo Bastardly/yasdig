@@ -290,7 +290,7 @@ impl<'a> LlmRunner<'a> {
 
         let mut cmd = Command::new(&bin);
         cmd.arg("--request").arg(&path);
-        let mut cmd = crate::sandbox::confine(cmd, &self.cfg.sandbox_roots())?;
+        let mut cmd = crate::sandbox::confine(cmd, &self.cfg.sandbox_roots(), self.cfg.settings().sandbox_block_local)?;
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd.spawn().with_context(|| {
             let hint = if crate::sandbox::enabled() {
@@ -349,6 +349,7 @@ impl<'a> LlmRunner<'a> {
             code: status.code(),
             cancelled: self.monitor.was_cancelled(),
             blind: blind.load(Ordering::SeqCst),
+            block_local: self.cfg.settings().sandbox_block_local,
             killed: sd::killed_by_system(&status),
             label,
             out: &out_tail,
@@ -363,6 +364,8 @@ struct Exit<'a> {
     code: Option<i32>,
     cancelled: bool,
     blind: bool,
+    /// `Settings::sandbox_block_local` as this run had it, for `blind`'s fix.
+    block_local: bool,
     killed: bool,
     label: &'a str,
     out: &'a VecDeque<String>,
@@ -438,9 +441,9 @@ impl Reader {
         if x.blind {
             bail!(
                 "{who} ({label}): no GPU is visible from inside the sandbox (\"{}\"), so it was \
-                 stopped before it fell back to the CPU. {} runs it without the sandbox.",
+                 stopped before it fell back to the CPU. {}",
                 sd::NO_GPU,
-                crate::sandbox::TURN_OFF
+                crate::sandbox::no_gpu_fix(x.block_local)
             );
         }
         if !x.success && x.cancelled {
@@ -504,7 +507,7 @@ mod tests {
     use super::*;
 
     fn exit<'a>(out: &'a VecDeque<String>, err: &'a VecDeque<String>) -> Exit<'a> {
-        Exit { success: true, code: Some(0), cancelled: false, blind: false, killed: false, label: "chat", out, err }
+        Exit { success: true, code: Some(0), cancelled: false, blind: false, block_local: true, killed: false, label: "chat", out, err }
     }
 
     fn read(lines: &[&str]) -> Reader {

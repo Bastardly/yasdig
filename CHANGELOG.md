@@ -28,7 +28,8 @@ What changed in each release of yasdig. Each release's executables are on the
   `work/gpu-cache/`, so the first run after this compiles its shaders again. They can't
   connect to local services either (the desktop's D-Bus could be asked to start a
   program outside the sandbox); if a graphics driver needs that and the card isn't
-  found, the run stops and says so instead of falling back to the CPU.
+  found, the run stops and says so instead of falling back to the CPU, and *Block local
+  connections* under Settings → General → Advanced lifts that one rule.
 - **Opened to the network** (`host = "0.0.0.0"`), the page now answers only to an IP
   address, a one-word name, a `.local` name, or a name listed in `names` under
   `[server]` in `startup.toml` — a website could otherwise point a name of its own at

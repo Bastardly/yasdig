@@ -136,6 +136,7 @@ export const FIELDS = [
   { key: 'clear_chats_on_close', page: true, label: 'Clear agent chats', help: 'setclearchats', kind: 'check' },
 
   SUB('Advanced'),
+  { key: 'sandbox_block_local', page: true, label: 'Block local connections (Linux sandbox)', help: 'setsandboxlocal', kind: 'check' },
   { key: 'hires_flash_attn', label: 'Flash attention', help: 'setflash', kind: 'check' },
   { key: 'weight_type', label: 'Weight type', help: 'setwtype', kind: 'text', blank: BLANK },
   { key: 'extra_args', label: 'Extra sd-cli arguments', help: 'setargs', kind: 'lines' },

@@ -172,6 +172,14 @@ pub struct Settings {
     /// shares pictures and would rather their prompts didn't travel with them.
     /// Page-level.
     pub embed_png_settings: bool,
+    /// Linux: the programs that load models (sd-cli, the agent's driver) may
+    /// not connect to local services — the desktop's D-Bus, which would start
+    /// a program outside their sandbox (`sandbox::confine`). On by default;
+    /// off for a graphics driver that has to connect to something to find the
+    /// card, which shows as "no GPU is visible from inside the sandbox". The
+    /// network block and the file confinement stay either way; the whole
+    /// sandbox's switch is `startup.toml`'s. Read per run. Page-level.
+    pub sandbox_block_local: bool,
 
     /// The `[agent]` table: what the agent may change in every chat, and the
     /// agent a new chat starts with (`crate::agent::knobs::Rules`). Read
@@ -349,6 +357,7 @@ impl Default for Settings {
             video_save: VIDEO_FILE.into(),
             storyboard_shot_seconds: DEFAULT_STORYBOARD_SHOT_SECONDS,
             embed_png_settings: true,
+            sandbox_block_local: true,
             // Prompt, negative and a bounded CFG on; the rest is asked for.
             agent: crate::agent::knobs::Rules::default(),
             // What the default prompt names. A file with no `[variables]`
@@ -419,6 +428,7 @@ impl Settings {
             video_save: self.video_save.clone(),
             storyboard_shot_seconds: self.storyboard_shot_seconds,
             embed_png_settings: self.embed_png_settings,
+            sandbox_block_local: self.sandbox_block_local,
             agent: self.agent.clone(),
             variables: self.variables.clone(),
         }
@@ -1118,6 +1128,7 @@ const PAGE_ONLY: &[&str] = &[
     "video_save",
     "storyboard_shot_seconds",
     "embed_png_settings",
+    "sandbox_block_local",
     "agent",
 ];
 
@@ -1388,6 +1399,9 @@ mod tests {
         assert!(Settings { reference_size: 100, ..Settings::default() }.validate().is_err());
         assert!(PAGE_ONLY.contains(&"vae_conv_direct") && Settings::default().vae_conv_direct);
         assert!(PAGE_ONLY.contains(&"embed_png_settings") && Settings::default().embed_png_settings);
+        // On unless a person turns it off, and an older file without it is on.
+        assert!(PAGE_ONLY.contains(&"sandbox_block_local") && Settings::default().sandbox_block_local);
+        assert!(toml::from_str::<Settings>("steps = 20").unwrap().sandbox_block_local);
         // Video was a nightly feature, behind `nightly_video`: a file that
         // still says so loads, and the key is let go on the next save.
         let old: Settings = toml::from_str("nightly_video = true\n").unwrap();

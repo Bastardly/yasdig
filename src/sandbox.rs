@@ -72,6 +72,20 @@ pub const SANDBOX_FAILED: i32 = 125;
 /// How to turn it off, for every message that offers it.
 pub const TURN_OFF: &str = "`enabled = false` under [sandbox] in startup.toml";
 
+/// What to do about a GPU that isn't found from inside, for the errors that
+/// stop such a run: on Linux with the local-connections rule on, lifting
+/// that one rule comes first — it is the part a driver could need — and the
+/// whole sandbox's switch after it.
+pub fn no_gpu_fix(block_local: bool) -> String {
+    if cfg!(target_os = "linux") && block_local {
+        format!(
+            "First untick Settings → General → Advanced → Block local connections and try again: a few              graphics drivers need one to find the card. If that changes nothing, {TURN_OFF} runs it              without the sandbox."
+        )
+    } else {
+        format!("{TURN_OFF} runs it without the sandbox.")
+    }
+}
+
 /// Set from `startup.toml` by `Config::load`, before any sd-cli runs.
 static OFF_BY_FILE: AtomicBool = AtomicBool::new(false);
 
@@ -145,9 +159,14 @@ pub fn probe() -> Option<Result<Probe, String>> {
 /// its place. A child that can't be confined fails — to spawn, or at once with
 /// the reason on stderr — and never runs unconfined. Called on every sd-cli
 /// spawn (`SdRunner::run_tail`), after the arguments are read off `cmd`.
-pub fn confine(cmd: Command, roots: &[Root]) -> anyhow::Result<Command> {
+///
+/// `block_local` is `Settings::sandbox_block_local`: on Linux, whether the
+/// child is also refused every `connect` (local services, the session D-Bus).
+/// The one rule a person can lift alone, for a graphics driver that needs to
+/// connect to find the card; the Windows container has no such part.
+pub fn confine(cmd: Command, roots: &[Root], block_local: bool) -> anyhow::Result<Command> {
     if enabled() {
-        imp::confine(cmd, roots)
+        imp::confine(cmd, roots, block_local)
     } else {
         Ok(cmd)
     }
@@ -225,25 +244,33 @@ mod imp {
     // `seccomp_data`: nr at 0, arch at 4, args[0]'s low half at 16
     // (little-endian; the kernel reads `domain` as an int).
     const DENY: u32 = libc::SECCOMP_RET_ERRNO | libc::EACCES as u32;
-    pub(super) static FILTER: [libc::sock_filter; 15] = [
-        /* 0 */ op(LD, 0, 0, 4),
-        /* 1 */ op(JEQ, 0, 12, ARCH), // foreign arch → 14
-        /* 2 */ op(LD, 0, 0, 0),
-        /* 3 */ op(JGE, 8, 0, X32_BIT), // → 12
-        /* 4 */ op(JEQ, 4, 0, libc::SYS_socket as u32), // → 9
-        /* 5 */ op(JEQ, 3, 0, libc::SYS_socketpair as u32), // → 9
-        /* 6 */ op(JEQ, 5, 0, libc::SYS_io_uring_setup as u32), // → 12
-        /* 7 */ op(JEQ, 4, 0, libc::SYS_connect as u32), // → 12
-        /* 8 */ op(RET, 0, 0, libc::SECCOMP_RET_ALLOW),
-        /* 9 */ op(LD, 0, 0, 16),
-        /* 10 */ op(JEQ, 2, 0, libc::AF_UNIX as u32), // → 13
-        /* 11 */ op(JEQ, 1, 0, libc::AF_NETLINK as u32), // → 13
-        /* 12 */ op(RET, 0, 0, DENY),
-        /* 13 */ op(RET, 0, 0, libc::SECCOMP_RET_ALLOW),
-        /* 14 */ op(RET, 0, 0, libc::SECCOMP_RET_KILL_PROCESS),
-    ];
+    /// `block_connect` false leaves instruction 7 in place with both jumps
+    /// falling through to ALLOW, so the two filters share every offset.
+    const fn filter(block_connect: bool) -> [libc::sock_filter; 15] {
+        [
+            /* 0 */ op(LD, 0, 0, 4),
+            /* 1 */ op(JEQ, 0, 12, ARCH), // foreign arch → 14
+            /* 2 */ op(LD, 0, 0, 0),
+            /* 3 */ op(JGE, 8, 0, X32_BIT), // → 12
+            /* 4 */ op(JEQ, 4, 0, libc::SYS_socket as u32), // → 9
+            /* 5 */ op(JEQ, 3, 0, libc::SYS_socketpair as u32), // → 9
+            /* 6 */ op(JEQ, 5, 0, libc::SYS_io_uring_setup as u32), // → 12
+            /* 7 */ op(JEQ, if block_connect { 4 } else { 0 }, 0, libc::SYS_connect as u32), // → 12
+            /* 8 */ op(RET, 0, 0, libc::SECCOMP_RET_ALLOW),
+            /* 9 */ op(LD, 0, 0, 16),
+            /* 10 */ op(JEQ, 2, 0, libc::AF_UNIX as u32), // → 13
+            /* 11 */ op(JEQ, 1, 0, libc::AF_NETLINK as u32), // → 13
+            /* 12 */ op(RET, 0, 0, DENY),
+            /* 13 */ op(RET, 0, 0, libc::SECCOMP_RET_ALLOW),
+            /* 14 */ op(RET, 0, 0, libc::SECCOMP_RET_KILL_PROCESS),
+        ]
+    }
+    pub(super) static FILTER: [libc::sock_filter; 15] = filter(true);
+    /// With `Settings::sandbox_block_local` off: internet sockets refused,
+    /// `connect` on the local ones allowed.
+    pub(super) static FILTER_LOCAL: [libc::sock_filter; 15] = filter(false);
 
-    pub fn confine(mut cmd: Command, roots: &[super::Root]) -> anyhow::Result<Command> {
+    pub fn confine(mut cmd: Command, roots: &[super::Root], block_local: bool) -> anyhow::Result<Command> {
         // The drivers' shader caches, moved inside: `~/.cache` is outside what
         // the child may write, and without a cache Mesa compiles every
         // pipeline again on every run. Under `work/`, the first root.
@@ -260,7 +287,7 @@ mod imp {
         }
         let writable: Vec<&std::path::Path> = writable.iter().map(|p| p.as_path()).collect();
         let files = landlock::ruleset(&writable);
-        apply(&mut cmd, files);
+        apply(&mut cmd, files, block_local);
         Ok(cmd)
     }
 
@@ -457,7 +484,8 @@ mod imp {
     /// `files` is [`landlock::ruleset`]'s, entered before the seccomp filter
     /// goes on. It was made for this child, so entering it must work: a
     /// failure fails the spawn rather than running with less.
-    pub fn apply(cmd: &mut Command, files: Option<std::os::fd::OwnedFd>) {
+    pub fn apply(cmd: &mut Command, files: Option<std::os::fd::OwnedFd>, block_local: bool) {
+        let filter: &'static [libc::sock_filter; 15] = if block_local { &FILTER } else { &FILTER_LOCAL };
         // SAFETY: runs between fork and exec, so it may only make
         // async-signal-safe calls: two `prctl`s on a static and one syscall
         // on an fd made beforehand, no allocation (`last_os_error` is the
@@ -471,8 +499,8 @@ mod imp {
                     landlock::enter(ruleset)?;
                 }
                 let prog = libc::sock_fprog {
-                    len: FILTER.len() as u16,
-                    filter: FILTER.as_ptr() as *mut libc::sock_filter,
+                    len: filter.len() as u16,
+                    filter: filter.as_ptr() as *mut libc::sock_filter,
                 };
                 if libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &prog) != 0 {
                     return Err(std::io::Error::last_os_error());
@@ -497,7 +525,7 @@ mod imp {
 mod imp {
     use std::process::Command;
     pub const SUPPORTED: bool = false;
-    pub fn confine(cmd: Command, _: &[super::Root]) -> anyhow::Result<Command> {
+    pub fn confine(cmd: Command, _: &[super::Root], _: bool) -> anyhow::Result<Command> {
         Ok(cmd)
     }
     pub fn kernel_ready() -> Option<bool> {
@@ -732,7 +760,7 @@ mod imp {
         Ok(())
     }
 
-    pub fn confine(cmd: Command, roots: &[Root]) -> anyhow::Result<Command> {
+    pub fn confine(cmd: Command, roots: &[Root], _: bool) -> anyhow::Result<Command> {
         grant_all(roots).map_err(anyhow::Error::msg)?;
         match probe().expect("Windows probes") {
             Ok(Probe::Leaks) => anyhow::bail!(
@@ -1019,20 +1047,24 @@ mod imp {
 
 #[cfg(all(test, target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 mod tests {
-    use super::imp::{apply, FILTER};
+    use super::imp::{apply, FILTER, FILTER_LOCAL};
     use std::process::Command;
 
     /// Runs the filter the way the kernel does, over a `seccomp_data` laid out
     /// as nr, arch, ip, args — so a wrong jump offset fails here, not in a
     /// child that dies or, worse, runs unconfined.
     fn verdict(nr: u32, arch: u32, arg0: u32) -> u32 {
+        run(&FILTER, nr, arch, arg0)
+    }
+
+    fn run(filter: &[libc::sock_filter], nr: u32, arch: u32, arg0: u32) -> u32 {
         let mut data = [0u8; 64];
         data[0..4].copy_from_slice(&nr.to_le_bytes());
         data[4..8].copy_from_slice(&arch.to_le_bytes());
         data[16..20].copy_from_slice(&arg0.to_le_bytes());
         let (mut pc, mut acc) = (0usize, 0u32);
         loop {
-            let f = &FILTER[pc];
+            let f = &filter[pc];
             let class = (f.code & 0x07) as u32;
             match class {
                 c if c == libc::BPF_LD => {
@@ -1078,6 +1110,26 @@ mod tests {
         }
     }
 
+    /// With the local-connections rule lifted (`Settings::sandbox_block_local`
+    /// off) the filter differs in `connect` alone.
+    #[test]
+    fn lifting_the_local_rule_allows_connect_and_nothing_else() {
+        let a = FILTER[1].k;
+        let deny = libc::SECCOMP_RET_ERRNO | libc::EACCES as u32;
+        assert_eq!(run(&FILTER_LOCAL, libc::SYS_connect as u32, a, 3), libc::SECCOMP_RET_ALLOW);
+        for (nr, arg) in [
+            (libc::SYS_socket, libc::AF_INET),
+            (libc::SYS_socket, libc::AF_UNIX),
+            (libc::SYS_socketpair, libc::AF_INET6),
+            (libc::SYS_io_uring_setup, 0),
+            (libc::SYS_openat, 0),
+        ] {
+            assert_eq!(run(&FILTER_LOCAL, nr as u32, a, arg as u32), verdict(nr as u32, a, arg as u32), "syscall {nr}");
+        }
+        assert_eq!(run(&FILTER_LOCAL, libc::SYS_socket as u32, a, libc::AF_INET as u32), deny);
+        assert_eq!(run(&FILTER_LOCAL, 0, 0, 0), libc::SECCOMP_RET_KILL_PROCESS);
+    }
+
     /// Against the real kernel: bash's `/dev/tcp` to a listener on loopback
     /// connects unconfined and is refused confined.
     #[test]
@@ -1089,7 +1141,7 @@ mod tests {
             let mut cmd = Command::new("bash");
             cmd.args(["-c", &script]).stderr(std::process::Stdio::null());
             if confined {
-                apply(&mut cmd, None);
+                apply(&mut cmd, None, true);
             }
             cmd.status()
         };
@@ -1102,7 +1154,7 @@ mod tests {
 
         let mut ok = Command::new("sh");
         ok.args(["-c", "true"]);
-        apply(&mut ok, None);
+        apply(&mut ok, None, true);
         assert!(ok.status().unwrap().success(), "a confined child otherwise runs");
     }
 
@@ -1117,21 +1169,22 @@ mod tests {
         let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
         // curl (already what downloads run), not answered: unconfined it
         // connects and times out (28), confined it can't connect (7).
-        let run = |confined: bool| {
+        let run = |confined: Option<bool>| {
             let mut cmd = Command::new("curl");
             cmd.args(["-s", "-o", "/dev/null", "--max-time", "1", "--unix-socket"])
                 .arg(&path)
                 .arg("http://localhost/")
                 .stderr(std::process::Stdio::null());
-            if confined {
-                apply(&mut cmd, None);
+            if let Some(block_local) = confined {
+                apply(&mut cmd, None, block_local);
             }
             cmd.status().map(|s| s.code())
         };
-        match run(false) {
+        match run(None) {
             Ok(open) => {
                 assert_eq!(open, Some(28), "the unconfined connect should arrive and wait");
-                assert_eq!(run(true).unwrap(), Some(7), "the confined connect must be refused");
+                assert_eq!(run(Some(true)).unwrap(), Some(7), "the confined connect must be refused");
+                assert_eq!(run(Some(false)).unwrap(), Some(28), "with the rule lifted it connects again");
             }
             Err(_) => eprintln!("skipped: no curl to try a connection with"),
         }
@@ -1156,7 +1209,7 @@ mod tests {
         let sh = |script: &str| {
             let mut cmd = Command::new("sh");
             cmd.args(["-c", script]).current_dir(&base).stderr(std::process::Stdio::null());
-            let cmd = super::imp::confine(cmd, &[super::Root { path: inside.clone(), write: true }]).unwrap();
+            let cmd = super::imp::confine(cmd, &[super::Root { path: inside.clone(), write: true }], true).unwrap();
             let mut cmd = cmd;
             cmd.status().unwrap().success()
         };

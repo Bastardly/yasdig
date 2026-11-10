@@ -489,6 +489,14 @@ const HELP = [
         + 'when you ask for one: it writes the name and look and draws a try into '
         + 'the cast editor, which opens on it. Nothing is kept until you press '
         + 'Save; ask for a change and it draws another try.' },
+  { ids: ['setsandboxlocal'],
+    text: 'Linux only. The programs that load model files run in a sandbox with no '
+        + 'network and no writing outside yasdig’s folders. Ticked, they also can’t '
+        + 'connect to other programs on this computer, which closes the last way a '
+        + 'booby-trapped model file could start something outside the sandbox. Leave '
+        + 'it on. Untick it only if generating fails with “no GPU is visible from '
+        + 'inside the sandbox”: a few graphics drivers need such a connection to find '
+        + 'the card. The rest of the sandbox stays on. Takes effect on the next run.' },
   { ids: ['setembedpng'],
     text: 'Writes the prompt, negative prompt, model, seed, steps, sampler and CFG '
         + 'into each image you save to output, in the format A1111, Forge and Civitai '
