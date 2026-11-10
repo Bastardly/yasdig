@@ -641,6 +641,11 @@ mod imp {
         Some(container().is_ok())
     }
 
+    /// The container opens only what it was granted.
+    pub fn files_confined() -> bool {
+        true
+    }
+
     /// Paths already granted this run; a grant is checked once per path.
     static GRANTED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
