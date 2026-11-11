@@ -712,6 +712,9 @@ pub fn round_size(chat: &Chat) -> u32 {
 /// The newest round, when it is whole and nothing was drawn after it: what a
 /// new session judges first instead of drawing again. Its number and size.
 pub fn judgeable(chat: &Chat) -> Option<(u32, u32)> {
+    if chat.session.redraw_first {
+        return None;
+    }
     let (round, n, size) = current_batch(chat)?;
     (round > 0 && n >= size).then_some((round, size))
 }
@@ -1314,19 +1317,105 @@ pub fn close_session(chat: &mut Chat) {
 /// The person's *Start* on a proposed session: it begins as the reply asked,
 /// and the leg goes on to its plan turn. A comparison's `before` is read now,
 /// since the person may have moved the knob while it waited.
+#[cfg(test)]
 pub fn start_proposal(chat: &mut Chat) -> Result<(), String> {
+    start_proposal_sized(chat, None, None)
+}
+
+/// [`start_proposal`] with the sizes the person set on the card: `rounds`
+/// (an improvement's; a comparison's is its values) and pictures per round.
+/// An improvement's first prompt is set here, as the agent's change.
+pub fn start_proposal_sized(chat: &mut Chat, rounds: Option<u32>, per_round: Option<u32>) -> Result<(), String> {
     let p = chat.session.proposal.take().ok_or("there is no session waiting to start")?;
+    let rewrote = p.prompt.as_ref().is_some_and(|prompt| set_prompt(chat, prompt, p.n, "the session's first prompt"));
     begin(chat, &p.goal);
+    chat.session.redraw_first = rewrote;
+    let per_round = per_round.map(|n| n.clamp(1, MAX_BATCH));
     if let Some(mut sw) = p.sweep {
         if let Some(k) = knobs::knob(&sw.knob) {
             sw.before = knobs::value_of(&chat.settings, k);
         }
-        chat.session.per_round = p.per_round;
+        chat.session.per_round = per_round.unwrap_or(p.per_round);
         chat.session.rounds = p.rounds;
         chat.session.sweep = Some(sw);
+    } else if rounds.is_some() || per_round.is_some() {
+        // What the card left blank is the default, not the plan's guess: a
+        // person who set one number expects the other to be the usual one.
+        chat.session.rounds = rounds.map_or(0, |n| n.clamp(1, MAX_ROUNDS));
+        chat.session.per_round = per_round.unwrap_or(0);
+        chat.session.sized = true;
     }
     chat.session.next = Next::Turn;
     Ok(())
+}
+
+/// *Draw one*: an improvement's first prompt drawn once, with no session —
+/// the prompt set as the agent's change, one picture on new seeds, as a chat
+/// turn's "draw" would. For a person who wanted the prompt, not the rounds.
+pub fn draw_proposal(chat: &mut Chat) -> Result<(), String> {
+    let prompt = chat
+        .session
+        .proposal
+        .as_ref()
+        .ok_or("there is no session waiting to start")?
+        .prompt
+        .clone()
+        .ok_or("this proposal has no prompt to draw")?;
+    let p = chat.session.proposal.take().expect("checked");
+    set_prompt(chat, &prompt, p.n, "the proposed session's first prompt, drawn once");
+    chat.session.mode = Mode::Chat;
+    chat.session.count = 1;
+    chat.session.fresh = true;
+    chat.session.next = Next::Batch;
+    Ok(())
+}
+
+/// *Again* under a round: the same settings drawn once more on new seeds,
+/// with no agent turn — "more like these" needs no model, and a turn costs a
+/// model load. Whatever session was waiting or stopped is closed first, as a
+/// new message closes it.
+pub fn draw_again(chat: &mut Chat, count: u32) -> Result<(), String> {
+    if !chat.messages.iter().any(|m| matches!(m, Msg::Batch { .. })) {
+        return Err("there is no round to draw again".into());
+    }
+    let prompt = chat.settings.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+    if prompt.trim().is_empty() {
+        return Err("there is no prompt to draw — write one, or ask the agent for one".into());
+    }
+    close_session(chat);
+    chat.session.mode = Mode::Chat;
+    chat.session.count = count.clamp(1, MAX_BATCH);
+    chat.session.fresh = true;
+    chat.session.next = Next::Batch;
+    Ok(())
+}
+
+/// Set the prompt as an agent's change under message `msg`, undoable like
+/// any other. No change when it is the prompt already.
+fn set_prompt(chat: &mut Chat, prompt: &str, msg: u32, reason: &str) -> bool {
+    let Some(k) = knobs::knob("prompt") else { return false };
+    let before = knobs::value_of(&chat.settings, k);
+    let value = Value::String(prompt.trim().to_string());
+    if before == value || prompt.trim().is_empty() {
+        return false;
+    }
+    knobs::write(&mut chat.settings, k, &value);
+    chat.settings_rev += 1;
+    let id = chat.next_change_id();
+    chat.changes.push(Change {
+        id,
+        by: "agent".into(),
+        state: ChangeState::Applied,
+        set: Map::from_iter([("prompt".to_string(), value)]),
+        before: Map::from_iter([("prompt".to_string(), before)]),
+        reason: reason.to_string(),
+        msg,
+        notes: Vec::new(),
+    });
+    if let Some(Msg::Agent { changes, .. }) = chat.messages.iter_mut().find(|m| m.n() == msg) {
+        changes.push(id);
+    }
+    true
 }
 
 /// The person's *No thanks*: the proposal goes, with a note saying so. A
@@ -1347,6 +1436,8 @@ pub fn begin(chat: &mut Chat, goal: &str) {
     chat.session.first_round = chat.session.round;
     chat.session.rounds = 0;
     chat.session.per_round = 0;
+    chat.session.sized = false;
+    chat.session.redraw_first = false;
     chat.session.sweep = None;
     chat.session.reference = chat
         .messages
@@ -1423,6 +1514,19 @@ pub fn sweep_table(chat: &Chat) -> String {
 }
 
 /// Record a reply on the chat and decide what comes next.
+/// `text` as the agent wrote it, with the braces off any `{name}` that is
+/// not one of the person's variables, and a note saying so.
+fn known_variables(text: &str, t: &Toolkit, notes: &mut Vec<String>) -> String {
+    let (kept, dropped) = crate::variables::unbrace_unknown(text, &t.variables);
+    for name in dropped {
+        let note = format!("{{{name}}} is not one of your variables, so the prompt says \"{name}\".");
+        if !notes.contains(&note) {
+            notes.push(note);
+        }
+    }
+    kept
+}
+
 pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, locks: &Locks, skills: Vec<String>, stats: crate::llm::Stats) {
     let n = chat.next_n();
     let mut change_ids = Vec::new();
@@ -1443,6 +1547,15 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
                     }
                 }
                 None => notes_out.push("The comparison picked no value, so the setting is back to what it was.".into()),
+            }
+        }
+    }
+    // A {name} the agent made up would fail every picture of the round
+    // (`variables::expand` refuses an unknown one): its braces come off.
+    if let Some(change) = r.change.as_mut() {
+        for key in ["prompt", "negative"] {
+            if let Some(Value::String(text)) = change.get_mut(key) {
+                *text = known_variables(text, t, &mut notes_out);
             }
         }
     }
@@ -1483,14 +1596,18 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
         }
         Mode::Plan => {
             chat.session.checks = plan_checks(&r);
+            let redraw = std::mem::take(&mut chat.session.redraw_first);
             // How long and how wide, as the goal said; unsaid is the default.
-            chat.session.rounds = r.rounds.map_or(0, |n| n.clamp(1, MAX_ROUNDS));
-            chat.session.per_round = r.count.map_or(0, |n| n.clamp(1, MAX_BATCH));
+            // Unless the person set them on the card.
+            if !chat.session.sized {
+                chat.session.rounds = r.rounds.map_or(0, |n| n.clamp(1, MAX_ROUNDS));
+                chat.session.per_round = r.count.map_or(0, |n| n.clamp(1, MAX_BATCH));
+            }
             // A round just drawn is judged first, unless the plan rewrote the
             // prompt (the change just made): then those pictures answer another goal.
             let rewrote = chat.changes.iter().any(|c| change_ids.contains(&c.id) && c.set.contains_key("prompt"));
             match judgeable(chat) {
-                Some((round, _)) if !rewrote => {
+                Some((round, _)) if !rewrote && !redraw => {
                     chat.session.first_round = round - 1;
                     chat.session.next = Next::Critique;
                 }
@@ -1567,7 +1684,17 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
                 // and its plan turn then writes the checks and sizes it.
                 Some("improve" | "session") => match r.goal.as_deref().map(str::trim).filter(|g| !g.is_empty()) {
                     Some(goal) => {
-                        chat.session.proposal = Some(Proposal { n, goal: goal.to_string(), sweep: None, per_round: 0, rounds: 0 });
+                        // Its first prompt, kept on the proposal: nothing
+                        // changes until the person starts it or draws one.
+                        // Taken off `r`, or the message would show it as a
+                        // described picture's.
+                        let prompt = r
+                            .prompt
+                            .take()
+                            .filter(|_| super::schema::writes_prompt(t))
+                            .map(|p| known_variables(p.trim(), t, &mut notes_out))
+                            .filter(|p| !p.is_empty());
+                        chat.session.proposal = Some(Proposal { n, goal: goal.to_string(), sweep: None, per_round: 0, rounds: 0, prompt });
                         Next::Nothing
                     }
                     None => {
@@ -1590,6 +1717,7 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
                                 per_round: r.count.unwrap_or(2).clamp(1, MAX_BATCH),
                                 rounds: sw.values.len() as u32,
                                 sweep: Some(sw),
+                                prompt: None,
                             });
                             Next::Nothing
                         }
@@ -2624,6 +2752,68 @@ mod tests {
         assert_eq!(c.session.goal, "A fox wearing a red hat");
         assert!(c.session.checks.is_empty(), "the plan writes its own");
         assert_eq!(next_step(&c), Step::Turn(Mode::Plan));
+    }
+
+    /// An improvement comes with its first prompt, which changes nothing
+    /// while it waits: *Draw one* sets it and draws a single picture with no
+    /// session; *Start* sets it, takes the card's sizes over the plan's, and
+    /// draws afresh rather than judging the old prompt's round.
+    /// *Again* is the server's: a round on new seeds, no turn, and only
+    /// where there is a round and a prompt to draw.
+    #[test]
+    fn again_draws_the_same_settings_on_new_seeds_without_a_turn() {
+        let mut c = chat();
+        assert!(draw_again(&mut c, 2).is_err(), "no round yet");
+        c.settings["prompt"] = json!("a dog");
+        start_round(&mut c, 2);
+        assert!(draw_again(&mut c, 99).is_ok());
+        assert_eq!((c.session.count, c.session.fresh, c.session.mode), (MAX_BATCH, true, Mode::Chat));
+        assert!(matches!(next_step(&c), Step::Image { .. }) && needs_round(&c));
+        c.settings["prompt"] = json!(" ");
+        assert!(draw_again(&mut c, 1).is_err(), "nothing to draw");
+    }
+
+    #[test]
+    fn a_proposal_carries_its_first_prompt_which_draw_one_and_start_set() {
+        let propose = |c: &mut Chat| {
+            c.session.goal.clear();
+            c.session.mode = Mode::Chat;
+            let t = tk(c);
+            let r = reply(json!({"notes": "an improvement", "action": "improve", "goal": "A fox in a red hat",
+                                 "prompt": "a fox wearing a red knitted hat, {mood} light", "reply": "Shall I?"}));
+            apply_reply(c, Mode::Chat, r, &t, &Locks::default(), vec![], Default::default());
+        };
+        let mut c = chat();
+        propose(&mut c);
+        let p = c.session.proposal.clone().expect("proposed");
+        assert_eq!(p.prompt.as_deref(), Some("a fox wearing a red knitted hat, mood light"), "an invented variable loses its braces");
+        assert_eq!(c.settings["prompt"], "a fox", "nothing changes while it waits");
+        assert!(matches!(c.messages.iter().rev().find(|m| matches!(m, Msg::Agent { .. })), Some(Msg::Agent { prompt: None, .. })));
+
+        draw_proposal(&mut c).unwrap();
+        assert!(c.session.proposal.is_none());
+        assert_eq!(c.settings["prompt"], "a fox wearing a red knitted hat, mood light");
+        assert_eq!((c.session.count, c.session.fresh, c.session.mode), (1, true, Mode::Chat));
+        assert!(matches!(next_step(&c), Step::Image { .. }) && needs_round(&c));
+        let change = c.changes.last().expect("an undoable change");
+        assert_eq!((change.before["prompt"].as_str(), change.msg), (Some("a fox"), p.n));
+
+        // Started instead, sized on the card, over a round already drawn.
+        let mut c = chat();
+        c.session.mode = Mode::Chat;
+        c.session.count = 1;
+        start_round(&mut c, 9);
+        let Some(Msg::Batch { images, .. }) = c.messages.last_mut() else { panic!("a round") };
+        images.push(ImageRef { kind: "item".into(), id: "a".into(), file: "a.png".into(), seed: Some(9) });
+        propose(&mut c);
+        start_proposal_sized(&mut c, Some(2), None).unwrap();
+        assert_eq!(c.settings["prompt"], "a fox wearing a red knitted hat, mood light");
+        assert_eq!(judgeable(&c), None, "that round answered the old prompt");
+        let t = tk(&c);
+        apply_reply(&mut c, Mode::Plan, reply(json!({"notes": "", "checks": ["Is the hat red?"], "rounds": 5, "count": 8, "reply": ""})),
+                    &t, &Locks::default(), vec![], Default::default());
+        assert_eq!((session_limit(&c), c.session.per_round), (2, 0), "the card's rounds, the usual pictures each");
+        assert!(needs_round(&c) && !c.session.redraw_first);
     }
 
     #[test]

@@ -144,6 +144,63 @@ pub fn expand(text: &str, vars: &Variables, seed: i64) -> Result<String> {
     Ok(out)
 }
 
+/// Every well-formed `{name}` in `text` as (start, end, name), in order —
+/// the same reading [`expand`] makes of it.
+fn placeholders(text: &str) -> Vec<(usize, usize, &str)> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(open) = text[at..].find('{').map(|i| i + at) {
+        let after = &text[open + 1..];
+        match after.find('}') {
+            Some(close) if is_name(&after[..close]) => {
+                found.push((open, open + close + 2, &after[..close]));
+                at = open + close + 2;
+            }
+            _ => at = open + 1,
+        }
+    }
+    found
+}
+
+/// Whether `text` names a variable at all.
+pub fn uses_any(text: &str) -> bool {
+    !placeholders(text).is_empty()
+}
+
+/// What each `{name}` in `text` rolled to on `seed`, in order: the words
+/// [`expand`] put in. Unknown and empty variables are left out.
+pub fn picks(text: &str, vars: &Variables, seed: i64) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (nth, (_, _, name)) in placeholders(text).into_iter().enumerate() {
+        if let Some(list) = words(vars, name).filter(|l| !l.is_empty()) {
+            out.push((name.to_string(), list[pick(seed, nth as u64, list.len())].clone()));
+        }
+    }
+    out
+}
+
+/// `text` with the braces taken off every `{name}` that is not a variable,
+/// and those names. For a prompt the agent wrote: [`expand`] refuses an
+/// unknown name — right for a person's typo, but a model that invents
+/// `{color}` would fail every picture of the round it asked for.
+pub fn unbrace_unknown(text: &str, vars: &Variables) -> (String, Vec<String>) {
+    let mut out = String::with_capacity(text.len());
+    let mut dropped = Vec::new();
+    let mut at = 0;
+    for (start, end, name) in placeholders(text) {
+        out.push_str(&text[at..start]);
+        if words(vars, name).is_some() {
+            out.push_str(&text[start..end]);
+        } else {
+            out.push_str(name);
+            dropped.push(name.to_string());
+        }
+        at = end;
+    }
+    out.push_str(&text[at..]);
+    (out, dropped)
+}
+
 /// The message for a name nothing answers to. It lists what *is* defined,
 /// because the answer is nearly always a typo or a variable saved under
 /// another name, and both are settled by seeing the list.
@@ -228,6 +285,27 @@ pub fn validate(vars: &Variables) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the agent's side uses: the words a seed rolled, read the way
+    /// `expand` reads them, and an invented name losing its braces.
+    #[test]
+    fn picks_agree_with_expand_and_unknown_names_lose_their_braces() {
+        let mut vars = Variables::new();
+        vars.insert("animal".into(), vec!["fox".into(), "cat".into(), "owl".into()]);
+        vars.insert("color".into(), vec!["red".into(), "blue".into()]);
+        let text = "a {color} {animal} beside a {color} {a nice day} door";
+        for seed in [1, 7, 12345] {
+            let rolled = picks(text, &vars, seed);
+            assert_eq!(rolled.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["color", "animal", "color"]);
+            let by_hand = format!("a {} {} beside a {} {{a nice day}} door", rolled[0].1, rolled[1].1, rolled[2].1);
+            assert_eq!(expand(text, &vars, seed).unwrap(), by_hand);
+        }
+        assert!(uses_any(text) && !uses_any("a {nice day} and [down] (up:1.2)"));
+        let (kept, dropped) = unbrace_unknown("a {Animal} with {mood} eyes, {a b}", &vars);
+        assert_eq!(kept, "a {Animal} with mood eyes, {a b}");
+        assert_eq!(dropped, ["mood"]);
+        assert!(expand(&kept, &vars, 3).is_ok());
+    }
 
     fn vars() -> Variables {
         Variables::from([

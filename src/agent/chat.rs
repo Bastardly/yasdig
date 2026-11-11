@@ -414,6 +414,12 @@ pub struct Proposal {
     pub per_round: u32,
     #[serde(default)]
     pub rounds: u32,
+    /// An improvement's first prompt, as the agent wrote it with the
+    /// proposal: shown on the card, set when the person starts the session
+    /// or draws one picture of it (`session::draw_proposal`). Nothing is
+    /// changed while the proposal waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 /// A picture a message shows.
@@ -687,6 +693,15 @@ pub struct Session {
     /// The next round draws new seeds rather than the last round's.
     #[serde(default)]
     pub fresh: bool,
+    /// The person sized the session on its card (`rounds`, `per_round`), so
+    /// the plan turn's own sizes are not taken.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sized: bool,
+    /// The session began by changing the prompt (its proposal's), so the
+    /// round drawn before it answers another prompt and is not judged
+    /// first (`session::judgeable`). Until the plan turn lands.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redraw_first: bool,
     /// A comparison, when this session is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep: Option<Sweep>,

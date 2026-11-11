@@ -1298,6 +1298,7 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chatnotes { font-size: var(--fs-sm); color: var(--text-dim); }
 .chatnotes > summary { cursor: pointer; color: var(--text-faint); }
 .chatnotes > p { margin: var(--sp-1) 0 0; white-space: pre-wrap; }
+.chatnotes > .chatstats { white-space: normal; }
 .chatstats { font-family: var(--font-num); font-size: var(--fs-micro); }
 .chatchecklist { margin: 0; padding-left: var(--sp-5); }
 .chatrefs { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
@@ -1339,6 +1340,13 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   display: flex; flex-direction: column; gap: var(--sp-1);
 }
 .chatcard.pending { border-color: var(--state); }
+/* What the agent changed, and a plan's checks: one line that opens. A session
+   writes one per round, and as cards they buried the conversation. */
+.chatchange { display: flex; align-items: flex-start; gap: var(--sp-2); font-size: var(--fs-sm); }
+.chatchange > .chatfold { flex: 1; min-width: 0; }
+.chatfold > summary { cursor: pointer; color: var(--text-dim); }
+.chatfold[open] > summary { color: var(--text); }
+.chatfold > :not(summary) { margin-top: var(--sp-1); }
 .chatcard .btnrow { margin-top: var(--sp-1); }
 .chatcardhead { margin: 0; font-size: var(--fs-sm); color: var(--text-dim); }
 .chatchanges { margin: 0; padding-left: var(--sp-4); }
@@ -1346,6 +1354,10 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chatclip { max-width: 100%; height: var(--chat-pic); width: auto; object-fit: contain; border-radius: var(--r-sm); align-self: flex-start; }
 .chatchecks.inline { position: static; }
 .chatprompt { margin: 0; white-space: pre-wrap; font-size: var(--fs-sm); }
+/* A proposal's sizes: two short number boxes on one line. */
+.chatsizes { display: flex; flex-wrap: wrap; gap: var(--sp-3); font-size: var(--fs-sm); color: var(--text-dim); }
+.chatsize { display: flex; align-items: center; gap: var(--sp-1); }
+.chatsize input { width: 5em; }
 
 /* The Cast panel: the cast as cards of picture and fields. Wide from the
    start and wider or taller by its corner (`both`); the cast fills as many

@@ -26,6 +26,8 @@ use anyhow::Result;
 use serde_json::json;
 
 const PROMPT: &str = "a fox, snowy forest, soft morning light, photograph";
+/// The same with a prompt variable (`{animal}`: fox, owl, hare) in it.
+const VAR_PROMPT: &str = "a {animal}, snowy forest, soft morning light, photograph";
 
 struct Case {
     name: &'static str,
@@ -34,6 +36,8 @@ struct Case {
     says: &'static str,
     /// A critique: the checks the test picture is judged by.
     checks: &'static [&'static str],
+    /// The prompt already in the box, where the case needs its own.
+    prompt: Option<&'static str>,
     /// What a model that understood wrote, or what was wrong.
     want: fn(&ReplyJson) -> Result<(), String>,
 }
@@ -55,6 +59,7 @@ const CASES: &[Case] = &[
         mode: Mode::Chat,
         says: "Draw a lighthouse on a cliff in a storm.",
         checks: &[],
+        prompt: None,
         want: |r| {
             action(r, "draw")?;
             let p = new_prompt(r).unwrap_or("").to_lowercase();
@@ -72,6 +77,7 @@ const CASES: &[Case] = &[
         mode: Mode::Chat,
         says: "Give me three pictures of a castle at night.",
         checks: &[],
+        prompt: None,
         want: |r| {
             action(r, "draw")?;
             if r.count == Some(3) { Ok(()) } else { Err(format!("count {:?} where 3 were asked for", r.count)) }
@@ -82,6 +88,7 @@ const CASES: &[Case] = &[
         mode: Mode::Chat,
         says: "What does CFG scale do? Don't draw anything.",
         checks: &[],
+        prompt: None,
         want: |r| {
             action(r, "talk")?;
             match new_prompt(r) {
@@ -96,10 +103,16 @@ const CASES: &[Case] = &[
         mode: Mode::Chat,
         says: "Keep trying until the fox is wearing a red knitted hat.",
         checks: &[],
+        prompt: None,
         want: |r| {
             action(r, "improve")?;
             let g = r.goal.as_deref().unwrap_or("").to_lowercase();
-            if g.contains("hat") { Ok(()) } else { Err(format!("the goal leaves out the hat: {g:?}")) }
+            if !g.contains("hat") {
+                return Err(format!("the goal leaves out the hat: {g:?}"));
+            }
+            // The card shows it, and *Draw one* draws it.
+            let p = r.prompt.as_deref().unwrap_or("").to_lowercase();
+            if p.contains("hat") && p.contains("fox") { Ok(()) } else { Err(format!("its first prompt isn't the whole prompt with the hat in it: {p:?}")) }
         },
     },
     Case {
@@ -107,6 +120,7 @@ const CASES: &[Case] = &[
         mode: Mode::Chat,
         says: "Which CFG works best for this prompt? Try a few values.",
         checks: &[],
+        prompt: None,
         want: |r| {
             action(r, "compare")?;
             if r.vary.as_deref() != Some("cfg_scale") {
@@ -126,10 +140,47 @@ const CASES: &[Case] = &[
         },
     },
     Case {
+        name: "keeps a prompt variable when it rewrites the prompt",
+        mode: Mode::Chat,
+        says: "Add a red knitted hat and draw it.",
+        checks: &[],
+        prompt: Some(VAR_PROMPT),
+        want: |r| {
+            action(r, "draw")?;
+            let p = new_prompt(r).unwrap_or("");
+            if !p.to_lowercase().contains("hat") {
+                return Err(format!("the prompt it would draw has no hat: {p:?}"));
+            }
+            // Written out as one animal, every picture is that animal.
+            if p.contains("{animal}") { Ok(()) } else { Err(format!("it wrote the variable out, or dropped it: {p:?}")) }
+        },
+    },
+    Case {
+        name: "makes a cast member, and says so before it is drawn",
+        mode: Mode::Chat,
+        says: "Make a character for my cast: Elias, a weathered fisherman in his fifties with a grey beard.",
+        checks: &[],
+        prompt: None,
+        want: |r| {
+            action(r, "cast")?;
+            let m = r.member.as_ref().ok_or("no member")?;
+            if !m.name.to_lowercase().contains("elias") {
+                return Err(format!("the member is named {:?}, not Elias", m.name));
+            }
+            // The reply is written before the picture is.
+            let reply = r.reply.to_lowercase();
+            match ["i drew", "i've drawn", "i have drawn", "here is", "here's"].iter().find(|w| reply.contains(*w)) {
+                Some(w) => Err(format!("its reply says \"{w}\" before anything is drawn: {:?}", r.reply)),
+                None => Ok(()),
+            }
+        },
+    },
+    Case {
         name: "writes checks that can be answered by looking",
         mode: Mode::Plan,
         says: "A fox wearing a red knitted hat in a snowy forest.",
         checks: &[],
+        prompt: None,
         want: |r| {
             let checks: Vec<&str> = r.checks.as_ref().and_then(|c| c.as_array()).into_iter().flatten().filter_map(|c| c.as_str()).collect();
             if !(2..=5).contains(&checks.len()) {
@@ -150,6 +201,7 @@ const CASES: &[Case] = &[
         says: "A red square and a blue circle on a white background.",
         // The picture has the square alone (`test_picture`).
         checks: &["Is there a red square?", "Is there a blue circle?"],
+        prompt: None,
         want: |r| {
             let row: Vec<bool> = r
                 .checks
@@ -181,7 +233,7 @@ fn test_picture() -> Result<Vec<u8>> {
 /// The chat a case's turn is asked in: a prompt already set, and for a
 /// critique the round it judges.
 fn chat_for(case: &Case) -> Chat {
-    let mut chat = Chat::new("agent-check".into(), json!({ "prompt": PROMPT, "cfg_scale": 6.0 }), None);
+    let mut chat = Chat::new("agent-check".into(), json!({ "prompt": case.prompt.unwrap_or(PROMPT), "cfg_scale": 6.0 }), None);
     match case.mode {
         Mode::Chat => chat.messages.push(Msg::User { n: 0, ms: 0, text: case.says.into(), images: vec![] }),
         Mode::Critique => {
@@ -215,8 +267,22 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
     );
     let (all_skills, _) = skills::load(&user_skills_dir(cfg));
     let family = ImageFamily::Sdxl;
-    let mut tk = toolkit::build(&Rules::default(), &json!({ "prompt": PROMPT, "cfg_scale": 6.0 }), &Locks::default(), vec![], Some(family));
-    tk.vision = model.vision();
+    // One per case: what a turn is offered follows the prompt in the box, the
+    // person's variables, and — for a cast member — an image model to draw with.
+    let toolkit_for = |case: &Case| {
+        let settings = json!({ "prompt": case.prompt.unwrap_or(PROMPT), "cfg_scale": 6.0 });
+        let models = if case.name.contains("cast member") {
+            vec![toolkit::ModelChoice { name: "sdxl".into(), family: family.as_str(), label: family.label(), references: false, locks: Locks::default() }]
+        } else {
+            vec![]
+        };
+        let mut tk = toolkit::build(&Rules::default(), &settings, &Locks::default(), models, Some(family));
+        tk.vision = model.vision();
+        if case.prompt.is_some() {
+            tk.variables.insert("animal".into(), vec!["fox".into(), "owl".into(), "hare".into()]);
+        }
+        tk
+    };
 
     let dir = crate::pipeline::scratch_dir(&cfg.base_dir.join("work"));
     std::fs::create_dir_all(&dir)?;
@@ -235,6 +301,7 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
             staged.0.push(p);
         }
         let chat = chat_for(case);
+        let tk = toolkit_for(case);
         let (skill_text, _, _) = skills::select(&all_skills, &[family.as_str()], case.mode);
         let turn = context::Turn {
             mode: case.mode,
@@ -282,7 +349,7 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
     if passed < ran {
         println!(
             "[agent-check] A failed case is a choice this model gets wrong on this build's instructions, not a broken install \
-             (`llm-selftest` checks that). The first five are chat turns; the last two are what a session needs."
+             (`llm-selftest` checks that). The first seven are chat turns; the last two are what a session needs."
         );
     }
     Ok(())

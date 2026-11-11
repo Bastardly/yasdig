@@ -25,7 +25,7 @@ yasdig doctor [models.toml]      # run the startup checks and report, without st
 yasdig upscale in.png out.png <model> [factor=2.0] [models.toml]  # the model enlarge alone
 yasdig fold-scales <file.gguf>...  # fold a scaled-fp8 GGUF's scales into its weights
 yasdig llm-selftest [agent|-] [picture.png] [models.toml]  # one agent turn, no server
-yasdig agent-check [agent|-] [models.toml]  # seven scored turns: what this agent model gets right
+yasdig agent-check [agent|-] [models.toml]  # nine scored turns: what this agent model gets right
 yasdig fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]  # no colour knobs: UI only
 yasdig fsr-selftest [out.png]    # synthesize patterns and check the filters
 yasdig sr-selftest               # the upscaler shaders against CPU references, plus speed
@@ -813,10 +813,16 @@ the chat, whose `rev` moves on every write.
   installed.
 - `POST /agent/undo` — `{ chat, change }`: put an applied change's settings back, if they
   still hold what it set (else `409`). Recorded as a change of yours.
-- `POST /agent/session` — `{ chat, start }`: answer the proposed session. `start: true`
-  begins it (a plan turn first) and answers `{job}`; `false` drops it with a note and
+- `POST /agent/session` — `{ chat, start, draw_one?, rounds?, count? }`: answer the
+  proposed session. `start: true` begins it (a plan turn first) and answers `{job}`;
+  with `rounds`/`count` it runs at those sizes (clamped; one given, the other is the
+  default) rather than the plan's; with `draw_one` the proposal's `prompt` is set and
+  drawn once instead (`409` when it has none). `false` drops it with a note and
   answers the chat. `409` with no proposal, or while the agent is working on the chat.
   A new `/agent/send` drops an unanswered one.
+- `POST /agent/again` — `{ chat, count? }`: draw the chat's settings again on new seeds,
+  `count` pictures (1), with no agent turn; answers `{job}`. `409` with no round yet, a
+  blank prompt, or while the agent is working on the chat.
 - `POST /agent/stop` — `{ chat }`: end the chat's leg, killing a reply or a render in flight.
 - `POST /chats/delete` / `POST /favorite-chats/delete` — `{ ids }`, one shelf each.
   `/favorite-chats/add` and `/favorite-chats/remove` move chats between the two. A chat

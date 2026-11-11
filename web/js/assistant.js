@@ -209,7 +209,16 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
       return;
     }
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    // A proposal card's size boxes are the only thing typed into the log, and
+    // a redraw (another job's queue change) must not empty them.
+    const typed = [...log.querySelectorAll('[data-size]')].map((el) => [el.dataset.size, el.value, el === document.activeElement]);
     log.innerHTML = renderChat(data.chat, live);
+    for (const [key, value, focused] of typed) {
+      const el = log.querySelector(`[data-size="${key}"]`);
+      if (!el) continue;
+      el.value = value;
+      if (focused) el.focus();
+    }
     if (scroll || atBottom) log.scrollTop = log.scrollHeight;
     if (document.activeElement !== q('atitle')) q('atitle').value = data.chat.title;
     q('astate').textContent = stateText(data.chat);
@@ -485,9 +494,22 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
     try {
       if (d.undo) {
         show(await post('/agent/undo', { chat: id, change: Number(d.undo) }), { scroll: false });
-      } else if (d.proposal === 'start') {
+      } else if (d.proposal === 'start' || d.proposal === 'one') {
+        // The card's sizes go only where the person filled one in: blank is
+        // the agent's own pick.
+        const body = { chat: id, start: true };
+        if (d.proposal === 'one') body.draw_one = true;
+        else for (const el of t.closest('.chatcard').querySelectorAll('[data-size]')) {
+          const n = Math.round(Number(el.value));
+          if (el.value.trim() && n >= 1) body[el.dataset.size] = n;
+        }
         t.disabled = true;
-        await post('/agent/session', { chat: id, start: true });
+        await post('/agent/session', body);
+        soonJobs();
+        await openChat(id);
+      } else if (d.again) {
+        t.disabled = true;
+        await post('/agent/again', { chat: id, count: Number(d.again) });
         soonJobs();
         await openChat(id);
       } else if (d.proposal === 'no') {

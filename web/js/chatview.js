@@ -5,7 +5,7 @@ import { esc } from './dom.js';
 // The Assistant's message list, drawn from the chat the server sent
 // (`GET /chats/{id}`). Pure — strings in, a string out — so `chatview.test.js`
 // can hold it to what it shows: every word the model wrote goes through `esc`,
-// a change is a card with Undo while it holds,
+// a change is one line with Undo while it holds,
 // a round is a row of its pictures with what the agent made of each — one
 // picture alone is drawn large.
 //
@@ -51,8 +51,19 @@ function picture(chat, ref, { n, badges = '', tools = true } = {}) {
     ${label}${badges}${ask}</figure>`;
 }
 
+// A change is one line — who, which knobs, Undo — since a session writes one
+// per round and the cards buried the conversation. Short values show on the
+// line; a prompt, the reason and the notes are behind it.
 function changeCard(c) {
-  const rows = Object.entries(c.set ?? {}).map(([k, v]) => `<li><b>${esc(KNOB_LABEL[k] ?? k)}</b>
+  const entries = Object.entries(c.set ?? {});
+  const long = (v) => typeof v === 'string' && v.length > 24;
+  const line = entries.map(([k, v]) => {
+    const was = c.before && k in c.before ? c.before[k] : undefined;
+    const name = esc(KNOB_LABEL[k] ?? k);
+    if (long(v) || long(was)) return name;
+    return `${name} ${was !== undefined ? `${esc(valueText(k, was))} → ` : ''}${esc(valueText(k, v))}`;
+  }).join(' · ');
+  const rows = entries.map(([k, v]) => `<li><b>${esc(KNOB_LABEL[k] ?? k)}</b>
     ${c.before && k in c.before ? `${esc(valueText(k, c.before[k]))} → ` : ''}${esc(valueText(k, v))}</li>`).join('');
   const state = {
     applied: `<button type="button" class="btn" data-undo="${c.id}" title="Put these settings back as they were">Undo</button>`,
@@ -61,11 +72,12 @@ function changeCard(c) {
     rejected: '<span class="sub">Set aside</span>',
   }[c.state] ?? '';
   const who = c.by === 'user' ? 'You changed' : c.state === 'rejected' ? 'The agent asked to change' : 'The agent changed';
-  return `<div class="chatcard">
-    <p class="chatcardhead">${who}</p><ul class="chatchanges">${rows}</ul>
-    ${c.reason ? `<p class="sub">${esc(c.reason)}</p>` : ''}
-    ${(c.notes ?? []).map((n) => `<p class="sub">${esc(n)}</p>`).join('')}
-    <div class="btnrow">${state}</div></div>`;
+  return `<div class="chatchange">
+    <details class="chatfold"><summary>${who} ${line}</summary>
+      <ul class="chatchanges">${rows}</ul>
+      ${c.reason ? `<p class="sub">${esc(c.reason)}</p>` : ''}
+      ${(c.notes ?? []).map((n) => `<p class="sub">${esc(n)}</p>`).join('')}
+    </details>${state}</div>`;
 }
 
 const PASS = { hires: 'Hi-res pass', refine: 'Refine pass', edit: 'Edit' };
@@ -102,17 +114,29 @@ function batchPictures(chat, m, judged) {
 }
 
 // A session the agent wants to run, waiting for the person: nothing is drawn
-// until Start (`/agent/session`), and a new message drops it.
+// until Start (`/agent/session`), and a new message drops it. An improvement
+// shows the prompt its first round would draw, so the person can take just
+// that (*Draw one*) — the rounds are the expensive half. The sizes are the
+// person's to set; blank is the agent's own pick. The server clamps them
+// (`knobs::MAX_ROUNDS`/`MAX_BATCH`), these maxima only stop the spinner.
 function proposalCard(p) {
   const what = p.sweep
     ? `Compare ${esc(KNOB_LABEL[p.sweep.knob] ?? p.sweep.knob)}: ${p.sweep.values.map((v) => esc(valueText(p.sweep.knob, v))).join(', ')}`
-      + ` — ${p.per_round} picture${p.per_round === 1 ? '' : 's'} each, on the same seeds, every one judged.`
+      + ' — on the same seeds, every picture judged.'
     : 'Draw rounds, judge each against yes/no checks and change the prompt or settings until the pictures are right.';
+  const size = (key, label, max, value) => `<label class="chatsize">${label}
+      <input type="number" data-size="${key}" min="1" max="${max}" step="1" placeholder="auto" value="${value > 0 ? value : ''}"></label>`;
+  const first = p.prompt ? `<p class="chatcardhead">Its first prompt</p><p class="chatprompt">${esc(p.prompt)}</p>` : '';
   return `<div class="chatcard">
     <p class="chatcardhead">${p.sweep ? 'Run this comparison?' : 'Run this session?'}</p>
-    <p class="chatprompt">${esc(p.goal)}</p><p class="sub">${what}</p>
+    <p class="chatprompt">${esc(p.goal)}</p>${first}<p class="sub">${what}</p>
+    <div class="chatsizes">
+      ${p.sweep ? '' : size('rounds', 'Rounds', 6, p.rounds)}
+      ${size('count', p.sweep ? 'Pictures per value' : 'Pictures per round', 8, p.per_round)}
+    </div>
     <div class="btnrow">
       <button type="button" class="btn" data-proposal="start">Start</button>
+      ${p.prompt ? '<button type="button" class="btn" data-proposal="one">Draw one</button>' : ''}
       <button type="button" class="btn" data-proposal="no">No thanks</button>
     </div></div>`;
 }
@@ -126,22 +150,27 @@ function agentMessage(chat, m) {
       <div class="btnrow">
         <button type="button" class="btn" data-copy-prompt="${m.n}">Copy to the Image tab</button>
       </div></div>` : '';
-  const checks = m.mode === 'plan' && chat.session.checks.length ? `<ol class="chatchecklist">${
-    chat.session.checks.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>` : '';
+  // The Session panel holds the checks too, so here they are one line.
+  const n = chat.session.checks.length;
+  const checks = m.mode === 'plan' && n ? `<details class="chatfold"><summary>${n} check${n === 1 ? '' : 's'}</summary><ol class="chatchecklist">${
+    chat.session.checks.map((c) => `<li>${esc(c)}</li>`).join('')}</ol></details>` : '';
   // A storyboard is long; the Story panel holds it.
   const board = m.mode === 'story' && chat.film ? `<div class="chatcard">
       <p class="chatcardhead">Storyboard${chat.film.title ? `: ${esc(chat.film.title)}` : ''}</p>
       <p class="sub">${chat.film.cast.length} in the cast · ${chat.film.shots.length} shot${chat.film.shots.length === 1 ? '' : 's'}</p>
       ${castPics(chat)}
       <div class="btnrow"><button type="button" class="btn" data-open-story>Show the storyboard</button></div></div>` : '';
-  const notes = m.notes ? `<details class="chatnotes"><summary>Notes</summary><p>${esc(m.notes)}</p></details>` : '';
-  const stats = m.stats?.n_gen ? `<span class="sub chatstats">${m.stats.n_prompt} read · ${m.stats.n_gen} written · ${
-    ((m.stats.load_ms + m.stats.read_ms + m.stats.gen_ms) / 1000).toFixed(1)} s</span>` : '';
+  // The turn's token counts are for whoever opens the notes, not a line of
+  // their own under every reply.
+  const notesOf = (stats) => (m.notes || stats ? `<details class="chatnotes"><summary>Notes</summary>${
+    m.notes ? `<p>${esc(m.notes)}</p>` : ''}${stats}</details>` : '');
+  const stats = m.stats?.n_gen ? `<p class="sub chatstats">${m.stats.n_prompt} read · ${m.stats.n_gen} written · ${
+    ((m.stats.load_ms + m.stats.read_ms + m.stats.gen_ms) / 1000).toFixed(1)} s</p>` : '';
   return `<div class="chatmsg agent" data-n="${m.n}">
     ${m.reply ? `<p class="chattext">${replyHtml(m.reply)}</p>` : ''}
     ${checks}${describe}${board}${changes.map(changeCard).join('')}${action ? actionCard(chat, action) : ''}
     ${chat.session.proposal?.n === m.n ? proposalCard(chat.session.proposal) : ''}
-    <div class="chatfoot">${notes}${stats}</div></div>`;
+    <div class="chatfoot">${notesOf(stats)}</div></div>`;
 }
 
 export function renderMessage(chat, m, i) {
@@ -156,9 +185,17 @@ export function renderMessage(chat, m, i) {
       // The critique of this round is the next agent message after it.
       const judged = chat.messages.slice(i + 1).find((x) => x.role === 'agent' && x.mode === 'critique');
       const empty = !m.images.length ? '<p class="sub">Drawing…</p>' : '';
+      // *Again* needs no model: the same settings on new seeds (`/agent/again`).
+      // Under the newest round only — it draws with the chat's settings as
+      // they are now, which are that round's — and never while a job runs.
+      const newest = !chat.messages.slice(i + 1).some((x) => x.role === 'batch');
+      const idle = !['queued', 'running'].includes(chat.session?.state);
+      const count = m.images.length;
+      const again = newest && idle && count ? `<div class="btnrow"><button type="button" class="btn" data-again="${count}"
+        title="Draw ${count === 1 ? 'one more' : `${count} more`} with these settings on new seeds. No agent turn.">Again</button></div>` : '';
       return `<div class="chatmsg batch" data-n="${m.n}">
         <p class="chatcardhead">Round ${m.round}<span class="sub"> · ${esc(m.summary)}</span></p>
-        <div class="chatpics${m.images.length === 1 ? ' large' : ''}">${batchPictures(chat, m, judged)}</div>${empty}</div>`;
+        <div class="chatpics${m.images.length === 1 ? ' large' : ''}">${batchPictures(chat, m, judged)}</div>${empty}${again}</div>`;
     }
     case 'clip':
       return `<div class="chatmsg agent" data-n="${m.n}"><div class="chatcard">

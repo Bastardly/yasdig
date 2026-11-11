@@ -229,3 +229,46 @@ test('the agent at work says so at the foot of the log, and only while it works'
   assert.ok(!renderChat(working, { text: '{"reply": "Hi' }).includes('chatworking'), 'a reply being written shows itself');
   assert.ok(!renderChat(chat()).includes('chatworking'), 'idle');
 });
+
+test('a change is one line: short values on it, a prompt behind it', () => {
+  const c = chat({
+    changes: [{ id: 1, by: 'agent', state: 'applied', reason: 'why',
+      set: { cfg_scale: 4, prompt: 'a very long prompt about a dog on a hill at dawn' }, before: { cfg_scale: 7, prompt: 'a dog' } }],
+    messages: [{ role: 'agent', n: 0, mode: 'chat', reply: 'ok', changes: [1] }],
+  });
+  const html = renderChat(c);
+  const summary = html.match(/<summary>([^]*?)<\/summary>/)[1];
+  assert.ok(summary.includes('CFG 7 → 4') && summary.includes('Prompt'));
+  assert.ok(!summary.includes('hill'), 'the prompt opens, it is not on the line');
+  assert.ok(html.includes('hill') && html.includes('data-undo="1"'));
+});
+
+test('a proposal shows its first prompt, its sizes and Draw one', () => {
+  const p = { n: 0, goal: 'a <b>fox</b>', prompt: 'a fox, red hat', per_round: 0, rounds: 0 };
+  const c = chat({
+    messages: [{ role: 'agent', n: 0, mode: 'chat', reply: 'shall I?' }],
+    session: { state: 'idle', goal: '', checks: [], round: 0, proposal: p },
+  });
+  let html = renderChat(c);
+  assert.ok(html.includes('a fox, red hat') && html.includes('data-proposal="one"'));
+  assert.ok(html.includes('data-size="rounds"') && html.includes('data-size="count"'));
+  assert.ok(!html.includes('<b>fox'), 'the goal is escaped');
+  // A comparison's rounds are its values; no prompt, no Draw one.
+  c.session.proposal = { n: 0, goal: 'cfg', per_round: 2, rounds: 2, sweep: { knob: 'cfg_scale', values: [3, 5] } };
+  html = renderChat(c);
+  assert.ok(!html.includes('data-size="rounds"') && !html.includes('data-proposal="one"'));
+  assert.ok(/data-size="count"[^>]*value="2"/.test(html));
+});
+
+test('Again is under the newest round only, and never while the agent works', () => {
+  const ref = (k) => ({ kind: 'item', id: `w${k}`, file: `${k}.png` });
+  const c = chat({ messages: [
+    { role: 'batch', n: 0, round: 1, summary: 's', images: [ref(1)] },
+    { role: 'batch', n: 1, round: 2, summary: 's', images: [ref(2), ref(3)] },
+  ] });
+  let html = renderChat(c);
+  assert.equal(html.match(/data-again/g).length, 1);
+  assert.ok(html.includes('data-again="2"'));
+  c.session.state = 'running';
+  assert.ok(!renderChat(c).includes('data-again'));
+});

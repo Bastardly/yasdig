@@ -351,6 +351,11 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32, sweep: bool) -> 
             let mut improve = props.clone();
             improve.insert("action".into(), json!({ "const": "improve" }));
             improve.insert("goal".into(), text(GOAL_CHARS));
+            // The first round's prompt, so the card shows what would be
+            // drawn and the person can have just that one picture.
+            if let Some(k) = t.offered_knobs().find(|k| k.key == "prompt") {
+                improve.insert("prompt".into(), knob_schema(k, t));
+            }
             improve.insert("reply".into(), text(REPLY_CHARS));
             branches.push(object(improve));
             // A comparison: one knob, the values to try, pictures per value.
@@ -553,7 +558,7 @@ mod tests {
         let seeing = output(Mode::Chat, &t, 1, 0, false);
         assert_eq!(actions(&seeing), ["talk", "draw", "describe", "improve", "cast", "compare"]);
         assert_eq!(keys(&seeing["anyOf"][2]), ["notes", "action", "prompt", "negative", "reply"]);
-        assert_eq!(keys(&seeing["anyOf"][3]), ["notes", "action", "goal", "reply"]);
+        assert_eq!(keys(&seeing["anyOf"][3]), ["notes", "action", "goal", "prompt", "reply"]);
         let compare = &seeing["anyOf"][5];
         assert_eq!(keys(compare), ["notes", "action", "change", "reason", "goal", "vary", "values", "count", "reply"]);
         // The default whitelist: prompt, negative, CFG, size, model — size isn't comparable.

@@ -118,6 +118,33 @@ fn library_text(library: &[super::toolkit::SavedCast]) -> Option<String> {
     Some(s)
 }
 
+/// Variables a turn is shown at most, words of each, and characters of a word.
+const VARS_MAX: usize = 12;
+const VAR_WORDS: usize = 6;
+const VAR_WORD_CHARS: usize = 30;
+
+/// The person's prompt variables, for a turn that writes the prompt: the
+/// names that work in braces, with a few of each one's words. `None` when
+/// there are none — the agent then never hears of braces, and one it writes
+/// anyway loses them (`session::apply_reply`).
+fn variables_text(vars: &crate::variables::Variables) -> Option<String> {
+    if vars.is_empty() {
+        return None;
+    }
+    let mut s = String::from(
+        "\n\nVariables: a {name} in the prompt is replaced by one of the person's words for it, picked anew for \
+         every picture. Keep each {name} the prompt has exactly as written, braces and all, unless asked to \
+         take it out. Put one in when the person asks for variety (\"a different animal each time\"). Only \
+         these names work; never make one up:",
+    );
+    for (name, words) in vars.iter().take(VARS_MAX) {
+        let shown: Vec<String> = words.iter().take(VAR_WORDS).map(|w| w.chars().take(VAR_WORD_CHARS).collect()).collect();
+        let more = words.len().saturating_sub(VAR_WORDS);
+        s.push_str(&format!("\n- {{{name}}}: {}{}", shown.join(", "), if more > 0 { format!(" (+{more} more)") } else { String::new() }));
+    }
+    Some(s)
+}
+
 pub fn system(t: &Toolkit, turn: &Turn) -> String {
     let mut s = String::new();
     s.push_str(turn.skills);
@@ -209,6 +236,9 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
             } else {
                 "\n\nThe prompt is not yours to change; pictures are drawn from the current one."
             });
+            if let Some(vars) = variables_text(&t.variables).filter(|_| schema::writes_prompt(t)) {
+                s.push_str(&vars);
+            }
             if turn.mode == Mode::Chat {
                 // On its own, not only as `Now:` at the end of a settings
                 // line: `agent-check` had a 26B model read past it there and
@@ -243,6 +273,12 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                      \"make these better\", \"find the best prompt for this picture\" (an attached picture is \
                      what the rounds are judged against). `goal`: one sentence of what the pictures must show.",
                 );
+                if schema::writes_prompt(t) {
+                    s.push_str(
+                        " `prompt`: the whole prompt its first round would draw, written out; the current one \
+                         unchanged when it already asks for everything.",
+                    );
+                }
                 if let Some(why) = &t.film_off {
                     s.push_str(&format!(
                         "\n- A film can't be made in this chat: {why}. If the person asks for one, say so and what would fix it."
@@ -419,12 +455,18 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                 ),
                 None => "Change the prompt if it doesn't ask for everything the goal does.".to_string(),
             };
+            let rolls = if crate::variables::uses_any(prompt) {
+                "\nThe prompt has variables, so every picture differs in those words: write checks that hold \
+                 whichever word was picked (\"Is the animal wearing a hat?\", not \"Is there a fox?\")."
+            } else {
+                ""
+            };
             let mut parts = reference_parts(
                 "The picture to match: the checks are what it shows, and the prompt should draw something like it.",
             );
             parts.push(Part::Text {
                     text: format!(
-                        "Goal: {}\nThe prompt now: {prompt}\nWrite the checks for this goal. {next}\nSet `rounds` and \
+                        "Goal: {}\nThe prompt now: {prompt}\nWrite the checks for this goal. {next}{rolls}\nSet `rounds` and \
                          `count` (pictures per round) from the person's words: \"try 2 rounds of 2\" is 2 and 2. \
                          When they don't say, 3 rounds of 4. At most {} rounds of {}.",
                         turn.goal,
@@ -453,8 +495,29 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                     turn.goal
                 ),
             });
+            // What each picture's variables rolled to: the prompt says
+            // {animal}, and the check is answered about the cat it drew.
+            let prompt = chat.settings.get("prompt").and_then(|p| p.as_str()).unwrap_or("");
+            let seeds: Vec<Option<i64>> = history
+                .iter()
+                .rev()
+                .find_map(|m| match m {
+                    Msg::Batch { round, images, .. } if *round == turn.round => Some(images.iter().map(|i| i.seed).collect()),
+                    _ => None,
+                })
+                .unwrap_or_default();
             for (k, p) in own.iter().enumerate() {
-                parts.push(Part::Text { text: format!("Picture {}:", k + 1) });
+                let rolled: Vec<String> = seeds
+                    .get(k)
+                    .copied()
+                    .flatten()
+                    .map(|seed| crate::variables::picks(prompt, &t.variables, seed))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(name, word)| format!("{name}: {word}"))
+                    .collect();
+                let drew = if rolled.is_empty() { String::new() } else { format!(" (drawn with {})", rolled.join(", ")) };
+                parts.push(Part::Text { text: format!("Picture {}{drew}:", k + 1) });
                 parts.push(Part::Image { path: p.clone() });
             }
             let checks: Vec<String> = turn.checks.iter().enumerate().map(|(i, c)| format!("{}. {c}", i + 1)).collect();
@@ -698,6 +761,29 @@ mod tests {
         assert!(labelled, "the reference comes first, named");
         let text: String = last.iter().filter_map(|p| match p { Part::Text { text } => Some(text.as_str()), _ => None }).collect();
         assert!(text.contains("the 2 picture(s) just drawn") && text.contains("Picture 2:") && !text.contains("Picture 3:"));
+    }
+
+    /// The agent hears of variables only when there are some, by name with a
+    /// few words; a critique is told what each picture rolled.
+    #[test]
+    fn variables_are_named_to_the_agent_and_their_rolls_to_a_critique() {
+        let mut t = toolkit();
+        assert!(!system(&t, &turn(Mode::Chat, vec![])).contains("Variables:"));
+        t.variables.insert("animal".into(), (0..9).map(|n| format!("beast{n}")).collect());
+        let s = system(&t, &turn(Mode::Chat, vec![]));
+        assert!(s.contains("- {animal}: beast0, beast1") && s.contains("(+3 more)") && !s.contains("beast7"), "{s}");
+
+        let mut c = chat();
+        c.settings["prompt"] = "a {animal} in a hat".into();
+        let checks = ["Is the animal wearing a hat?".to_string()];
+        let tn = Turn { checks: &checks, round: 1, ..turn(Mode::Critique, vec!["/w/a.png".into(), "/w/b.png".into()]) };
+        let m = messages(&c, &t, &tn);
+        let text: String = m.last().unwrap().content.iter().filter_map(|p| match p { Part::Text { text } => Some(text.as_str()), _ => None }).collect();
+        let word = &crate::variables::picks("a {animal} in a hat", &t.variables, 1)[0].1;
+        assert!(text.contains(&format!("Picture 1 (drawn with animal: {word}):")), "{text}");
+        let plan = messages(&c, &t, &turn(Mode::Plan, vec![]));
+        let text: String = plan.last().unwrap().content.iter().filter_map(|p| match p { Part::Text { text } => Some(text.as_str()), _ => None }).collect();
+        assert!(text.contains("whichever word was picked"), "{text}");
     }
 
     #[test]

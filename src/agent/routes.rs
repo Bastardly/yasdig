@@ -43,6 +43,7 @@ pub fn route(
         ("POST", "/agent/undo") => undo(conn, cfg, body),
         ("POST", "/agent/stop") => stop(conn, cfg, lanes, monitor, body),
         ("POST", "/agent/session") => answer_proposal(conn, cfg, lanes, body),
+        ("POST", "/agent/again") => again(conn, cfg, lanes, body),
         ("GET", p) if p.starts_with("/chats/") => {
             let rest = &p["/chats/".len()..];
             let parts: Vec<&str> = rest.split('/').collect();
@@ -698,6 +699,14 @@ fn answer_proposal(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u
     struct Dto {
         chat: String,
         start: bool,
+        /// *Draw one*: the proposal's first prompt, once, instead of the session.
+        #[serde(default)]
+        draw_one: bool,
+        /// The card's sizes, where the person set them.
+        #[serde(default)]
+        rounds: Option<u32>,
+        #[serde(default)]
+        count: Option<u32>,
     }
     let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
     let store = super::store(cfg);
@@ -708,7 +717,11 @@ fn answer_proposal(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u
         if !dto.start {
             return session::decline_proposal(c).map_err(|e| anyhow::anyhow!(e)).map(|_| c.clone());
         }
-        session::start_proposal(c).map_err(|e| anyhow::anyhow!(e))?;
+        if dto.draw_one {
+            session::draw_proposal(c).map_err(|e| anyhow::anyhow!(e))?;
+        } else {
+            session::start_proposal_sized(c, dto.rounds, dto.count).map_err(|e| anyhow::anyhow!(e))?;
+        }
         c.session.state = State::Queued;
         c.session.job = None;
         c.session.error = None;
@@ -721,6 +734,35 @@ fn answer_proposal(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u
     if !dto.start {
         return get_chat(conn, cfg, &dto.chat);
     }
+    let job = enqueue(lanes, &store, &c)?;
+    ok(conn, json!({ "job": job }))
+}
+
+/// *Again* under a round (`session::draw_again`): queued like a turn, but
+/// its leg starts at the pictures.
+fn again(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Dto {
+        chat: String,
+        #[serde(default)]
+        count: Option<u32>,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let store = super::store(cfg);
+    let r = store.update(&dto.chat, |c| {
+        if c.session.busy() {
+            anyhow::bail!("the agent is working on this chat — stop it, or wait");
+        }
+        session::draw_again(c, dto.count.unwrap_or(1)).map_err(|e| anyhow::anyhow!(e))?;
+        c.session.state = State::Queued;
+        c.session.job = None;
+        c.session.error = None;
+        Ok(c.clone())
+    });
+    let c = match r {
+        Ok(c) => c,
+        Err(e) => return err(conn, 409, &format!("{e:#}")),
+    };
     let job = enqueue(lanes, &store, &c)?;
     ok(conn, json!({ "job": job }))
 }

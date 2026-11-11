@@ -3,6 +3,29 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### Added
+
+- **The Assistant knows your prompt variables.** It is told their names and words,
+  keeps a `{name}` when it rewrites a prompt, and a session's judge is told which word
+  each picture rolled. A name it makes up loses its braces instead of failing the round.
+- **A proposed session shows the prompt it would start with**, and **Draw one** draws
+  that prompt once without the session. *Rounds* and *Pictures per round* can be set
+  on the card.
+- **Again**, under the newest round of a chat: the same settings on new seeds, with no
+  agent turn.
+- `agent-check` has nine cases: a variable kept in a rewritten prompt, and a cast member.
+
+### Changed
+
+- **A chat reads shorter**: a change the agent made is one line that opens, as are a
+  session's checks; a turn's token counts are under its Notes.
+
+### Fixed
+
+- The Assistant said "I drew…" about a cast member before the picture existed.
+
 ## 0.10.1 — 2026-11-10
 
 ### Fixed

@@ -24,7 +24,7 @@ cargo run --release -- fsr-selftest         # full wgpu path, no sd.cpp or check
 cargo run --release -- fsr in.png out.png [scale] [sharpness] [clarity]
 cargo run --release -- upscale in.png out.png <model> [factor]  # model enlarge + consistency dB
 cargo run --release -- sr-selftest          # `src/sr/` shader ops vs CPU references, matmul TFLOPS
-cargo run --release -- agent-check [agent]  # seven scored agent turns (`agent/check.rs`): run before and after a skill edit
+cargo run --release -- agent-check [agent]  # nine scored agent turns (`agent/check.rs`): run before and after a skill edit
 cargo run --release -- fold-scales f.gguf   # fold a scaled-fp8 GGUF's scales into its weights, in place
 node --test 'web/js/*.test.js'              # prompt-weight maths, OOM box choices, module graph evaluates.
                                             #   Node's built-in runner; no npm/package.json; runtime needs no Node.
@@ -965,6 +965,25 @@ Break silently:
   a critique answers checks/keepers only, and after the last one `sweep_table` is posted
   as a note and `Mode::Verdict` (`best`) runs: `before` is written back, then `best` lands
   as an ordinary undoable change — so Undo returns to before the comparison.
+- **A proposal is more than Start**: an improve carries the prompt its first round
+  would draw (`Proposal.prompt`, the schema's `prompt` on that branch). Start sets it
+  as an undoable change and marks `Session.redraw_first` (the plan turn then draws
+  rather than judging the old prompt's round — `judgeable` is `None` while it is set);
+  *Draw one* (`/agent/session {draw_one}` → `session::draw_proposal`) sets it and
+  draws once as a chat draw, no session. The card's sizes (`rounds`, `count` →
+  `start_proposal_sized`) set `Session.sized`, which the plan turn's own sizes never
+  overwrite. The card's number boxes are the only thing typed into the log, so
+  `draw()` in assistant.js carries their values across a redraw.
+- **Again is the server's** (`POST /agent/again` → `session::draw_again`):
+  `close_session`, then a chat draw on new seeds with no turn. The page offers it under
+  the newest round only, never while the chat's job runs.
+- **The agent is told the prompt variables** (`Toolkit.variables`, `serde(skip)`,
+  from Settings per turn; `context::variables_text`, capped): names and a few words in
+  Chat and Plan when it may write the prompt; a critique's pictures are labelled with
+  what each rolled (`variables::picks`, off the Batch's seeds — the same maths as
+  `expand`, pinned by a test). **A `{name}` the agent invents would fail the round**
+  (unknown name → error), so `session::known_variables` → `variables::unbrace_unknown`
+  strips its braces with a note, on a change's prompt/negative and a proposal's prompt.
 - **`Session.reference` is staged first** in plan and critique turns (`Turn.reference`
   counts them), so "Picture 1" stays the round's first picture.
 - **The agent sizes its work**: chat `count` (1 unless said), a plan's `rounds`/`count`

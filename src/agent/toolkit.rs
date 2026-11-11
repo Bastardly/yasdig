@@ -90,6 +90,10 @@ pub struct Toolkit {
     /// names it may reuse, each with its look.
     #[serde(skip)]
     pub library: Vec<SavedCast>,
+    /// The person's prompt variables (`crate::variables`): the names the
+    /// agent may write in braces, each with its words.
+    #[serde(skip)]
+    pub variables: crate::variables::Variables,
 }
 
 /// A saved cast entry as a story turn is shown it.
@@ -365,6 +369,7 @@ pub fn locks_for(cfg: &Config, profile: Option<&Profile>, settings: &Value) -> L
 pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     let settings = crate::settings::Settings::load_or_default(&cfg.user_dir());
     let rules = settings.agent;
+    let variables = settings.variables;
     let registry = cfg.registry();
     let template = chat.settings.get("template").and_then(|t| t.as_str()).unwrap_or("");
     let profile = registry.get(template);
@@ -399,6 +404,7 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     }
     t.video = video;
     t.videos = installed;
+    t.variables = variables;
     t
 }
 
@@ -508,6 +514,7 @@ pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelCh
         vision: false,
         rules: rules.clone(),
         library: Vec::new(),
+        variables: Default::default(),
     }
 }
 

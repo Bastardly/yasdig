@@ -1031,9 +1031,11 @@ say what you want, and the agent decides whether that is an answer, a picture, a
 description, a session that improves or a comparison.
 
 - **Talk about prompts.** Ask for a prompt, a rewrite, ideas. It can change the tab's
-  settings as it answers — each change is a card with its reason and an **Undo**.
+  settings as it answers — each change is a line with an **Undo**, which opens to the
+  full values and its reason.
 - **Draw.** "Draw a fox in a red hat", "three of those": it writes the prompt and draws
-  as many as you said (one when you didn't).
+  as many as you said (one when you didn't). **Again**, under the newest round, draws
+  the same number once more on new seeds without asking the agent anything.
 - **Describe a picture.** Attach one (*Choose…* from Outputs or Favorites, *Upload…*, paste or drop it on the composer, or press
   *Ask* on any picture in the chat) and ask for it as a prompt. It writes one for the
   chat's image model in that model's style — tags for SD 1.x, SD 2.x and SDXL, sentences
@@ -1042,8 +1044,11 @@ description, a session that improves or a comparison.
 - **Improve.** Ask it to get something right ("keep trying until the hat is red"),
   improve the round on screen ("make these better" — it judges that round first and keeps
   its seeds), or match a picture: attach one and say "find the best prompt for this".
-  The agent proposes a *session* — the goal, as a card with **Start** and **No thanks** —
-  and nothing is drawn until you press Start (a new message sets it aside). Then it writes yes/no checks, draws a round, answers every check
+  The agent proposes a *session* — the goal and the prompt its first round would draw,
+  as a card with **Start**, **Draw one** and **No thanks** — and nothing is drawn until
+  you answer (a new message sets it aside). *Draw one* takes the prompt and draws it
+  once, with no session. *Rounds* and *Pictures per round* on the card are yours to
+  set; left on auto, the agent sizes it. On Start it writes yes/no checks, draws a round, answers every check
   for every picture, changes one or two settings and draws again — until a picture
   passes, it decides it can't do better, or the rounds run out. A picture attached to the
   message that starts it is the **picture to match**: the checks are written from it, and
@@ -1072,6 +1077,12 @@ what it starts from; what it changes, you see change in the boxes; Undo puts the
 Change a box while it works and it draws with yours from its next round. Coming back to
 a chat sets the boxes to that chat's settings. The source picked in *Image to image* is
 not the agent's: its pictures are drawn from noise.
+
+**The agent knows your [prompt variables](#prompt-variables).** It is told their names
+and a few of each one's words, keeps a `{name}` that is in the prompt when it rewrites
+it, and may write one in. When it judges a round it is told which word each picture
+rolled, so "the owl has no hat" is about the owl. A `{name}` it invents loses its
+braces, with a note, rather than failing the round.
 
 **Settings → Agent** says what the agent may do, in every chat: a tick per setting it
 may change and per pass it may run on a keeper. It starts with the prompt, negative
