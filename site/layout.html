@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<meta name="description" content="{{description}}">
+<link rel="canonical" href="{{canonical}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="YASDIG">
+<meta property="og:title" content="{{title}}">
+<meta property="og:description" content="{{description}}">
+<meta property="og:url" content="{{canonical}}">
+{{og}}
+<meta name="theme-color" content="#0a0a0b">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23e0912b'/%3E%3Ctext x='16' y='23' font-family='Arial,sans-serif' font-size='20' font-weight='700' text-anchor='middle' fill='%23100c05'%3EY%3C/text%3E%3C/svg%3E">
+<!-- The app's own tokens (web/tokens.css, copied by build.mjs), then the site. -->
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/style.css">
+<!-- Not deferred: it marks <html> as scripted before the first paint, so the
+     phone's rail starts folded away instead of flashing open. -->
+<script src="/js/site.js"></script>
+{{head}}
+</head>
+<body>
+<!-- The app's shape: a rail of buttons down the left, the page beside it.
+     Where the app's buttons open floating panels, these open a route. On a
+     phone the rail folds away behind the bar's menu button; with scripts off it
+     stays open above the page, so every link is still there. -->
+<div class="site">
+  <div class="topbar">
+    <a class="brand" href="/">YASDIG</a>
+    <button type="button" class="burger" aria-controls="rail" aria-expanded="false" aria-label="Menu">
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+  </div>
+  <nav class="rail" id="rail" aria-label="Site">
+    <a class="brand railbrand" href="/" title="Yet Another Stable Diffusion Image Generator">YASDIG</a>
+    <div class="railbtns">
+      {{rail}}
+    </div>
+    <div class="railfoot">{{railfoot}}</div>
+  </nav>
+  <main class="content">
+{{body}}
+    <footer>
+      <a href="https://github.com/Bastardly/yasdig">GitHub</a>
+      <a href="https://github.com/Bastardly/yasdig/blob/master/LICENSE">Apache-2.0</a>
+      <a href="https://ko-fi.com/yasdig">Support on Ko-fi</a>
+      <a href="https://youtube.com/@yasdig-sd">YouTube</a>
+      <span>Powered by <a href="https://github.com/leejet/stable-diffusion.cpp">stable-diffusion.cpp</a></span>
+    </footer>
+  </main>
+</div>
+</body>
+</html>

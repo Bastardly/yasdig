@@ -1,14 +1,17 @@
-# yasdig.com: the static page in site/, deployed to GitHub Pages. Kept apart
-# from docs/ (the Markdown reference), so GitHub's Jekyll never renders those,
-# and from release.yml. The custom domain is site/CNAME plus the repo's
-# Settings → Pages → Custom domain; DNS points yasdig.com at GitHub Pages.
+# yasdig.com: built from site/ by site/build.mjs (Node, no packages) into
+# _site/, deployed to GitHub Pages. Kept apart from docs/ (the Markdown
+# reference), so GitHub's Jekyll never renders those, and from release.yml.
+# The custom domain is site/CNAME plus the repo's Settings → Pages → Custom
+# domain; DNS points yasdig.com at GitHub Pages.
 
 name: pages
 
 on:
   push:
     branches: [master]
-    paths: ["site/**", ".github/workflows/pages.yml"]
+    # The site, and the app files it is built from: the Help topics become
+    # /guide/, and the tokens are the site's palette.
+    paths: ["site/**", "web/js/help.js", "web/tokens.css", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -29,6 +32,11 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the site
+        run: node site/build.mjs
       # The README's VirusTotal badge, served from here: shields.io won't fetch
       # from github.com, so the newest release's badge.json (scan.yml) is
       # copied into the site. A release with none yet leaves the badge as the
@@ -36,10 +44,10 @@ jobs:
       - name: VirusTotal badge
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download --repo "$GITHUB_REPOSITORY" --pattern badge.json --dir site || true
+        run: gh release download --repo "$GITHUB_REPOSITORY" --pattern badge.json --dir _site || true
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@v4

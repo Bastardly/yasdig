@@ -9,8 +9,12 @@ paths:
 ## The stylesheet
 
 `web/style.css`, everything visual; markup carries classes only. **A rule names a
-role, never a value**: colour, type, space, radius and column caps are `:root` tokens —
-a hex elsewhere means a missing token. Ink ramp and state colour are neutral (bone)
+role, never a value**: colour, type, space, radius and column caps are `:root` tokens
+in **`web/tokens.css`** (linked first) — a hex elsewhere means a missing token.
+**`tokens.css` is also yasdig.com's**: `site/build.mjs` copies it into the site, so a
+renamed or removed token breaks `site/style.css` too (grep it). A token only the site
+uses goes in `site/style.css`'s own `:root`. The claude.ai *Design System* artifact
+is a copy for browsing — republish it when tokens change. Ink ramp and state colour are neutral (bone)
 because they sit beside a graded image. `--fold-title`/`--fold-on` for fold headings.
 **Amber (`.btn-run`) is the dock's main button only** (plus Hi-res above a result,
 the thumbnails' favourite star as a glyph colour, the Shots strip's round + (asked for), and the Assistant's
@@ -65,7 +69,7 @@ only `js/app.js`.
 | `convert.js` | the Models tab's Convert panel (`loadConvertModels`, reloaded by `loadInstalled`) |
 | `getmodels.js` | Models tab, `openModels` |
 | `prompt-box.js` / `prompt-weight.js` | the custom element; pure weighting maths |
-| `help.js` | Help tab `TOPICS` |
+| `help.js` | Help tab `TOPICS` — also yasdig.com's `/guide/` pages (`site/build.mjs`; a new `fill` needs a `FILLED` row there) |
 | `settings.js` / `modelsettings.js` | Settings form from `FIELDS`; *Per model* card |
 | `assistant.js` | the Assistant panel (`mountAssistant`, per tab): chats, the composer, following a turn, the Image tab's controls both ways |
 | `board.js` | a Video chat's film as the Shots rows (both ways) and the Cast panel |

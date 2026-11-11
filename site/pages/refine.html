@@ -1,0 +1,55 @@
+<!--
+title: Refine & adjust — Hi-res, inpaint, Edit, Extend, Upscale | YASDIG
+description: Finish a Stable Diffusion picture in one place: Hi-res, Refine, redraw a painted area, Edit by instruction, Extend the canvas, Upscale with FSR, and eleven lossless sliders. Every step undoable.
+-->
+<h1>Refine &amp; adjust</h1>
+<p class="lede">A click on a picture opens the one place it's finished: the picture
+  nearly full screen, a rail of passes and tools down the left, and every step kept in
+  its history.</p>
+
+<media src="refine-dialog.png" alt="The Refine & adjust dialog with the Refine and Adjust panels open" caption="Refine &amp; adjust: passes and tools as panels over the picture.">
+
+<section class="feature">
+  <h2>Passes</h2>
+  <ul>
+    <li><b>Hi-res</b> enlarges the picture and adds detail at the new size.</li>
+    <li><b>Refine</b> goes over the whole picture lightly — or <b>paint an area</b> and
+      only that is redrawn: a hand, a face, a sign.</li>
+    <li><b>Edit</b> changes it by instruction (“make it night”, “remove the hat”), with
+      Flux.2 or FLUX.3 Klein.</li>
+    <li><b>Extend</b> grows the canvas and draws what lies beyond the edges, with
+      FLUX.1 Fill.</li>
+    <li><b>Scale</b> enlarges with AMD FSR or an upscaler model (ESRGAN, SPAN, SwinIR…),
+      drawing nothing new.</li>
+  </ul>
+  <p>Any pass can use a different model from the one that drew the picture.</p>
+  <media src="refine-redraw.webm" alt="Painting over a hand and redrawing only that area" caption="Paint the part that's wrong; only that is redrawn.">
+  <media src="refine-extend.webm" alt="Extending a picture's canvas to the sides" caption="Extend: the same room, wider.">
+</section>
+
+<section class="feature">
+  <h2>History you can compare</h2>
+  <p>Every pass is a step. Go back with Ctrl+Z, or compare two steps side by side with a
+    split you drag.</p>
+</section>
+
+<section class="feature">
+  <h2>Eleven live sliders, lossless</h2>
+  <p><b>Tone</b> (lightness, contrast, highlights, shadows), <b>Colour</b> (saturation,
+    vibrance, temperature, tint, hue) and <b>Detail</b> (clarity and sharpness). They
+    re-filter on the GPU in milliseconds, always from the untouched original — so you
+    can change your mind as often as you like, and no pass ever redraws over pixels
+    that were already sharpened.</p>
+  <p><b>1:1</b> shows true pixels, the right view for sharpness; the fitted view is
+    the right one for a grade.</p>
+</section>
+
+<section class="feature">
+  <h2>Touch up by hand</h2>
+  <p><b>Brushes</b> — Dodge, Burn, Blur and more, plus <b>Restore</b>, which paints an
+    earlier step back in. An <b>area</b> picked by shape and by colour, with a look of
+    its own. <b>Crop</b>, and <b>text</b> drawn onto the picture in your installed
+    fonts.</p>
+</section>
+
+<p class="next">Read more: <a href="/guide/redraw/">the Refine &amp; adjust guide →</a></p>

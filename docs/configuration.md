@@ -455,7 +455,7 @@ turbo model is trained to land in 1–4 steps at CFG 1, where a standard SDXL wa
 around 20 at 5–7. The same icons are on Models → Convert and on the viewer's ten
 sliders.
 
-The interface is static files — `web/index.html`, `web/style.css` and a folder of ES
+The interface is static files — `web/index.html`, `web/tokens.css`, `web/style.css` and a folder of ES
 modules under `web/js/` — with no build step, no framework and nothing fetched from
 the network, so editing one and reloading is the whole development loop. The modules
 are plain `import`/`export` that the browser resolves itself; `web/js/app.js` is the

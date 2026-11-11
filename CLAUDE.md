@@ -31,6 +31,7 @@ cargo run --release -- agent-check [agent]  # nine scored agent turns (`agent/ch
 cargo run --release -- fold-scales f.gguf   # fold a scaled-fp8 GGUF's scales into its weights, in place
 node --test 'web/js/*.test.js'              # prompt-weight maths, OOM box choices, module graph evaluates.
                                             #   Node's built-in runner; no npm/package.json; runtime needs no Node.
+./website.sh                                # = node site/serve.mjs: yasdig.com preview on 127.0.0.1:8090, GitHub API mocked (`?mock=`)
 ```
 
 Shaders otherwise compile only at GPU device creation, so `cargo test` is what turns a

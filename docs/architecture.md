@@ -56,7 +56,8 @@ How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the invari
   src/fsr/         wgpu compute (upscale.wgsl = EASU, grade.wgsl = colour,
                    contrast.wgsl = clarity, sharpen.wgsl = RCAS)
   web/index.html   frontend: the markup, and one <script type="module">
-  web/style.css    the design tokens and every rule built on them
+  web/tokens.css   the design tokens (shared with yasdig.com, site/)
+  web/style.css    every rule built on them
   web/js/          the frontend, one ES module per area — app.js is the entry
   src/web.rs       the whitelist of files the page is made of, and the route
   models.toml      config + model profiles + the [[video]] overrides

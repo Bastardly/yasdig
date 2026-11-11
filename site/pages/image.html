@@ -1,0 +1,62 @@
+<!--
+title: Image — draft fast, keep the good ones | YASDIG
+description: Generate batches or a loop of quick Stable Diffusion drafts on your own GPU, keep each with its settings, and escalate only the keepers. SDXL, Flux, FLUX.3 Klein, Z-Image and more.
+-->
+<h1>Image</h1>
+<p class="lede">Most generators make you pick the expensive settings before you know
+  whether the picture is any good. YASDIG turns that round: draft small and fast, keep
+  the good ones, and spend GPU time only on those.</p>
+
+<media src="image-tab.png" alt="The Image tab: the rail on the left, the picture, and floating panels" caption="The Image tab: a rail of panels down the left, the latest picture filling the rest.">
+
+<section class="feature">
+  <h2>A workspace, not a form</h2>
+  <p>A rail down the left opens floating panels over the picture — <b>Prompts</b>,
+    <b>Models</b>, <b>Generation</b>, <b>Image to image</b>, <b>Hi-res pass</b>,
+    <b>Refine pass</b>, <b>Info</b>, <b>Current</b> and <b>Favorites</b>. Drag each where
+    you want it; it stays there next time. A panel that departs from a plain generate
+    says so in its title, and its rail button carries a dot even while it's closed.</p>
+</section>
+
+<section class="feature">
+  <h2>Batches and loops</h2>
+  <p>Set <b>Images</b> to four and press <b>Generate 4</b>: each picture appears as it
+    lands. Tick <b>Until stopped</b> and it keeps going — and a loop follows the panel,
+    so change the prompt or the model while it runs and the next image uses it.</p>
+  <media src="image-batch.webm" alt="A loop of drafts filling the work-item strip while the prompt is changed" caption="A loop follows the panel: change the prompt and the next image uses it.">
+</section>
+
+<section class="feature">
+  <h2>Every image kept, with what made it</h2>
+  <p>Each generation lands in the work-item grid with its prompt, seed, model and every
+    setting, so any one can be reopened and taken further later. Star the ones you love:
+    favourites survive <i>Delete all</i>. Saved PNGs carry their settings in a form
+    A1111, Forge and Civitai read.</p>
+</section>
+
+<section class="feature">
+  <h2>Then escalate just the keepers</h2>
+  <p><b>Hi-res</b> makes a picture bigger and adds the detail a plain upscale can't
+    invent; <b>Refine</b> goes over it lightly. Both can use a different model from the
+    draft — draft on a fast Turbo model, finish on a detailed one. A click on the
+    picture opens <a href="/refine/">Refine &amp; adjust</a> for the rest.</p>
+</section>
+
+<section class="feature">
+  <h2>Prompt tools</h2>
+  <ul>
+    <li><b>Weights</b>: Ctrl+↑/↓ or Ctrl+wheel on a word writes <code>(word:1.2)</code>.</li>
+    <li><b><code>{variables}</code></b> roll a different word for each image of a batch.</li>
+    <li><b>Enhance</b> writes your few words out in full for the model you picked — tags
+      for SDXL, sentences for the rest — and Ctrl+Z puts yours back.</li>
+    <li><b>References</b>: the Klein models look at up to four pictures while they draw
+      (“the jacket from image 2”).</li>
+    <li><b>Image to image</b>: start from your own picture — upload, drop or paste it.</li>
+    <li><b>LoRAs</b>, checked against the model, so one made for another family is
+      refused rather than silently doing nothing.</li>
+    <li><b>Layout boxes</b> on MOSS-Image: say where each thing and each line of text
+      goes in the frame.</li>
+  </ul>
+</section>
+
+<p class="next">Next: <a href="/refine/">Refine &amp; adjust →</a></p>

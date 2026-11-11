@@ -1,0 +1,142 @@
+/* yasdig — the tokens the page is built from (style.css builds it).
+ *
+ * One file for the app and for yasdig.com: `site/build.mjs` copies this file
+ * into the site as it is, so the website can't drift from the app. A token
+ * only the site needs goes in site/style.css's own :root, not here.
+ *
+ * The brief this answers: the interface sits beside a 1024 px render that the
+ * user is grading with eight colour knobs. Chrome that carries hue biases that
+ * judgement, which is why a photo editor is grey — so the ink ramp below has no
+ * hue in it, and the one saturated colour is spent on a single job.
+ *
+ * A rule here names a *role*, never a value. If you find yourself writing a hex
+ * outside :root, the token you want is missing; add it rather than the hex. */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- Ink. Neutral, not blue-black: a blue page casts on the picture. ---- */
+  --ink-900: #0a0a0b;   /* the page. The darkest surface in the app, because the
+                           result column is not a card — the image sits on this */
+  --ink-800: #121213;   /* inset: fields, tracks, the canvas bed */
+  --ink-700: #17181a;   /* surface: cards, the viewer's panel, dialogs */
+  --ink-600: #1f2022;   /* raised: neutral buttons */
+  --ink-500: #2c2d30;   /* hairline */
+  --ink-400: #3c3d41;   /* strong border, disabled fill */
+
+  --text:       #ebeae7;
+  --text-dim:   #9b9a96;  /* labels, .sub, .meta */
+  --text-faint: #6c6b68;  /* group headings, placeholders, disabled text */
+
+  /* ---- The two role colours, and which one goes where.
+     Amber is the *action* colour: action buttons live in the controls column,
+     away from the picture. Bone is the *state* colour — active tab, active
+     thumbnail, every range's accent, the progress fill, the focus ring — and
+     those all land on or beside an image, so that is the one that has to be
+     achromatic. It is also the selection mark every photo tool uses.
+
+     Amber marks **the one action a controls panel exists to perform** — the
+     button at the head of the column. Neutral is everything else, red stops or
+     destroys something. On four of the five panels that action spends GPU time
+     and the colour doubles as a warning about it; on the Settings tab it costs
+     nothing, and consistency across the panels won that argument. Nothing but
+     the head of a controls column should wear it. ---- */
+  --accent:      #e0912b;
+  --accent-hi:   #f0a643;
+  --on-accent:   #100c05;
+  --state:       #ddd9d2;
+  --on-state:    #101011;
+  --danger:      #b8413a;
+  --danger-hi:   #cc4c44;
+  --danger-text: #ff9c8f;
+  /* The blue i, a model file's note: blue because nothing else on the page
+     is, so it never reads as an action, a state or a heading. */
+  --info:        #4f9fe8;
+  --info-soft:   rgba(79, 159, 232, .18);
+  --on-info:     #07121d;
+  /* The Jobs button: something is queued. The danger red's saturation and
+     lightness (52%, 47%) at a green hue, so the two buttons in the tab row read
+     as a pair of the same weight. A green that light carries dark text — white
+     on it is under 3:1. */
+  /* The folds' own colours, kept apart from the action and state tokens so
+     a section heading never reads as a button. Titles take amber's saturation
+     and lightness on a cool hue, hsl(205 86% 60%), so they stand out of the
+     white body text without being Generate's amber; a summary marking a
+     departure from the plain path is green. Change them here. */
+  --fold-title:  #e8b16d;
+  --fold-on:     var(--go);
+  --go:          #3ab84f;
+  --go-hi:       #44cc59;
+  --on-go:       #08130a;
+
+  /* ---- Type. No webfont: the server is localhost and the project's pitch is
+     that it fetches nothing, so a stylesheet that phones out for a face would be
+     the one part of the app that needs the internet. Pick the best installed. --- */
+  --font-ui:  Inter, "SF Pro Text", "Segoe UI Variable Text", Cantarell, "Noto Sans", system-ui, sans-serif;
+  --font-num: "JetBrains Mono", "IBM Plex Mono", "DejaVu Sans Mono", ui-monospace, monospace;
+  --font-info: Georgia, "DejaVu Serif", serif;   /* the i's glyph */
+
+  --fs-micro:   11px;
+  --fs-sm:      13px;
+  --fs-body:    15px;
+  --fs-title:   20px;
+  --fs-display: 26px;
+  --lh-body: 1.5;
+
+  /* ---- Space, radius, line ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --gap-thumbs: 3px;               /* deliberately off the scale: a strip of
+                                      thumbnails wants to read as one strip */
+  --r-sm: 4px;                     /* inside something: a fill, a thumbnail */
+  --r-md: 8px;                     /* controls: buttons, fields */
+  --r-lg: 12px;                    /* containers: cards, dialogs, the image */
+  --line: 1px solid var(--ink-500);
+  --line-strong: 1px solid var(--ink-400); /* an edge that must read over moving content: the dock's top */
+  --shadow-pop: 0 6px 20px rgba(0, 0, 0, .8);
+  --scrim: rgba(0, 0, 0, .85);     /* the viewer's backdrop */
+  --scrim-soft: rgba(0, 0, 0, .7); /* the picker's, and the close button's bed */
+  --ly-line: rgba(221, 217, 210, .85); /* a layout box's edge over the frame:
+                                   the bone of --state, a touch see-through */
+  --ly-fill: rgba(16, 16, 17, .35);  /* its inside, dark enough to read the tag on */
+  --ly-dim: .35;                   /* the last picture under the frame */
+  --mask: rgba(220, 70, 60, .5);   /* a Redraw mask over the picture: the
+                                      danger hue, see-through so you can aim */
+
+  /* ---- Measurements. All at the values the layout was tuned to; see the
+     .layout comment for why the caps are the part that matters. ---- */
+  --col-controls: 380px;
+  --col-controls-max: 420px;
+  --col-result: 560px;
+  --col-result-max: 1024px;
+  --col-items: 460px;
+  --col-items-max: 660px;
+  --panel-w: 300px;      /* a floating panel in Refine & adjust */
+  --rail-w: 130px;       /* that dialog's rail of panel toggles */
+  --ws-rail-w: 150px;    /* the Image and Video tabs' rail: longer labels */
+  --gm-rail-w: 220px;    /* the Models tab's: family names, a count, a mark */
+  --ws-panel-w: 380px;   /* their panels: forms, wider than the dialog's */
+  --shot-w: 300px;       /* one shot's card in the Shots panel's strip */
+  --shot-common-w: 640px; /* Shots' Every shot and negative, however wide the panel */
+  --foot-h: 28px;        /* the fixed page footer, and the dialog's foot line */
+  --thumb-h: 200px;      /* work items, clips, and the img2img sources — one
+                            size, because they are the same strip of pictures
+                            doing the same job on two tabs */
+  --thumb-h-pick: 140px; /* the first-frame picker */
+  --thumb-h-chosen: 120px; /* the one chosen image, above its buttons */
+  --thumb-h-try: 72px;   /* a try in the cast editor's strip */
+  --cast-chip-pic: 32px; /* a cast member's picture on its chip in the Prompts panel */
+  --star: 28px;          /* the favourite star's disc on a thumbnail */
+  --chat-pic: 160px;     /* a picture in the conversation, its height */
+  --story-pic: 144px;    /* a cast picture or a keyframe in the Story panel, its width */
+  --story-text-h: 100px; /* a Story panel text box, before it is dragged taller */
+  --chat-pic-large: 90vh; /* a large one's cap, so a portrait still fits on screen */
+  --preview-h: 420px;    /* the live preview under the progress line; a cap,
+                            so a portrait render can't push the folds away */
+  --bar-name: 60px;
+  --bar-val: 72px;
+}

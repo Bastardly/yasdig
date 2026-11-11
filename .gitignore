@@ -10,3 +10,6 @@
 /bin/
 /startup.toml
 /plan.md
+/_site/
+# yasdig.com's screenshots are wanted, unlike every other PNG in the tree.
+!/site/media/*.png

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Put a scan into a release's notes: a visible "VirusTotal" section, and the
-# same facts as one JSON comment the site parses (site/index.html, `scanOf`).
+# same facts as one JSON comment the site parses (site/js/download.js, `scanOf`).
 # Everything between the two markers is replaced, so running it again on a
 # release updates it rather than stacking a second copy; the notes above are
 # left as written.

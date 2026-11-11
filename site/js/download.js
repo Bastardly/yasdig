@@ -1,136 +1,15 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>YASDIG — Yet Another Stable Diffusion Image Generator</title>
-<meta name="description" content="Make pictures on your own PC with stable-diffusion.cpp: draft fast, then finish only the ones worth keeping. One file, no Python, any Vulkan GPU.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23e0912b'/%3E%3Ctext x='16' y='23' font-family='Arial,sans-serif' font-size='20' font-weight='700' text-anchor='middle' fill='%23100c05'%3EY%3C/text%3E%3C/svg%3E">
-<link rel="stylesheet" href="style.css">
-</head>
-<body>
-<div class="page">
+// The download buttons and their dialogs (site/partials/downloads.html), on the
+// Overview and Download pages. Moved out of the old one-page site unchanged,
+// except that the GitHub API's address is one constant: `serve.mjs` answers
+// it from site/mock/ when the page is opened on this computer.
 
-<header>
-  <div class="brand"><b>YASDIG</b></div>
-  <a href="https://github.com/Bastardly/yasdig">GitHub</a>
-</header>
+// On this computer, the preview's mock of the API; `?mock=flagged` (and the
+// other scenarios in site/mock/releases.mjs) picks what it answers.
+const LOCAL = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+const API = LOCAL ? '/mock-api' : 'https://api.github.com';
+const MOCK = LOCAL ? new URLSearchParams(location.search).get('mock') : null;
+const api = (path) => `${API}${path}${MOCK ? `${path.includes('?') ? '&' : '?'}mock=${encodeURIComponent(MOCK)}` : ''}`;
 
-<section class="hero">
-  <h1>YASDIG</h1>
-  <p class="expand">Yet Another Stable Diffusion Image Generator</p>
-  <p class="pitch">Make pictures on your own PC: draft fast, then finish only the ones
-    worth keeping.</p>
-
-  <!-- Each button goes to the Releases page until the script below finds the
-       newest release's file, so with no JS, or the GitHub API down, nothing is
-       a dead link. The script also makes the button for your system amber. -->
-  <div class="downloads">
-    <a class="btn" id="dl-win" href="https://github.com/Bastardly/yasdig/releases">
-      Download for Windows<small>Windows 10 / 11, 64-bit</small></a>
-    <a class="btn" id="dl-linux" href="https://github.com/Bastardly/yasdig/releases">
-      Download for Linux<small>x86-64</small></a>
-  </div>
-  <p class="sub release" id="release"></p>
-  <p class="sub noos" id="noos" hidden>There is no build for this system yet: YASDIG
-    runs on Windows and Linux PCs.</p>
-  <p class="sub links"><a href="https://github.com/Bastardly/yasdig/releases">All releases</a>
-    · <a href="https://github.com/Bastardly/yasdig">Source on GitHub</a></p>
-</section>
-
-<!-- Before a download: how to start it, and what is known about the file —
-     its version and SHA-256, what VirusTotal's engines said (Linux only:
-     the unsigned Windows build isn't scanned), and that GitHub
-     built it from the public source (`checked`). Opened by the script only
-     once it has found the release; without it each button is the Releases-page
-     link it always was. Windows also says what SmartScreen will show, so the
-     warnings read as expected rather than as a reason to stop. -->
-<dialog id="win-dialog" class="card dl-dialog">
-  <h2>Before you download</h2>
-  <p>YASDIG is free and open source — every line of it is
-    <a href="https://github.com/Bastardly/yasdig">public on GitHub</a>. It isn't signed
-    with a paid Microsoft certificate yet, so Windows doesn't know it and will warn you
-    twice:</p>
-  <ol>
-    <li><b>While downloading</b>, Edge may say the file isn't commonly downloaded.
-      Choose <i>⋯ → Keep</i>, then <i>Keep anyway</i>.</li>
-    <li><b>The first time you start it</b>, Windows shows <i>Windows protected your
-      PC</i>. Choose <i>More info → Run anyway</i>.</li>
-  </ol>
-  <p class="sub">After that it starts like any other program. Extract the zip first
-    (right-click → <i>Extract All</i>) and start <code>yasdig.exe</code> from the folder.</p>
-  <div class="checked" id="win-checked"></div>
-  <div class="dialog-buttons">
-    <button type="button" class="btn" data-cancel>Cancel</button>
-    <a class="btn btn-run" id="win-go" href="https://github.com/Bastardly/yasdig/releases" download>Download</a>
-  </div>
-</dialog>
-<dialog id="linux-dialog" class="card dl-dialog">
-  <h2>Before you download</h2>
-  <p>YASDIG is free and open source — every line of it is
-    <a href="https://github.com/Bastardly/yasdig">public on GitHub</a>. The download
-    is a folder in a <code>.tar.gz</code>: extract it where you want to keep it, and
-    start the program inside.</p>
-  <pre><code>tar xzf yasdig-linux-x86_64.tar.gz
-./yasdig/yasdig</code></pre>
-  <p class="sub">It needs your graphics driver's Vulkan support — Mesa's RADV on AMD
-    and Intel, or NVIDIA's own driver — which most distributions install with the
-    driver.</p>
-  <div class="checked" id="linux-checked"></div>
-  <div class="dialog-buttons">
-    <button type="button" class="btn" data-cancel>Cancel</button>
-    <a class="btn btn-run" id="linux-go" href="https://github.com/Bastardly/yasdig/releases" download>Download</a>
-  </div>
-</dialog>
-
-<section class="points">
-  <div class="card">
-    <h3>Draft cheap, finish what's worth it</h3>
-    <p>Generate small and fast, keep the good ones, then Hi-res, Refine, Edit,
-      Extend or Upscale just those — each step one you can undo.</p>
-  </div>
-  <div class="card">
-    <h3>One file, no Python</h3>
-    <p>Nothing to install. Runs on AMD, NVIDIA and Intel graphics cards through
-      Vulkan, powered by stable-diffusion.cpp.</p>
-  </div>
-  <div class="card">
-    <h3>Models in one click</h3>
-    <p>SDXL, Flux, Flux.2 and FLUX.3 Klein, Z-Image, Krea 2, Qwen-Image and more — downloaded
-      to the right place from inside the app.</p>
-  </div>
-</section>
-
-<section class="card start">
-  <h2>Getting started</h2>
-  <ol>
-    <li><b>Download</b> the file for your system, above.</li>
-    <li><b>Extract it</b> — on Windows, right-click the zip → <i>Extract All</i>. You get a
-      <code>yasdig</code> folder: keep it, everything the app makes goes in there.</li>
-    <li><b>Start <code>yasdig</code></b> in that folder. Your browser opens on the app.</li>
-    <li>Open <b>Models</b>, download a model, then press <b>Generate</b>.</li>
-  </ol>
-  <p class="sub">You need a graphics card with a current driver (AMD, NVIDIA or Intel).
-    How much memory depends on the model; the app says per model.</p>
-  <p class="sub">On Windows, the first start may show <i>Windows protected your PC</i>:
-    choose <i>More info → Run anyway</i>. YASDIG is open source but not yet signed
-    with a Microsoft certificate.</p>
-</section>
-
-<footer>
-  <a href="https://github.com/Bastardly/yasdig">GitHub</a>
-  <a href="https://github.com/Bastardly/yasdig/blob/master/LICENSE">Apache-2.0</a>
-  <a href="https://ko-fi.com/yasdig">Support on Ko-fi</a>
-  <a href="https://youtube.com/@yasdig-sd">YouTube</a>
-  <!-- Switch on when the account exists:
-  <a href="https://twitter.com/…">Twitter</a>
-  -->
-  <span>Powered by <a href="https://github.com/leejet/stable-diffusion.cpp">stable-diffusion.cpp</a></span>
-</footer>
-
-</div>
-
-<script>
 // Which system is this? The button for it is the amber one. A Mac, a phone or a
 // tablet gets neither, and a line saying there is no build for it.
 (function () {
@@ -147,7 +26,7 @@
 // now. On any failure the buttons keep pointing at the Releases page.
 (async function () {
   try {
-    const r = await fetch('https://api.github.com/repos/Bastardly/yasdig/releases?per_page=10');
+    const r = await fetch(api('/repos/Bastardly/yasdig/releases?per_page=10'));
     if (!r.ok) return;
     // The archives (a zip and a tar.gz holding a `yasdig/` folder), or the
     // bare executables older releases carry.
@@ -242,7 +121,7 @@ function askFirst(os, asset, rel, scan) {
     if (asked || !asset.digest) return;
     asked = true;
     try {
-      const r = await fetch(`https://api.github.com/repos/Bastardly/yasdig/attestations/${asset.digest}`);
+      const r = await fetch(api(`/repos/Bastardly/yasdig/attestations/${asset.digest}`));
       if (r.ok && ((await r.json()).attestations || []).length) box.querySelector('.attest').hidden = false;
     } catch { /* no line */ }
   };
@@ -267,6 +146,3 @@ function askFirst(os, asset, rel, scan) {
   // A click on the backdrop closes it too; the card itself doesn't.
   dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
 }
-</script>
-</body>
-</html>

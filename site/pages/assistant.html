@@ -1,0 +1,48 @@
+<!--
+title: Assistant — a local AI agent for prompts and pictures | YASDIG
+description: A language model on your own GPU that writes prompts, describes a picture as a prompt, improves pictures round by round, compares settings and writes short films. No cloud; from about 4 GB.
+-->
+<h1>Assistant</h1>
+<p class="lede">A chat with a small language model that runs on your own GPU, the way
+  the image models do — on the Image and Video tabs' rails. Nothing goes to the cloud;
+  the 4B model fits an 8 GB card.</p>
+
+<media src="assistant-chat.png" alt="The Assistant panel proposing a session with its first prompt" caption="Say what you want; the agent decides whether that's an answer, a picture or a session.">
+
+<section class="feature">
+  <h2>Talk about prompts, and draw</h2>
+  <p>Ask for a prompt, a rewrite or ideas — it can change the tab's settings as it
+    answers, each change a line with an <b>Undo</b>. Say “draw a fox in a red hat” or
+    “three of those” and it writes the prompt and draws them.</p>
+</section>
+
+<section class="feature">
+  <h2>Describe a picture</h2>
+  <p>Attach a picture and ask for it as a prompt. It writes one in the style of the
+    chat's image model — tags for SD 1.x and SDXL, sentences for the rest — with
+    <i>Copy to the Image tab</i>.</p>
+</section>
+
+<section class="feature">
+  <h2>Improve, round by round</h2>
+  <p>“Keep trying until the hat is red”, or attach a picture and say “find the best
+    prompt for this”. The agent proposes a session first and draws nothing until you
+    press <b>Start</b>. Then it writes yes/no checks, draws a round, judges every
+    picture, changes one or two settings — only the ones you allow — and goes again,
+    until a picture passes or the rounds run out.</p>
+  <media src="assistant-session.webm" alt="An improve session: rounds of pictures, each judged against checks" caption="Draw, judge, adjust — on the Image tab's own settings.">
+</section>
+
+<section class="feature">
+  <h2>Compare settings</h2>
+  <p>“What's the best CFG for this?” “Which model draws hands better?” It draws one round
+    per value on the same seeds, so the value is the only difference, and answers from
+    what it sees.</p>
+</section>
+
+<section class="feature">
+  <h2>Films and the board</h2>
+  <p>On the Video tab, the Assistant writes short films as storyboards — shots, cast
+    and keyframes — that become the Video tab's shots.</p>
+  <media src="assistant-board.png" alt="A film's storyboard with keyframes and cast" caption="A storyboard, ready to become shots.">
+</section>

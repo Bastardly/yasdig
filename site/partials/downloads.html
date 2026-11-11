@@ -1,0 +1,61 @@
+<!-- The download buttons, pasted into the Overview and Download pages.
+     Each button goes to the Releases page until download.js finds the
+     newest release's file, so with no JS, or the GitHub API down, nothing is
+     a dead link. The script also makes the button for your system amber. -->
+<div class="downloads">
+  <a class="btn btn-dl" id="dl-win" href="https://github.com/Bastardly/yasdig/releases">
+    Download for Windows<small>Windows 10 / 11, 64-bit</small></a>
+  <a class="btn btn-dl" id="dl-linux" href="https://github.com/Bastardly/yasdig/releases">
+    Download for Linux<small>x86-64</small></a>
+</div>
+<p class="sub release" id="release"></p>
+<p class="sub noos" id="noos" hidden>There is no build for this system yet: YASDIG
+  runs on Windows and Linux PCs.</p>
+<p class="sub links"><a href="https://github.com/Bastardly/yasdig/releases">All releases</a>
+  · <a href="https://github.com/Bastardly/yasdig">Source on GitHub</a></p>
+
+<!-- Before a download: how to start it, and what is known about the file —
+     its version and SHA-256, what VirusTotal's engines said (Linux only:
+     the unsigned Windows build isn't scanned), and that GitHub
+     built it from the public source (`checked`). Opened by the script only
+     once it has found the release; without it each button is the Releases-page
+     link it always was. Windows also says what SmartScreen will show, so the
+     warnings read as expected rather than as a reason to stop. -->
+<dialog id="win-dialog" class="card dl-dialog">
+  <h2>Before you download</h2>
+  <p>YASDIG is free and open source — every line of it is
+    <a href="https://github.com/Bastardly/yasdig">public on GitHub</a>. It isn't signed
+    with a paid Microsoft certificate yet, so Windows doesn't know it and will warn you
+    twice:</p>
+  <ol>
+    <li><b>While downloading</b>, Edge may say the file isn't commonly downloaded.
+      Choose <i>⋯ → Keep</i>, then <i>Keep anyway</i>.</li>
+    <li><b>The first time you start it</b>, Windows shows <i>Windows protected your
+      PC</i>. Choose <i>More info → Run anyway</i>.</li>
+  </ol>
+  <p class="sub">After that it starts like any other program. Extract the zip first
+    (right-click → <i>Extract All</i>) and start <code>yasdig.exe</code> from the folder.</p>
+  <div class="checked" id="win-checked"></div>
+  <div class="dialog-buttons">
+    <button type="button" class="btn" data-cancel>Cancel</button>
+    <a class="btn btn-run" id="win-go" href="https://github.com/Bastardly/yasdig/releases" download>Download</a>
+  </div>
+</dialog>
+<dialog id="linux-dialog" class="card dl-dialog">
+  <h2>Before you download</h2>
+  <p>YASDIG is free and open source — every line of it is
+    <a href="https://github.com/Bastardly/yasdig">public on GitHub</a>. The download
+    is a folder in a <code>.tar.gz</code>: extract it where you want to keep it, and
+    start the program inside.</p>
+  <pre><code>tar xzf yasdig-linux-x86_64.tar.gz
+./yasdig/yasdig</code></pre>
+  <p class="sub">It needs your graphics driver's Vulkan support — Mesa's RADV on AMD
+    and Intel, or NVIDIA's own driver — which most distributions install with the
+    driver.</p>
+  <div class="checked" id="linux-checked"></div>
+  <div class="dialog-buttons">
+    <button type="button" class="btn" data-cancel>Cancel</button>
+    <a class="btn btn-run" id="linux-go" href="https://github.com/Bastardly/yasdig/releases" download>Download</a>
+  </div>
+</dialog>
+<script src="/js/download.js" defer></script>

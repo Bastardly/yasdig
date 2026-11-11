@@ -1,0 +1,53 @@
+<!--
+title: Video — Wan 2.2, LTX-2 and MiniMax H3 on your own GPU | YASDIG
+description: Make video clips locally with Wan 2.2, LTX-2.3/2.5 and MiniMax H3 (with sound on LTX and H3). Long clips a shot at a time, flicker-free enlarge, and narrated stills in a voice you choose.
+-->
+<h1>Video</h1>
+<p class="lede">The Video tab is laid out like the Image tab: a rail of panels, the
+  clip filling the rest. Text or a first frame to video, with LoRAs and a live preview
+  while it renders.</p>
+
+<media src="video-clip.webm" alt="A short clip made in YASDIG" caption="A clip made a shot at a time.">
+
+<section class="feature">
+  <h2>The models</h2>
+  <ul>
+    <li><b>Wan 2.2</b> — TI2V-5B, and the I2V-A14B pair; Wan 2.1 VACE and dense models.</li>
+    <li><b>LTX-2.3 and LTX-2.5</b> — picture and soundtrack together at 24 fps; distilled,
+      8 steps, with LTX's own ×2 hi-res in the same run.</li>
+    <li><b>MiniMax H3</b> — with sound, and an 8-step Turbo LoRA.</li>
+  </ul>
+  <p>The <a href="/models/">Models tab</a> has one-click cards for them.</p>
+</section>
+
+<section class="feature">
+  <h2>A clip is shots</h2>
+  <p>A model this size runs out of memory a few seconds in, so a longer clip is made a
+    shot at a time: each shot has its own prompt, seed and length, and goes on from the
+    previous shot's last frame. What every shot shares — the characters, the place, the
+    look — goes in <b>Every shot</b>. Five shots of three seconds make a fifteen-second
+    clip, up to twenty shots.</p>
+  <media src="video-shots.png" alt="The Shots panel with several shots in a row" caption="The Shots panel: a prompt, seed and length per shot.">
+</section>
+
+<section class="feature">
+  <h2>Enlarge without flicker</h2>
+  <p><b>Enlarge</b> runs FSR over every frame — fixed filters, so nothing flickers.
+    With an LTX model and its latent upscaler installed, <b>LTX</b> can instead redraw
+    each shot at twice its size, Wan's and H3's clips too: it sees all of a shot's
+    frames at once, so the new detail holds still. Clips save to Outputs as video
+    files.</p>
+</section>
+
+<section class="feature">
+  <h2>Narrated stills</h2>
+  <p>Your pictures with a voice reading over them, in the voice of a short recording you
+    pick — Chatterbox (English, or 23 languages) or Qwen3-TTS.</p>
+</section>
+
+<section class="feature">
+  <h2>Films from a storyboard</h2>
+  <p>The <a href="/assistant/">Assistant</a> writes a short film as a storyboard, with
+    your <a href="/cast/">cast</a> in it, and the storyboard becomes the Video tab's
+    shots.</p>
+</section>

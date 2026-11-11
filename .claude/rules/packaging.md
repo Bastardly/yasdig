@@ -67,7 +67,7 @@ Five things break silently:
 `/releases` with pre-releases included.
 
 **Releasing** (`v*` tag → `release.yml`, ~9 min; pushing `master` also deploys the
-site when `site/` changed):
+site when `site/`, `web/js/help.js` or `web/tokens.css` changed):
 
 1. Commit the work. In `CHANGELOG.md` turn `## Unreleased` into `## X.Y.Z — date`;
    bump `version` in `Cargo.toml` and `yasdig`'s entry in `Cargo.lock`; `cargo build`;
@@ -95,7 +95,7 @@ notes above kept), plus `scan.json`. It runs after the release is public and nev
 blocks one.
 
 - **The site parses that notes section**: one `<!-- yasdig-scan {scan.json} -->`
-  comment (`scanOf` in `site/index.html`). Change both or neither.
+  comment (`scanOf` in `site/js/download.js`). Change both or neither.
 - **The hash shown is GitHub's own `digest` of the asset**, there from upload,
   not the scan's.
 - **The README's VirusTotal badge reads `https://yasdig.com/badge.json`** (shields.io
@@ -121,8 +121,33 @@ so they read `sdxl/x` on Windows too.
   with it still loads — no `deny_unknown_fields` — and the key drops on the next save).
   A future unfinished feature can bring the section back.
 - **Website**: `site/` (yasdig.com), deployed by `.github/workflows/pages.yml`, kept
-  out of `docs/`. Short and download-first; tokens hand-copied from `web/style.css`.
-  Buttons repoint via `api.github.com/…/releases` (not `releases/latest`, which skips
+  out of `docs/`. **Generated**: `node site/build.mjs` writes `_site/` (gitignored)
+  from `layout.html` (the rail, the phone's burger bar), `pages/*.html` (a leading
+  comment holds `title:`/`description:`, both required) and `partials/`. Every route
+  is a whole static page — no SPA — so crawlers and scripts-off visitors get the text;
+  absolute paths throughout (`404.html` is served at any depth).
+  - **Preview**: `node site/serve.mjs` (127.0.0.1:8090) rebuilds per page request and
+    answers the GitHub API from `site/mock/releases.mjs` — `download.js` points at
+    `/mock-api` on localhost; `?mock=flagged|unscanned|oldwin|prerelease|noattest|nolinux|down`
+    shows each dialog state. Mocks never reach `_site/`.
+  - **Tokens are the app's**: `web/tokens.css` is copied in as is; the site's own
+    tokens (`--sp-8`, `--page-w`, …) are in `site/style.css`'s `:root`. The build
+    **fails on a `var(--x)` nothing defines** — a renamed app token shows up here.
+  - **`/guide/<id>/` is the app's Help tab**: the build imports `web/js/help.js`
+    (stubs as in `modules.test.js`) and writes each `TOPICS` row in `menuOrder()`. A
+    topic with `fill(el)` needs a `FILLED` row (its placeholder → a link) or the
+    build stops. Adding a Help topic adds a page and a rail item, nothing else.
+  - **`<media src=…>`** in a page: a file from `site/media/` (picture, or a muted
+    looping webm that plays while in view). A missing file is a labelled empty frame
+    **in the preview only** (`build({preview})`, `--preview`); the deploy leaves it
+    out, and both list it. `*.png` is gitignored repo-wide; `site/media/*.png` is excepted.
+  - Feature pages (`image`, `refine`, `video`, `assistant`, `cast`, `models`) are
+    handwritten from README/`docs/guide.md`: **a feature change that the README
+    gets may need the page too.** `sitemap.xml`, `robots.txt`, canonical/OG tags and
+    the home page's JSON-LD come from the build.
+
+  The download flow (`site/partials/downloads.html` + `site/js/download.js`, on `/`
+  and `/download/`): buttons repoint via `api.github.com/…/releases` (not `releases/latest`, which skips
   pre-releases); failure leaves the Releases link. **Both buttons open a dialog
   first** (`#win-dialog`, `#linux-dialog`, `askFirst`): how to start it, then a
   *Checked* block (`checked()`): version, VirusTotal's verdicts (Linux; the Windows

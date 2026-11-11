@@ -1,0 +1,60 @@
+<!--
+title: Models — SDXL, Flux, FLUX.3 Klein, Z-Image, Qwen-Image and more | YASDIG
+description: The Stable Diffusion and Flux model families YASDIG runs, what each takes on the card, one-click downloads from inside the app, and Convert to shrink a model to GGUF so it fits your GPU.
+-->
+<h1>Models</h1>
+<p class="lede">The Models tab downloads a working set for each family in one click —
+  the model and the parts it needs, to the right place. The ones marked
+  <i>Recommended</i> fit your GPU.</p>
+
+<media src="models-catalog.png" alt="The Models tab's catalog of model families" caption="One card per family, with what it takes on your card.">
+
+<section class="feature">
+  <h2>Families</h2>
+  <div class="tablewrap">
+  <table class="helptable">
+    <thead><tr><th>Family</th><th>Good for</th><th>On the card</th></tr></thead>
+    <tbody>
+      <tr><td>SD 1.x, SD 2.x, SDXL</td><td>The huge library of community checkpoints and LoRAs</td><td>SDXL: a 6.9 GB file</td></tr>
+      <tr><td>Z-Image Turbo</td><td>Fast: 8 steps</td><td>About 11 GB</td></tr>
+      <tr><td>Flux.2 Klein 4B / 9B</td><td>Fast (4 steps); takes reference images and can <b>Edit</b></td><td>About 9 / 19 GB</td></tr>
+      <tr><td>FLUX.3 Klein / Klein Base</td><td>16 steps / 20-step base; reference images and <b>Edit</b></td><td>About 11 GB</td></tr>
+      <tr><td>Flux.1 schnell / dev</td><td>4-step drafts / detailed 20-step renders</td><td>About 18.5 GB</td></tr>
+      <tr><td>Krea 2 Turbo</td><td>8 steps</td><td>About 15 GB</td></tr>
+      <tr><td>Qwen-Image</td><td>The largest here (20B); strong at text in pictures</td><td>About 17 GB</td></tr>
+      <tr><td>Qwen-Image 2.1</td><td>7B, strong lettering, trained at 2048²; 8 steps with Turbo</td><td>About 18 GB</td></tr>
+      <tr><td>Iris-3B Turbo / Iris-3B</td><td>Small: draws in pixels with no VAE; Turbo in 4 steps</td><td>About 8 GB</td></tr>
+      <tr><td>MOSS-Image</td><td>Layout and lettering; 50 steps at real CFG, so not fast</td><td>About 16 GB (INT8) / 21 GB (BF16)</td></tr>
+      <tr><td>FLUX.1 Fill</td><td>Powers <b>Extend</b>; not used for generating</td><td>About 18.5 GB</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="sub">Video: Wan 2.2, Wan 2.1 VACE, MiniMax H3 and LTX-2.3/2.5 — see
+    <a href="/video/">Video</a>.</p>
+</section>
+
+<section class="feature">
+  <h2>Less memory than that?</h2>
+  <p>The <b>Memory</b> setting keeps the model in system RAM or streams it from the SSD,
+    and when a render runs out of memory anyway, the error offers the ways out.
+    <a href="/guide/memory/">The Memory guide →</a></p>
+</section>
+
+<section class="feature">
+  <h2>Any file, recognised by what's inside</h2>
+  <p><code>.safetensors</code>, <code>.gguf</code> or <code>.ckpt</code>: YASDIG reads
+    every file to find out what it is, so names and folders don't matter. Model files
+    are read, never run — there is no Python inside. <b>Installed</b> lists every file
+    you have with the families it serves, and a note on any of them behind its blue
+    <i>i</i>.</p>
+  <media src="models-installed.png" alt="The Installed list with files and the families they serve" caption="Installed: every file, and what it's for.">
+</section>
+
+<section class="feature">
+  <h2>Convert</h2>
+  <p>Shrink a model to GGUF — q8, q4 and others — so it fits your card. fp8 files run at
+    twice their size on AMD cards; Convert turns one into a GGUF that runs at its real
+    size.</p>
+</section>
+
+<p class="next">Read more: <a href="/guide/models/">Intro to models →</a></p>

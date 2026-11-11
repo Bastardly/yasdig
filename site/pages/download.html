@@ -1,0 +1,63 @@
+<!--
+title: Download YASDIG for Windows and Linux
+description: Download YASDIG, a free Stable Diffusion app for Windows 10/11 and Linux. One archive, no installer, no Python; runs on AMD, NVIDIA and Intel GPUs through Vulkan.
+-->
+<section class="hero hero-small">
+  <h1>Download</h1>
+  <p class="pitch">Free and open source, for Windows and Linux PCs.</p>
+  <!-- include downloads -->
+</section>
+
+<section class="card start">
+  <h2>Getting started</h2>
+  <ol>
+    <li><b>Download</b> the file for your system, above.</li>
+    <li><b>Extract it</b> somewhere you can write to — <code>Documents</code>, say, not
+      Program Files. On Windows, right-click the zip → <i>Extract All</i>. You get a
+      <code>yasdig</code> folder: keep it, everything the app makes goes in there.</li>
+    <li><b>Start <code>yasdig</code></b> in that folder. Your browser opens on the app.</li>
+    <li>Open <b>Models</b>, download a model, then press <b>Generate</b>.</li>
+  </ol>
+  <p class="sub">On Windows, the first start may show <i>Windows protected your PC</i>:
+    choose <i>More info → Run anyway</i>. YASDIG is open source but not yet signed
+    with a Microsoft certificate.</p>
+</section>
+
+<section class="card start">
+  <h2>What you need</h2>
+  <ul>
+    <li>A 64-bit <b>Windows 10 or 11</b> or <b>Linux</b> PC. There is no macOS version.</li>
+    <li>A graphics card with a current driver — AMD, NVIDIA or Intel. Current drivers all
+      include Vulkan, which is what YASDIG draws with.</li>
+    <li>Graphics memory to suit the model: the <a href="/models/">Models page</a> lists
+      what each takes. With less, the app can keep a model in system RAM or stream it
+      from the SSD.</li>
+  </ul>
+  <p class="sub">Developed and tested on Linux with an AMD Radeon RX 7900 XTX (24 GB).
+    Other Vulkan GPUs and Windows should work; reports are welcome.</p>
+</section>
+
+<section class="card start">
+  <h2>Updating and stopping</h2>
+  <p>To stop it, close its console window or press <b>Close server</b> on the page. To
+    update, replace <code>yasdig.exe</code> (or <code>yasdig</code>) with the one from
+    the new archive: your models, settings and pictures stay where they are.</p>
+  <pre><code>yasdig(.exe)       the program
+models/            the models you download
+user/              your settings, favourites and cast — never cleared
+work/              every generation, and work/output/ for the pictures you save
+bin/               stable-diffusion.cpp, unpacked from the program</code></pre>
+</section>
+
+<section class="card start">
+  <h2>Privacy and checking the download</h2>
+  <p><b>Everything stays on your computer.</b> No account, no telemetry, no update
+    check. YASDIG goes online only when you press download on the Models tab, and then
+    only to Hugging Face. The page it opens listens on <code>127.0.0.1</code>, so other
+    machines on your network can't reach it.</p>
+  <p><b>Models load in a sandbox with no network</b>, on Linux and on Windows: even a
+    crafted model file that broke in couldn't send anything anywhere.</p>
+  <p><b>Each release can be checked</b> three ways, all shown when you press a download
+    button: VirusTotal's scan (Linux), the SHA-256, and GitHub's attestation that it
+    built the archive from the public source.</p>
+</section>
