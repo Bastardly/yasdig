@@ -1,6 +1,6 @@
 # Architecture notes
 
-How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the detailed invariants.
+How the pieces fit, for anyone working on the code. `CLAUDE.md` holds the invariants, `.claude/rules/` the traps per area.
 
 
 - **Single GPU worker thread.** Both sd.cpp and the wgpu FSR passes use the GPU, so all

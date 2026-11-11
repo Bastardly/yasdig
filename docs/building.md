@@ -72,7 +72,7 @@ llama.cpp as a library: `build.rs` configures `llm/` (not llama.cpp's own projec
 no TLS. A release carries it as it carries sd-cli. `YASDIG_LLM=/path/to/yasdig-llm`
 embeds one built elsewhere. Moving llama.cpp to another commit means checking the
 driver against it: it calls llama.cpp's chat-template and multimodal helpers, whose
-signatures change between releases (CLAUDE.md, *The agent*, has the list).
+signatures change between releases (`.claude/rules/agent.md` has the list).
 
 A checkout runs the sd-cli named by `[sd].binary` in the repo's `models.toml` — the one
 above — and serves the page straight from `web/`, so an edit shows on reload.
