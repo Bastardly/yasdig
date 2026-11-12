@@ -3,6 +3,39 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## 0.10.3 — 2026-11-12
+
+### Added
+
+- **Copy details** in the out-of-memory box: the whole error log onto the clipboard in
+  one press, for a bug report.
+- **Video models in Settings → Per model**, in the same list as the image models, each
+  with its own settings and their defaults: size, frames, steps, CFG, sampler, memory,
+  the negative prompt and the model's parts — high-noise ones on Wan A14B, Hi-res on
+  LTX, language and voice on narrated stills. Saving there is the Video tab's
+  *Save as defaults*.
+- **yasdig.com** has a page per feature, the app's Help as a guide, and the app's rail
+  (a menu on phones).
+
+### Changed
+
+- **The Assistant's chat reads as a chat**: your messages in a blue bubble on the right,
+  the agent's in a green one on the left, and its Notes easier to read.
+
+### Fixed
+
+- **A picture made with a VAE or text encoder you have since deleted** can be refined,
+  hi-res'd, redrawn and edited again — by you or the Assistant — without regenerating
+  it: it uses the file that fits the model now. Reopened, its select shows that file;
+  one left on a missing file, because nothing installed fits, has a red border.
+- **Enhance no longer adds prompt variables.** It keeps the ones your words use and
+  writes no others — a made-up `{name}` used to fail the next Generate, and a real one
+  you didn't ask for rolled a different word into every picture.
+- **The Shots panel's sideways scrollbar** stays in view when a shot is taller than the
+  panel; the strip scrolls both ways, and its + stays at the top right.
+- Per model's video models were squeezed into a strip at the bottom of the panel with a
+  scrollbar of their own, and could only be cleared there.
+
 ## 0.10.2 — 2026-11-11
 
 ### Added
