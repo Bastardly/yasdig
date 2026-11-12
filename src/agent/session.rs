@@ -1954,7 +1954,7 @@ mod tests {
         let t = film_tk(&c, false);
         apply_reply(&mut c, Mode::Story, reply(board()), &t, &Locks::default(), vec![], Default::default());
         assert_eq!(next_step(&c), Step::Enhance(0));
-        let long = |s: &str| super::super::enhance::Enhanced { prompt: format!("{s} In full."), sound: "Rain.".into() };
+        let long = |s: &str| super::super::enhance::Enhanced { prompt: format!("{s} In full."), sound: "Rain.".into(), ..Default::default() };
         for k in 0..3 {
             let text = c.film.as_ref().unwrap().shots[k].text.clone();
             shot_enhanced(&mut c, k, &text, Ok(&long(&text)));

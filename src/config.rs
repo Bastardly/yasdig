@@ -1950,8 +1950,8 @@ impl VideoFamily {
     /// from its own last one — a long clip's shots. Not
     /// VACE, which reads `-i` as a reference image, nor the dense family, whose
     /// text-to-video checkpoints ignore it (`src/pipeline/video.cpp`).
-    /// Narrated stills "chain" in the sense that matters here: a clip of many
-    /// shots, each a cut from its own picture.
+    /// Narrated stills "chain" in the sense that matters here: a shot of many
+    /// parts, each read over the shot's one picture.
     pub fn chains(self) -> bool {
         matches!(
             self,
@@ -4911,7 +4911,7 @@ lora_dir = "adapters"
     /// Layout boxes are MOSS-Image's alone, and checked by the layout's own
     /// rules on the way in.
     /// Only a family whose `-i` is a first frame can go on from a clip's last —
-    /// and narrated stills, every shot a cut from its own picture.
+    /// and narrated stills, every part read over its shot's picture.
     #[test]
     fn only_a_first_frame_family_chains() {
         let chains: Vec<_> = VideoFamily::ALL.iter().filter(|f| f.chains()).collect();

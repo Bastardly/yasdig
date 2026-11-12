@@ -46,14 +46,15 @@ const words = (x, fresh = true) => JSON.stringify([
 // image. Only shot 1 and a cut start fresh, so only they take any. A row
 // holds one or the other now (`castOnRow`, `session::shot_spec`); this is the
 // guard for one saved before, which may hold both.
-// Narrated stills (`take.narrated`): every row is a cut from its own picture
-// with at most one sound, the voice; nothing else is read, and a shot's
-// length is its speech's, so `frames` is null — never compared.
+// Narrated stills (`take.narrated`): a shot is one picture, part 1's, and
+// every part is read over it with at most one sound, the voice; nothing else
+// is read, and a part's length is its speech's, so `frames` is null —
+// never compared.
 export const ALL = { references: true, sounds: true };
 export function sentRow(r, k, take = ALL) {
   if (take.narrated) {
     return {
-      ...r, frames: null, cut: k > 0, refs: [], audio: (r.audio ?? []).slice(0, 1), key: r.key ?? null,
+      ...r, frames: null, cut: false, refs: [], audio: (r.audio ?? []).slice(0, 1), key: k === 0 ? r.key ?? null : null,
       subjects: [], voices: [], cast: [], lines: [], sound: '', music: '',
     };
   }
@@ -126,4 +127,31 @@ export function shotOutdated(c, want, scene) {
     if ((c.typed_negative ?? c.negative ?? '') !== (scene.negative ?? '')) return true;
   }
   return false;
+}
+
+// What Enhance shows part `k` of shot `s` of what is around it, from the
+// storyboard: `order` is every shot in storyboard order, `{scene, texts}`
+// (each part's words, '' for an empty one). Its scene's opening part, this
+// shot's first part, and the part before — inside the shot that one goes on
+// from its last frame; a shot's part 1 cuts from the last words of the shot
+// before, in this scene or the one before it. The fields of
+// `agent::enhance::Request`.
+export function partNeighbours(order, s, k) {
+  const at = order[s];
+  if (!at) return { first: '', scene: '', before: '', cut: false, then_continues: false };
+  const t = (x) => String(x ?? '').trim();
+  const opener = order.find((o) => o.scene === at.scene) ?? at;
+  const first = opener === at && k === 0 ? '' : t(opener.texts.find((x) => t(x)));
+  let before = '';
+  if (k > 0) before = t(at.texts[k - 1]);
+  else {
+    for (let j = s - 1; j >= 0 && !before; j--) before = t([...order[j].texts].reverse().find((x) => t(x)));
+  }
+  return {
+    first,
+    scene: k > 0 ? t(at.texts[0]) : '',
+    before,
+    cut: k === 0 && !!before,
+    then_continues: !!t(at.texts[k + 1]),
+  };
 }

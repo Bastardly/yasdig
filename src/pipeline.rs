@@ -731,18 +731,18 @@ fn also(note: Option<String>, more: Option<String>) -> Option<String> {
 fn cut_short(e: &anyhow::Error, k: usize, n: usize) -> String {
     let stopped = format!("{e:#}").contains(crate::sd::CANCELLED);
     if k == 0 {
-        // Only an in-place change gets here with nothing done: the shots it
+        // Only an in-place change gets here with nothing done: the parts it
         // replaced are gone, and so is the one that should have followed.
         return if stopped {
-            format!("Stopped during the first of {n} new shot(s); the clip ends where the change began.")
+            format!("Stopped during the first of {n} new part(s); the shot ends where the change began.")
         } else {
-            format!("The first of {n} new shot(s) failed ({e:#}); the clip ends where the change began.")
+            format!("The first of {n} new part(s) failed ({e:#}); the shot ends where the change began.")
         };
     }
     if stopped {
-        format!("Stopped during shot {} of {n}; the {k} before it are kept.", k + 1)
+        format!("Stopped during part {} of {n}; the {k} before it are kept.", k + 1)
     } else {
-        format!("Shot {} of {n} failed ({e:#}); the {k} before it are kept.", k + 1)
+        format!("Part {} of {n} failed ({e:#}); the {k} before it are kept.", k + 1)
     }
 }
 
@@ -2567,13 +2567,32 @@ impl Engine {
         std::fs::create_dir_all(&self.scratch)?;
         let staged = |name: String| self.scratch.join(format!("narrate-{id}-{name}"));
 
-        // Every picture found before a word is spoken.
+        // Every picture found before a word is spoken: the shot's first frame, which is `init` on a
+        // fresh run and frame 0 of the kept parts on an extend. Copied out,
+        // since an extend writes frames after it and the copy outlives none.
+        let mut scratch = Scratch::default();
+        let held = scratch.path(staged("shot.png".into()));
+        let shot_picture = || -> Result<PathBuf> {
+            if let Some(p) = init {
+                return Ok(p.to_path_buf());
+            }
+            let first = self.videos.frame_path(id, 0);
+            if before.is_empty() || !first.is_file() {
+                bail!("part 1 has no picture: pick the shot's first frame");
+            }
+            std::fs::copy(&first, &held).context("holding the shot's picture")?;
+            Ok(held.clone())
+        };
         let mut stills = Vec::with_capacity(segs.len());
-        for (k, seg) in segs.iter().enumerate() {
-            stills.push(match (&seg.keyframe, k == 0 && before.is_empty()) {
-                (_, true) => init.map(Path::to_path_buf).context("shot 1 has no picture: pick one")?,
-                (Some(stem), false) => self.output_source(stem)?,
-                (None, false) => bail!("shot {} has no picture: pick one", before.len() + k + 1),
+        let mut shot_pic: Option<PathBuf> = None;
+        for k in 0..segs.len() {
+            stills.push(if k == 0 && before.is_empty() {
+                init.map(Path::to_path_buf).context("part 1 has no picture: pick the shot's first frame")?
+            } else {
+                match &shot_pic {
+                    Some(p) => p.clone(),
+                    None => shot_pic.insert(shot_picture()?).clone(),
+                }
             });
         }
 
@@ -2617,13 +2636,13 @@ impl Engine {
         for (k, seg) in segs.iter().enumerate() {
             let texts = crate::narration::pieces(&seg.conditioned);
             if texts.is_empty() {
-                bail!("shot {}: there is nothing to say", before.len() + k + 1);
+                bail!("part {}: there is nothing to say", before.len() + k + 1);
             }
             let mut outs = Vec::new();
             for (i, text) in texts.into_iter().enumerate() {
                 let out = staged(format!("{k}-{i}.wav"));
                 pieces.push(crate::llm::Piece {
-                    text,
+                    text: crate::narration::speakable(&text),
                     speaker: voice_of[k].clone(),
                     seed: (seg.seed as u32).wrapping_add(i as u32),
                     n_predict: crate::narration::MAX_PIECE_FRAMES,
@@ -2649,7 +2668,7 @@ impl Engine {
             sampling,
             pieces,
         };
-        let label = format!("narration, {} shot(s)", segs.len());
+        let label = format!("narration, {} part(s)", segs.len());
         let spoken = crate::llm::LlmRunner::watched(&self.cfg, &self.monitor).speak(&req, &label);
         let cleanup = || {
             for p in req.pieces.iter().map(|p| &p.out).chain(speakers.iter().map(|(_, p)| p)) {
@@ -2840,10 +2859,10 @@ impl Engine {
         }
         let m = clip.video.clone();
         if req.keep == 0 {
-            bail!("shot 1 is the clip: to change it, press Generate clip");
+            bail!("part 1 starts the shot: to change it, press Generate shot again");
         }
         if req.keep > clip.segments.len() {
-            bail!("the clip has {} shot(s), not {}: open it again", clip.segments.len(), req.keep);
+            bail!("the shot has {} part(s), not {}: open it again", clip.segments.len(), req.keep);
         }
         if req.keep == clip.segments.len() && req.shots.is_empty() {
             bail!("say what happens next: add a shot below the ones already drawn");
@@ -5189,10 +5208,11 @@ fn still_size(src: (u32, u32), frame: (u32, u32)) -> (u32, u32) {
     }
 }
 
-/// [`plan_shots`] for narrated stills: every shot is a cut from its own
-/// picture (shot 1's is the clip's first frame), its words what the voice
-/// reads, at most one sound — the voice — and no references. Its length is
-/// its speech's, known only once spoken, so `frames` is 0 here.
+/// [`plan_shots`] for narrated stills: a shot is one picture, its first
+/// frame, and its parts are read over it in turn — each part's words what the
+/// voice reads, at most one sound (the voice) and no references. Its length
+/// is its speech's, known only once spoken, so `frames` is 0 here. Another
+/// picture is another shot on the storyboard.
 fn plan_narrated(
     vars: &variables::Variables,
     shots: &[ShotSpec],
@@ -5205,27 +5225,24 @@ fn plan_narrated(
         let k = first + j;
         let text = shot.text.trim().to_string();
         if text.is_empty() {
-            bail!("shot {} is empty: write what the voice says, or remove it", k + 1);
+            bail!("part {} is empty: write what the voice says, or remove it", k + 1);
         }
         let keyframe = shot.keyframe.as_deref().map(str::trim).filter(|s| !s.is_empty());
         if k == 0 {
             if keyframe.is_some() {
-                bail!("shot 1's picture is the clip's first frame: pick it as the first frame instead");
+                bail!("part 1's picture is the shot's first frame: pick it as the first frame instead");
             }
             if !has_init {
-                bail!("shot 1 has no picture: pick one for it");
+                bail!("part 1 has no picture: pick the shot's first frame");
             }
-        } else {
-            let Some(stem) = keyframe else { bail!("shot {} has no picture: pick one for it", k + 1) };
-            if !workitems::valid_id(stem) {
-                bail!("'{stem}' is not an output image");
-            }
+        } else if keyframe.is_some() {
+            bail!("part {}: a narrated shot is one picture, part 1's — add a shot on the storyboard for another", k + 1);
         }
         if !shot.references.is_empty() {
-            bail!("shot {}: narrated stills follow no references — pick the shot's picture instead", k + 1);
+            bail!("part {}: narrated stills follow no references — pick the shot's picture instead", k + 1);
         }
         if shot.audio.len() > 1 {
-            bail!("shot {}: one voice reads a shot", k + 1);
+            bail!("part {}: one voice reads a part", k + 1);
         }
         if let Some(bad) = shot.audio.iter().find(|r| !workitems::valid_id(r)) {
             bail!("'{bad}' is not an output sound");
@@ -5238,9 +5255,9 @@ fn plan_narrated(
             seed,
             start: 0,
             frames: 0,
-            cut: k > 0,
+            cut: false,
             references: Vec::new(),
-            keyframe: if k > 0 { keyframe.map(str::to_string) } else { None },
+            keyframe: None,
             audio: shot.audio.clone(),
             words: Default::default(),
         });
@@ -5258,7 +5275,7 @@ fn plan_shots(
 ) -> Result<Vec<Segment>> {
     let first = before.len();
     if first + shots.len() > MAX_SHOTS {
-        bail!("a long clip has at most {MAX_SHOTS} shots; this one has {}", first + shots.len());
+        bail!("a shot has at most {MAX_SHOTS} parts; this one has {}", first + shots.len());
     }
     if m.family == crate::config::VideoFamily::Narrated {
         return plan_narrated(vars, shots, before, has_init);
@@ -5268,7 +5285,7 @@ fn plan_shots(
         let k = first + j;
         let text = shot.text.trim().to_string();
         if text.is_empty() {
-            bail!("shot {} is empty: say what happens in it, or remove it", k + 1);
+            bail!("part {} is empty: say what happens in it, or remove it", k + 1);
         }
         // Shot 1 starts fresh whatever its row says.
         let cut = k > 0 && shot.cut;
@@ -5283,14 +5300,14 @@ fn plan_shots(
         }
         if let Some(stem) = keyframe {
             if k == 0 {
-                bail!("shot 1 starts from the clip's first frame: pick it as the first frame instead");
+                bail!("part 1 starts from the shot's first frame: pick it as the first frame instead");
             }
             if !cut {
-                bail!("shot {}: a shot that starts from a picture is a cut — set it to Cut", k + 1);
+                bail!("part {}: a shot that starts from a picture is a cut — set it to Cut", k + 1);
             }
             if !shot.references.is_empty() {
                 bail!(
-                    "shot {}: a cut starts from a picture or follows references, not both — sd.cpp can't give \
+                    "part {}: a cut starts from a picture or follows references, not both — sd.cpp can't give \
                      MiniMax H3 references and a starting frame at once",
                     k + 1
                 );
@@ -5301,7 +5318,7 @@ fn plan_shots(
         }
         if !shot.references.is_empty() && !m.family.takes_references() {
             bail!(
-                "shot {}: references need MiniMax H3; a {} model follows a picture only as a cut's start",
+                "part {}: references need MiniMax H3; a {} model follows a picture only as a cut's start",
                 k + 1,
                 m.family.label()
             );
@@ -5309,13 +5326,13 @@ fn plan_shots(
         // A cut with neither a picture nor references starts fresh from its
         // words, as shot 1 does with no first frame.
         if !shot.references.is_empty() && k > 0 && !cut {
-            bail!("shot {}: references need a cut — H3 can't follow them and go on from the last frame", k + 1);
+            bail!("part {}: references need a cut — H3 can't follow them and go on from the last frame", k + 1);
         }
         if !shot.references.is_empty() && k == 0 && has_init {
-            bail!("shot 1: references can't sit beside a first frame on H3 — clear the first frame, or the references");
+            bail!("part 1: references can't sit beside a first frame on H3 — clear the first frame, or the references");
         }
         if shot.references.len() > crate::config::MAX_REFERENCES {
-            bail!("shot {}: at most {} reference images", k + 1, crate::config::MAX_REFERENCES);
+            bail!("part {}: at most {} reference images", k + 1, crate::config::MAX_REFERENCES);
         }
         if let Some(bad) = shot.references.iter().find(|r| !workitems::valid_id(r)) {
             bail!("'{bad}' is not an output image");
@@ -5323,32 +5340,32 @@ fn plan_shots(
         // Sounds go where references go: Ref2VA, never beside a first frame.
         if !shot.audio.is_empty() {
             if !m.family.takes_references() {
-                bail!("shot {}: sounds need MiniMax H3; a {} model takes none", k + 1, m.family.label());
+                bail!("part {}: sounds need MiniMax H3; a {} model takes none", k + 1, m.family.label());
             }
             if m.audio_vae.is_none() {
-                bail!("shot {}: H3 hears a sound through its audio VAE — pick one in the model's parts", k + 1);
+                bail!("part {}: H3 hears a sound through its audio VAE — pick one in the model's parts", k + 1);
             }
             if keyframe.is_some() {
-                bail!("shot {}: a cut starts from a picture or follows sounds, not both — sd.cpp can't give H3 both", k + 1);
+                bail!("part {}: a cut starts from a picture or follows sounds, not both — sd.cpp can't give H3 both", k + 1);
             }
             if k > 0 && !cut {
-                bail!("shot {}: sounds need a cut — H3 can't follow them and go on from the last frame", k + 1);
+                bail!("part {}: sounds need a cut — H3 can't follow them and go on from the last frame", k + 1);
             }
             if k == 0 && has_init {
-                bail!("shot 1: sounds can't sit beside a first frame on H3 — clear the first frame, or the sounds");
+                bail!("part 1: sounds can't sit beside a first frame on H3 — clear the first frame, or the sounds");
             }
             if shot.audio.len() > MAX_REF_AUDIO {
-                bail!("shot {}: H3 follows at most {MAX_REF_AUDIO} sounds", k + 1);
+                bail!("part {}: H3 follows at most {MAX_REF_AUDIO} sounds", k + 1);
             }
             if let Some(bad) = shot.audio.iter().find(|r| !workitems::valid_id(r)) {
                 bail!("'{bad}' is not an output sound");
             }
         }
         if shot.words.lines.iter().any(|l| l.who.trim().is_empty() && !l.words.trim().is_empty()) {
-            bail!("shot {}: say who speaks each line — \"Mara: Hello\", or \"narrator: …\" for a voice nobody on screen has", k + 1);
+            bail!("part {}: say who speaks each line — \"Mara: Hello\", or \"narrator: …\" for a voice nobody on screen has", k + 1);
         }
         if shot.words.subjects.len() > shot.references.len() || shot.words.voices.len() > shot.audio.len() {
-            bail!("shot {}: a name for a reference or a sound that isn't there", k + 1);
+            bail!("part {}: a name for a reference or a sound that isn't there", k + 1);
         }
         let seed = if shot.seed < 0 { random_seed().wrapping_add(k as i64) } else { shot.seed };
         let rolled = variables::expand(&text, vars, seed)?;
@@ -5561,9 +5578,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Narrated stills: every shot needs its picture (shot 1's is the clip's
-    /// first frame), is a cut, reads its words as typed (no *Every shot*), and
-    /// takes one voice at most; its length waits for the speech.
+    /// Narrated stills: a shot is one picture, its first frame, and its parts
+    /// are read over it in turn — as typed (no scene description), one voice
+    /// at most, each as long as its speech.
     #[test]
     fn a_narrated_shot_is_a_picture_and_the_words_read_over_it() {
         let vars = Default::default();
@@ -5573,17 +5590,17 @@ mod tests {
             audio: audio.iter().map(|s| s.to_string()).collect(),
             ..shot(text, 3, Some(99))
         };
-        let segs = plan_shots(&vars, &m, &[pic("Once.", None, &["v"]), pic("Then.", Some("b"), &[])], "ignored", &[], true)
+        let segs = plan_shots(&vars, &m, &[pic("Once.", None, &["v"]), pic("Then.", None, &[])], "ignored", &[], true)
             .unwrap();
         assert_eq!(segs[0].conditioned, "Once.");
-        assert_eq!((segs[0].cut, segs[1].cut), (false, true));
-        assert_eq!(segs[1].keyframe.as_deref(), Some("b"));
+        assert_eq!((segs[0].cut, segs[1].cut), (false, false), "part 2 is read over the shot's picture");
+        assert_eq!(segs[1].keyframe, None);
         assert_eq!((segs[0].frames, segs[1].frames), (0, 0));
         assert_eq!(segs[1].audio, Vec::<String>::new(), "kept as the row had it; the voice carries over at render");
 
         let err = |shots: &[ShotSpec], init: bool| plan_shots(&vars, &m, shots, "", &[], init).unwrap_err().to_string();
-        assert!(err(&[pic("x", None, &[])], false).contains("shot 1 has no picture"));
-        assert!(err(&[pic("x", None, &[]), pic("y", None, &[])], true).contains("shot 2 has no picture"));
+        assert!(err(&[pic("x", None, &[])], false).contains("part 1 has no picture"));
+        assert!(err(&[pic("x", None, &[]), pic("y", Some("b"), &[])], true).contains("one picture"));
         assert!(err(&[pic("x", None, &["a", "b"])], true).contains("one voice"));
         assert!(err(&[pic("x", Some("k"), &[])], true).contains("first frame"));
         assert!(err(&[ShotSpec { references: vec!["r".into()], ..pic("x", None, &[]) }], true).contains("references"));
@@ -5614,7 +5631,7 @@ mod tests {
         assert!(segs[0].seed >= 0);
         // An empty row is refused by number, not skipped (the rows would shift).
         let e = plan_shots(&vars, &m, &[shot("x", 1, None), shot(" ", 1, None)], "", &[], false).unwrap_err();
-        assert!(e.to_string().contains("shot 2 is empty"), "{e}");
+        assert!(e.to_string().contains("part 2 is empty"), "{e}");
     }
 
     /// A cut with references is H3's alone, never beside a first frame, and
@@ -5745,7 +5762,7 @@ mod tests {
         let e = plan_shots(&vars, &wan, &[key(shot("x", 1, None), false)], "", &[crate::videos::Segment::default()], false).unwrap_err();
         assert!(e.to_string().contains("is a cut"), "{e}");
         let e = plan_shots(&vars, &wan, &[key(shot("x", 1, None), true)], "", &[], false).unwrap_err();
-        assert!(e.to_string().contains("shot 1"), "{e}");
+        assert!(e.to_string().contains("part 1"), "{e}");
 
         let h3 = video("minimax_h3");
         assert!(plan_shots(&vars, &h3, &[key(shot("x", 1, None), true)], "", &[crate::videos::Segment::default()], false).is_ok());

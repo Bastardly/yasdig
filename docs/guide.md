@@ -878,18 +878,19 @@ the action, the camera and every sound: who speaks, word for word and in what vo
 singing, the sounds of the place, music only when you asked. On Wan it writes picture
 and motion only. On H3 it writes what is seen, keeps names as they are (they are
 matched to the references), leaves Spoken, Sound and Music to their fields, and fills
-an empty Sound. Ctrl+Z puts your words back.
+an empty Sound, and an empty Spoken with the lines your words have someone say. Ctrl+Z puts your words back.
 
-A later shot is written to belong to the same clip: Enhance shows the agent shot 1, the
-last cut before it and the shot before, and asks it to keep the place, the light, the
-time of day and how people look unless the shot's own words change them — a shot that
-goes on carries on from the one before, a cut is a new camera shot of the same film.
-A shot that the next one goes on from is written to end with everyone in it in view:
-the next shot knows only that last frame, so a face turned away or framed out there
+A later part is written to belong to the same video: Enhance shows the agent the
+scene's first part, this shot's first part and the part before — for a shot's part 1,
+the last part of the shot before it on the storyboard — and asks it to keep the place,
+the light, the time of day and how people look unless the part's own words change
+them. A part goes on from the one before; a shot's part 1 is a new camera shot of the
+same film. A part that another follows is written to end with everyone in it in view:
+the next part knows only that last frame, so a face turned away or framed out there
 would come back as someone else's.
-**Enhance every shot**, under the shots, does them in order, each one waiting for the
-one before, so shot 5 is written to match shots 1 to 4 as they now read. Stop ends it
-where it is: the shots done stay written.
+**Enhance every part**, under the parts, does them in order, each one waiting for the
+one before, so part 5 is written to match parts 1 to 4 as they now read. Stop ends it
+where it is: the parts done stay written.
 
 **Cheap first, then good.** After a render every row shows the seed it was drawn with,
 and the rows on the clip on the stage are ticked green. Change one row's seed, length or
@@ -1000,14 +1001,15 @@ A clip made of pictures you already have, with a voice reading over them: pictur
 while the voice explains one thing, picture 2 while it goes on. Get **Models → Voice
 models** (Chatterbox Turbo for English, Chatterbox Multilingual for 23 languages, or
 Qwen3-TTS — run by llama.cpp beside the Assistant's models), then pick
-**Narrated stills** in the Video tab's model list. The Shots strip becomes one row per
-picture. The Generation panel holds the size, the fps, the **Language** (on a model
+**Narrated stills** in the Video tab's model list. A shot is one picture, and its parts are
+read over it in turn — a new picture is a new shot on the storyboard. The Generation panel holds the size, the fps, the **Language** (on a model
 that reads more than one) and the
 **Default voice**: a 2–15 s recording of the voice to read in, a sound in Outputs or a
 cast member's voice. *Save as defaults for this model* keeps it. Each row has:
 
-- **Picture** — an output, a cast member's picture or an upload, picked like a first
-  frame. Every row needs one. It is fitted inside the clip's size on black, never cropped.
+- **Picture** — on part 1 only: an output, a cast member's picture or an upload, picked
+  like a first frame. Every shot needs one. It is fitted inside the video's size on
+  black, never cropped.
 - **What the voice says** — read as written, in the panel's **Language**. Long text is
   fine: it is spoken a few sentences at a time and joined, and the picture stays up as
   long as the words take, plus half a second.

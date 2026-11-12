@@ -175,16 +175,18 @@ Break silently:
 - **Skills** (`agent::skills`): built-ins compiled in, `user/skills/*.md` re-read per
   turn, an `id` match replaces; `BUDGET` drops whole skills, lowest priority first.
 - **Enhance** (`agent::enhance`, `POST /enhance`, `Work::Enhance`, `Kind::Enhance`,
-  `web/js/enhance.js`): one schema-held call (`{prompt, sound?}`) per box, with the
+  `web/js/enhance.js`): one schema-held call (`{prompt, sound?, spoken?}`) per box, with the
   family's `modes: [enhance]` guide (`skills::select_enhance`: `Skill.enhance` guides
   plus the family's mode-free style notes; `select` never gives a chat turn one). The
   page writes the answer with `insertText` (undo). H3 keeps names (its `<Subject N>`
-  match) and its fields; `sound` only fills an empty one. **A shot sees its
-  neighbours** (`enhance::neighbours`: shot 1, the last cut, the shot before — a cut
+  match) and its fields; `sound` and `spoken` (H3's Spoken lines — its prompt is what is seen, so a
+  line the words asked for had nowhere else to go) each fill only an empty field. **A shot sees its
+  neighbours** (a film's from `enhance::neighbours`: shot 1, the last cut, the shot
+  before; the Video tab's parts from the storyboard, `shots.js` `partNeighbours` — a cut
   is "the same film", not "nothing carried over"), shed by `trimmed` to fit the
   context and dropped on a `ContextOverflow` retry; `then_continues` (the next shot goes
   on from this one) asks it to end with every face in view — a continue knows only the
-  last frame, so a face that left it comes back a stranger's (film.md says the same); *Enhance every shot*
+  last frame, so a face that left it comes back a stranger's (film.md says the same); *Enhance every part*
   (`enhanceAll`) runs the rows in order. **A story's new or changed
   shots are enhanced after the turn** (`FilmShot.enhance` → `Next::Enhance` →
   `Step::Enhance`, `session::shot_enhanced`): the story's words move to

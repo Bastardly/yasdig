@@ -31,8 +31,8 @@ description = the old *Every shot*, negative, a `seed` its `every` rolls off —
 id **`{vid}-s{n}`** (`story::shot_of`; `VideoStore::dir` maps it, so every
 `/videos/{id}/…` route, Extend, Enlarge, plan and draft work on a shot unchanged).
 Below, "clip" means a shot unless it says Video. A cut is the join between shots; parts
-don't carry `cut` now (read for old records), except narrated stills, whose `sentRow`
-still makes each part a cut from its own picture (step 6 makes it one picture per shot). Names in the UI: Storyboard, Shot
+don't carry `cut` now (read for old records); a narrated shot is one picture, part 1's,
+read over by every part. Names in the UI: Storyboard, Shot
 (the old Shots panel, rows labelled *Part k*), Scene.
 
 - **Model, size, fps and Hi-res are the Video's** (the Generation panel), so shots
@@ -93,7 +93,11 @@ still makes each part a cut from its own picture (step 6 makes it one picture pe
   Generate video; a new `n` is one past every shot's, and `#cbenlargerest` finishes a
   version with what made it (`ClipVersion`). `Engine::enlarge_clip` refuses an `n` the
   shot has, and clears a leftover `v{n}/` not in the record.
-- **Not yet**: Enhance's neighbours across shots, narrated stills as one picture per shot.
+- **Enhance sees the storyboard** (`shots.js` `partNeighbours`, tested; `enhanceRow`
+  builds the order from `rowsOfShot`, the open shot from its rows): `first` the
+  scene's opening part, `scene` this shot's part 1, `before` the part before — for
+  part 1 the last words of the shot before, any scene, as a `cut`; `then_continues` a
+  next part in the shot. The server's `enhance::neighbours` is the paused films'.
 
 ## Clips (shots)
 
@@ -327,19 +331,21 @@ still makes each part a cut from its own picture (step 6 makes it one picture pe
   speaker reads in the model's first predefined voice (Chatterbox needs one); pieces
   go out with `n_predict` `narration::MAX_PIECE_FRAMES` (the driver's 512 is 20 s at
   Chatterbox's 25 Hz). Multilingual's guidance sequence is llama.cpp's own
-  (`classifier_free_guidance` doubles `n_seq_max` at init). `plan_narrated`: shot 1's
-  picture is `source`, the rest `keyframe`, `cut` = k>0, ≤1 `audio`, `every`/negative
+  (`classifier_free_guidance` doubles `n_seq_max` at init). `plan_narrated`: part 1's
+  picture is the shot's `source`; a later part has none and is read over it (`cut`
+  false; a `keyframe` on one is refused — another picture is another shot); ≤1 `audio`, `every`/negative
   unused, `frames` 0 until spoken. `Engine::narrate`: one speak run for every new
-  shot (a shot's own `audio`, else `VideoModel.narrator`, the panel's *Default voice*
+  part (one without a picture holds `init`, or on an extend a scratch copy of frame 0) (a shot's own `audio`, else `VideoModel.narrator`, the panel's *Default voice*
   — no carrying over from the shot before; `/videos/extend` sends the panel's
   `narrator`/`language` so a Redo reads as shown; pieces ≤300 chars at sentence ends,
-  `narration::pieces`), `narration::lay` pads each shot to whole frames **measured
+  `narration::pieces`, each spoken as `narration::speakable` — Chatterbox's reference
+  `punc_norm`, which neither our driver nor llama.cpp's pipeline does), `narration::lay` pads each shot to whole frames **measured
   from the clip's start** (rounding never accumulates), the still fitted *contain* on
   black as RGB (`fit_still`; canvas uploads are RGBA), frame 1 written, the rest
   **hard links** (`hold_frame`, copy fallback) — Enlarge's FSR path processes each
   segment's first frame and links the rest too. `chains()` is true (Extend/Redo
   work) but `VideoView` and skills leave it out of films and Enhance. Page:
-  `narrateRow` relabels the row, `sentRow` with `take.narrated` sends `frames: null`
+  `narrateRow` relabels the row (the picture on part 1 only), `sentRow` with `take.narrated` sends `frames: null`
   (`rowMatches` skips it), `.unnarrated` + `#tab-video.narrated` hide the diffusion
   controls, `#vlang`; both players decode **one still per segment**
   (`decodeFrames`/`stillsOf` in dom.js) — 720 frames would be 720 decodes.

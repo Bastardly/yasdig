@@ -42,19 +42,21 @@ pub struct Request {
     /// The clip's look, added to every shot by the server.
     #[serde(default)]
     pub every: String,
-    /// The shot before this one, which it goes on from — or, on a cut, cuts
-    /// from. (An older page sent it on a continue only.)
+    /// The part before this one, which it goes on from — or, on a cut (a
+    /// shot's part 1), the last part of the shot before, which it cuts from.
+    /// (An older page sent it on a continue only.)
     #[serde(default)]
     pub before: String,
-    /// Shot 1 of the clip, for every later shot: what it set up — the place,
-    /// the light, how its people look — holds unless the words change it.
+    /// The scene's opening part (an Assistant film's shot 1), for every later
+    /// one: what it set up — the place, the light, how its people look —
+    /// holds unless the words change it.
     #[serde(default)]
     pub first: String,
-    /// The shot this one's scene began with (the last cut before it), when
-    /// that is neither shot 1 nor the shot before.
+    /// This camera shot's part 1 (a film's last cut before it), when that
+    /// is neither `first` nor `before`.
     #[serde(default)]
     pub scene: String,
-    /// The next shot goes on from this one's last frame: it must end with
+    /// The next part goes on from this one's last frame: it must end with
     /// the people in it in view, or they come back with new faces.
     #[serde(default)]
     pub then_continues: bool,
@@ -87,6 +89,11 @@ pub struct Enhanced {
     /// H3's sound line, written only when the shot had none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sound: String,
+    /// H3's Spoken lines, written only when the part had none: its prompt
+    /// is what is seen, so words the person had someone say would otherwise
+    /// be lost from it with nowhere to go.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spoken: Vec<Line>,
 }
 
 /// What a request is for, resolved against what is installed.
@@ -176,9 +183,19 @@ pub fn brief(t: Target, req: &Request, looks: &[(String, String)], sees_picture:
             .collect();
         let fields = t.fields();
         if !lines.is_empty() {
-            out.push_str(if fields { "\nSpoken (its own field; not in your prompt):\n" } else { "\nSpoken, word for word:\n" });
+            out.push_str(if fields {
+                "\nSpoken (its own field; not in your prompt; leave `spoken` empty):\n"
+            } else {
+                "\nSpoken, word for word:\n"
+            });
             out.push_str(&lines.join("\n"));
             out.push('\n');
+        } else if fields {
+            out.push_str(
+                "\nSpoken: none written yet — if the person's words have anyone say something, write each line in \
+                 `spoken`: who says it (their name as written, or \"narrator\" for a voice nobody on screen has) and \
+                 the words. Empty when nobody speaks.\n",
+            );
         }
         if !req.sound.trim().is_empty() {
             out.push_str(&format!(
@@ -211,11 +228,13 @@ fn quote(s: &str, max: usize) -> String {
     format!("{}…", cut.trim_end())
 }
 
-/// What the shots around this one set up, so a clip's shots read as one
-/// film: shot 1 (the place, the light, the people), the shot its scene began
-/// with, and the shot before — which a continue goes on from and a cut cuts
-/// from. A cut used to be told "nothing carried over", and each shot of a
-/// five-shot clip lit its own place.
+/// What the parts around this one set up, so a Video's shots read as one
+/// film: the scene's opening part (the place, the light, the people), the
+/// part this camera shot began with, and the part before — which a part goes
+/// on from inside a shot, and a shot's part 1 cuts from. A cut used to be
+/// told "nothing carried over", and each shot of a five-shot clip lit its
+/// own place. An Assistant film fills the same fields from its own shots
+/// ([`neighbours`]).
 fn continuity(out: &mut String, req: &Request, sees_picture: bool) {
     let before = req.before.trim();
     let first = req.first.trim();
@@ -225,32 +244,32 @@ fn continuity(out: &mut String, req: &Request, sees_picture: bool) {
     }
     if !first.is_empty() && first != before {
         out.push_str(&format!(
-            "\nThe clip opens with this shot:\n{}\nKeep to what it set up — the place, the light, the time of day, the \
-             colours, how its people look and dress — unless this shot's words change them.\n",
+            "\nThe scene opens with:\n{}\nKeep to what it set up — the place, the light, the time of day, the \
+             colours, how its people look and dress — unless this part's words change them.\n",
             quote(first, NEIGHBOUR_CHARS)
         ));
     }
     if !scene.is_empty() && scene != first && scene != before {
-        out.push_str(&format!("\nThis shot's scene began with:\n{}\n", quote(scene, NEIGHBOUR_CHARS)));
+        out.push_str(&format!("\nThis camera shot began with:\n{}\n", quote(scene, NEIGHBOUR_CHARS)));
     }
     if !req.cut {
         if !before.is_empty() && !sees_picture {
             out.push_str(&format!(
-                "\nThe shot goes on from the last frame of the shot before, which was:\n{}\nCarry on the same place, \
+                "\nThis goes on from the last frame of the part before, which was:\n{}\nCarry on the same place, \
                  light, people and clothes, and describe what happens next and what changes; don't set the scene \
                  again.\n",
                 quote(before, NEIGHBOUR_CHARS)
             ));
         }
     } else {
-        out.push_str("\nThe shot is a cut: a new camera shot of the same film.");
+        out.push_str("\nThis is a cut: a new camera shot of the same film.");
         if !before.is_empty() {
             out.push_str(&format!(" It cuts from:\n{}\n", quote(before, NEIGHBOUR_CHARS)));
         } else {
             out.push('\n');
         }
         out.push_str(
-            "Keep the film's light, time of day and colours unless this shot's words move to another place or time, \
+            "Keep the film's light, time of day and colours unless this part's words move to another place or time, \
              and say again who is where.\n",
         );
     }
@@ -258,7 +277,7 @@ fn continuity(out: &mut String, req: &Request, sees_picture: bool) {
     // framed out there comes back as a stranger's.
     if req.then_continues {
         out.push_str(
-            "\nThe next shot goes on from this shot's last frame and knows only what it shows: end with everyone in \
+            "\nThe next part goes on from this one's last frame and knows only what it shows: end with everyone in \
              it in view, faces visible, no one turned away, leaving or cut off by the frame.\n",
         );
     }
@@ -295,13 +314,29 @@ fn trimmed(req: &Request, t: Target, fixed: usize, budget: usize) -> Option<Requ
     Some(r)
 }
 
-/// The output's shape: the prompt, and H3's sound line beside it.
+/// The output's shape: the prompt, and H3's sound line and Spoken lines
+/// beside it.
 fn schema(t: Target) -> serde_json::Value {
     let mut props = serde_json::json!({ "prompt": { "type": "string", "minLength": 1, "maxLength": 2400 } });
     let mut required = vec!["prompt"];
     if t.fields() {
         props["sound"] = serde_json::json!({ "type": "string", "maxLength": 500 });
+        props["spoken"] = serde_json::json!({
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "who": { "type": "string", "maxLength": 60 },
+                    "words": { "type": "string", "maxLength": 400 },
+                    "voiceover": { "type": "boolean" },
+                },
+                "required": ["who", "words", "voiceover"],
+                "additionalProperties": false,
+            },
+        });
         required.push("sound");
+        required.push("spoken");
     }
     serde_json::json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
 }
@@ -318,6 +353,11 @@ pub fn parse(content: &str) -> Result<Enhanced> {
     let mut e: Enhanced = serde_json::from_str(body).context("reading the agent's answer")?;
     e.prompt = clean(&e.prompt);
     e.sound = clean(&e.sound);
+    for l in &mut e.spoken {
+        l.who = clean(&l.who);
+        l.words = clean(&l.words);
+    }
+    e.spoken.retain(|l| !l.words.is_empty());
     if e.prompt.is_empty() {
         bail!("the agent wrote an empty prompt");
     }
@@ -447,7 +487,7 @@ fn variables_line(vars: &crate::variables::Variables) -> String {
 /// names.
 fn keep_known(e: &mut Enhanced, vars: &crate::variables::Variables) -> Vec<String> {
     let mut dropped = Vec::new();
-    for text in [&mut e.prompt, &mut e.sound] {
+    for text in [&mut e.prompt, &mut e.sound].into_iter().chain(e.spoken.iter_mut().map(|l| &mut l.words)) {
         let (kept, names) = crate::variables::unbrace_unknown(text, vars);
         *text = kept;
         for n in names {
@@ -479,14 +519,18 @@ mod tests {
         let ltx = brief(Target::Video(VideoFamily::Ltx25, false), &r, &looks, false);
         assert!(ltx.contains("The person's words:\na man sings opera"), "{ltx}");
         assert!(ltx.contains("don't repeat it): cinematic, warm light"), "{ltx}");
-        assert!(ltx.contains("shot before, which was:\nLeo walks on stage"), "{ltx}");
+        assert!(ltx.contains("part before, which was:\nLeo walks on stage"), "{ltx}");
         assert!(ltx.contains("about 5 seconds"), "{ltx}");
         assert!(ltx.contains("- Leo: Leo is a tall man in a black tailcoat."), "{ltx}");
         assert!(ltx.contains("Spoken, word for word:\n- Leo [Italian]: \"Nessun dorma\""), "{ltx}");
         // H3 keeps its speech and sound apart, and is asked for a sound line.
         let h3 = brief(Target::Video(VideoFamily::MinimaxH3, true), &r, &looks, false);
-        assert!(h3.contains("Spoken (its own field; not in your prompt)"), "{h3}");
+        assert!(h3.contains("Spoken (its own field; not in your prompt; leave `spoken` empty)"), "{h3}");
         assert!(h3.contains("write it in `sound`"), "{h3}");
+        assert!(!h3.contains("write each line in `spoken`"), "{h3}");
+        let unsaid = brief(Target::Video(VideoFamily::MinimaxH3, true), &Request { lines: vec![], ..r.clone() }, &looks, false);
+        assert!(unsaid.contains("write each line in `spoken`"), "{unsaid}");
+        assert!(!ltx.contains("`spoken`"), "LTX weaves speech into its paragraph");
         // A picture shown wins over the shot before; an image prompt has no shot parts.
         assert!(brief(Target::Video(VideoFamily::Wan22Ti2v5b, false), &r, &looks, true).contains("first frame"));
         let img = brief(Target::Image(ImageFamily::Flux), &r, &looks, false);
@@ -504,8 +548,8 @@ mod tests {
         let mut r = shot("Mara looks back.");
         (r.first, r.scene, r.before, r.cut) = (first, scene, before, true);
         let b = brief(t, &r, &[], false);
-        assert!(b.contains("opens with this shot:\nDusk on a pier, orange light.\nKeep to what it set up"), "{b}");
-        assert!(b.contains("scene began with:\nLeo in a cafe."), "{b}");
+        assert!(b.contains("opens with:\nDusk on a pier, orange light.\nKeep to what it set up"), "{b}");
+        assert!(b.contains("camera shot began with:\nLeo in a cafe."), "{b}");
         assert!(b.contains("a new camera shot of the same film. It cuts from:\nHe sips."), "{b}");
         assert!(!b.contains("nothing carried over"), "{b}");
         // A continue goes on from the shot before; shot 1 isn't quoted twice.
@@ -516,7 +560,7 @@ mod tests {
         assert!(b.contains("which was:\nDusk on a pier") && b.contains("don't set the scene again"), "{b}");
         assert!(!b.contains("opens with"), "{b}");
         // Shot 1 has none of it.
-        assert!(!brief(t, &shot("Dusk on a pier."), &[], false).contains("shot before"));
+        assert!(!brief(t, &shot("Dusk on a pier."), &[], false).contains("part before"));
         // One the next shot goes on from ends with its people in view.
         let r = super::Request { then_continues: true, ..shot("Dusk on a pier.") };
         assert!(brief(t, &r, &[], false).contains("faces visible"));
@@ -553,7 +597,7 @@ mod tests {
         // Only what the person's words use: {mood} is defined but wasn't written.
         let vars = crate::variables::used("a {animal} at dusk", &defined);
         assert_eq!(vars.keys().collect::<Vec<_>>(), ["Animal"]);
-        let mut e = Enhanced { prompt: "a {animal}, {mood}, with {fur_color} fur".into(), sound: "a {animal} purrs, {fur_color}".into() };
+        let mut e = Enhanced { prompt: "a {animal}, {mood}, with {fur_color} fur".into(), sound: "a {animal} purrs, {fur_color}".into(), ..Default::default() };
         assert_eq!(keep_known(&mut e, &vars), ["mood".to_string(), "fur_color".to_string()]);
         assert_eq!(e.prompt, "a {animal}, mood, with fur_color fur");
         assert_eq!(e.sound, "a {animal} purrs, fur_color");
@@ -568,7 +612,12 @@ mod tests {
         assert!(parse("{\"prompt\": \"  \"}").is_err());
         assert!(parse("no object").is_err());
         let s = schema(Target::Video(VideoFamily::MinimaxH3, true));
-        assert_eq!(s["required"], serde_json::json!(["prompt", "sound"]));
+        assert_eq!(s["required"], serde_json::json!(["prompt", "sound", "spoken"]));
+        let e = parse(r#"{"prompt": "Mara waves.", "sound": "", "spoken": [
+            {"who": "Mara", "words": "\"Hello there.\"", "voiceover": false}, {"who": "Leo", "words": " ", "voiceover": false}]}"#)
+        .unwrap();
+        assert_eq!(e.spoken.len(), 1, "a line with no words is dropped");
+        assert_eq!((e.spoken[0].who.as_str(), e.spoken[0].words.as_str()), ("Mara", "Hello there."));
         assert_eq!(schema(Target::Video(VideoFamily::Ltx23, false))["required"], serde_json::json!(["prompt"]));
     }
 }

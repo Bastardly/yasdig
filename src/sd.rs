@@ -362,9 +362,9 @@ impl<'a> SdRunner<'a> {
         shot: Option<(usize, usize)>,
     ) -> Result<()> {
         let cmd = self.video_cmd(m, prompt, negative, seed, io);
-        // A long clip's progress line says which shot it is on.
+        // A shot's progress line says which part it is on.
         let label = match shot {
-            Some((k, n)) => format!("shot {k} of {n}"),
+            Some((k, n)) => format!("part {k} of {n}"),
             None => (if io.init.is_some() { "i2v" } else { "t2v" }).to_string(),
         };
         self.run(cmd, &label)

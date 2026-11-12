@@ -2,7 +2,7 @@
 // the stage (`shots.js`). Not in `web::WEB_FILES`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shotState, sentRow, shotOutdated } from './shots.js';
+import { shotState, sentRow, shotOutdated, partNeighbours } from './shots.js';
 
 const seg = (text, k) => ({ text, seed: 10 + k, frames: 33, start: k * 32 });
 const clip = (...texts) => ({ segments: texts.map(seg) });
@@ -156,30 +156,32 @@ test("a row holds what every model takes, and sends its model's part", () => {
   assert.equal(shotState(rs, c, true).action, 'redo', 'on H3 it would follow the references instead');
 });
 
-test('a narrated row is its picture, its words and its voice; its length is the speech', () => {
+test('a narrated shot is one picture, its parts read over it; a part\'s length is its speech', () => {
   const take = { references: false, sounds: false, narrated: true };
-  // As drawn: lengths from the speech, each shot after the first a cut from its picture.
+  // As drawn: lengths from the speech, part 2 read over part 1's picture.
   const c = {
     source: 'p1',
     segments: [
       { text: 'Once there was a crab.', seed: 4, frames: 41, start: 0, cut: false, audio: ['voice'] },
-      { text: 'It lived by the sea.', seed: 5, frames: 30, start: 41, cut: true, keyframe: 'p2', audio: [] },
+      { text: 'It lived by the sea.', seed: 5, frames: 30, start: 41, cut: false, audio: [] },
     ],
   };
   const r = [
     { text: 'Once there was a crab.', seed: 4, frames: 81, cut: false, key: 'p1', audio: ['voice'], refs: ['x'] },
-    { text: 'It lived by the sea.', seed: 5, frames: 81, cut: false, key: 'p2', audio: [] },
+    { text: 'It lived by the sea.', seed: 5, frames: 81, cut: true, key: 'stray', audio: [] },
   ];
-  assert.equal(shotState(r, c, true, take).action, 'none', 'the Frames box and a stray continue never count');
+  assert.equal(shotState(r, c, true, take).action, 'none', 'the Frames box, a stray cut and a later picture never count');
   const sent = sentRow(r[1], 1, take);
-  assert.equal(sent.cut, true);
-  assert.equal(sent.key, 'p2');
+  assert.equal(sent.cut, false);
+  assert.equal(sent.key, null, 'only part 1 holds the picture');
+  assert.equal(sentRow(r[0], 0, take).key, 'p1');
   assert.deepEqual(sent.refs, []);
-  for (const change of [{ key: 'p3' }, { audio: ['other'] }, { text: 'It lived in the sea.' }, { seed: 6 }]) {
+  for (const change of [{ audio: ['other'] }, { text: 'It lived in the sea.' }, { seed: 6 }]) {
     const s = shotState([r[0], { ...r[1], ...change }], c, true, take);
     assert.equal(s.action, 'redo', JSON.stringify(change));
     assert.equal(s.done, 1);
   }
+  assert.equal(shotState([{ ...r[0], key: 'p9' }, r[1]], c, true, take).done, 0, 'a new picture redraws the shot');
   assert.deepEqual(sentRow({ ...r[0], audio: ['a', 'b'] }, 0, take).audio, ['a'], 'one voice');
 });
 
@@ -199,4 +201,20 @@ test('a drawn shot is outdated while its video or scene differs from what made i
   assert.equal(shotOutdated({ ...c, rendered: false }, { ...want, width: 1 }, scene), false, 'a plan is drawn as it is');
   assert.equal(shotOutdated({ ...c, typed_negative: '{bad}' }, want, { ...scene, negative: '{bad}' }), false,
     'the negative as typed, before its roll');
+});
+
+test('a part sees its scene\'s opening, its shot\'s first part and the part before; part 1 cuts from the shot before', () => {
+  const order = [
+    { scene: 0, texts: ['Dusk on a pier.', 'She turns.'] },
+    { scene: 0, texts: ['Close on her face.', '', 'She smiles.', 'She walks.'] },
+    { scene: 1, texts: ['A cafe at noon.'] },
+  ];
+  assert.deepEqual(partNeighbours(order, 0, 0), { first: '', scene: '', before: '', cut: false, then_continues: true });
+  assert.deepEqual(partNeighbours(order, 1, 0),
+    { first: 'Dusk on a pier.', scene: '', before: 'She turns.', cut: true, then_continues: false });
+  assert.deepEqual(partNeighbours(order, 1, 2),
+    { first: 'Dusk on a pier.', scene: 'Close on her face.', before: '', cut: false, then_continues: true });
+  assert.deepEqual(partNeighbours(order, 2, 0),
+    { first: '', scene: '', before: 'She walks.', cut: true, then_continues: false },
+    'a new scene opens itself, and cuts from the last words of the one before');
 });

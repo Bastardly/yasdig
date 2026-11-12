@@ -93,6 +93,41 @@ pub const PIECE_GAP: f32 = 0.25;
 /// read as a change of subject.
 pub const SHOT_GAP: f32 = 0.5;
 
+/// A piece as Chatterbox's reference reads it (`punc_norm` in its `tts.py`),
+/// which our driver and llama.cpp's Chatterbox pipeline don't do: a capital
+/// first letter, plain punctuation, and an ending. Without it a 13-word line
+/// with no stop came back 16 s long, a held vowel before the words (heard
+/// 2026-11-12, Chatterbox, no voice picked). Qwen3-TTS's pipeline does much
+/// the same itself, so it reads the same either way.
+pub fn speakable(piece: &str) -> String {
+    let mut s = piece.to_string();
+    for (from, to) in [
+        ("...", ", "),
+        ("…", ", "),
+        (":", ","),
+        (" - ", ", "),
+        (";", ", "),
+        ("—", "-"),
+        ("–", "-"),
+        ("“", "\""),
+        ("”", "\""),
+        ("‘", "'"),
+        ("’", "'"),
+    ] {
+        s = s.replace(from, to);
+    }
+    // Spaces collapsed after, so "Wait... what" has one.
+    let s = s.split_whitespace().collect::<Vec<_>>().join(" ").replace(" ,", ",");
+    let mut c = s.chars();
+    let Some(first) = c.next() else { return String::new() };
+    let mut out: String = first.to_uppercase().chain(c).collect();
+    // The multilingual reference also ends on CJK stops.
+    if !out.ends_with(['.', '!', '?', '-', ',', '、', '，', '。', '？', '！']) {
+        out.push('.');
+    }
+    out
+}
+
 /// Cut `text` into pieces of at most [`PIECE_CHARS`] characters: whole
 /// sentences where they fit, then clauses (`;`, `:`, `,`), then words — never
 /// inside a word. A word longer than the cap is a piece of its own. Blank
@@ -237,6 +272,19 @@ pub fn lay(shots: &[Vec<Audio>], fps: u32, start: u32) -> Result<(Audio, Vec<u32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The reference's normalisation: a capital, plain punctuation, a stop.
+    #[test]
+    fn a_piece_is_read_with_an_ending() {
+        assert_eq!(speakable("hello I am Gary from Wakanda"), "Hello I am Gary from Wakanda.");
+        assert_eq!(speakable("Wait... what?  "), "Wait, what?");
+        assert_eq!(speakable("so ... then"), "So, then.");
+        assert_eq!(speakable("one; two: three — “four”"), "One, two, three - \"four\".");
+        assert_eq!(speakable("It's fine,"), "It's fine,");
+        assert_eq!(speakable("ändern"), "Ändern.");
+        assert_eq!(speakable("你好。"), "你好。");
+        assert_eq!(speakable("   "), "");
+    }
 
     fn tone(seconds: f32, rate: u32) -> Audio {
         let n = (seconds * rate as f32) as usize;

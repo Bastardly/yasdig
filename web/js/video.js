@@ -5,7 +5,7 @@ import { soonJobs, stopKind, stopAllKind } from './jobs.js';
 import { clip, renderVideo, stopPlayback, clearClip, openStage } from './player.js';
 import { initClipView } from './clipview.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
-import { shotState, rowMatches, sentRow, shotOutdated, ALL } from './shots.js';
+import { shotState, rowMatches, sentRow, shotOutdated, partNeighbours, ALL } from './shots.js';
 import {
   initStoryboard, setVideo, currentVideo, currentShotId, clipOf, sceneOf, shotName, refreshFrom, followShot,
   drawBoard, fillScene, unlockVideo, sceneLocked, syncHead,
@@ -192,14 +192,15 @@ function readRow(el) {
 
 // ---- Enhance -----------------------------------------------------------------
 //
-// A shot written out in full by the agent's model for the Video tab's model
-// (`enhance.js`): with the clip's look; shot 1, the last cut before it and
-// the shot before (`agent::enhance::neighbours`, so a later shot keeps the
-// place and light they set up); its first frame, who is in it and their
+// A part written out in full by the agent's model for the Video tab's model
+// (`enhance.js`): with its scene's description; the scene's opening part,
+// this shot's first part and the part before — across shots, the last words
+// of the shot before (`partNeighbours`), so a later shot keeps the place and
+// light they set up; its first frame, who is in it and their
 // looks, its length, and what is said and heard — LTX weaves speech into the
-// paragraph, H3 keeps its fields and gets a Sound line when it had none.
+// paragraph, H3 keeps its fields and gets Sound and Spoken when they were empty.
 // Resolves true when the box was written.
-const ENHANCE_TIP = "The agent's model writes this shot out in full for the picked video model: action, looks, place, camera and, on LTX, every sound. Ctrl+Z in the box undoes it.";
+const ENHANCE_TIP = "The agent's model writes this part out in full for the picked video model: action, looks, place, camera and, on LTX, every sound. Ctrl+Z in the box undoes it.";
 function enhanceRow(row, btn) {
   const m = currentVideoModel();
   const els = rowEls();
@@ -208,20 +209,12 @@ function enhanceRow(row, btn) {
   const fps = m?.forced_fps ?? (parseInt($('vfps').value, 10) || 0);
   const frames = r.frames ?? (m ? alignFrames(m.frames, m.frame_grid) : null);
   const note = row.querySelector('.shotenhanceerr');
-  const text = (j) => els[j].querySelector('textarea').value;
-  let scene = '';
-  for (let j = k - 1; j >= 1; j--) if (els[j].dataset.cut === '1') { scene = text(j); break; }
   const body = {
     kind: 'video',
     model: $('vmodel').value,
     text: r.text,
     every: $('veverytext').value,
-    first: k > 0 ? text(0) : '',
-    scene,
-    // The next row goes on from this one's last frame (`then_continues`).
-    then_continues: k + 1 < els.length && els[k + 1].dataset.cut !== '1' && !!text(k + 1).trim(),
-    before: k > 0 ? text(k - 1) : '',
-    cut: k > 0 && r.cut,
+    ...partNeighbours(...storyOrder(els), k),
     picture: sentRow(r, k, takeOf(m)).key || null,
     seconds: fps && frames ? frames / fps : null,
     cast: r.cast,
@@ -232,17 +225,39 @@ function enhanceRow(row, btn) {
   };
   return enhance(btn, row.querySelector('textarea'), body, {
     onError: (msg) => { note.textContent = msg; note.hidden = !msg; },
+    // H3's fields, each only when it was empty: the person's own stand.
     onDone: (a) => {
-      const snd = row.querySelector('.shotsnd');
-      if (a.sound && !snd.value.trim()) {
-        snd.value = a.sound;
-        snd.dispatchEvent(new Event('input', { bubbles: true }));
-      }
+      const fill = (el, v) => {
+        if (!v || el.value.trim()) return;
+        el.value = v;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      };
+      fill(row.querySelector('.shotsnd'), a.sound);
+      fill(row.querySelector('.shotlines'), linesText(a.spoken ?? []));
     },
   });
 }
 
-// *Enhance every shot*: the rows in order, each waiting for the one before,
+// Every shot of the Video in storyboard order as `partNeighbours` reads it,
+// the open one from its rows, and where the open one is. Off a Video, the
+// open shot alone.
+function storyOrder(els) {
+  const open = els.map((el) => el.querySelector('textarea').value);
+  const v = currentVideo();
+  const id = currentShotId();
+  const order = [];
+  let at = -1;
+  for (const [si, sc] of (v?.scenes ?? []).entries()) {
+    for (const sid of sc.shots) {
+      if (sid === id) at = order.length;
+      const c = clipOf(sid);
+      order.push({ scene: si, texts: sid === id ? open : c ? rowsOfShot(c).map((r) => r.text ?? '') : [] });
+    }
+  }
+  return at < 0 ? [[{ scene: 0, texts: open }], 0] : [order, at];
+}
+
+// *Enhance every part*: the rows in order, each waiting for the one before,
 // so shot k is written to match the shots already written out. A row with
 // no words is passed over; an error (shown under its row) or Stop ends it.
 let enhancingAll = false;
@@ -259,7 +274,7 @@ async function enhanceAll() {
     }
   } finally {
     enhancingAll = false;
-    btn.textContent = 'Enhance every shot';
+    btn.textContent = 'Enhance every part';
   }
 }
 
@@ -809,9 +824,9 @@ function rowsSeconds(m) {
 
 // The marks, each row's start switch, references button and ×, the footer's
 // press, and what the shots add up to.
-// A row on a narrated model is a picture, the words a voice reads, and the
-// voice: every row is a cut from its own picture, its length its speech's
-// (no Frames), and nothing a video model reads is shown. `a` is how many
+// A row on a narrated model is the words a voice reads and the voice, its
+// length its speech's (no Frames); part 1 also holds the shot's one picture,
+// which every part is read over. Nothing a video model reads is shown. `a` is how many
 // sounds it holds (its own voice, if any; the rest read in the panel's
 // default voice). On any other model it puts back what it took.
 function narrateRow(el, i, on, a) {
@@ -823,14 +838,15 @@ function narrateRow(el, i, on, a) {
   if (tip) tip.dataset.tip = hintFor(on ? 'vnarrated' : 'vprompt');
   const ta = el.querySelector('textarea');
   ta.dataset.placeholder ??= ta.placeholder;
-  ta.placeholder = on ? 'The words read over this picture — as long as you like.' : ta.dataset.placeholder;
+  ta.placeholder = !on ? ta.dataset.placeholder : i === 0 ? 'The words read over this picture — as long as you like.'
+    : 'The words read next, over the shot’s picture.';
   show('label[data-help="vshotframes"], .shotframes, .shotenhancerow', !on);
   if (!on) return;
-  el.classList.add('fresh');
+  el.classList.toggle('fresh', i === 0);
   show('.shotstart, .shotrefs, .shotwhy, .shotsoundrows, .shotcastrow', false);
   const key = el.dataset.key || '';
-  show('.shotkey, .shotkeylabel, .shotkeyup', true);
-  show('.shotkeythumb, .shotkeyclear', !!key);
+  show('.shotkey, .shotkeylabel, .shotkeyup', i === 0);
+  show('.shotkeythumb, .shotkeyclear', i === 0 && !!key);
   if (key) el.querySelector('.shotkeythumb').src = `/outputs/${encodeURIComponent(key)}/thumb.png`;
   const voice = el.querySelector('.shotsounds');
   voice.hidden = false;
@@ -941,7 +957,7 @@ function syncShots() {
   if (busy) {
     note.textContent = 'This shot is queued or drawing; its parts can be changed again when it lands.';
   } else if (m.narrated && !st.action.match(/redo|extend/)) {
-    note.textContent = `${live.length || 1} part${live.length > 1 ? 's' : ''}, each held as long as its words take to say. `
+    note.textContent = `${live.length || 1} part${live.length > 1 ? 's' : ''}, read in turn over the shot's picture, each held as long as its words take to say. `
       + 'A part with no voice of its own is read in the default voice.';
   } else if (live.length > 1 && !m.chains) {
     note.textContent = `${m.name} can't go on from a last frame, so a shot is one part — `
@@ -1329,10 +1345,13 @@ function vidPayload(rows, scene = sceneNow()) {
 }
 
 // After a press: the rows the clip now has, with the seeds they were drawn
-// with, then any sent that it didn't get to (a Stop, a failed shot) — kept
-// for another try.
+// with, then any sent that it didn't get to (a Stop, a failed part) — kept
+// for another try — then the rows added below them while it drew (`sent`
+// are `liveRows`, which know their place on screen).
 function landRows(c, sent) {
-  drawShots([...rowsOf(c), ...sent.slice((c.segments ?? []).length)]);
+  const last = sent.reduce((m, r) => Math.max(m, r.i ?? -1), -1);
+  const later = rowEls().slice(last + 1).map(readRow);
+  drawShots([...rowsOf(c), ...sent.slice((c.segments ?? []).length), ...later]);
   syncVideoSummaries();
   setDraft(c);
 }

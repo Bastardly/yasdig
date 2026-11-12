@@ -213,12 +213,12 @@ const HELP = [
         + 'the last one adds one frame fewer: its first is the last one’s final '
         + 'frame. A longer part costs more memory, so a long shot is more parts.' },
   { ids: ['vnarrated'],
-    text: 'What the voice reads while this shot’s picture is on screen — a sentence or a page. The shot lasts as long as '
-      + 'the reading, with a half-second pause before the next picture. Long text is read a few sentences at a time in '
+    text: 'What the voice reads over the shot’s picture — a sentence or a page. The parts are read in turn, each lasting as '
+      + 'long as its reading, with a half-second pause before the next. Long text is read a few sentences at a time in '
       + 'the same voice. A new seed is a new reading of the same words.' },
   { ids: ['vnarrator'],
     text: 'The voice the clip is read in: a 2–15 s recording of one person speaking clearly, with no music behind '
-      + 'it — from Outputs, a cast member, or this computer. A shot with a voice of its own reads in that one '
+      + 'it — from Outputs, a cast member, or this computer. A part with a voice of its own reads in that one '
       + 'instead. With none, the voice model reads in a voice of its own: Chatterbox’s is always the same, '
       + 'Qwen3-TTS makes up a different one each shot.' },
   { ids: ['vlang'],
