@@ -25,4 +25,8 @@ Roadmap as it is currently planned. Changes can happen.
 - [ ] Video to video
 - [ ] Mac support. I do want to support Mac, and it should be possible to swap the Vulkan backend with Metal. But I don't have a Machine to test it with.
 - [ ] Improve narrative clips. Pretty basic atm.
-- [ ] Move help tab to website, and give that knowledge as a skill for the assistant. (Rag)
+
+# Known bugs
+- [ ] Setting -> Per Model -> Video models clamped at the bottom. Also, does not show proper setting options.
+- [ ] OOM Error - Needs a copy key for easier debugging. Currently hard to copy paste.
+- [ ] Agent has trouble working from work items that has deleted models, such as VAE or Text Encoder. Should choose a new by default.

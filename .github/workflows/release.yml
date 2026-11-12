@@ -72,7 +72,7 @@ jobs:
     # runs on systems with the glibc it was built against *or newer*.
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Vulkan SDK
         # The LunarG SDK rather than apt: 22.04's Vulkan headers are older than
@@ -144,7 +144,7 @@ jobs:
           tar -C pkg -czf yasdig-linux-x86_64.tar.gz yasdig
           tar -tvzf yasdig-linux-x86_64.tar.gz
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: yasdig-linux-x86_64
           path: yasdig-linux-x86_64.tar.gz
@@ -152,7 +152,7 @@ jobs:
   windows:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Vulkan SDK
         # The installer and flags upstream's own CI uses.
@@ -223,14 +223,14 @@ jobs:
       # build's is the folder: upload-artifact zips what it is given, so the
       # zip would arrive inside a zip — this way the download *is* the
       # release's zip, `yasdig\` at its root.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: github.ref_type == 'tag'
         with:
           name: yasdig-windows-x86_64
           path: yasdig-windows-x86_64.zip
           retention-days: 90
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: github.ref_type != 'tag'
         with:
           name: yasdig-windows-x86_64
@@ -254,13 +254,13 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
       # What a download can be checked against: `sha256sum -c SHA256SUMS`.
       - name: Checksums
         run: sha256sum yasdig-linux-x86_64.tar.gz yasdig-windows-x86_64.zip > SHA256SUMS
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             yasdig-linux-x86_64.tar.gz
