@@ -144,6 +144,16 @@ pub fn expand(text: &str, vars: &Variables, seed: i64) -> Result<String> {
     Ok(out)
 }
 
+/// The person's variables that `text` names, under their own spelling — what
+/// Enhance may keep, since it must never add one the person didn't write.
+pub fn used(text: &str, vars: &Variables) -> Variables {
+    placeholders(text)
+        .into_iter()
+        .filter_map(|(_, _, name)| vars.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
 /// Every well-formed `{name}` in `text` as (start, end, name), in order —
 /// the same reading [`expand`] makes of it.
 fn placeholders(text: &str) -> Vec<(usize, usize, &str)> {

@@ -375,8 +375,12 @@ pub fn run(cfg: &Config, monitor: &Monitor, req: &Request) -> Result<Enhanced> {
         }
     }
     let sees = !parts.is_empty();
+    // Only the variables the person's own words use: one Enhance put in
+    // unasked rolls a different word into every picture.
+    let vars = crate::variables::used(&format!("{}\n{}", req.text, req.sound), &cfg.settings().variables);
     let system = format!(
-        "{guide}\n\nAnswer with one JSON object: `prompt` is the new prompt alone — no title, no \"Here is\", no quotes around it{}.",
+        "{guide}\n\n{}\n\nAnswer with one JSON object: `prompt` is the new prompt alone — no title, no \"Here is\", no quotes around it{}.",
+        variables_line(&vars),
         if t.fields() { ", and `sound` the shot's sound line (empty when it has one)" } else { "" }
     );
     let n_ctx = tune.n_ctx.min(N_CTX);
@@ -417,7 +421,42 @@ pub fn run(cfg: &Config, monitor: &Monitor, req: &Request) -> Result<Enhanced> {
     if !t.fields() || !req.sound.trim().is_empty() {
         e.sound.clear();
     }
+    for name in keep_known(&mut e, &vars) {
+        eprintln!("enhance: {{{name}}} wasn't in the words it was given; the prompt says \"{name}\"");
+    }
     Ok(e)
+}
+
+/// Which `{name}`s the answer keeps: the guides teach "keep a word in
+/// braces", and a model not told which made some up — an unknown name fails
+/// the next Generate — or added real ones the person never asked for.
+fn variables_line(vars: &crate::variables::Variables) -> String {
+    if vars.is_empty() {
+        return "The person's words use no variables: write no {braces}.".to_string();
+    }
+    let names: Vec<String> = vars.keys().map(|n| format!("{{{n}}}")).collect();
+    format!(
+        "The person's words use the variables {}: keep each exactly, braces and all. Add no other {{name}}.",
+        names.join(", ")
+    )
+}
+
+/// The braces off any `{name}` in the answer that the person's words didn't
+/// use (`variables::unbrace_unknown`, as a chat reply's prompt gets): never
+/// a prompt Generate would refuse, nor a roll nobody asked for. Answers the
+/// names.
+fn keep_known(e: &mut Enhanced, vars: &crate::variables::Variables) -> Vec<String> {
+    let mut dropped = Vec::new();
+    for text in [&mut e.prompt, &mut e.sound] {
+        let (kept, names) = crate::variables::unbrace_unknown(text, vars);
+        *text = kept;
+        for n in names {
+            if !dropped.contains(&n) {
+                dropped.push(n);
+            }
+        }
+    }
+    dropped
 }
 
 #[cfg(test)]
@@ -502,6 +541,24 @@ mod tests {
 
     fn text_len(s: &str) -> usize {
         super::super::context::text_tokens(s)
+    }
+
+    #[test]
+    fn an_answer_keeps_only_the_variables_the_persons_words_use() {
+        let defined: crate::variables::Variables = [
+            ("Animal".to_string(), vec!["cat".to_string(), "fox".to_string()]),
+            ("mood".to_string(), vec!["calm".to_string()]),
+        ]
+        .into();
+        // Only what the person's words use: {mood} is defined but wasn't written.
+        let vars = crate::variables::used("a {animal} at dusk", &defined);
+        assert_eq!(vars.keys().collect::<Vec<_>>(), ["Animal"]);
+        let mut e = Enhanced { prompt: "a {animal}, {mood}, with {fur_color} fur".into(), sound: "a {animal} purrs, {fur_color}".into() };
+        assert_eq!(keep_known(&mut e, &vars), ["mood".to_string(), "fur_color".to_string()]);
+        assert_eq!(e.prompt, "a {animal}, mood, with fur_color fur");
+        assert_eq!(e.sound, "a {animal} purrs, fur_color");
+        assert!(variables_line(&vars).contains("{Animal}"));
+        assert!(variables_line(&crate::variables::used("a fox", &defined)).contains("no variables"));
     }
 
     #[test]

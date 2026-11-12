@@ -8,6 +8,7 @@ Roadmap as it is currently planned. Changes can happen.
 - [ ] Improve assistant UI - Currently chat is a bit too messy.
 - [x] Improve wording. E.g. agent is using past tense, when starting to create a cast member
 - [x] OOM Error - Needs a copy key for easier debugging. Currently hard to copy paste.
+- [x] Enhance sometimes use variables that don't exist.
 
 
 # v0.11.x - Video improvements
@@ -30,4 +31,3 @@ Roadmap as it is currently planned. Changes can happen.
 # Known bugs
 - [ ] Setting -> Per Model -> Video models clamped at the bottom. Also, does not show proper setting options.
 - [ ] Agent has trouble working from work items that has deleted models, such as VAE or Text Encoder. Should choose a new by default.
-- [ ] Enhance sometimes use variables that don't exist.
