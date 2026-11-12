@@ -72,9 +72,28 @@ still makes each part a cut from its own picture (step 6 makes it one picture pe
   picked shot, decoded frames cached per shot (`decoded`, keyed by id+created+frames),
   each shot's own `audio.wav` re-synced as the playhead crosses into it, a strip of
   shots under the scrubber (`#vshotmarks`). Same shots again = a seek; `seek: false`
-  (a refresh after a render) leaves the playhead. The canvas opens the clip dialog on
-  the shot under the playhead.
-- **Not yet**: downloading/saving/enlarging the joined Video (each is per shot today), Enhance's neighbours across shots, narrated stills as one picture per shot.
+  (a refresh after a render) leaves the playhead. The canvas (and a second click on
+  the open Video's tile) opens the clip dialog on the whole Video (`openStage` →
+  `openVideoView(vid, shots, frame)`).
+- **The join is `VideoStore::joined(vid, n)`** (`story.rs`): generated shots in
+  storyboard order, refused by shot name when a size or fps differs (measured
+  `clip.width/height`, or the version's) or version `n` doesn't cover a shot.
+  **Sound: each shot gets exactly its frames' samples counted from the Video's start**
+  (`join_audio`, cumulative `frames × rate / fps`): a silent shot is silence, a short
+  WAV padded, a long one cut — never per-frame rounding, which drifts. Served as
+  `/videos/{vid}/joined.wav` and `/videos/{vid}[/v{n}]/joined.avi`, **encoded per
+  request, never cached** (a reorder is only a `/videos/story` save, so no shot's
+  `invalidate` would clear it; `avi::encode` refuses past 4 GB). *Save to output* with a
+  Video id writes `{vid}[-v{n}].avi`, or a frames folder numbered across shots (wide
+  enough to sort) plus `audio.wav`.
+- **A Video's version is computed, never stored**: `n` is a version of the Video when
+  some shot has `v{n}`; the shots without it are what it "doesn't cover" (a Stop, a
+  shot drawn again or extended — `invalidate` drops a shot's versions). Enlarge runs
+  one `/videos/enlarge {id: shot, version: n}` per shot, page-sequential like
+  Generate video; a new `n` is one past every shot's, and `#cbenlargerest` finishes a
+  version with what made it (`ClipVersion`). `Engine::enlarge_clip` refuses an `n` the
+  shot has, and clears a leftover `v{n}/` not in the record.
+- **Not yet**: Enhance's neighbours across shots, narrated stills as one picture per shot.
 
 ## Clips (shots)
 
@@ -182,8 +201,10 @@ still makes each part a cut from its own picture (step 6 makes it one picture pe
   and H3's round-up snap undid every step down from an off-grid one. There is no
   clip seed: each shot has its own.
 - **The clip dialog** (`#clipbox`, `web/js/clipview.js`, its own player): Enlarge,
-  History, Download, Save to output — no shots. Opened from the stage's canvas, or an
-  Outputs ▶ tile (`openOutputClip`: play and Download only). **Enlarges are versions inside the clip**
+  History, Download, Save to output of the **whole Video** (`view.kind 'video'`: frame
+  `k` mapped to its shot by `frameUrl`). Opened from the stage's canvas, or an
+  Outputs ▶ tile (`openOutputClip`: a saved `{vid}` reopens its Video; otherwise play
+  and Download only). **Enlarges are versions inside the clip**
   (`work/videos/{id}/v{n}/`, `Clip.versions`, always from the original's frames),
   served at `/videos/{id}/v{n}/frames/{k}.png` and `…/v{n}/clip.avi`
   (`clip_version` parses `{id}` or `{id}/v{n}`; `v0` is refused). *Save to output*

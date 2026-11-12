@@ -802,6 +802,19 @@ fn ltx_enlarge_steps() -> u32 {
     8
 }
 
+/// The version an enlarge writes: the one asked for (a Video's shared `n`),
+/// never over one the clip has; else the clip's next.
+fn version_number(clip: &Clip, want: Option<u32>) -> Result<u32> {
+    match want {
+        Some(0) => bail!("version 0 is the original; an enlarge writes 1 or later"),
+        Some(n) if clip.versions.iter().any(|v| v.n == n) => {
+            bail!("this shot already has version {n}")
+        }
+        Some(n) => Ok(n),
+        None => Ok(clip.versions.iter().map(|v| v.n).max().unwrap_or(0) + 1),
+    }
+}
+
 /// A side for LTX's first pass: the nearest multiple of 32, as sd.cpp would
 /// otherwise round it up and warn (`align_image_size`).
 pub fn ltx_side(v: u32) -> u32 {
@@ -2917,19 +2930,24 @@ impl Engine {
     /// the clip's folder), listed in its record — the clip dialog's History.
     /// Invariant 9: the frames are filtered, never re-diffused. Always from the
     /// original's frames, so a 2× of a 2× isn't a second resample.
+    ///
+    /// `version` is the number to write it as: a Video is enlarged a shot at
+    /// a time, every shot into one `n` so its History lists one version.
+    /// `None` takes the shot's next.
     pub fn enlarge_clip(
         &mut self,
         id: &str,
         factor: f32,
         filters: &Filters,
         ltx: Option<&LtxEnlargeRequest>,
+        version: Option<u32>,
     ) -> Result<EnlargeResult> {
         let mut clip = self.videos.load(id)?;
         if !clip.rendered {
             bail!("that clip isn't generated yet, so there is nothing to enlarge");
         }
         if let Some(req) = ltx {
-            return self.enlarge_clip_ltx(clip, filters, req);
+            return self.enlarge_clip_ltx(clip, filters, req, version);
         }
         if !(1.0..=MAX_UPSCALE).contains(&factor) {
             bail!("upscale factor must be between 1.0 and {MAX_UPSCALE}");
@@ -2939,8 +2957,10 @@ impl Engine {
         if frames.is_empty() {
             bail!("clip '{id}' has no frames on disk");
         }
-        let n = clip.versions.iter().map(|v| v.n).max().unwrap_or(0) + 1;
+        let n = version_number(&clip, version)?;
         let out_dir = self.videos.version_root(id, n);
+        // Not in the record, so a leftover of a run that died: never mixed in.
+        let _ = std::fs::remove_dir_all(&out_dir);
         // A half-written version is swept by its guard, as a clip's is.
         let mut guard = crate::videos::ClipDir::at(out_dir.clone());
         std::fs::create_dir_all(&out_dir)
@@ -2972,6 +2992,8 @@ impl Engine {
             height: size.1,
             ltx: None,
         });
+        // A Video's shared n can be below a version this shot already has.
+        clip.versions.sort_by_key(|v| v.n);
         self.videos.save(&clip)?;
         guard.keep();
         Ok(EnlargeResult { clip, version: n, ms: t.elapsed().as_millis() })
@@ -2987,7 +3009,13 @@ impl Engine {
     /// the way a per-frame refine does. A shot at a time, each on its own
     /// words, since the refine follows the prompt; the shot's sound is the
     /// clip's, untouched (LTX's own soundtrack from the run is dropped).
-    fn enlarge_clip_ltx(&mut self, mut clip: Clip, filters: &Filters, req: &LtxEnlargeRequest) -> Result<EnlargeResult> {
+    fn enlarge_clip_ltx(
+        &mut self,
+        mut clip: Clip,
+        filters: &Filters,
+        req: &LtxEnlargeRequest,
+        version: Option<u32>,
+    ) -> Result<EnlargeResult> {
         let id = clip.id.clone();
         let mut m = self.cfg.video_model(&req.model)?;
         if !m.family.is_ltx() {
@@ -3030,8 +3058,10 @@ impl Engine {
         // Its LoRAs are the clip's model's, not this one's.
         m.picked_loras.clear();
 
-        let n = clip.versions.iter().map(|v| v.n).max().unwrap_or(0) + 1;
+        let n = version_number(&clip, version)?;
         let out_dir = self.videos.version_root(&id, n);
+        // Not in the record, so a leftover of a run that died: never mixed in.
+        let _ = std::fs::remove_dir_all(&out_dir);
         let mut guard = crate::videos::ClipDir::at(out_dir.clone());
         std::fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
         let t = Instant::now();
@@ -3103,6 +3133,8 @@ impl Engine {
             height: out.1,
             ltx: Some(crate::videos::LtxEnlarge { model: req.model.clone(), strength: req.strength, steps }),
         });
+        // A Video's shared n can be below a version this shot already has.
+        clip.versions.sort_by_key(|v| v.n);
         self.videos.save(&clip)?;
         guard.keep();
         Ok(EnlargeResult { clip, version: n, ms: t.elapsed().as_millis() })

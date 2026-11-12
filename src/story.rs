@@ -523,6 +523,136 @@ fn split_rows(draft: &serde_json::Value, n: usize) -> Vec<Vec<serde_json::Value>
     out
 }
 
+// ---- The join ----------------------------------------------------------------
+
+/// A Video as one picture and one soundtrack: its generated shots in
+/// storyboard order. What *Download* and *Save to output* write; the page's
+/// players read the same shots frame by frame and `joined.wav` for the sound.
+pub struct Joined {
+    pub fps: u32,
+    pub frames: Vec<PathBuf>,
+    pub audio: Option<crate::avi::Audio>,
+}
+
+/// One shot's part in a join: its name for an error, its frame count, its
+/// sound (`None` when it is silent).
+pub struct JoinPart {
+    pub name: String,
+    pub frames: u32,
+    pub audio: Option<crate::avi::Audio>,
+}
+
+/// The shots' sounds as one track. Each shot gets exactly the samples its
+/// frames last, measured from the start of the Video
+/// (`frames so far × rate / fps`), so a shot whose WAV runs short or long is
+/// padded or cut rather than pushing every later shot out of sync; a silent
+/// shot is silence. `None` when no shot has sound.
+pub fn join_audio(parts: &[JoinPart], fps: u32) -> Result<Option<crate::avi::Audio>> {
+    let Some(first) = parts.iter().find_map(|p| p.audio.as_ref()) else {
+        return Ok(None);
+    };
+    let (rate, channels) = (first.sample_rate, first.channels);
+    let block = channels as usize * 2;
+    let fps = fps.max(1) as u64;
+    let mut pcm = Vec::new();
+    let mut done = 0u64;
+    for p in parts {
+        if let Some(a) = &p.audio {
+            if (a.sample_rate, a.channels) != (rate, channels) {
+                bail!(
+                    "{}'s sound is {} Hz, {} channel(s) and the video's is {rate} Hz, {channels} — \
+                     generate {} again to join it",
+                    p.name, a.sample_rate, a.channels, p.name
+                );
+            }
+        }
+        done += p.frames as u64;
+        let want = (done * rate as u64 / fps) as usize * block;
+        let at = pcm.len();
+        if let Some(a) = &p.audio {
+            pcm.extend_from_slice(&a.pcm[..(want - at).min(a.pcm.len()) / block * block]);
+        }
+        pcm.resize(want, 0);
+    }
+    Ok(Some(crate::avi::Audio { sample_rate: rate, channels, pcm }))
+}
+
+impl VideoStore {
+    /// Video `vid` joined: version 0 is the shots as generated, `n` their
+    /// enlarged version `n` — which every generated shot must have, or the
+    /// sizes would differ. Refused, naming the shots, when they can't be one
+    /// picture: another size or frame rate (an outdated shot, made before an
+    /// unlock) or sound of another rate.
+    pub fn joined(&self, vid: &str, version: u32) -> Result<Joined> {
+        let v = self.load_video_full(vid)?;
+        let names = shot_names(&v);
+        let shots: Vec<&Clip> = v.clips.iter().filter(|c| c.rendered && c.frames > 0).collect();
+        if shots.is_empty() {
+            bail!("nothing in this video is generated yet");
+        }
+        let name = |c: &Clip| names.iter().find(|(id, _)| *id == c.id).map_or_else(|| c.id.clone(), |(_, n)| n.clone());
+        let size = |c: &Clip| match version {
+            0 => Some((c.width, c.height)),
+            n => c.versions.iter().find(|x| x.n == n).map(|x| (x.width, x.height)),
+        };
+        let missing: Vec<String> = shots.iter().filter(|c| size(c).is_none()).map(|c| name(c)).collect();
+        if !missing.is_empty() {
+            bail!(
+                "version {version} doesn't cover {} — Enlarge them in it first",
+                missing.join(", ")
+            );
+        }
+        let (width, height) = size(shots[0]).unwrap_or_default();
+        let fps = shots[0].fps;
+        let odd: Vec<String> = shots
+            .iter()
+            .filter(|c| size(c) != Some((width, height)) || c.fps != fps)
+            .map(|c| {
+                let (w, h) = size(c).unwrap_or_default();
+                format!("{} ({w}×{h}, {} fps)", name(c), c.fps)
+            })
+            .collect();
+        if !odd.is_empty() {
+            bail!(
+                "these shots can't join a {width}×{height}, {fps} fps video: {} — generate them again",
+                odd.join(", ")
+            );
+        }
+        let mut frames = Vec::new();
+        let mut parts = Vec::new();
+        for c in &shots {
+            let mine = self.version_frames(&c.id, version);
+            if mine.is_empty() {
+                bail!("{} has no frames on disk", name(c));
+            }
+            let audio = match (c.audio, self.audio_path(&c.id)) {
+                (true, Some(p)) => Some(crate::avi::read_wav(&p)?),
+                _ => None,
+            };
+            parts.push(JoinPart { name: name(c), frames: mine.len() as u32, audio });
+            frames.extend(mine);
+        }
+        let audio = join_audio(&parts, fps)?;
+        Ok(Joined { fps, frames, audio })
+    }
+}
+
+/// Each shot's name as the storyboard says it: "Shot 2", or "Scene 1 · Shot
+/// 2" once there is more than one scene.
+fn shot_names(v: &Video) -> Vec<(String, String)> {
+    let many = v.scenes.len() > 1;
+    v.scenes
+        .iter()
+        .enumerate()
+        .flat_map(|(si, s)| {
+            s.shots.iter().enumerate().map(move |(k, id)| {
+                let n = if many { format!("Scene {} · Shot {}", si + 1, k + 1) } else { format!("Shot {}", k + 1) };
+                (id.clone(), n)
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,6 +869,121 @@ mod tests {
         store.favorite(id).unwrap();
         assert!(store.load_video(id).unwrap().favorite, "a star moves the Video whole");
         assert!(store.dir(&format!("{id}-s1")).starts_with(&store.favorites));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn mono(rate: u32, samples: &[u8]) -> crate::avi::Audio {
+        // One byte value per sample, both bytes of it, so a sample's origin
+        // can be read back.
+        crate::avi::Audio { sample_rate: rate, channels: 1, pcm: samples.iter().flat_map(|&s| [s, s]).collect() }
+    }
+
+    fn part(name: &str, frames: u32, audio: Option<crate::avi::Audio>) -> JoinPart {
+        JoinPart { name: name.into(), frames, audio }
+    }
+
+    /// Each shot's sound is put at its own frames: a silent shot is silence,
+    /// a short WAV is padded and a long one cut, so the shot after starts on
+    /// time either way.
+    #[test]
+    fn a_joined_sound_keeps_every_shot_on_its_frames() {
+        // 10 fps at 100 Hz: 10 samples a frame.
+        let parts = [
+            part("Shot 1", 2, None),
+            part("Shot 2", 2, Some(mono(100, &[2; 15]))), // 5 short
+            part("Shot 3", 1, Some(mono(100, &[3; 14]))), // 4 long
+            part("Shot 4", 1, Some(mono(100, &[4; 10]))),
+        ];
+        let a = join_audio(&parts, 10).unwrap().unwrap();
+        let s: Vec<u8> = a.pcm.chunks(2).map(|c| c[0]).collect();
+        assert_eq!(s.len(), 60);
+        assert!(s[..20].iter().all(|&x| x == 0), "a silent shot is silence");
+        assert!(s[20..35].iter().all(|&x| x == 2) && s[35..40].iter().all(|&x| x == 0), "padded");
+        assert!(s[40..50].iter().all(|&x| x == 3), "cut to its frame");
+        assert!(s[50..].iter().all(|&x| x == 4), "and the next starts on time");
+        assert!(join_audio(&[part("Shot 1", 3, None)], 10).unwrap().is_none(), "no sound, no track");
+    }
+
+    /// Sample positions come from the frames so far, not a per-frame
+    /// rounding, so a rate that doesn't divide never drifts.
+    #[test]
+    fn a_joined_sound_does_not_drift_on_an_odd_rate() {
+        let parts: Vec<JoinPart> = (0..7).map(|k| part(&format!("Shot {k}"), 1, Some(mono(100, &[k as u8; 20])))).collect();
+        let a = join_audio(&parts, 7).unwrap().unwrap();
+        assert_eq!(a.pcm.len() / 2, 100, "seven frames at 7 fps are one second");
+    }
+
+    #[test]
+    fn a_joined_sound_refuses_another_rate() {
+        let parts = [part("Shot 1", 1, Some(mono(100, &[1; 10]))), part("Shot 2", 1, Some(mono(200, &[1; 20])))];
+        let e = join_audio(&parts, 10).unwrap_err().to_string();
+        assert!(e.contains("Shot 2") && e.contains("200 Hz"), "{e}");
+    }
+
+    /// A Video of two generated shots and one not: the join is the two, in
+    /// storyboard order; a shot at another size is refused by name, and so
+    /// is a version a shot doesn't have.
+    #[test]
+    fn a_video_joins_its_generated_shots_in_order() {
+        let dir = std::env::temp_dir().join(format!("yasdig-story-join-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = VideoStore::new(&dir, &dir.join("user"));
+        let id = "900-7";
+        let shots: Vec<String> = (1..=3).map(|n| format!("{id}-s{n}")).collect();
+        let v = Video {
+            id: id.into(),
+            created_ms: 900,
+            title: String::new(),
+            lock: None,
+            scenes: vec![Scene {
+                id: "c1".into(),
+                title: String::new(),
+                every: String::new(),
+                negative: String::new(),
+                seed: 3,
+                // Storyboard order is s2 first.
+                shots: vec![shots[1].clone(), shots[0].clone(), shots[2].clone()],
+            }],
+            favorite: false,
+            clips: Vec::new(),
+        };
+        store.create_video(&v).unwrap();
+        let make = |sid: &str, frames: u32, shade: u8, rendered: bool| {
+            let d = store.dir(sid);
+            std::fs::create_dir_all(&d).unwrap();
+            let mut c = crate::videos::tests::clip(sid, 900);
+            (c.width, c.height, c.fps, c.frames, c.rendered) = (8, 4, 10, frames, rendered);
+            if rendered {
+                for n in 0..frames {
+                    png(&d.join(format!("frame_{n:03}.png")), shade);
+                }
+            }
+            std::fs::write(d.join("clip.json"), serde_json::to_vec(&c).unwrap()).unwrap();
+        };
+        make(&shots[0], 2, 10, true);
+        make(&shots[1], 3, 20, true);
+        make(&shots[2], 0, 0, false);
+        // The second in order has sound; the first is padded with silence.
+        crate::avi::write_wav(&store.dir(&shots[0]).join(AUDIO), &mono(100, &[9; 20])).unwrap();
+        let mut c = store.load(&shots[0]).unwrap();
+        c.audio = true;
+        store.save(&c).unwrap();
+
+        let j = store.joined(id, 0).unwrap();
+        assert_eq!((j.fps, j.frames.len()), (10, 5));
+        assert!(j.frames[0].starts_with(store.dir(&shots[1])), "storyboard order, not shot number");
+        let a = j.audio.unwrap();
+        assert_eq!(a.pcm.len(), 50 * 2);
+        assert!(a.pcm[..60].iter().all(|&b| b == 0) && a.pcm[60..].iter().all(|&b| b == 9));
+
+        let e = store.joined(id, 1).err().unwrap().to_string();
+        assert!(e.contains("version 1") && e.contains("Shot 1") && e.contains("Shot 2"), "{e}");
+
+        let mut c = store.load(&shots[1]).unwrap();
+        c.width = 16;
+        store.save(&c).unwrap();
+        let e = store.joined(id, 0).err().unwrap().to_string();
+        assert!(e.contains("Shot 2") && e.contains("16×4"), "{e}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

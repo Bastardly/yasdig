@@ -657,7 +657,16 @@ needs a Vulkan device and nothing else.
   for the reason under "Video" above. With `"ltx": { "model": "…", "strength": 0.45,
   "steps": 8 }` it is instead LTX's latent ×2 and refine, a shot at a time over all
   its frames at once (any clip, any family; `steps` only for a model without a fixed
-  refine schedule); the version records it as `ltx`. Stop kills it.
+  refine schedule); the version records it as `ltx`. Stop kills it. With `"version": n`
+  it is written as version `n` (refused when the shot has one): a Video is enlarged a
+  shot at a time, every shot into one `n`.
+- `GET /videos/{video}/joined.wav` — a Video's generated shots' sound as one track, in
+  storyboard order: each shot's sound at exactly its frames, silence under a silent one.
+  404 when no shot has sound.
+- `GET /videos/{video}/joined.avi`, `/videos/{video}/v{n}/joined.avi` — the Video (or
+  its enlarged version `n`) as one AVI, as an attachment, encoded per request. 400,
+  naming the shots, when they can't be joined: another size or frame rate, sound at
+  another rate, or a version that doesn't cover every shot.
 - `POST /videos/extend` — `{ "id": "…", "keep": 2, "shots": [{ "prompt": "…", "seed": -1,
   "frames": 33 }], "every": "…", "negative": "…" }` changes the clip in place: its first
   `keep` shots are kept (at least 1 — changing shot 1 is a new clip), the rest cut, then
@@ -669,7 +678,8 @@ needs a Vulkan device and nothing else.
   are removed, since they no longer cover the clip.
 - `POST /videos/save` — `{ "id": "…", "version": 0 }`. The version into `work/output/`,
   as `{id}[-v{n}].avi` (or a frames folder with `video_save = "frames"`). Answers
-  `{ "saved": "…" }`.
+  `{ "saved": "…" }`. With a Video's id, the Video joined as `joined.avi` has it; its
+  frames folder is numbered across every shot and carries `audio.wav`.
 - `POST /videos/plan` — `/video`'s body, plus an optional `id`: the clip saved as it
   stands without generating — a record with no frames, `"rendered": false`, listed by
   `/videos` like any clip. With `id`, saved over that plan (refused over a generated

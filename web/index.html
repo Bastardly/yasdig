@@ -1096,14 +1096,14 @@
      dismissed on any click, which is fine for something you only look at and
      hostile for something you edit in — one stray click on the picture and the
      picture is gone. So: an explicit x, plus Escape, which <dialog> gives free. -->
-<!-- The clip dialog (clipview.js): a clip played full size, its enlarged
-     versions as History with Compare, Enlarge, and Save to output — Refine &
-     adjust's shape (`.lbrail`, floating panels). A clip from the Video tab's
-     grids has all of it; one saved to output plays and downloads. Shots are
-     added on the Video tab, in the Shots panel, where Generate is. -->
+<!-- The clip dialog (clipview.js): a Video played full size, its shots
+     joined, its enlarged versions as History with Compare, Enlarge, and Save
+     to output — Refine & adjust's shape (`.lbrail`, floating panels). A Video
+     from the Video tab has all of it; a clip saved to output plays and
+     downloads. Shots are made on the Video tab, from the storyboard. -->
 <dialog id="clipbox">
   <nav class="lbrail" aria-label="Clip">
-    <b class="railtitle">Clip</b>
+    <b class="railtitle">Video</b>
     <button type="button" class="btn btn-choice railbtn" data-panel="cb-enlarge">Enlarge</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="cb-history">History</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="cb-download">Download</button>
@@ -1161,11 +1161,16 @@
           <input id="cbclarity" type="number" step="0.05" min="-1" max="1" value="0">
         </div>
       </div>
-      <p class="sub" id="cbfsrnote">FSR on every frame of the original, into a new version in
-        History. A fixed kernel can't flicker, so the frames stay stable — unlike
+      <p class="sub" id="cbfsrnote">FSR on every frame of the original, every shot, into a new
+        version in History. A fixed kernel can't flicker, so the frames stay stable — unlike
         a per-frame diffusion, which invents new detail each frame and boils.</p>
     </div>
     <div class="fpfoot">
+      <!-- On a version a Stop cut short, or that a shot drawn again since
+           left: its missing shots, made as it was (clipview.js `enlarge`). -->
+      <button type="button" id="cbenlargerest" class="btn btn-block" hidden></button>
+      <button type="button" id="cbenlargestop" class="btn btn-danger btn-block" hidden
+        title="No more shots after the one enlarging now; an LTX shot is stopped too. What is done stays as a version.">Stop</button>
       <button type="button" id="cbenlarge" class="btn btn-run btn-block">Enlarge</button>
     </div>
   </section>

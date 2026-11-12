@@ -1,5 +1,5 @@
 import { $, esc, ICONS, setPlayIcon, decodeFrames, stillsOf } from './dom.js';
-import { openClipView } from './clipview.js';
+import { openVideoView } from './clipview.js';
 
 // ---- The frame player -------------------------------------------------------
 //
@@ -168,6 +168,13 @@ function renderInfo(c, ms) {
     <table class="helptable"><tbody>${files}</tbody></table>`;
 }
 
+// The clip dialog on what the stage plays: the Video's generated shots, in
+// order, at the playhead. A shot's id is `{video}-s{n}` (`story::shot_of`).
+export function openStage() {
+  if (!parts.length) return;
+  openVideoView(parts[0].c.id.replace(/-s\d+$/, ''), parts.map((p) => ({ c: p.c, label: p.label })), vframe);
+}
+
 // Nothing on the stage: *New video*, or a Video none of whose shots is made.
 export function clearClip() {
   stopPlayback();
@@ -204,7 +211,7 @@ export function renderVideo(list, sel, ms, { seek = true } = {}) {
   listKey = key;
   parts = list.map((x) => ({ c: x.c, label: x.label, from: 0, n: 0 }));
   $('vresult').innerHTML = `
-    <p class="stagehint">Click to enlarge, compare and save the shot under the playhead</p>
+    <p class="stagehint">Click to enlarge, compare and save the video</p>
     <canvas id="vcanvas"></canvas>
     <div class="player">
       <button type="button" id="vplay" class="btn btn-icon" title="Play" aria-label="Play">${ICONS.play}</button>
@@ -214,13 +221,10 @@ export function renderVideo(list, sel, ms, { seek = true } = {}) {
     <div class="shotmarks" id="vshotmarks" hidden></div>
     ${list.filter((x) => x.c.audio).map((x) => `<audio data-shot="${esc(x.c.id)}" preload="auto"
       src="/videos/${encodeURIComponent(x.c.id)}/audio.wav?${x.c.created_ms}"></audio>`).join('')}`;
-  // The canvas opens the clip dialog on the shot under the playhead —
-  // Enlarge, History, Save to output — as the Image tab's picture opens
-  // Refine & adjust.
-  $('vcanvas').addEventListener('click', () => {
-    const p = partAt(vframe);
-    if (p) openClipView(p.c);
-  });
+  // The canvas opens the clip dialog on the whole Video at the playhead —
+  // Enlarge, History, Download, Save to output — as the Image tab's picture
+  // opens Refine & adjust.
+  $('vcanvas').addEventListener('click', openStage);
   $('vplay').addEventListener('click', togglePlay);
   $('vscrub').addEventListener('input', (e) => {
     stopPlayback();

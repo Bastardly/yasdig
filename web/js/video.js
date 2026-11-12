@@ -2,8 +2,8 @@ import { $, esc, getJSON, post, numOr, rememberFolds, ICONS, randomSeed } from '
 import { floatPanels } from './panels.js';
 import { MEMORY_LABELS, showError } from './memory.js';
 import { soonJobs, stopKind, stopAllKind } from './jobs.js';
-import { clip, renderVideo, stopPlayback, clearClip } from './player.js';
-import { initClipView, openClipView } from './clipview.js';
+import { clip, renderVideo, stopPlayback, clearClip, openStage } from './player.js';
+import { initClipView } from './clipview.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
 import { shotState, rowMatches, sentRow, shotOutdated, ALL } from './shots.js';
 import {
@@ -1758,10 +1758,10 @@ function markClips() {
 
 // A Video from a grid: its settings into the panels (from the shot made
 // last, else its first), its storyboard, and its first shot on the stage.
-// A second click on the open one opens the clip dialog on the shot shown.
+// A second click on the open one opens the clip dialog on it, whole.
 function clickClip(v) {
   if (currentVideo()?.id === v.id) {
-    if (clip) openClipView(clip);
+    openStage();
     return;
   }
   keepDraft();

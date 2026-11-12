@@ -88,7 +88,9 @@
 //!   GET  /videos      -> Current: every clip, starred ones too, newest first
 //!   GET  /videos/{id}/thumb.png
 //!   GET  /videos/{id}/frames/{n}.png   one frame; the page plays the sequence
-//!   POST /videos/enlarge -> {id, upscale} FSR over every frame
+//!   POST /videos/enlarge -> {id, upscale, version?} FSR over every frame
+//!   GET  /videos/{video}/joined.wav, /videos/{video}[/v{n}]/joined.avi
+//!                        a Video's shots as one track / one file
 //!   POST /videos/extend  -> {id, keep, shots, every?, negative?}
 //!   POST /videos/delete  -> {ids:[..]} from work/videos/ only
 //!   GET  /favorite-clips -> the starred clips alone (user/favorite_clips/)
@@ -293,6 +295,9 @@ enum Work {
         sharpness: Option<f32>,
         clarity: Option<f32>,
         ltx: Option<pipeline::LtxEnlargeRequest>,
+        /// The version number to write, when a Video is enlarged: every
+        /// shot's under one `n`. `None` takes the shot's next.
+        version: Option<u32>,
     },
     /// Shots added to a clip, or its last one cut off (`Engine::extend_clip`).
     ExtendClip(pipeline::ExtendClipRequest),
@@ -705,6 +710,7 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
             sharpness,
             clarity,
             ltx,
+            version,
         } => queue.finish(
             t.id,
             engine
@@ -713,6 +719,7 @@ fn diffuse(engine: &mut Engine, saver: &pipeline::Display, queue: &Jobs, t: jobs
                     upscale,
                     &Filters::starting_at(sharpness.unwrap_or(0.0), clarity.unwrap_or(0.0)),
                     ltx.as_ref(),
+                    version,
                 )
                 .and_then(|r| json_body(&r)),
         ),
@@ -1144,6 +1151,13 @@ fn route(
                 Some((id, version, n)) => handle_clip_file(conn, cfg, id, Some((version, n))),
                 None => conn.respond(404, "text/plain", b"not found"),
             }
+        }
+        // A Video as one: its shots' sound as one track, and the file.
+        ("GET", p) if p.starts_with("/videos/") && p.ends_with("/joined.wav") => {
+            handle_joined_media(conn, cfg, p.trim_start_matches("/videos/").trim_end_matches("/joined.wav"), false)
+        }
+        ("GET", p) if p.starts_with("/videos/") && p.ends_with("/joined.avi") => {
+            handle_joined_media(conn, cfg, p.trim_start_matches("/videos/").trim_end_matches("/joined.avi"), true)
         }
         ("GET", p) if p.starts_with("/videos/") && p.ends_with("/audio.wav") => {
             handle_clip_media(conn, cfg, p.trim_start_matches("/videos/").trim_end_matches("/audio.wav"), false)
@@ -2124,6 +2138,8 @@ fn handle_enlarge_clip(
         /// LTX instead of FSR: `{model, strength, steps?}`, always ×2.
         #[serde(default)]
         ltx: Option<pipeline::LtxEnlargeRequest>,
+        #[serde(default)]
+        version: Option<u32>,
     }
 
     match parse_json::<Dto>(conn, body)? {
@@ -2138,6 +2154,7 @@ fn handle_enlarge_clip(
                 sharpness: dto.sharpness,
                 clarity: dto.clarity,
                 ltx: dto.ltx,
+                version: dto.version,
             },
             false,
             400,
@@ -2281,6 +2298,38 @@ fn handle_clip_media(conn: &mut http::Connection, cfg: &Config, head: &str, vide
     }
 }
 
+/// A Video's shots joined (`VideoStore::joined`): `{vid}/joined.wav`, the
+/// sound the clip dialog plays and a download carries, or
+/// `{vid}[/v{n}]/joined.avi`, encoded per request — a reorder changes it
+/// without touching any shot, so there is nothing safe to cache it by.
+fn handle_joined_media(conn: &mut http::Connection, cfg: &Config, head: &str, avi: bool) -> Result<()> {
+    let Some((vid, version)) = clip_version(head) else {
+        return conn.respond(404, "text/plain", b"not found");
+    };
+    let joined = match video_store(cfg).joined(vid, if avi { version } else { 0 }) {
+        Ok(j) => j,
+        Err(e) => return conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
+    };
+    if !avi {
+        return match joined.audio {
+            Some(a) => conn.respond(200, "audio/wav", &avi::wav_bytes(&a)),
+            None => conn.respond(404, "text/plain", b"not found"),
+        };
+    }
+    match avi::encode(&joined.frames, joined.fps, joined.audio.as_ref()) {
+        Ok(body) => conn.respond_with(
+            200,
+            "video/x-msvideo",
+            &format!(
+                "Content-Disposition: attachment; filename=\"{vid}{}.avi\"\r\n",
+                if version > 0 { format!("-v{version}") } else { String::new() }
+            ),
+            &body,
+        ),
+        Err(e) => conn.respond(500, "application/json", error_json(&format!("{e:#}")).as_bytes()),
+    }
+}
+
 /// `POST /videos/save {id, version}`: a version of a clip into `work/output/`
 /// — the clip dialog's *Save to output*. As a video file or a folder of
 /// frames, `Settings::video_save`'s choice; named `{id}` for the original and
@@ -2297,6 +2346,14 @@ fn handle_save_clip(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> R
         return Ok(());
     };
     let videos = video_store(cfg);
+    // A Video: its shots joined, under the Video's id.
+    if story::shot_of(&dto.id).is_none() && videos.load_video(&dto.id).is_ok() {
+        let r = save_joined(cfg, &videos, &dto.id, dto.version);
+        return match r {
+            Ok(p) => conn.respond(200, "application/json", serde_json::json!({ "saved": p }).to_string().as_bytes()),
+            Err(e) => conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
+        };
+    }
     let r = (|| -> Result<PathBuf> {
         let clip = videos.load(&dto.id)?;
         if !clip.rendered {
@@ -2330,6 +2387,36 @@ fn handle_save_clip(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> R
         Ok(p) => conn.respond(200, "application/json", serde_json::json!({ "saved": p }).to_string().as_bytes()),
         Err(e) => conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
     }
+}
+
+/// *Save to output* of a Video: `{vid}.avi` (or `{vid}-v{n}`), or a folder
+/// of its frames numbered across every shot, wide enough to sort by name.
+fn save_joined(cfg: &Config, videos: &videos::VideoStore, vid: &str, version: u32) -> Result<PathBuf> {
+    let joined = videos.joined(vid, version)?;
+    let name = match version {
+        0 => vid.to_string(),
+        n => format!("{vid}-v{n}"),
+    };
+    let out = store(cfg).output_dir().to_path_buf();
+    if cfg.settings().video_save == settings::VIDEO_FILE {
+        let dest = out.join(format!("{name}.avi"));
+        avi::write(&dest, &joined.frames, joined.fps, joined.audio.as_ref())?;
+        let _ = std::fs::remove_file(out.join(format!("{name}-thumb.png")));
+        return Ok(dest);
+    }
+    let dest = out.join(&name);
+    // Saved again over an older save: the Video may have fewer frames now.
+    let _ = std::fs::remove_dir_all(&dest);
+    std::fs::create_dir_all(&dest)?;
+    let width = joined.frames.len().saturating_sub(1).to_string().len().max(3);
+    for (i, f) in joined.frames.iter().enumerate() {
+        std::fs::copy(f, dest.join(format!("frame_{i:0width$}.png")))
+            .with_context(|| format!("copying {}", f.display()))?;
+    }
+    if let Some(a) = &joined.audio {
+        avi::write_wav(&dest.join("audio.wav"), a)?;
+    }
+    Ok(dest)
 }
 
 fn handle_delete_clips(conn: &mut http::Connection, cfg: &Config, body: &[u8], shelf: Shelf) -> Result<()> {

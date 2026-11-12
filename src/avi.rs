@@ -54,13 +54,22 @@ impl Audio {
 /// with `audio` as a second stream. Written through a `.part` and a rename, so
 /// a half-written file is never what a player or the gallery finds.
 pub fn write(path: &Path, frames: &[PathBuf], fps: u32, audio: Option<&Audio>) -> Result<()> {
+    let bytes = encode(frames, fps, audio)?;
+    let part = path.with_extension("avi.part");
+    std::fs::write(&part, bytes).with_context(|| format!("writing {}", part.display()))?;
+    std::fs::rename(&part, path).with_context(|| format!("writing {}", path.display()))
+}
+
+/// [`write`]'s file, in memory: a joined Video's download is made per
+/// request rather than cached, since a reorder changes it without touching
+/// any shot.
+pub fn encode(frames: &[PathBuf], fps: u32, audio: Option<&Audio>) -> Result<Vec<u8>> {
     let Some(first) = frames.first() else {
         bail!("a clip with no frames has nothing to write");
     };
     let (width, height) = image::image_dimensions(first)
         .with_context(|| format!("reading {}", first.display()))?;
-    let mut jpegs = Vec::with_capacity(frames.len());
-    for f in frames {
+    let jpeg = |f: &PathBuf| -> Result<Vec<u8>> {
         let img = image::open(f).with_context(|| format!("reading {}", f.display()))?.to_rgb8();
         if img.dimensions() != (width, height) {
             bail!("{} is {}×{}, not the clip's {width}×{height}", f.display(), img.width(), img.height());
@@ -69,12 +78,30 @@ pub fn write(path: &Path, frames: &[PathBuf], fps: u32, audio: Option<&Audio>) -
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, QUALITY)
             .encode_image(&img)
             .with_context(|| format!("encoding {} as JPEG", f.display()))?;
-        jpegs.push(buf);
+        Ok(buf)
+    };
+    // A PNG decode and a JPEG encode per frame, each on one core: a joined
+    // Video's 382 frames at 1248×720 took 8.8 s one after another. In runs
+    // across the cores, in order.
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16);
+    let per = frames.len().div_ceil(threads).max(1);
+    let jpegs: Vec<Vec<u8>> = std::thread::scope(|sc| {
+        let runs: Vec<_> = frames.chunks(per).map(|run| sc.spawn(move || run.iter().map(jpeg).collect::<Result<Vec<_>>>())).collect();
+        let mut out = Vec::with_capacity(frames.len());
+        for r in runs {
+            out.extend(r.join().map_err(|_| anyhow::anyhow!("encoding the frames failed"))??);
+        }
+        Ok::<_, anyhow::Error>(out)
+    })?;
+    // RIFF sizes are u32: past 4 GB the header would wrap and no player
+    // could read the file. Counted before building, not after.
+    let size = jpegs.iter().map(|j| j.len() as u64 + 24).sum::<u64>()
+        + audio.map_or(0, |a| a.pcm.len() as u64 + 24)
+        + 64 * 1024;
+    if size >= u32::MAX as u64 {
+        bail!("{} frames are over 4 GB as one AVI — save it as frames instead (Settings → Save clips as)", frames.len());
     }
-    let bytes = build(width, height, fps.max(1), &jpegs, audio.filter(|a| !a.pcm.is_empty()));
-    let part = path.with_extension("avi.part");
-    std::fs::write(&part, bytes).with_context(|| format!("writing {}", part.display()))?;
-    std::fs::rename(&part, path).with_context(|| format!("writing {}", path.display()))
+    Ok(build(width, height, fps.max(1), &jpegs, audio.filter(|a| !a.pcm.is_empty())))
 }
 
 fn build(width: u32, height: u32, fps: u32, jpegs: &[Vec<u8>], audio: Option<&Audio>) -> Vec<u8> {
@@ -298,6 +325,11 @@ fn parse(b: &[u8]) -> Result<Contents> {
 
 /// Write `audio` as a WAV file.
 pub fn write_wav(path: &Path, audio: &Audio) -> Result<()> {
+    std::fs::write(path, wav_bytes(audio)).with_context(|| format!("writing {}", path.display()))
+}
+
+/// [`write_wav`]'s file, in memory — a joined Video's sound, served.
+pub fn wav_bytes(audio: &Audio) -> Vec<u8> {
     let mut b = Vec::with_capacity(44 + audio.pcm.len());
     let align = audio.block_align();
     b.extend_from_slice(b"RIFF");
@@ -313,7 +345,7 @@ pub fn write_wav(path: &Path, audio: &Audio) -> Result<()> {
     b.extend_from_slice(b"data");
     b.extend_from_slice(&(audio.pcm.len() as u32).to_le_bytes());
     b.extend_from_slice(&audio.pcm);
-    std::fs::write(path, b).with_context(|| format!("writing {}", path.display()))
+    b
 }
 
 /// Read a WAV [`write_wav`] wrote: 16-bit PCM, its `fmt ` and `data` chunks
