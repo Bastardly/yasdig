@@ -333,16 +333,25 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    which the shots after them go on from, are raised a shade (`.fresh`). */
 /* Every shot and the negative: folded once set, and no wider than a form. */
 .shotcommon { max-width: var(--shot-common-w); }
-.shotstrip { display: flex; align-items: flex-start; gap: var(--sp-2); overflow-x: auto; padding-bottom: var(--sp-2); }
+/* The strip takes the panel's height that is left and scrolls both ways
+   itself. Scrolling only sideways inside a panel body that scrolled down,
+   its sideways bar sat under the shots — out of sight whenever a card was
+   taller than the panel. Below `--shot-strip-min` the panel body scrolls
+   again, so a panel dragged small still reaches everything. */
+#vfold-prompt > .fpbody { display: flex; flex-direction: column; }
+#vfold-prompt > .fpbody > * { flex: none; }
+#vfold-prompt > .fpbody > .shotstrip { flex: 1 1 auto; min-height: var(--shot-strip-min); }
+.shotstrip { display: flex; align-items: flex-start; gap: var(--sp-2); overflow: auto; padding-bottom: var(--sp-2); }
 #vshots { display: flex; align-items: flex-start; gap: var(--sp-2); flex: none; }
 .shotrow {
   flex: none; width: var(--shot-w); padding: var(--sp-2) var(--sp-3) var(--sp-3);
   background: var(--ink-800); border: var(--line); border-radius: var(--r-lg);
 }
 .shotrow.fresh { background: var(--ink-600); border-color: var(--ink-400); }
-/* Add shot: round, and held at the strip's right edge while it scrolls. */
+/* Add shot: round, and held at the strip's top right while it scrolls
+   either way. */
 .shotadd {
-  position: sticky; right: 0; flex: none; width: 2.5rem; height: 2.5rem; padding: 0;
+  position: sticky; right: 0; top: 0; flex: none; width: 2.5rem; height: 2.5rem; padding: 0;
   border-radius: 50%; font-size: var(--fs-display); line-height: 1; box-shadow: var(--shadow-pop);
 }
 .shothead { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; flex-wrap: wrap; }

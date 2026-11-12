@@ -46,7 +46,10 @@ Break silently:
   `.workspace` has `isolation: isolate`, so its panels' z-indexes (up to 1000) stack
   inside it and never over the top bar. The dialogs are in the top layer.
 - **Shots is a sideways strip** (`.shotstrip`, a card per shot, `.fresh` on shot 1 and
-  each cut; the round amber + is `position: sticky` at the strip's right edge; Every
+  each cut; the round amber + is `position: sticky` at the strip's top right; **the
+  strip fills the panel body's leftover height and scrolls both ways itself**
+  (`#vfold-prompt > .fpbody` is a column, `--shot-strip-min` before the body
+  scrolls) — else its sideways bar sat out of sight under a tall card; Every
   shot and the negative fold as `#vfold-every`, capped at `--shot-common-w`) and resizes
   both ways — `fpboth` in markup is overwritten by `PANEL_DEFS`' `both`.
 - **Panels resize vertically** (`resize: vertical`); `panels.js` saves a dragged
