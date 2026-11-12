@@ -1155,6 +1155,7 @@ pub fn models_json(
     entries: &[crate::config::ModelEntry],
     tuned: &ModelSettings,
     parts: &std::collections::BTreeMap<String, Vec<crate::config::PartView>>,
+    video: &[(crate::config::VideoModel, Vec<crate::config::PartView>)],
     note: Option<&str>,
 ) -> Result<String> {
     let models: Vec<serde_json::Value> = entries
@@ -1177,22 +1178,31 @@ pub fn models_json(
             }))
         })
         .collect::<Result<_>>()?;
-    // The video models with saved defaults, for the card's own list: their
-    // boxes are edited on the Video tab, so here they are only shown and cleared.
-    let video: Vec<serde_json::Value> = tuned
-        .video
-        .keys()
-        .chain(tuned.video_parts.keys())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .map(|name| {
-            serde_json::json!({
-                "name": name,
-                "over": tuned.video.get(name).cloned().unwrap_or_default(),
-                "parts_over": tuned.video_parts.get(name).cloned().unwrap_or_default(),
-            })
+    // Every video model, in the same card as the image ones: its base is
+    // where it starts with nothing saved (`video_models_untuned`, what a save
+    // compares against), with `memory` as the mode it resolves to, and which
+    // of the knobs it has at all.
+    let video: Vec<serde_json::Value> = video
+        .iter()
+        .map(|(m, parts)| {
+            let all = serde_json::to_value(m)?;
+            let mut base: serde_json::Map<String, serde_json::Value> =
+                VIDEO_KNOBS.iter().map(|k| (k.to_string(), all.get(*k).cloned().unwrap_or_default())).collect();
+            base.insert("memory".into(), m.memory_mode().into());
+            Ok(serde_json::json!({
+                "name": m.name,
+                "family_label": m.family.label(),
+                "moe": m.family.is_moe(),
+                "ltx": m.family.is_ltx(),
+                "narrated": m.family == crate::config::VideoFamily::Narrated,
+                "languages": crate::narration::offered(&m.languages),
+                "base": base,
+                "over": tuned.video.get(&m.name).cloned().unwrap_or_default(),
+                "parts": parts,
+                "parts_over": tuned.video_parts.get(&m.name).cloned().unwrap_or_default(),
+            }))
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let mut body = serde_json::json!({ "models": models, "video": video });
     if let Some(msg) = note {
         body["error"] = serde_json::Value::String(msg.to_string());
@@ -1252,6 +1262,23 @@ mod tests {
         for key in PAGE_ONLY {
             assert!(js.contains(&format!("{{ key: '{key}', page: true")), "{key} has no row marked page: true");
         }
+    }
+
+    /// Settings → Per model's video rows are the knobs a video save takes,
+    /// all of them: its Clear sends each as `null`, and a key the server
+    /// doesn't know refuses the whole save.
+    #[test]
+    fn per_model_video_rows_are_the_video_knobs() {
+        let page = crate::web::lookup("/js/modelsettings.js").expect("modelsettings.js is served");
+        let js = std::str::from_utf8(page.bytes).unwrap();
+        let table = js.split("const VROWS = [").nth(1).and_then(|r| r.split("];").next()).expect("the VROWS table");
+        // As sets: the rows are in the order the card reads, not the file's.
+        let mut keys: Vec<&str> =
+            table.split("{ key: '").skip(1).map(|r| r.split('\'').next().unwrap()).collect();
+        keys.sort_unstable();
+        let mut knobs = VIDEO_KNOBS;
+        knobs.sort_unstable();
+        assert_eq!(keys, knobs, "VROWS in modelsettings.js against VIDEO_KNOBS");
     }
 
     fn tmpdir(tag: &str) -> PathBuf {

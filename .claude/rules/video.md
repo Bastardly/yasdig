@@ -136,7 +136,9 @@ paths:
   `Config::video_models` lays them over `video_models_untuned`, which is what a
   save compares against (`update_video_model`: typed round trip first, `memory`
   against `memory_mode()`); a saved part is kept only when it isn't discovery's.
-  `POST /model-settings {kind: "video"}`; `reconcile` takes a video `exists` too.
+  `POST /model-settings {kind: "video"}` (the Video tab's *Save as defaults* and
+  Settings → Per model, which lists every video model); `reconcile` takes a video
+  `exists` too.
 - **A clip is shots** (`VideoRequest.shots: Vec<ShotSpec {text, seed, frames, cut,
   references}>`, at least one, plus `every`): one sd-cli run per shot in one job,
   each with its own seed and `align_frames`'d length (`render_first`/`render_shot`

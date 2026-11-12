@@ -1434,6 +1434,19 @@ fn part_views(cfg: &Config) -> std::collections::BTreeMap<String, Vec<config::Pa
         .collect()
 }
 
+/// Every video model as it starts with nothing saved, and its slots — the
+/// Per model card's video half.
+fn video_views(cfg: &Config) -> Vec<(config::VideoModel, Vec<config::PartView>)> {
+    let scan = cfg.video_scan();
+    cfg.video_models_untuned()
+        .into_iter()
+        .map(|m| {
+            let views = cfg.video_part_views(&m, &scan);
+            (m, views)
+        })
+        .collect()
+}
+
 /// `GET /model-settings`. A file that won't parse answers 200 with no
 /// overrides and the error beside them, for the reason `/settings` does: the
 /// form still has to be editable, and saving it is the repair.
@@ -1445,7 +1458,7 @@ fn handle_get_model_settings(conn: &mut http::Connection, cfg: &Config) -> Resul
             Some(format!("{e:#} — showing no per-model settings; saving will rewrite the file")),
         ),
     };
-    match settings::models_json(&cfg.entries(), &tuned, &part_views(cfg), note.as_deref()) {
+    match settings::models_json(&cfg.entries(), &tuned, &part_views(cfg), &video_views(cfg), note.as_deref()) {
         Ok(b) => conn.respond(200, "application/json", b.as_bytes()),
         Err(e) => conn.respond(500, "application/json", error_json(&format!("{e:#}")).as_bytes()),
     }
@@ -1501,7 +1514,7 @@ fn handle_save_model_settings(
             tuned.parts.insert(dto.model.clone(), parts);
         }
         tuned.save(&cfg.user_dir())?;
-        settings::models_json(&cfg.entries(), &tuned, &part_views(cfg), None)
+        settings::models_json(&cfg.entries(), &tuned, &part_views(cfg), &video_views(cfg), None)
     })();
     match result {
         Ok(b) => conn.respond(200, "application/json", b.as_bytes()),

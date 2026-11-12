@@ -324,8 +324,6 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .btn.btn-info:disabled, .btn.btn-info:disabled:hover { opacity: .35; background: transparent; }
 #notetext { width: 100%; margin-top: var(--sp-2); resize: vertical; }
 #notedlg { width: min(560px, 92vw); }
-/* Per model's list of video models with saved defaults. */
-.pmvrow { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
 /* A long clip's shot: a heading line (its number, how it starts, done, ×),
    then its seed and length, its prompt, its references. A rule above each
    but the first is the separator between shots. */

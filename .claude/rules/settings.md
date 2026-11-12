@@ -36,6 +36,13 @@ global *SD 1.x, SD 2.x and SDXL* section); 3. `[templates.*]` in `models.toml`;
 - **Entries key on registry name** (file stem). Each start **parks** orphans in
   `user/model-settings.removed.toml` and restores them when the model returns
   (`ModelSettings::reconcile`); `doctor` only reports.
+- **Video models are in the same card** (`GET /model-settings`' `video`: every
+  `video_models_untuned` model with its `base` over `VIDEO_KNOBS`, `memory` as
+  `memory_mode()`, `moe`/`ltx`/`narrated`, `languages`, parts): the Model select's
+  values are `i:`/`v:` + name (a name may be both), video groups after image ones.
+  A video model swaps `#pmrows` for `#pmvrows` (`VROWS` in modelsettings.js, rows
+  hidden by `applies`) and saves `{kind: "video"}` — which answers `{tuned}`, so the
+  card re-reads the listing.
 - **`upscaler: None` means both FSR and unset** — documented, not fixed.
   **`scheduler` uses `"auto"` as a value** (`config::AUTO_SCHEDULER`), so DiT recipes
   can pin Auto over a global `karras`.
