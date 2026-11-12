@@ -3054,6 +3054,9 @@ impl Config {
         use crate::sandbox::Root;
         let mut roots: Vec<Root> = [
             self.base_dir.join("work"),
+            // A starred Video lives here, and generating or enlarging one of
+            // its shots writes into its folder (`VideoStore::dir`).
+            self.user_dir().join("favorite_clips"),
             self.models_dir(),
             self.video_dir(),
             self.lora_dir(),

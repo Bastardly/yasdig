@@ -38,6 +38,7 @@ run sd-cli too) or `YASDIG_NO_SANDBOX=1`; messages name the file
   list), and holds sd-cli in a kill-on-close job, so Stop's kill of the launcher
   takes sd-cli too.
 - **The container opens only what is granted**: `Config::sandbox_roots` (`work/`,
+  `user/favorite_clips/` — a starred Video's shots are generated in place —
   every model folder — writable, Convert writes beside its source — and sd-cli's
   folder), as inheritable ACEs added once. **A path sd-cli is handed must be under
   one**: the `upscale` CLI stages an ESRGAN's files in scratch.

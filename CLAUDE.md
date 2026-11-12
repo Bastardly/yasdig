@@ -162,7 +162,7 @@ A new trap goes in the area's file, not here; a new source file goes in its `pat
     via a counter-suffixed temp name and rename.
 - **Every sd-cli spawn is `SdRunner::run_tail`'s, which confines it**
   (`sandbox::confine`). **A path sd-cli is handed, or a place a child writes, must be
-  under a `Config::sandbox_roots` root** (`work/`, the model folders, sd-cli's folder)
+  under a `Config::sandbox_roots` root** (`work/`, `user/favorite_clips/`, the model folders, sd-cli's folder)
   on both OSes; `curl` for downloads is deliberately outside. The rest is
   `.claude/rules/sandbox.md`.
 - **`SdRunner::run` streams; never go back to `Command::output()`.**
