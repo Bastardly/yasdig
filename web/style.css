@@ -275,6 +275,8 @@ textarea, input, select {
   width: 100%; background: var(--ink-800); color: var(--text);
   border: var(--line); border-radius: var(--r-md); padding: var(--sp-2) var(--sp-3); font: inherit;
 }
+/* A model part whose file is gone and that nothing installed fits (parts.js). */
+select.partmissing { border-color: var(--danger-hi); }
 textarea { resize: vertical; min-height: 64px; }
 textarea.short { min-height: 48px; }
 ::placeholder { color: var(--text-faint); }

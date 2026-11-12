@@ -80,6 +80,13 @@ Things that break silently:
   `components.is_none()` for old sidecars.
   `a_checkpoint_keeps_its_m_when_it_is_handed_a_vae`. (External VAE skips SDXL's fp16
   conv scale — pick the fp16-fix VAE.)
+- **A recorded part that is gone is refitted** (`Config::refit_parts`): the model's
+  own pick now (saved, else the scan's), else the first file that fits, else a
+  checkpoint's built-in; nothing fits → the path stays (the run names it). Run on
+  the `/workitems`/`/favorites` listing (what the page restores), in `open_in` and
+  `reopen_edits`, and by `Engine::refit` before Refine, Hi-res, Redraw and Edit.
+  `apply_parts` skips a named part not on disk (the model's own runs). The page
+  reddens a part select left on a "(missing)" option (`markMissing`, `.partmissing`).
 - **`ImageFamily::runnable` needs components *and* a `recipe()`**
   (`a_runnable_dit_has_a_recipe_and_its_parts`).
 

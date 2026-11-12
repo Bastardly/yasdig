@@ -1645,6 +1645,14 @@ impl Engine {
         output_source(&self.items, stem)
     }
 
+    /// A part deleted since this picture was made or reopened is the model's
+    /// pick now ([`Config::refit_parts`]), before a pass runs on it.
+    fn refit(&self, p: &mut Pending) {
+        for note in self.cfg.refit_parts(&mut p.profile) {
+            eprintln!("[yasdig] {note}");
+        }
+    }
+
     /// Point a pending result at a different checkpoint before an escalation
     /// runs on it.
     ///
@@ -3079,6 +3087,7 @@ impl Engine {
     /// resolution there is nothing downstream to smear what the pass adds.
     pub fn refine(&mut self, id: u64, over: &EscalateRequest) -> Result<GenResult> {
         let mut p = lock(&self.retained).get(id, "refine")?;
+        self.refit(&mut p);
         // Model first, then the boxes on top of it: a swap replaces the whole
         // profile, so applying the overrides the other way round would throw
         // them away. Both before `can_refine`, so the check reads the settings
@@ -3185,6 +3194,7 @@ impl Engine {
     /// keeps describing the picture.
     pub fn redraw(&mut self, id: u64, req: &RedrawRequest) -> Result<GenResult> {
         let mut p = lock(&self.retained).get(id, "redraw")?;
+        self.refit(&mut p);
         set_memory(&mut p.profile, req.memory.as_deref())?;
         self.cfg.check_loras(&p.profile.loras, p.profile.family)?;
         let strength = req.strength.unwrap_or(REDRAW_STRENGTH);
@@ -3461,6 +3471,7 @@ impl Engine {
 
     pub fn edit(&mut self, id: u64, req: &EditRequest) -> Result<GenResult> {
         let mut p = lock(&self.retained).get(id, "edit")?;
+        self.refit(&mut p);
         set_memory(&mut p.profile, req.memory.as_deref())?;
         if !p.profile.family.takes_references() {
             bail!(
@@ -3640,6 +3651,7 @@ impl Engine {
             bail!("upscale must be between 1 and {MAX_UPSCALE}");
         }
         let mut p = lock(&self.retained).get(id, "run a hi-res pass on")?;
+        self.refit(&mut p);
         // See `refine`: the swap replaces the profile, so it has to come first.
         // Note this can also move `hires_max_side`, and therefore whether the
         // pass is affordable at all — `can_hires` below is asked of the model
@@ -4302,7 +4314,10 @@ impl Display {
     /// Into `slot`: `Slot::Image` from the Image tab, and `Slot::Agent` where
     /// the agent opens its keeper to run a pass on it.
     pub fn open_in(&mut self, work_id: &str, shelf: Shelf, slot: Slot) -> Result<GenResult> {
-        let item = self.items.load(shelf, work_id)?;
+        let mut item = self.items.load(shelf, work_id)?;
+        for note in self.cfg.refit_parts(&mut item.profile) {
+            eprintln!("[yasdig] reopening {work_id}: {note}");
+        }
         // The validated id, never the sidecar's own `id` field: a copied-in
         // sidecar whose field disagrees with its file name would open another
         // item's picture.
@@ -4402,7 +4417,9 @@ impl Display {
             let n = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
             let raw = copy_in(&s.file, format!("{id}-{}-{n}-raw.png", s.step))?;
             let mut profile = s.profile;
-            // As `Store::load` does: whether the model is there now.
+            // As `open_in` does for the picture: a part gone since is the
+            // model's pick now (which also says whether it can run).
+            self.cfg.refit_parts(&mut profile);
             profile.exists = profile.missing().is_empty();
             history.push(Snapshot {
                 raw,

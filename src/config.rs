@@ -3569,6 +3569,48 @@ impl Config {
         }
     }
 
+    /// A recorded profile's parts whose files have gone, swapped for what fits
+    /// now: the model's own pick as it runs today (a saved choice, else the
+    /// scan's), else the first file on disk that fits the slot, else — on a
+    /// checkpoint that has its own — none, its built-in one. A slot nothing
+    /// fits keeps the missing path, so the select still names it and the run
+    /// fails saying which file. Answers one line per swap, for the console.
+    ///
+    /// A work item records absolute paths (invariant: the sidecar is what ran),
+    /// so a VAE or text encoder deleted or replaced since left every older
+    /// picture unable to Refine, Hi-res or Edit, and the Image tab reopening
+    /// one showed the old file "(missing)" — the next Generate failed on it.
+    /// Regenerating with the new files was the only way out.
+    pub fn refit_parts(&self, p: &mut Profile) -> Vec<String> {
+        let Some(c) = &p.components else { return Vec::new() };
+        let gone: Vec<&PartSlot> =
+            p.family.slots().iter().filter(|s| c.get(s.key).is_some_and(|f| !f.is_file())).collect();
+        if gone.is_empty() {
+            return Vec::new();
+        }
+        let now = self.registry().remove(&p.name).filter(|m| m.family == p.family);
+        let scan = self.scan_images();
+        let mut notes = Vec::new();
+        for slot in gone {
+            let own = now.as_ref().and_then(|m| m.components.as_ref()).and_then(|c| c.get(slot.key)).filter(|f| f.is_file());
+            let fits = || self.part_options(slot, &scan).into_iter().next().map(|o| o.path);
+            let next = match own.cloned() {
+                Some(f) => Some(f),
+                None if p.parts_optional() => None,
+                None => match fits() {
+                    Some(f) => Some(f),
+                    None => continue,
+                },
+            };
+            let old = p.components.as_ref().and_then(|c| c.get(slot.key)).map(|f| f.display().to_string()).unwrap_or_default();
+            let with = next.as_ref().map_or("the checkpoint's own".to_string(), |f| self.part_name(f));
+            notes.push(format!("{} {old} is gone; using {with}", slot.label));
+            p.set_part(slot.key, next);
+        }
+        p.exists = p.missing().is_empty();
+        notes
+    }
+
     /// Lay a request's part choices onto a profile. See [`GenRequest::parts`].
     ///
     /// [`GenRequest::parts`]: crate::pipeline::GenRequest::parts
@@ -3576,6 +3618,14 @@ impl Config {
         let scan = self.scan_images();
         for (key, name) in parts {
             match name {
+                // A file that isn't there at all — the "(missing)" option a
+                // reopened picture left in the select, or a chat's settings
+                // copied from one: the model's own pick runs instead
+                // (`require_files` still stops it if that is gone too). A name
+                // that is there but doesn't fit is still refused below.
+                Some(name) if !self.models_dir().join(name).exists() => {
+                    eprintln!("[yasdig] {key} '{name}' is not on disk; using the model's own");
+                }
                 Some(name) => {
                     let path = self.resolve_part(p.family, key, name, &scan)?;
                     p.set_part(key, Some(path));
@@ -4127,6 +4177,56 @@ t5xxl = "v/umt5.gguf"
             cfg.resolve_part(ImageFamily::Krea2, "vae", "video/vae/wan_2.1_vae.safetensors", &scan).unwrap(),
             wan_vae
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_recorded_part_deleted_since_is_the_one_that_fits_now() {
+        let root = crate::config::fresh_test_root("yasdig-cfg-refit");
+        let models = root.join("models");
+        fake_model(&models.join("zimage.safetensors"), &[("cap_embedder.0.weight", "[3840,2560]")]);
+        let vae = [
+            ("decoder.conv_in.weight", "[512,16,3,3]"),
+            ("decoder.mid.block_1.conv2.bias", "[512]"),
+            ("encoder.conv_out.bias", "[32]"),
+        ];
+        let qwen = [
+            ("model.embed_tokens.weight", "[151936,2560]"),
+            ("model.layers.0.self_attn.q_norm.weight", "[128]"),
+            ("model.norm.weight", "[2560]"),
+        ];
+        fake_model(&models.join("vae").join("new-ae.safetensors"), &vae);
+        fake_model(&models.join("te").join("qwen3.safetensors"), &qwen);
+        std::fs::write(root.join("models.toml"), "[sd]\nbinary = \"sd-cli\"\n").unwrap();
+        let cfg = Config::load(&root.join("models.toml")).unwrap();
+
+        // A picture made with a VAE and an encoder since deleted; the encoder
+        // was replaced, the VAE has nothing that fits but the new file.
+        let mut p = cfg.registry().remove("zimage").unwrap();
+        let old_vae = models.join("vae").join("old-ae.safetensors");
+        p.set_part("vae", Some(old_vae.clone()));
+        let kept_llm = p.components.as_ref().unwrap().llm.clone();
+        let notes = cfg.refit_parts(&mut p);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        let parts = p.components.as_ref().unwrap();
+        assert_eq!(parts.vae, Some(models.join("vae").join("new-ae.safetensors")));
+        assert_eq!(parts.llm, kept_llm, "a part still on disk is left alone");
+        assert!(p.exists);
+
+        // Nothing fits: the missing path stays, so the run names it.
+        std::fs::remove_file(models.join("vae").join("new-ae.safetensors")).unwrap();
+        let mut p = cfg.registry().remove("zimage").unwrap();
+        p.set_part("vae", Some(old_vae.clone()));
+        assert!(cfg.refit_parts(&mut p).is_empty());
+        assert_eq!(p.components.as_ref().unwrap().vae, Some(old_vae));
+        assert!(!p.exists);
+
+        // And a request naming a file that isn't there runs on the model's own.
+        let mut p = cfg.registry().remove("zimage").unwrap();
+        let before = p.components.clone();
+        let parts = [("llm".to_string(), Some("te/gone.safetensors".to_string()))].into();
+        cfg.apply_parts(&mut p, &parts).unwrap();
+        assert_eq!(p.components, before);
         std::fs::remove_dir_all(&root).ok();
     }
 

@@ -22,7 +22,7 @@ export function partRows({ el, prefix, none, onChange }) {
     // file was deleted, or a required part not downloaded yet. Listed so the
     // select names it rather than silently showing another file.
     if (part.current && !part.options.some((o) => o.name === part.current)) {
-      opts.push(`<option value="${esc(part.current)}" data-path="${esc(part.current_path ?? '')}">`
+      opts.push(`<option value="${esc(part.current)}" data-path="${esc(part.current_path ?? '')}" data-missing="1">`
         + `${esc(part.current)} (missing)</option>`);
     }
     return opts.join('');
@@ -34,7 +34,22 @@ export function partRows({ el, prefix, none, onChange }) {
       <label for="${prefix}-${p.slot}">${esc(p.label)}</label>
       <select id="${prefix}-${p.slot}" data-slot="${p.slot}">${options(p)}</select>`).join('');
     for (const p of parts ?? []) $(`${prefix}-${p.slot}`).value = p.current ?? '';
-    if (onChange) for (const sel of selects()) sel.addEventListener('change', onChange);
+    for (const sel of selects()) {
+      sel.addEventListener('change', () => markMissing(sel));
+      if (onChange) sel.addEventListener('change', onChange);
+    }
+    markMissing();
+  }
+
+  // Red while a select holds a file that isn't on disk: the server swaps a
+  // deleted part for one that fits (`Config::refit_parts`), so one still
+  // showing "(missing)" is a slot nothing installed fills.
+  function markMissing(only) {
+    for (const sel of only ? [only] : selects()) {
+      const gone = sel.selectedOptions[0]?.dataset.missing === '1';
+      sel.classList.toggle('partmissing', gone);
+      sel.title = gone ? 'This file is not on disk, and nothing installed fits here: get one on the Models tab.' : '';
+    }
   }
 
   // Put back the files a run used, from absolute paths keyed by slot. A path no
@@ -50,10 +65,12 @@ export function partRows({ el, prefix, none, onChange }) {
       if (!opt) {
         opt = new Option(`${path} (missing)`, path);
         opt.dataset.path = path;
+        opt.dataset.missing = '1';
         sel.add(opt);
       }
       sel.value = opt.value;
     }
+    markMissing();
   }
 
   // Every slot, including an emptied one as `null`: the rows are the complete

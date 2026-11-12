@@ -1244,7 +1244,12 @@ fn handle_list_workitems(
     cfg: &Config,
     shelf: Shelf,
 ) -> Result<()> {
-    let items = store(cfg).listing(shelf);
+    let mut items = store(cfg).listing(shelf);
+    // What the Image tab puts back on reopening: a part deleted since is the
+    // model's pick now, as the reopened picture's passes will run it.
+    for l in &mut items {
+        cfg.refit_parts(&mut l.item.profile);
+    }
     match serde_json::to_vec(&items) {
         Ok(body) => conn.respond(200, "application/json", &body),
         Err(e) => conn.respond(
