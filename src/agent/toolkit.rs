@@ -388,6 +388,9 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     t.film_off = match chat.context {
         // In context: a film is begun from the Video tab's panel.
         super::chat::Pane::Image => Some("films are made from the Assistant on the Video tab".into()),
+        // Video 2.0 (scenes and shots) rebuilt what a film lands on; the
+        // board comes back on the new storyboard.
+        super::chat::Pane::Video if FILMS_PAUSED => Some(FILMS_PAUSED_WHY.into()),
         super::chat::Pane::Video => film_off(&rules, image, chat.video.as_deref(), video.as_ref()),
     };
     t.image_tab = chat.context == super::chat::Pane::Image;
@@ -435,6 +438,11 @@ fn fill_from(o: &mut serde_json::Map<String, Value>, p: &Profile) {
 /// Why a chat can't make a film: it needs the agent allowed to, an image
 /// model for the cast and keyframes, and a video model that goes on from
 /// one shot to the next.
+/// Films wait for the Video tab's storyboard of scenes and shots.
+pub const FILMS_PAUSED: bool = true;
+pub const FILMS_PAUSED_WHY: &str =
+    "films are being rebuilt for the Video tab's scenes and shots; for now, write the shots in the storyboard";
+
 pub fn film_off(rules: &Rules, image: bool, picked: Option<&str>, video: Option<&VideoView>) -> Option<String> {
     if !rules.film {
         return Some("making movies is off in Settings → Agent".into());

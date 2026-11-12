@@ -42,7 +42,11 @@ let timer = null;
 let pickFor = null; // the cast member an upload is for
 let warning = '';
 
-const film = () => got?.chat.film ?? null;
+// Paused for Video 2.0: a film's flat rows don't fit scenes and shots, so a
+// chat's old film is not bound onto the storyboard until it is rebuilt for it
+// (the server says so too, `toolkit::FILMS_PAUSED`). The Cast panel stays.
+const FILMS_PAUSED = true;
+const film = () => (FILMS_PAUSED ? null : got?.chat.film ?? null);
 // `session::MAX_CAST`: past it the server refuses an added member.
 const MAX_CAST = 6;
 const busy = () => ['queued', 'running'].includes(got?.chat.session.state);

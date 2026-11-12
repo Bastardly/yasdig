@@ -331,8 +331,6 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    clip reads left to right as it plays and the panel (resizable both ways)
    shows as many as it is wide. A continue is inset; shot 1 and each cut,
    which the shots after them go on from, are raised a shade (`.fresh`). */
-/* Every shot and the negative: folded once set, and no wider than a form. */
-.shotcommon { max-width: var(--shot-common-w); }
 /* The strip takes the panel's height that is left and scrolls both ways
    itself. Scrolling only sideways inside a panel body that scrolled down,
    its sideways bar sat under the shots — out of sight whenever a card was
@@ -348,6 +346,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   background: var(--ink-800); border: var(--line); border-radius: var(--r-lg);
 }
 .shotrow.fresh { background: var(--ink-600); border-color: var(--ink-400); }
+/* The prompt is what a card is for, so it starts tall; the seed comes last,
+   since a shot's seed is rarely the thing being changed. */
+.shotrow prompt-box textarea { min-height: var(--shot-prompt-h); }
 /* Add shot: round, and held at the strip's top right while it scrolls
    either way. */
 .shotadd {
@@ -389,6 +390,49 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .shotrow.done .shothead b { color: var(--go); }
 .shotrow.done .shothead b::after { content: " \2713"; }
 .shotrow.done textarea { border-color: var(--go); }
+/* The storyboard: scenes, each its shots indented under it, first to last.
+   The shot on the stage is marked in the state bone, as a picked thumbnail
+   is; a shot's mark says made, outdated, changed or not yet. */
+#vboard { display: flex; flex-direction: column; gap: var(--sp-3); margin: var(--sp-2) 0; }
+.sbscene { border: var(--line); border-radius: var(--r-lg); padding: var(--sp-2); background: var(--ink-800); }
+.sbscene.on { border-color: var(--ink-400); }
+.sbhead { display: flex; align-items: center; gap: var(--sp-2); }
+/* Block, not .btn's inline-flex: a flex box centres and clips its text without an ellipsis. */
+.sbname { display: block; flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sbhead > .sub { flex: none; white-space: nowrap; }
+.sbtools { display: inline-flex; align-items: center; gap: var(--sp-1); flex: none; }
+.sbtools .btn-icon { min-width: 1.75rem; padding: var(--sp-1); }
+.sbshots { list-style: none; margin: var(--sp-2) 0 0; padding: 0 0 0 var(--sb-indent); display: flex; flex-direction: column; gap: var(--sp-1); }
+.sbshot { display: flex; align-items: center; gap: var(--sp-2); border: var(--line); border-radius: var(--r-md); padding: var(--sp-1); background: var(--ink-700); }
+.sbshot.on { border-color: var(--state); }
+/* Made: a green edge, the departure green that already means "drawn" on a
+   part. The shot picked keeps its bone edge; its mark still says done. */
+.sbshot.done:not(.on), .sbscene.done:not(.on) { border-color: var(--go); }
+.sbscene.done.on { box-shadow: inset 0 0 0 1px var(--go); }
+.sbshot.outdated:not(.on) { border-color: var(--fold-title); }
+.sbgenrow { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-2); }
+.sbgenrow .sub { margin: 0; flex: 1; min-width: 0; }
+/* Under the scrubber: a Video's shots as a strip, each as wide as it is
+   long; the one under the playhead in bone, the picked one a shade up. */
+.shotmarks { display: flex; gap: var(--gap-thumbs); height: var(--sp-2); margin-top: var(--sp-1); }
+.shotmarks > span { background: var(--ink-500); border-radius: var(--r-sm); cursor: pointer; min-width: var(--sp-1); }
+.shotmarks > span.picked { background: var(--ink-400); }
+.shotmarks > span.at { background: var(--state); }
+.sbpick {
+  flex: 1; min-width: 0; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto;
+  column-gap: var(--sp-2); align-items: center; text-align: left;
+  background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer;
+}
+.sbpick img, .sbnopic { grid-row: 1 / 3; height: var(--sb-pic); width: calc(var(--sb-pic) * 16 / 9); object-fit: cover; border-radius: var(--r-sm); background: var(--ink-900); }
+.sbline { font-size: var(--fs-sm); color: var(--text-dim); }
+.sbtext { font-size: var(--fs-sm); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.sbmark { color: var(--text-faint); }
+.sbshot.done .sbmark { color: var(--go); }
+.sbshot.outdated .sbmark, .sbshot.changed .sbmark { color: var(--fold-title); }
+.sbfoot { margin-top: var(--sp-2); padding-left: var(--sb-indent); }
+/* A lock over fields a made shot was drawn with, and the way to let go. */
+.lockline { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin: var(--sp-2) 0; }
+.lockline .sub { flex: 1; min-width: 0; margin: 0; }
 /* The A14B pair's expert choice, under its row. */
 .loraexpert { width: 100%; margin-top: var(--sp-1); }
 
@@ -722,7 +766,8 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
   border-bottom: var(--line); cursor: move; user-select: none; touch-action: none;
 }
 .fpanel.moving .fphead { cursor: grabbing; }
-.fphead b { flex: 0 0 auto; }
+/* A title may be a scene's own words: it shrinks to an ellipsis before the × leaves the panel. */
+.fphead b { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fphead .foldstate { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
 .fphead .fpreset { margin-left: auto; padding: 2px var(--sp-2); }
 .fpclose {
@@ -845,7 +890,9 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* The Video stage: the canvas, and the player's row under it. */
 .vstage { flex-direction: column; }
 .vstage:not(:empty) > #vcanvas { max-width: 100%; max-height: calc(100% - 56px - var(--stagehint-h, 0px)); width: auto; }
-.vstage .player { width: min(100%, 640px); }
+.vstage .player, .vstage .shotmarks { width: min(100%, 640px); }
+/* With a Video's shot strip under the player, the canvas leaves room for it. */
+.vstage:has(#vshotmarks:not([hidden])) > #vcanvas { max-height: calc(100% - 56px - var(--sp-3) - var(--stagehint-h, 0px)); }
 /* The hint's 2px is the gap, as over the Image tab's picture. */
 .vstage > .stagehint + #vcanvas { margin-top: 0; }
 /* A panel is narrower than the old column: the picker's smaller strip. */

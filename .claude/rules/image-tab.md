@@ -49,8 +49,8 @@ Break silently:
   each cut; the round amber + is `position: sticky` at the strip's top right; **the
   strip fills the panel body's leftover height and scrolls both ways itself**
   (`#vfold-prompt > .fpbody` is a column, `--shot-strip-min` before the body
-  scrolls) — else its sideways bar sat out of sight under a tall card; Every
-  shot and the negative fold as `#vfold-every`, capped at `--shot-common-w`) and resizes
+  scrolls) — else its sideways bar sat out of sight under a tall card; the scene's
+  words are the Scene panel's, `storyboard.js`) and resizes
   both ways — `fpboth` in markup is overwritten by `PANEL_DEFS`' `both`.
 - **Panels resize vertically** (`resize: vertical`); `panels.js` saves a dragged
   height (`p.h`, from a `ResizeObserver` on the inline height) and a header

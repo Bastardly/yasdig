@@ -1,18 +1,5 @@
 Roadmap as it is currently planned. Changes can happen.
 
-# v0.10.x - Models manager
-- [x] Add voice model integration for narrative clips.
-- [x] Add narrative clips as option under the video tab
-- [x] Sandbox improvements
-- [x] Teach assistant to use variables.
-- [x] Improve assistant UI - Currently chat is a bit too messy.
-- [x] Improve wording. E.g. agent is using past tense, when starting to create a cast member
-- [x] OOM Error - Needs a copy key for easier debugging. Currently hard to copy paste.
-- [x] Enhance sometimes use variables that don't exist.
-- [x] Agent has trouble working from work items that has deleted models, such as VAE or Text Encoder. Should choose a new by default.
-- [x] Setting -> Per Model -> Video models clamped at the bottom. Also, does not show proper setting options.
-- [x] Fix x scroll in shots menu
-
 
 # v0.11.x - Video improvements
 - [ ] Video UI refinement (Not happy with it).
@@ -32,3 +19,4 @@ Roadmap as it is currently planned. Changes can happen.
 - [ ] Improve narrative clips. Pretty basic atm.
 
 # Known bugs
+- [ ] LTX generates random clip if prompt is too long.

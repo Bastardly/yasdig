@@ -120,9 +120,12 @@
   --ws-rail-w: 150px;    /* the Image and Video tabs' rail: longer labels */
   --gm-rail-w: 220px;    /* the Models tab's: family names, a count, a mark */
   --ws-panel-w: 380px;   /* their panels: forms, wider than the dialog's */
-  --shot-w: 300px;       /* one shot's card in the Shots panel's strip */
-  --shot-common-w: 640px; /* Shots' Every shot and negative, however wide the panel */
-  --shot-strip-min: 280px; /* the Shots strip before its panel scrolls instead: a card's head and seed */
+  --shot-w: 420px;       /* one shot's card in the Shots panel's strip: wide
+                            enough that the prompt, not the buttons, sets its shape */
+  --shot-prompt-h: 100px; /* a shot's prompt box before it is dragged taller */
+  --sb-pic: 54px;        /* a shot's first frame in the storyboard, its height */
+  --sb-indent: 20px;     /* a scene's shots under its header */
+  --shot-strip-min: 280px; /* the Shots strip before its panel scrolls instead: a card's head and its first fields */
   --foot-h: 28px;        /* the fixed page footer, and the dialog's foot line */
   --thumb-h: 200px;      /* work items, clips, and the img2img sources — one
                             size, because they are the same strip of pictures

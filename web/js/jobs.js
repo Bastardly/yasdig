@@ -361,6 +361,15 @@ export function stopKind(kind) {
   return Promise.resolve();
 }
 
+// Every job of a kind — the waiting ones first, so the queue can't hand the
+// next one out as the running one dies: the Video tab's Stop during
+// *Generate video* ends the shot drawing and the shots waiting behind it.
+export async function stopAllKind(kind) {
+  const mine = snap.jobs.filter((j) => j.kind === kind);
+  const order = [...mine.filter((j) => j.state === 'queued'), ...mine.filter((j) => j.state !== 'queued')];
+  for (const j of order) await stopJob(j.id).catch(() => {});
+}
+
 // Whether the worker is on a job of this kind right now — so a button waiting
 // on its own request can say "Queued…" until its turn comes.
 export const runningKind = () => runningJob()?.kind ?? null;

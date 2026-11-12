@@ -2,7 +2,7 @@
 // the stage (`shots.js`). Not in `web::WEB_FILES`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shotState, sentRow } from './shots.js';
+import { shotState, sentRow, shotOutdated } from './shots.js';
 
 const seg = (text, k) => ({ text, seed: 10 + k, frames: 33, start: k * 32 });
 const clip = (...texts) => ({ segments: texts.map(seg) });
@@ -181,4 +181,22 @@ test('a narrated row is its picture, its words and its voice; its length is the 
     assert.equal(s.done, 1);
   }
   assert.deepEqual(sentRow({ ...r[0], audio: ['a', 'b'] }, 0, take).audio, ['a'], 'one voice');
+});
+
+test('a drawn shot is outdated while its video or scene differs from what made it, and not after', () => {
+  const c = {
+    rendered: true, model: 'ltx', fps: 24, every: 'a harbour', negative: 'blur', typed_negative: null,
+    video: { width: 768, height: 512, hires: false },
+  };
+  const want = { model: 'ltx', width: 768, height: 512, fps: 24, hires: false };
+  const scene = { every: 'a harbour ', negative: 'blur' };
+  assert.equal(shotOutdated(c, want, scene), false);
+  for (const change of [{ model: 'wan' }, { width: 832 }, { fps: 16 }, { hires: true }]) {
+    assert.equal(shotOutdated(c, { ...want, ...change }, scene), true, JSON.stringify(change));
+  }
+  assert.equal(shotOutdated(c, want, { ...scene, every: 'a forest' }), true);
+  assert.equal(shotOutdated(c, want, { ...scene, negative: '' }), true);
+  assert.equal(shotOutdated({ ...c, rendered: false }, { ...want, width: 1 }, scene), false, 'a plan is drawn as it is');
+  assert.equal(shotOutdated({ ...c, typed_negative: '{bad}' }, want, { ...scene, negative: '{bad}' }), false,
+    'the negative as typed, before its roll');
 });

@@ -11,24 +11,39 @@ export let clip = null;
 let vframes = [];
 let vframe = 0;
 let vtimer = null;
+// A Video plays whole: its generated shots, in storyboard order, one frame
+// list. `parts` says where each shot is in it ({c, from, n}); `clip` is the
+// shot picked on the storyboard (null when that one isn't generated), which
+// is what Enlarge and the Shot panel act on.
+let parts = [];
+let listKey = '';
+// Decoded frames per shot, so moving between shots of one Video is a seek,
+// not a reload. Only the Video on the stage is kept.
+const decoded = new Map();
+const shotKey = (c) => `${c.id}@${c.created_ms}@${c.frames}`;
 
-// A clip with sound (MiniMax H3) has an <audio> beside the canvas. The frame
-// timer is the clock and the soundtrack is put where the frames are whenever
-// playback starts or wraps — two seconds of footage don't drift far enough
-// between those for a frame-accurate sync to be worth its code.
-const sound = () => $('vaudio');
+// The shot the playhead is in.
+const partAt = (i) => parts.find((p) => i >= p.from && i < p.from + p.n) ?? parts[0];
+
+// A shot with sound has an <audio> beside the canvas. The frame timer is the
+// clock and each shot's soundtrack is put where the frames are whenever
+// playback starts, wraps or crosses into the shot — a few seconds don't drift
+// far enough between those for a frame-accurate sync to be worth its code.
+const sounds = () => [...document.querySelectorAll('#vresult audio[data-shot]')];
 
 function syncSound() {
-  const a = sound();
-  if (!a) return;
-  a.currentTime = vframe / Math.max(1, clip.fps);
-  a.play().catch(() => {});
+  const p = partAt(vframe);
+  for (const a of sounds()) {
+    if (a.dataset.shot !== p?.c.id) { a.pause(); continue; }
+    a.currentTime = (vframe - p.from) / Math.max(1, p.c.fps);
+    a.play().catch(() => {});
+  }
 }
 
 export function stopPlayback() {
-  clearInterval(vtimer);
+  clearTimeout(vtimer);
   vtimer = null;
-  sound()?.pause();
+  for (const a of sounds()) a.pause();
   setPlayIcon($('vplay'), false);
 }
 
@@ -36,14 +51,17 @@ function drawFrame(i) {
   const cv = $('vcanvas');
   if (!cv || !vframes[i]) return;
   vframe = i;
-  cv.getContext('2d').drawImage(vframes[i], 0, 0);
+  cv.getContext('2d').drawImage(vframes[i], 0, 0, cv.width, cv.height);
   const scrub = $('vscrub');
   if (scrub) scrub.value = i;
+  const p = partAt(i);
   const at = $('vat');
-  if (at) {
-    at.textContent =
-      `${i + 1}/${vframes.length} · ${(i / (clip.fps || 1)).toFixed(2)}s`;
+  if (at && p) {
+    const secs = parts.filter((x) => x.from < p.from).reduce((t, x) => t + x.n / (x.c.fps || 1), 0)
+      + (i - p.from) / (p.c.fps || 1);
+    at.textContent = `${parts.length > 1 ? `${p.label} · ` : ''}${i + 1}/${vframes.length} · ${secs.toFixed(2)}s`;
   }
+  for (const m of document.querySelectorAll('#vshotmarks > span')) m.classList.toggle('at', m.dataset.shot === p?.c.id);
 }
 
 function togglePlay() {
@@ -51,42 +69,66 @@ function togglePlay() {
   if (!vframes.length) return;
   setPlayIcon($('vplay'), true);
   syncSound();
-  vtimer = setInterval(() => {
+  const tick = () => {
+    const was = partAt(vframe);
     const next = (vframe + 1) % vframes.length;
     drawFrame(next);
-    if (next === 0) syncSound();
-  }, 1000 / Math.max(1, clip.fps));
+    if (next === 0 || partAt(next) !== was) syncSound();
+    vtimer = setTimeout(tick, 1000 / Math.max(1, partAt(vframe)?.c.fps || 1));
+  };
+  vtimer = setTimeout(tick, 1000 / Math.max(1, partAt(vframe)?.c.fps || 1));
 }
 
-// Every frame, decoded before the first one is shown. A clip is 33 PNGs off
-// localhost, so this is a fraction of a second — and decoding as we play would
-// show the first pass through at whatever rate the disk managed rather than at
-// the clip's own fps. A narrated clip decodes one still per shot.
-async function loadFrames(c) {
+// A shot's frames, decoded once — a narrated one a still per part. A frame
+// that won't decode must not hang the whole Video; it is dropped and counted.
+function framesOf(c) {
+  const k = shotKey(c);
+  if (!decoded.has(k)) {
+    decoded.set(k, decodeFrames(c.frames,
+      (n) => `/videos/${encodeURIComponent(c.id)}/frames/${n}.png`, stillsOf(c)));
+  }
+  return decoded.get(k);
+}
+
+// Every frame, decoded before the first one is shown — playing while
+// decoding would show the first pass at whatever rate the disk managed.
+async function loadFrames(list, key, startAt) {
   stopPlayback();
   vframes = [];
-  // A frame that won't decode must not hang the whole clip; it is dropped and
-  // the count below says so.
-  const loaded = await decodeFrames(c.frames,
-    (n) => `/videos/${encodeURIComponent(c.id)}/frames/${n}.png`, stillsOf(c));
-  // Another clip was opened while these decoded: its own load owns the
-  // canvas, and these frames playing under its title would be the wrong clip.
-  if (c !== clip) return;
-  vframes = loaded.filter(Boolean);
+  for (const k of [...decoded.keys()]) if (!list.some((c) => shotKey(c) === k)) decoded.delete(k);
+  const got = await Promise.all(list.map(framesOf));
+  // Another Video, or another set of shots, was put on the stage meanwhile.
+  if (key !== listKey) return;
+  let lost = 0;
+  vframes = [];
+  parts.forEach((p, j) => {
+    const ok = got[j].filter(Boolean);
+    lost += p.c.frames - ok.length;
+    p.from = vframes.length;
+    p.n = ok.length;
+    vframes.push(...ok);
+  });
   const cv = $('vcanvas');
   if (cv) {
-    cv.width = c.width;
-    cv.height = c.height;
+    cv.width = list[0].width;
+    cv.height = list[0].height;
   }
   const scrub = $('vscrub');
   if (scrub) scrub.max = Math.max(0, vframes.length - 1);
-  // Shown, not played: a clip that lands, or is opened, waits for Play —
-  // judging it starts from its first frame, at the user's moment.
-  if (vframes.length) drawFrame(0);
-  if (vframes.length !== c.frames) {
-    $('verr').textContent =
-      `${c.frames - vframes.length} of ${c.frames} frames could not be loaded.`;
-  }
+  drawMarks();
+  // Shown, not played: judging starts at the person's moment.
+  if (vframes.length) drawFrame(startAt());
+  if (lost) $('verr').textContent = `${lost} frame(s) could not be loaded.`;
+}
+
+// Under the scrubber, the shots as a strip, each as wide as it is long; a
+// click goes to the start of one.
+function drawMarks() {
+  const el = $('vshotmarks');
+  if (!el) return;
+  el.hidden = parts.length < 2;
+  el.innerHTML = parts.map((p) => `<span data-shot="${esc(p.c.id)}" style="flex-grow:${Math.max(1, p.n)}"
+    title="${esc(p.label)}" class="${p.c.id === clip?.id ? 'picked' : ''}"></span>`).join('');
 }
 
 // The separate files a clip ran with, by the names `VideoModel` gives them —
@@ -126,41 +168,70 @@ function renderInfo(c, ms) {
     <table class="helptable"><tbody>${files}</tbody></table>`;
 }
 
-// Nothing on the stage: *New clip*. The clip itself stays in its grid.
+// Nothing on the stage: *New video*, or a Video none of whose shots is made.
 export function clearClip() {
   stopPlayback();
   clip = null;
   vframes = [];
   vframe = 0;
+  parts = [];
+  listKey = '';
   $('vresult').innerHTML = '';
-  $('vresultinfo').innerHTML = '<p class="sub">No clip yet.</p>';
+  $('vresultinfo').innerHTML = '<p class="sub">Nothing generated yet.</p>';
 }
 
-// The clip, rebuilt per clip: the player on the stage and what is known about
-// it in the Info panel; the clip dialog does the rest. `ms` is only there for
-// a clip that was just generated — opening one from the grid has no timing to
-// report, and inventing one would be worse than leaving it out.
+// One clip on its own — the stage before Video 2.0, and still the way a shot
+// that belongs to no Video plays.
 export function renderClip(c, ms) {
-  clip = c;
+  renderVideo([{ c, label: 'Shot 1' }], c, ms);
+}
+
+// A Video on the stage: `list` its generated shots in order (`{c, label}`),
+// `sel` the shot picked (or null), the playhead put at its first frame. The
+// same shots again only move the playhead.
+export function renderVideo(list, sel, ms, { seek = true } = {}) {
+  clip = sel;
+  const key = list.map((x) => shotKey(x.c)).join('|');
+  const startAt = () => parts.find((p) => p.c.id === sel?.id)?.from ?? 0;
+  if (sel) renderInfo(sel, ms);
+  if (key === listKey && $('vcanvas')) {
+    if (!seek) return;
+    stopPlayback();
+    drawMarks();
+    if (vframes.length) drawFrame(startAt());
+    return;
+  }
+  listKey = key;
+  parts = list.map((x) => ({ c: x.c, label: x.label, from: 0, n: 0 }));
   $('vresult').innerHTML = `
-    <p class="stagehint">Click to enlarge, compare and save</p>
+    <p class="stagehint">Click to enlarge, compare and save the shot under the playhead</p>
     <canvas id="vcanvas"></canvas>
     <div class="player">
       <button type="button" id="vplay" class="btn btn-icon" title="Play" aria-label="Play">${ICONS.play}</button>
       <input id="vscrub" type="range" min="0" max="0" step="1" value="0">
       <span class="val" id="vat"></span>
     </div>
-    ${c.audio ? `<audio id="vaudio" preload="auto" src="/videos/${encodeURIComponent(c.id)}/audio.wav"></audio>` : ''}`;
-  renderInfo(c, ms);
-  // The canvas opens the clip dialog — Enlarge, History, Save to output — as
-  // the Image tab's picture opens Refine & adjust.
-  $('vcanvas').title = 'Click to enlarge, compare and save';
-  $('vcanvas').addEventListener('click', () => openClipView(clip));
+    <div class="shotmarks" id="vshotmarks" hidden></div>
+    ${list.filter((x) => x.c.audio).map((x) => `<audio data-shot="${esc(x.c.id)}" preload="auto"
+      src="/videos/${encodeURIComponent(x.c.id)}/audio.wav?${x.c.created_ms}"></audio>`).join('')}`;
+  // The canvas opens the clip dialog on the shot under the playhead —
+  // Enlarge, History, Save to output — as the Image tab's picture opens
+  // Refine & adjust.
+  $('vcanvas').addEventListener('click', () => {
+    const p = partAt(vframe);
+    if (p) openClipView(p.c);
+  });
   $('vplay').addEventListener('click', togglePlay);
   $('vscrub').addEventListener('input', (e) => {
     stopPlayback();
     drawFrame(parseInt(e.target.value, 10) || 0);
   });
-  loadFrames(c);
+  $('vshotmarks').addEventListener('click', (e) => {
+    const id = e.target.closest('[data-shot]')?.dataset.shot;
+    const p = parts.find((x) => x.c.id === id);
+    if (!p) return;
+    stopPlayback();
+    drawFrame(p.from);
+  });
+  loadFrames(list.map((x) => x.c), key, startAt);
 }
-

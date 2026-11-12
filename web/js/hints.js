@@ -168,22 +168,22 @@ const HELP = [
         + 'its own size. The model card calls this experimental: it guides, it '
         + 'doesn’t trace.' },
   { ids: ['vshots'],
-    text: 'A clip, one shot at a time: each shot is its own sd-cli run with its '
+    text: 'A shot, one part at a time: each part is its own sd-cli run with its '
         + 'own seed, length and words, and each after the first goes on from the '
         + 'last one’s final frame — so say only what happens in it; an action or a '
-        + 'line in shot 1 happens once. Shots the clip on screen already has are '
-        + 'ticked green. Change one’s seed, length or words and Redo from shot k '
-        + 'draws it and the ones after it again, keeping those before; add a row '
-        + 'and Extend clip draws it onto the end. Cheap to try at a few steps — '
-        + 'then raise the steps and Generate clip makes every shot again with the '
-        + 'same seeds. TI2V-5B, A14B and H3 can do it. Shot 1 can start from an '
-        + 'image — Start from image, under its prompt: the clip animates it, which is '
-        + 'by far the most reliable way to control what the clip contains; without '
-        + 'one the model runs as plain text-to-video.' },
+        + 'line in part 1 happens once. Parts the shot on screen already has are '
+        + 'ticked green. Change one’s seed, length or words and Redo from part k '
+        + 'draws it and the ones after it again, keeping those before; add a part '
+        + 'and Generate shot draws it onto the end. A new camera shot — a cut — is '
+        + 'a new shot in the Storyboard, not a part. TI2V-5B, A14B, H3 and LTX go '
+        + 'on from a last frame. Part 1 can start from an image — Start from '
+        + 'image, under its prompt: the shot animates it, which is by far the most '
+        + 'reliable way to control what it contains; without one the model runs as '
+        + 'plain text-to-video.' },
   { ids: ['vshotcast'],
     text: 'Who is in the shot, by the names Spoken uses: type a name, or Add cast… '
         + 'for someone from the Cast tab — on H3 their picture becomes a reference '
-        + 'and their voice a sound. Only shot 1 and a cut have it: a shot that goes '
+        + 'and their voice a sound. Only a shot’s first part has it: a part that goes '
         + 'on starts from the last frame, with whoever it shows. Anyone here with no line is '
         + 'told to stay silent, lips closed: MiniMax H3 fills time nobody accounted '
         + 'for with speech nobody wrote.' },
@@ -202,16 +202,16 @@ const HELP = [
         + 'goes in Sound). Empty is none: without it H3 tends to add a score of its own.' },
   { ids: ['vshotseed'],
     text: 'The shot’s seed. -1 rolls a new one, and the box then shows the seed '
-        + 'the shot was drawn with, so Generate clip draws it the same way again '
-        + '— at more steps, say. A new shot starts with the seed of the one above. '
+        + 'the shot was drawn with, so Generate shot draws it the same way again '
+        + '— at more steps, say. A new part starts with the seed of the one above. '
         + 'The circling arrow puts -1 back; the die picks a seed at random and '
         + 'keeps it, to try the shot another way.' },
   { ids: ['vshotframes'],
     text: 'How long the shot is, in frames — divided by fps, that is its length. '
         + 'The model’s latent grid only permits certain counts (Wan works in 4k+1, '
-        + 'H3 in 17k+5), so the number is rounded for you. A shot that goes on from '
+        + 'H3 in 17k+5), so the number is rounded for you. A part that goes on from '
         + 'the last one adds one frame fewer: its first is the last one’s final '
-        + 'frame. A longer shot costs more memory, so a long clip is more shots.' },
+        + 'frame. A longer part costs more memory, so a long shot is more parts.' },
   { ids: ['vnarrated'],
     text: 'What the voice reads while this shot’s picture is on screen — a sentence or a page. The shot lasts as long as '
       + 'the reading, with a half-second pause before the next picture. Long text is read a few sentences at a time in '
@@ -242,11 +242,13 @@ const HELP = [
         + 'without Nitro; a long clip then looks soft, and half size helps. The '
         + 'AVI is the file yasdig keeps, large and untouched.' },
   { ids: ['vevery'],
-    text: 'Words that go in front of every shot, the first included: who and where '
-        + '— the characters, the place, the look. One frame is all that carries '
-        + 'across a seam, so a face that turns away is drawn again from these. '
-        + 'Keep actions and dialogue out: they belong to a shot. Its {variables} '
-        + 'roll once, so a rolled character is the same one in every shot.' },
+    text: 'Words that go in front of every part of every shot in this scene: who '
+        + 'and where — the characters, the place, the look. One frame is all that '
+        + 'carries across a part’s seam, and nothing across a cut, so a face is '
+        + 'drawn again from these. Keep actions and dialogue out: they belong to a '
+        + 'part. Its {variables} roll once for the scene, so a rolled character is '
+        + 'the same one in every shot of it. Once a shot of the scene is made, these '
+        + 'lock; unlocking marks those shots outdated.' },
   { ids: ['vloras'],
     text: 'LoRAs for the video model, from models/loras/ — only the ones for this '
         + 'model’s size are offered (a TI2V-5B LoRA does nothing to a 14B). On the '

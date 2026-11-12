@@ -154,6 +154,7 @@ mod sd;
 mod settings;
 mod shutdown;
 mod startup;
+mod story;
 mod sr;
 mod variables;
 mod videos;
@@ -503,6 +504,8 @@ fn run(args: &[String]) -> Result<()> {
     // Nothing is queued yet, so a chat that says the agent is working on it
     // was cut off by the last stop.
     agent::store(&cfg).settle_all();
+    // Clips from before Video 2.0 become Videos of one scene, once.
+    video_store(&cfg).convert_old();
 
     // The diffusion worker. It initializes wgpu + sd, reports readiness, then
     // takes work from the job queue one image at a time. The display worker is
@@ -1112,6 +1115,14 @@ fn route(
         ("GET", "/video-models") => handle_video_models(conn, cfg),
         ("POST", "/video") => handle_video(conn, lanes, &req.body),
         ("POST", "/videos/plan") => handle_plan_clip(conn, cfg, &req.body),
+        ("POST", "/videos/new") => handle_new_video(conn, cfg, &req.body),
+        ("POST", "/videos/shot") => handle_add_shot(conn, cfg, &req.body),
+        ("POST", "/videos/shot/delete") => handle_delete_shot(conn, cfg, &req.body),
+        ("POST", "/videos/story") => handle_story(conn, cfg, &req.body),
+        ("GET", "/videos/unconverted") => {
+            let ids = video_store(cfg).unconverted();
+            conn.respond(200, "application/json", serde_json::json!({ "ids": ids }).to_string().as_bytes())
+        }
         ("POST", "/videos/draft") => handle_clip_draft(conn, cfg, &req.body),
         ("POST", "/videos/enlarge") => handle_enlarge_clip(conn, lanes, &req.body),
         ("POST", "/videos/extend") => handle_extend_clip(conn, lanes, &req.body),
@@ -1790,6 +1801,8 @@ struct VideoDto {
     shots: Vec<ShotDto>,
     #[serde(default)]
     every: Option<String>,
+    #[serde(default)]
+    every_seed: Option<i64>,
 }
 
 impl VideoDto {
@@ -1816,6 +1829,7 @@ impl VideoDto {
             loras: self.loras,
             shots: self.shots.into_iter().map(ShotDto::spec).collect(),
             every: self.every,
+            every_seed: self.every_seed,
             into: self.id.filter(|s| !s.is_empty()),
         }
     }
@@ -1855,6 +1869,175 @@ fn handle_plan_clip(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> R
             conn.respond(200, "application/json", body.to_string().as_bytes())
         }
         Err(e) => conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
+    }
+}
+
+/// A Video as `{video}`, its shots' clips with it — every story route's answer.
+fn answer_video(conn: &mut http::Connection, cfg: &Config, id: &str) -> Result<()> {
+    match video_store(cfg).load_video_full(id) {
+        Ok(v) => conn.respond(200, "application/json", serde_json::json!({ "video": v }).to_string().as_bytes()),
+        Err(e) => conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes()),
+    }
+}
+
+fn bad(conn: &mut http::Connection, e: anyhow::Error) -> Result<()> {
+    conn.respond(400, "application/json", error_json(&format!("{e:#}")).as_bytes())
+}
+
+/// `POST /videos/new {plan, title?, scene}`: a Video of one scene and one
+/// shot, the shot saved as `plan` is (the `/video` body, one empty part).
+fn handle_new_video(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        plan: VideoDto,
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        scene: SceneDto,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let videos = video_store(cfg);
+    let seed = dto.scene.seed.filter(|s| *s >= 0).unwrap_or_else(pipeline::random_seed);
+    let id = workitems::new_id(seed);
+    let shot = format!("{id}-s1");
+    let video = story::Video {
+        id: id.clone(),
+        created_ms: pipeline::now_ms(),
+        title: dto.title,
+        lock: None,
+        scenes: vec![story::Scene {
+            id: "c1".into(),
+            title: dto.scene.title,
+            every: dto.scene.every,
+            negative: dto.scene.negative,
+            seed,
+            shots: vec![shot.clone()],
+        }],
+        favorite: false,
+        clips: Vec::new(),
+    };
+    if let Err(e) = videos.create_video(&video) {
+        return bad(conn, e);
+    }
+    let mut req = dto.plan.request();
+    req.into = Some(shot);
+    if let Err(e) = pipeline::plan_clip(cfg, &store(cfg), &videos, &req) {
+        let _ = videos.delete(Shelf::Work, &id);
+        return bad(conn, e);
+    }
+    answer_video(conn, cfg, &id)
+}
+
+#[derive(serde::Deserialize, Default)]
+struct SceneDto {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    every: String,
+    #[serde(default)]
+    negative: String,
+    #[serde(default)]
+    seed: Option<i64>,
+}
+
+/// `POST /videos/shot {id, scene, at, plan}`: a new shot in scene `scene` of
+/// Video `id`, at place `at` (the end when past it), saved as `plan` is.
+fn handle_add_shot(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        id: String,
+        scene: String,
+        #[serde(default)]
+        at: Option<usize>,
+        plan: VideoDto,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let videos = video_store(cfg);
+    let v = match videos.load_video(&dto.id) {
+        Ok(v) => v,
+        Err(e) => return bad(conn, e),
+    };
+    if v.shot_ids().count() >= story::MAX_VIDEO_SHOTS {
+        return bad(conn, anyhow::anyhow!("a video holds at most {} shots", story::MAX_VIDEO_SHOTS));
+    }
+    if !v.scenes.iter().any(|s| s.id == dto.scene) {
+        return bad(conn, anyhow::anyhow!("that scene is gone"));
+    }
+    let shot = videos.new_shot_id(&v);
+    let mut req = dto.plan.request();
+    req.into = Some(shot.clone());
+    if let Err(e) = pipeline::plan_clip(cfg, &store(cfg), &videos, &req) {
+        let _ = std::fs::remove_dir_all(videos.dir(&shot));
+        return bad(conn, e);
+    }
+    let placed = videos.update_video(&dto.id, |v| {
+        let s = v.scenes.iter_mut().find(|s| s.id == dto.scene).context("that scene is gone")?;
+        let at = dto.at.unwrap_or(usize::MAX).min(s.shots.len());
+        s.shots.insert(at, shot.clone());
+        Ok(())
+    });
+    if let Err(e) = placed {
+        let _ = std::fs::remove_dir_all(videos.dir(&shot));
+        return bad(conn, e);
+    }
+    answer_video(conn, cfg, &dto.id)
+}
+
+/// `POST /videos/shot/delete {id}`: a shot out of its Video, frames and all.
+fn handle_delete_shot(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        id: String,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    match video_store(cfg).delete_shot(&dto.id) {
+        Ok(v) => answer_video(conn, cfg, &v.id),
+        Err(e) => bad(conn, e),
+    }
+}
+
+/// `POST /videos/story {id, title, scenes, unlock?}`: the storyboard as the
+/// page has it — the scenes' order, headers, descriptions and negatives, and
+/// which shots each holds in what order. Shots are added and removed by their
+/// own routes, so the shots named must be exactly the Video's. `unlock`
+/// lets go of the lock, so the next render sets a new one.
+fn handle_story(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Dto {
+        id: String,
+        #[serde(default)]
+        title: Option<String>,
+        scenes: Vec<story::Scene>,
+        #[serde(default)]
+        unlock: bool,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let saved = video_store(cfg).update_video(&dto.id, |v| {
+        let mut had: Vec<&String> = v.shot_ids().collect();
+        let mut got: Vec<&String> = dto.scenes.iter().flat_map(|s| s.shots.iter()).collect();
+        had.sort();
+        got.sort();
+        if had != got {
+            anyhow::bail!("the storyboard is out of date; reload the video");
+        }
+        let mut ids: Vec<&String> = dto.scenes.iter().map(|s| &s.id).collect();
+        ids.sort();
+        ids.dedup();
+        if ids.len() != dto.scenes.len() || dto.scenes.is_empty() {
+            anyhow::bail!("a video needs at least one scene, each with an id of its own");
+        }
+        v.scenes = dto.scenes.clone();
+        if let Some(t) = &dto.title {
+            v.title = t.clone();
+        }
+        if dto.unlock {
+            v.lock = None;
+        }
+        Ok(())
+    });
+    match saved {
+        Ok(v) => answer_video(conn, cfg, &v.id),
+        Err(e) => bad(conn, e),
     }
 }
 
@@ -1898,6 +2081,8 @@ fn handle_extend_clip(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -
         narrator: Option<String>,
         #[serde(default)]
         language: Option<String>,
+        #[serde(default)]
+        every_seed: Option<i64>,
     }
     match parse_json::<Dto>(conn, body)? {
         Some(dto) => enqueue_wait(
@@ -1913,6 +2098,7 @@ fn handle_extend_clip(conn: &mut http::Connection, lanes: &Lanes, body: &[u8]) -
                 negative: dto.negative,
                 narrator: dto.narrator,
                 language: dto.language,
+                every_seed: dto.every_seed,
             }),
             false,
             500,
@@ -2019,7 +2205,7 @@ fn handle_convert(
 }
 
 fn handle_list_clips(conn: &mut http::Connection, cfg: &Config, shelf: Shelf) -> Result<()> {
-    let clips = video_store(cfg).listing(shelf);
+    let clips = video_store(cfg).video_listing(shelf);
     match serde_json::to_vec(&clips) {
         Ok(body) => conn.respond(200, "application/json", &body),
         Err(e) => conn.respond(

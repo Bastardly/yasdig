@@ -366,8 +366,9 @@ export function openClipView(clip) {
 export async function openOutputClip(stem) {
   const [, id, v] = stem.match(/^(.*?)(?:-v(\d+))?$/);
   try {
-    const clips = await getJSON('/videos');
-    const c = Array.isArray(clips) ? clips.find((x) => x.id === id) : null;
+    // A saved shot's stem is its id; the listing is Videos, each with its shots.
+    const videos = await getJSON('/videos');
+    const c = Array.isArray(videos) ? videos.flatMap((v) => v.clips ?? []).find((x) => x.id === id) : null;
     if (c) {
       view = { kind: 'clip', clip: c };
       open();

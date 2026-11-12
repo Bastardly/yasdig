@@ -1,6 +1,7 @@
 ---
 paths:
   - "src/videos.rs"
+  - "src/story.rs"
   - "src/narration.rs"
   - "src/voices.rs"
   - "src/avi.rs"
@@ -8,6 +9,7 @@ paths:
   - "web/js/video.js"
   - "web/js/player.js"
   - "web/js/shots.js"
+  - "web/js/storyboard.js"
   - "web/js/clipview.js"
   - "web/js/export.js"
   - "web/js/mp4mux.js"
@@ -19,6 +21,62 @@ paths:
 ---
 
 # Video
+
+## Video 2.0: Video › Scene › Shot › Part
+
+**A shot is what a clip always was** (one model, parts going on from the last frame);
+a **Video** (`src/story.rs`, `work/videos/{vid}/video.json`) orders **scenes** (header,
+description = the old *Every shot*, negative, a `seed` its `every` rolls off —
+`VideoRequest.every_seed`) of **shots**, each a clip folder at `{vid}/s{n}/` under the
+id **`{vid}-s{n}`** (`story::shot_of`; `VideoStore::dir` maps it, so every
+`/videos/{id}/…` route, Extend, Enlarge, plan and draft work on a shot unchanged).
+Below, "clip" means a shot unless it says Video. A cut is the join between shots; parts
+don't carry `cut` now (read for old records), except narrated stills, whose `sentRow`
+still makes each part a cut from its own picture (step 6 makes it one picture per shot). Names in the UI: Storyboard, Shot
+(the old Shots panel, rows labelled *Part k*), Scene.
+
+- **Model, size, fps and Hi-res are the Video's** (the Generation panel), so shots
+  join. `Video.lock` is taken by the first render (`take_lock`); `Engine::video`
+  refuses a shot that differs (`check_lock`) until `POST /videos/story {unlock}` clears
+  it. Steps/CFG/LoRAs/memory stay free. **Outdated is computed** (`shots.js`
+  `shotOutdated`: recorded model/size/fps/hires vs the panel, `every`/negative vs the
+  scene), never stored. A scene's words lock in the page only (`sceneLocked`).
+- **A drawn shot drawn again renders under a new id** (`new_shot_id`) and
+  `replace_shot` swaps it into the scene on success, so a Stop keeps the old one.
+- **Routes**: `/videos/new {plan, title, scene}`, `/videos/shot {id, scene, at, plan}`,
+  `/videos/shot/delete {id}`, `/videos/story {id, title, scenes, unlock}` (refused
+  unless the shots named are exactly the Video's), all answering `{video}` with its
+  shots' `clips`. `/videos` and `/favorite-clips` list Videos; star/delete act on the
+  Video folder. Every record write is `update_video` under `RECORD`.
+- **Old clips are converted at start** (`VideoStore::convert_old`): split at cut marks,
+  frames renumbered (hard links), `audio.wav` split at `start × rate / fps`, drafts
+  split by their rows' `cut`; built in `{id}.convert`, swapped by renames (`recover`
+  finishes or undoes a crash). The Video keeps the old id.
+- **Page**: `storyboard.js` (board panel, Scene panel, ↑↓ moves across scene edges;
+  **the Shot, Scene and Generation panels have no rail button** — only the storyboard
+  opens them (Generation by `#vopengen` under the title, beside the lock and Unlock),
+  so an unsaved video still draws a placeholder Scene 1 · Shot 1 to click;
+  **Advanced is a fold at the foot of Generation** (`#vfold-adv`, a `<details>`, no
+  panel), and **Cast's rail button shows only on a model with `references`**
+  (`syncCastRail`; nothing else uses it while films are off);
+  hooks from `video.js`), `video.js` stages one shot (`stageShot`; `applySettings` only
+  when a Video is opened from the grid). A new video is saved by a press
+  (`ensureVideo`), never by typing. *Generate video*/*scene* queue every shot whose
+  mark isn't done (`pressShot`: `/video` or `/videos/extend`) **one at a time** (`videoRun`: a
+  dozen requests waiting at once would take every connection the poll and Stop need);
+  the rail's Stop ends the run and stops every video job (`stopAllKind`). Drafts are `{rows}`.
+- **The Assistant's films are paused** (`toolkit::FILMS_PAUSED`, `board.js`
+  `FILMS_PAUSED`): its flat rows don't fit; it comes back on the storyboard.
+- **The stage plays the Video whole** (`showVideo` → player.js `renderVideo`): every
+  generated shot in storyboard order as one frame list (`parts`), the playhead at the
+  picked shot, decoded frames cached per shot (`decoded`, keyed by id+created+frames),
+  each shot's own `audio.wav` re-synced as the playhead crosses into it, a strip of
+  shots under the scrubber (`#vshotmarks`). Same shots again = a seek; `seek: false`
+  (a refresh after a render) leaves the playhead. The canvas opens the clip dialog on
+  the shot under the playhead.
+- **Not yet**: downloading/saving/enlarging the joined Video (each is per shot today), Enhance's neighbours across shots, narrated stills as one picture per shot.
+
+## Clips (shots)
 
 - **Discovered by reading headers** (`src/discover.rs`), discriminators from sd.cpp's
   `ModelLoader::get_sd_version`. **Read shapes off square tensors only**
@@ -80,8 +138,8 @@ paths:
 - **A clip is a PNG sequence**, not a container (no decoder here; escalations need
   frames). Playback is `<canvas>`.
 - Video Stop is `POST /cancel` and kills; error ends in `sd::CANCELLED` → "Stopped".
-- **Clips queue**: Generate clip is never locked (`pending` counts requests in
-  flight; it reads *Queue another clip*), each request waits on the job queue. Only
+- **Shots queue**: Generate is never locked (`pending` counts requests in
+  flight), each request waits on the job queue. Only
   a change to one clip is one at a time (`busyClips`: its footer and × hide), so a
   clip's rows are never sent twice.
 - **Unsent edits are a per-clip draft on the server** (`setDraft`/`keepDraft` →

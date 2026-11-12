@@ -108,3 +108,22 @@ export function shotState(rows, clip, chains, take = ALL) {
     dropLast: whole && segs.length >= 2 ? segs.length - 1 : -1,
   };
 }
+
+// Whether a drawn shot no longer fits its Video: made at another model, size,
+// frame rate or Hi-res than the Video's (`want`, as the Generation panel has
+// it — the lock holds these until unlocked), or with other words than its
+// scene's description and negative. Computed, never stored, so putting a
+// field back clears the mark. A plan is never outdated: it is drawn with what
+// is there when it is drawn.
+export function shotOutdated(c, want, scene) {
+  if (!c || c.rendered === false) return false;
+  const v = c.video ?? {};
+  if (want && (c.model !== want.model || Number(v.width) !== Number(want.width)
+    || Number(v.height) !== Number(want.height) || Number(c.fps) !== Number(want.fps)
+    || !!v.hires !== !!want.hires)) return true;
+  if (scene) {
+    if (String(c.every ?? '').trim() !== String(scene.every ?? '').trim()) return true;
+    if ((c.typed_negative ?? c.negative ?? '') !== (scene.negative ?? '')) return true;
+  }
+  return false;
+}

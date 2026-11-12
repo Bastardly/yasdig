@@ -519,6 +519,9 @@ pub struct VideoRequest {
     /// The Shots panel's *Every shot*: what goes in front of every shot's
     /// text ([`crate::videos::shot_prompt`]).
     pub every: Option<String>,
+    /// What `every`'s variables roll off: the scene's seed, so each of a
+    /// scene's shots rolls the same words. `None` rolls off shot 1's.
+    pub every_seed: Option<i64>,
     /// A clip saved and not generated yet ([`plan_clip`]): render into it,
     /// keeping its id and place in the grid, rather than make a new one.
     pub into: Option<String>,
@@ -710,6 +713,9 @@ pub struct ExtendClipRequest {
     /// now (`None` keeps the clip's), so a Redo reads in the voice shown.
     pub narrator: Option<String>,
     pub language: Option<String>,
+    /// The scene's seed, as `VideoRequest::every_seed`: the parts added roll
+    /// the scene's words as its other shots did.
+    pub every_seed: Option<i64>,
 }
 
 /// Two notes as one, either or both absent.
@@ -2372,7 +2378,7 @@ impl Engine {
         // the same one in every shot; a shot rolls off its own.
         let every_typed = req.every.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
         let every = match &every_typed {
-            Some(e) => variables::expand(e, &vars, seed)?,
+            Some(e) => variables::expand(e, &vars, req.every_seed.filter(|s| *s >= 0).unwrap_or(seed))?,
             None => String::new(),
         };
         let mut shots = req.shots.clone();
@@ -2381,14 +2387,38 @@ impl Engine {
         self.check_sounds(&segments)?;
         let n = segments.len();
 
+        // A shot of a Video joins its other shots only at their model, size
+        // and fps: refused before minutes of render, not after.
+        if let Some(id) = &req.into {
+            let want = crate::story::VideoLock {
+                model: req.model.clone(),
+                width: m.width,
+                height: m.height,
+                fps: m.effective_fps(),
+                hires: m.hires,
+            };
+            self.videos.check_lock(id, &want)?;
+        }
+
         // A soundtrack only survives in a container — see `videos::CONTAINER`.
         let sound = m.audio_vae.is_some();
         // Into a saved plan, keeping its id (and so its URLs and star), or a
-        // clip of its own.
+        // clip of its own. A Video's shot drawn again renders under a new id
+        // and takes the old one's place only once it is done, so a Stop or a
+        // failure leaves the shot that was there.
+        let mut replacing = None;
         let (id, created_ms, (pattern, mut dir)) = match &req.into {
             Some(id) => {
                 let plan = self.videos.load(id)?;
-                (id.clone(), plan.created_ms, self.videos.prepare_plan(id, sound)?)
+                match crate::story::shot_of(id) {
+                    Some((vid, _)) if plan.rendered => {
+                        let fresh = self.videos.new_shot_id(&self.videos.load_video(vid)?);
+                        replacing = Some(id.clone());
+                        let prep = self.videos.prepare(&fresh, sound)?;
+                        (fresh, plan.created_ms, prep)
+                    }
+                    _ => (id.clone(), plan.created_ms, self.videos.prepare_plan(id, sound)?),
+                }
             }
             None => {
                 let id = workitems::new_id(seed);
@@ -2481,6 +2511,10 @@ impl Engine {
         // path, not the rare one, because that is what Stop does. Nothing goes
         // to `work/output/`: a clip is a work item until *Save to output*.
         dir.keep();
+        if let Some(old) = &replacing {
+            self.videos.replace_shot(old, &clip.id)?;
+        }
+        self.videos.take_lock(&clip.id, crate::story::VideoLock::of(&clip))?;
         Ok(VideoResult { clip, gen_ms, note })
     }
 
@@ -2807,7 +2841,7 @@ impl Engine {
         // the shots already drawn, so a rolled character stays the same one.
         let every_typed = req.every.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
         let every = match &every_typed {
-            Some(e) => variables::expand(e, &vars, clip.seed)?,
+            Some(e) => variables::expand(e, &vars, req.every_seed.filter(|s| *s >= 0).unwrap_or(clip.seed))?,
             None => String::new(),
         };
         // Everything checked before a frame is cut: a refused row must not
@@ -5378,14 +5412,14 @@ fn purge_pngs(dir: &std::path::Path) {
 /// Wall-clock milliseconds, for work item ids and their `created_ms`. Only ever
 /// compared against other values from here, so a clock that steps backwards
 /// misorders the grid and nothing worse.
-fn now_ms() -> u128 {
+pub(crate) fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
 }
 
-fn random_seed() -> i64 {
+pub(crate) fn random_seed() -> i64 {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.subsec_nanos() as u64)
@@ -5474,6 +5508,7 @@ mod tests {
             loras: None,
             shots: vec![shot("a {animal} walks", -1, Some(30)), shot("it swims", 9, None)],
             every: Some("  ".into()),
+            every_seed: None,
             into: None,
         };
         let c = super::plan_clip(&cfg, &items, &videos, &req).unwrap();

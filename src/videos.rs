@@ -148,7 +148,7 @@ fn yes() -> bool {
 /// rendered would read as never generated.
 static RECORD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn record_lock() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn record_lock() -> std::sync::MutexGuard<'static, ()> {
     RECORD.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -282,7 +282,7 @@ impl Clip {
     /// scene every shot was conditioned with, which is now what *Every shot*
     /// holds; a one-go clip that was extended had a blank first shot, meaning
     /// "the Prompt alone", and keeps its Prompt as shot 1.
-    fn normalize(&mut self) {
+    pub(crate) fn normalize(&mut self) {
         if !self.segments.is_empty() {
             self.shots.clear();
             self.shot_starts.clear();
@@ -397,8 +397,8 @@ pub(crate) fn frames_in(dir: &Path) -> Vec<PathBuf> {
 /// like `workitems::Store`, so the GPU worker and each connection thread build
 /// their own.
 pub struct VideoStore {
-    root: PathBuf,
-    favorites: PathBuf,
+    pub(crate) root: PathBuf,
+    pub(crate) favorites: PathBuf,
 }
 
 impl VideoStore {
@@ -415,7 +415,7 @@ impl VideoStore {
     }
 
     /// The one place a [`Shelf`] becomes a directory.
-    fn shelf_dir(&self, shelf: Shelf) -> &Path {
+    pub(crate) fn shelf_dir(&self, shelf: Shelf) -> &Path {
         match shelf {
             Shelf::Work => &self.root,
             Shelf::Favorites => &self.favorites,
@@ -424,7 +424,15 @@ impl VideoStore {
 
     /// Where clip `id` is: starred, or in `work/videos/` — which is also where
     /// a clip not made yet goes, so [`VideoStore::prepare`] needs nothing else.
+    ///
+    /// A **shot** of a Video (`{video}-s{n}`, [`crate::story::shot_of`]) is a
+    /// clip folder inside its Video's (`{video}/s{n}/`), so a star or a delete
+    /// moves the Video whole and every `/videos/{id}/…` route reaches a shot
+    /// as it reached a clip.
     pub fn dir(&self, id: &str) -> PathBuf {
+        if let Some((video, shot)) = crate::story::shot_of(id) {
+            return self.dir(video).join(shot);
+        }
         let fav = self.favorites.join(id);
         if fav.is_dir() {
             fav
@@ -464,6 +472,13 @@ impl VideoStore {
     pub fn save_plan(&self, clip: &mut Clip, picture: Option<&Path>) -> Result<()> {
         if !valid_id(&clip.id) {
             bail!("'{}' is not a clip id", clip.id);
+        }
+        // A shot's Video must still be there: a plan saved after its Video
+        // was deleted would make a folder no grid lists.
+        if let Some((vid, _)) = crate::story::shot_of(&clip.id) {
+            if !self.dir(vid).join(crate::story::VIDEO_FILE).is_file() {
+                bail!("that video was deleted");
+            }
         }
         let _g = record_lock();
         if let Ok(old) = self.load(&clip.id) {
@@ -784,6 +799,7 @@ impl VideoStore {
     /// The clips on one shelf, newest first. A directory without a readable
     /// `clip.json` is skipped — that's a run that died part way through, and one
     /// of them shouldn't cost the user the whole grid.
+    #[cfg(test)]
     pub fn list(&self, shelf: Shelf) -> Vec<Clip> {
         let Ok(entries) = std::fs::read_dir(self.shelf_dir(shelf)) else {
             return Vec::new();
@@ -806,6 +822,7 @@ impl VideoStore {
 
     /// What a grid shows: Current is both shelves (a starred clip stays where
     /// it was found, flagged `favorite`), Favorites its own alone.
+    #[cfg(test)]
     pub fn listing(&self, shelf: Shelf) -> Vec<Clip> {
         if shelf == Shelf::Favorites {
             return self.list(Shelf::Favorites);
@@ -944,7 +961,7 @@ fn sweep_render(dir: &Path) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::config::{VideoFamily, VideoModel};
 
@@ -966,7 +983,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    fn model() -> VideoModel {
+    pub(crate) fn model() -> VideoModel {
         let src = r#"
 [sd]
 binary = "sd-cli"
@@ -982,7 +999,7 @@ t5xxl = "t.gguf"
         cfg.video.into_iter().next().unwrap()
     }
 
-    fn clip(id: &str, created_ms: u128) -> Clip {
+    pub(crate) fn clip(id: &str, created_ms: u128) -> Clip {
         Clip {
             id: id.to_string(),
             created_ms,

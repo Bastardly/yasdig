@@ -636,9 +636,9 @@
        (`syncVideoSummaries`). -->
   <div class="workspace" id="tab-video" hidden>
   <nav class="wsrail" aria-label="Video">
-    <button type="button" class="btn btn-choice railbtn" data-panel="vid-prompt">Shots</button>
-    <button type="button" class="btn btn-choice railbtn" data-panel="vid-gen">Generation</button>
-    <button type="button" class="btn btn-choice railbtn unnarrated" data-panel="vid-adv">Advanced</button>
+    <!-- The Shot, Scene and Generation panels have no button: they are opened
+         from the storyboard — a shot, a scene, or the Video's own settings. -->
+    <button type="button" class="btn btn-choice railbtn" data-panel="vid-board">Storyboard</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-info">Info</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-current">Current</button>
     <button type="button" class="btn btn-choice railbtn" data-panel="vid-favorites">Favorites</button>
@@ -648,18 +648,19 @@
       <!-- Not the image tab's Stop, which finishes the image in flight and then
            ends the run. There is only ever one clip in flight, so stopping it
            means killing it — POST /cancel. -->
-      <!-- An empty stage and one empty shot: start another clip without
-           taking apart the one on screen, which stays in Current. -->
+      <!-- An empty storyboard and one empty shot: start another video
+           without taking apart the one open, which stays in Current. -->
       <button type="button" id="vnew" class="btn btn-block"
-        title="Start a new clip: empties the stage and the shots. The clip on screen stays in Current.">New clip</button>
-      <!-- The clip as the shots and settings have it, kept without drawing
-           it (`/videos/plan`): it waits in Current, and saves itself after. -->
+        title="Start a new video: an empty storyboard with one shot. The video open now stays in Current.">New video</button>
+      <!-- A new video kept without drawing it (`/videos/new`); once kept,
+           every change saves itself. -->
       <button type="button" id="vsaveclip" class="btn btn-block"
-        title="Keep this clip's shots and settings without generating it. It waits in Current as Not generated; open it any time, and Generate draws it.">Save</button>
+        title="Keep this video without generating it. It waits in Current as Not generated, and saves itself from then on.">Save</button>
       <div class="runstop">
         <button id="vstop" class="btn btn-danger btn-block" hidden>Stop</button>
       </div>
-      <button id="vgo" class="btn btn-run btn-block">Generate clip</button>
+      <button id="vgo" class="btn btn-run btn-block"
+        title="Generate every shot that is not generated, outdated or changed, in storyboard order. Shots already made are kept.">Generate video</button>
     </div>
   </nav>
   <!-- The clip on screen, as a canvas player (`renderClip`). -->
@@ -671,8 +672,53 @@
        the clip on the stage already has is marked done; a changed one is
        drawn again, with every row after it (*Redo from shot k*), and rows
        added under a whole clip are drawn onto it (*Extend clip*). -->
-  <section class="fpanel fpboth" id="vfold-prompt" aria-label="Shots" hidden>
-    <header class="fphead"><b>Shots</b> <span class="foldstate" id="vsum-prompt"></span><button type="button" class="fpclose" aria-label="Close Shots">&times;</button></header>
+  <!-- The open video's scenes and their shots, first to last
+       (`storyboard.js`): a shot's mark says whether it is made, outdated or
+       changed; a click puts it on the stage and in the Shot panel. -->
+  <section class="fpanel" id="panel-vid-board" aria-label="Storyboard" hidden>
+    <header class="fphead"><b>Storyboard</b> <span class="foldstate" id="vsum-board"></span><button type="button" class="fpclose" aria-label="Close Storyboard">&times;</button></header>
+    <div class="fpbody">
+      <label for="vtitle">Title</label>
+      <input type="text" id="vtitle" placeholder="Untitled video">
+      <!-- What every shot shares — the Video's Generation panel — and, once a
+           shot is made with it, the lock on it. -->
+      <div class="sbgenrow">
+        <button type="button" class="btn" id="vopengen" title="The model, size, frame rate and settings every shot is made with">Generation</button>
+        <span class="sub" id="vboardsum"></span>
+      </div>
+      <div class="lockline" id="vlockline" hidden>
+        <span class="sub" id="vlocktext"></span>
+        <button type="button" class="btn" id="vunlock">Unlock</button>
+      </div>
+      <div id="vboard"></div>
+      <button type="button" id="vsceneadd" class="btn">+ Scene</button>
+    </div>
+  </section>
+  <!-- The scene of the shot on the stage: what all its shots share. -->
+  <section class="fpanel" id="panel-vid-scene" aria-label="Scene" hidden>
+    <header class="fphead"><b id="vscenehead">Scene</b> <span class="foldstate" id="vsum-every"></span><button type="button" class="fpclose" aria-label="Close Scene">&times;</button></header>
+    <div class="fpbody">
+      <label for="vscenetitle">What happens</label>
+      <input type="text" id="vscenetitle" placeholder="a short header: the harbour at dawn">
+      <label for="veverytext" data-help="vevery">Scene description</label>
+      <prompt-box>
+        <textarea id="veverytext" class="short" placeholder="who and where: a red-haired woman in a green coat, a rainy street at night, film grain"></textarea>
+      </prompt-box>
+      <label for="vnegative">Negative prompt</label>
+      <!-- Pre-filled from the model, which for Wan means Wan's own published
+           negative prompt — 400 characters of Chinese nobody should have to
+           retype. Emptying it deliberately means "no negative". -->
+      <prompt-box>
+        <textarea id="vnegative" class="short"></textarea>
+      </prompt-box>
+      <div class="lockline" id="vscenelock" hidden>
+        <span class="sub">Locked: shots of this scene were made with these words.</span>
+        <button type="button" class="btn" id="vsceneunlock">Unlock</button>
+      </div>
+    </div>
+  </section>
+  <section class="fpanel fpboth" id="vfold-prompt" aria-label="Shot" hidden>
+    <header class="fphead"><b id="vshothead">Shot</b> <span class="foldstate" id="vsum-prompt"></span><button type="button" class="fpclose" aria-label="Close Shot">&times;</button></header>
     <div class="fpbody">
       <!-- Whose rows these are while an Assistant chat's film is open on them
            (`board.js`), or the way back to it after another clip. -->
@@ -680,33 +726,14 @@
         <span class="sub" id="vboardtext"></span>
         <button type="button" class="btn" id="vboardback" hidden>Back to the storyboard</button>
       </div>
-      <!-- What every shot shares: set once, so it folds away and its line
-           says what it holds. Capped in width, since the panel widens for
-           the shot strip below and a sentence across 1900 px is unreadable. -->
-      <details class="fold shotcommon unnarrated" id="vfold-every" open>
-        <summary>For every shot <span class="foldstate" id="vsum-every"></span></summary>
-        <label for="veverytext" data-help="vevery">Every shot</label>
-        <prompt-box>
-          <textarea id="veverytext" class="short" placeholder="who and where: a red-haired woman in a green coat, a rainy street at night, film grain"></textarea>
-        </prompt-box>
-
-        <label for="vnegative">Negative prompt</label>
-        <!-- Pre-filled from the model, which for Wan means Wan's own published
-             negative prompt — 400 characters of Chinese nobody should have to
-             retype. Emptying it deliberately means "no negative". -->
-        <prompt-box>
-          <textarea id="vnegative" class="short"></textarea>
-        </prompt-box>
-      </details>
-
-      <label class="grouphead" data-help="vshots">Shots</label>
+      <label class="grouphead" data-help="vshots">Parts</label>
       <!-- What the storyboard on the rows leaves out on this model (`board.js`). -->
       <p class="sub" id="vsentnote"></p>
       <!-- The shots side by side, left to right as they play; the strip scrolls
            sideways, and + stays at its right edge however far it has gone. -->
       <div class="shotstrip">
         <div id="vshots"></div>
-        <button type="button" id="vshotadd" class="btn btn-run shotadd" title="Add a shot after the last one" aria-label="Add shot">+</button>
+        <button type="button" id="vshotadd" class="btn btn-run shotadd" title="Add a part: it goes on from the last one's last frame" aria-label="Add part">+</button>
       </div>
       <!-- A shot's starting image from this computer: the row's Upload. -->
       <input type="file" id="vkeyfile" accept="image/*" hidden>
@@ -714,15 +741,19 @@
     </div>
     <div class="fpfoot" id="vextendfoot" hidden>
       <button type="button" id="venhanceall" class="btn btn-block" hidden
-        title="Every shot written out in full, in order, each to match the ones before it: shot 1's place and light carry on unless a shot's words change them. Ctrl+Z in a box undoes its shot">Enhance every shot</button>
+        title="Every part written out in full, in order, each to match the ones before it: the scene's place and light carry on unless a part's words change them. Ctrl+Z in a box undoes its part">Enhance every part</button>
       <button type="button" id="vframes" class="btn btn-block" hidden
         title="The pictures the storyboard's shots start from, drawn with the cast — any of the cast not drawn yet first. Optional">Draw the first frames</button>
-      <button type="button" id="vextend" class="btn btn-run btn-block" hidden>Extend clip</button>
+      <button type="button" id="vextend" class="btn btn-block" hidden>Generate shot</button>
     </div>
   </section>
   <section class="fpanel" id="vfold-gen" aria-label="Generation" hidden>
     <header class="fphead"><b>Generation</b> <span class="foldstate" id="vsum-gen"></span><button type="button" class="fpclose" aria-label="Close Generation">&times;</button></header>
     <div class="fpbody">
+      <!-- The whole video's: shots join only at one model, size and frame
+           rate, so once one is made these hold until unlocked (in the
+           storyboard). -->
+      <p class="sub" id="vgenlocked" hidden>Model, size, frame rate and Hi-res are locked: a shot is made with them. Unlock in the Storyboard.</p>
       <label for="vmodel">Model</label>
       <div class="withinfo">
         <select id="vmodel"></select>
@@ -806,6 +837,41 @@
           <select id="vsampler"></select>
         </div>
       </div>
+      <!-- What was the Advanced panel: the knobs most never touch, folded
+           shut under the ones they do. -->
+      <details class="fold unnarrated" id="vfold-adv">
+        <summary>Advanced <span class="foldstate" id="vsum-adv"></span></summary>
+        <!-- Shown only for the mixture-of-experts pair, which is the only family
+             with a second expert for these to describe. -->
+        <div class="row" id="vmoe" hidden>
+          <div>
+            <label for="vhsteps">High-noise steps</label>
+            <input id="vhsteps" type="number" min="0" max="100">
+          </div>
+          <div>
+            <label for="vhcfg">High-noise CFG</label>
+            <input id="vhcfg" type="number" step="0.1" min="0">
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="vshift">Flow shift</label>
+            <input id="vshift" type="number" step="0.5" min="0">
+          </div>
+        </div>
+        <div class="checks">
+          <!-- On by default (`VideoModel::vae_tiling`): Wan's VAE is the
+               memory-hungry end of the pipeline, and tiling it costs time rather
+               than quality. -->
+          <label><input type="checkbox" id="vtiling"> VAE tiling (on by default; off decodes faster with room to spare)</label>
+        </div>
+        <label for="vmemory">Memory</label>
+        <select id="vmemory">
+          <option value="auto">Auto</option>
+          <option value="ram">System RAM</option>
+          <option value="disk">Stream from SSD (slower)</option>
+        </select>
+      </details>
     </div>
     <!-- The Image tab's per-model save, for the video model: the boxes that
          differ from where it would start, into user/model-settings.toml. -->
@@ -815,41 +881,6 @@
         <button type="button" id="vclearmodel" class="btn" hidden title="Forget this model's saved defaults">Clear</button>
       </div>
       <p class="sub" id="vsavemodelmsg"></p>
-    </div>
-  </section>
-  <section class="fpanel" id="vfold-adv" aria-label="Advanced" hidden>
-    <header class="fphead"><b>Advanced</b> <span class="foldstate" id="vsum-adv"></span><button type="button" class="fpclose" aria-label="Close Advanced">&times;</button></header>
-    <div class="fpbody">
-      <!-- Shown only for the mixture-of-experts pair, which is the only family
-           with a second expert for these to describe. -->
-      <div class="row" id="vmoe" hidden>
-        <div>
-          <label for="vhsteps">High-noise steps</label>
-          <input id="vhsteps" type="number" min="0" max="100">
-        </div>
-        <div>
-          <label for="vhcfg">High-noise CFG</label>
-          <input id="vhcfg" type="number" step="0.1" min="0">
-        </div>
-      </div>
-      <div class="row">
-        <div>
-          <label for="vshift">Flow shift</label>
-          <input id="vshift" type="number" step="0.5" min="0">
-        </div>
-      </div>
-      <div class="checks">
-        <!-- On by default (`VideoModel::vae_tiling`): Wan's VAE is the
-             memory-hungry end of the pipeline, and tiling it costs time rather
-             than quality. -->
-        <label><input type="checkbox" id="vtiling"> VAE tiling (on by default; off decodes faster with room to spare)</label>
-      </div>
-      <label for="vmemory">Memory</label>
-      <select id="vmemory">
-        <option value="auto">Auto</option>
-        <option value="ram">System RAM</option>
-        <option value="disk">Stream from SSD (slower)</option>
-      </select>
     </div>
   </section>
   <!-- What is known about the clip on screen, the Image tab's Info panel:

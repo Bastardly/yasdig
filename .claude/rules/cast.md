@@ -111,6 +111,8 @@ shelf, and Close server's clear never reaches it.
   `subjects`; no state of its own): *Add from cast…* → `addCastToShots` (shot 1 and
   every cut), Remove → `removeCastFromShots` by name. Redrawn on `onRowsChange`
   (end of `syncShots`), only when its HTML moved.
+  Its rail button hides on a model without `references` (`video.js` `syncCastRail`),
+  so the "can't follow references" text there is only reached by a film for now.
 
 **Made by the agent** (`action: "cast"`, `member {name, kind, look}`, gated by
 `Toolkit::casts`: `Rules.cast` and an image model):

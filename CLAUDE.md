@@ -70,7 +70,7 @@ A new trap goes in the area's file, not here; a new source file goes in its `pat
 | any page work: stylesheet tokens, the module table and its rules, `<prompt-box>` | `web.md` | anything under `web/`, `src/web.rs` |
 | settings layers, per-model settings, prompt variables, **adding a per-model or video knob** | `settings.md` | `settings.rs`, `variables.rs`, `settings.js`, `modelsettings.js` |
 | the sd-cli sandbox (seccomp, Landlock, AppContainer) | `sandbox.md` | `src/sandbox.rs` |
-| video: discovery, LTX/H3/Wan, shots, clips, plans, drafts, sounds, narrated stills, export | `video.md` | `videos.rs`, `narration.rs`, `voices.rs`, `avi.rs`, `h3prompt.rs`, `video.js`, `shots.js`, … |
+| video: the Video › Scene › Shot › Part storyboard, discovery, LTX/H3/Wan, plans, drafts, sounds, narrated stills, export | `video.md` | `videos.rs`, `story.rs`, `narration.rs`, `voices.rs`, `avi.rs`, `h3prompt.rs`, `video.js`, `storyboard.js`, `shots.js`, … |
 | Convert, scaled-fp8 folding | `convert.md` | `convert.rs`, `foldscale.rs`, `half.rs`, `convert.js` |
 
 ## Invariants

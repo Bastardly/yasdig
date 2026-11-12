@@ -65,7 +65,7 @@ fn clear_in(store: &Store, videos: &VideoStore, chats: &ChatStore, s: &Settings)
     }
     if s.clear_videos_on_close {
         // `work/videos/` alone: a starred clip is in `user/favorite_clips/`.
-        for c in videos.list(Shelf::Work) {
+        for c in videos.list_videos(Shelf::Work) {
             match videos.delete(Shelf::Work, &c.id) {
                 Ok(()) => out.videos += 1,
                 Err(e) => log(e),
