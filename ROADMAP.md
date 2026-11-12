@@ -5,12 +5,13 @@ Roadmap as it is currently planned. Changes can happen.
 - [x] Add narrative clips as option under the video tab
 - [x] Sandbox improvements
 - [x] Teach assistant to use variables.
-- [ ] Improve assistant UI - Currently chat is a bit too messy.
+- [x] Improve assistant UI - Currently chat is a bit too messy.
 - [x] Improve wording. E.g. agent is using past tense, when starting to create a cast member
 - [x] OOM Error - Needs a copy key for easier debugging. Currently hard to copy paste.
 - [x] Enhance sometimes use variables that don't exist.
 - [x] Agent has trouble working from work items that has deleted models, such as VAE or Text Encoder. Should choose a new by default.
 - [x] Setting -> Per Model -> Video models clamped at the bottom. Also, does not show proper setting options.
+- [x] Fix x scroll in shots menu
 
 
 # v0.11.x - Video improvements
