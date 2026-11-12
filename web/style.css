@@ -1156,11 +1156,12 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chatlog:empty::after { content: attr(data-empty); color: var(--text-dim); margin: auto; text-align: center; max-width: 36em; }
 
 .chatmsg { display: flex; flex-direction: column; gap: var(--sp-2); max-width: 100%; }
-.chatmsg.user {
-  align-self: flex-end; max-width: 85%; padding: var(--sp-2) var(--sp-3);
-  background: var(--ink-700); border: var(--line); border-radius: var(--r-lg);
-}
-.chatmsg.agent { align-self: flex-start; }
+/* A chat's two voices as bubbles of one shape: the person's on the right in
+   slate blue, the agent's on the left in green, each with its corner on its
+   own side squared. A round's pictures (`.batch`) stay full width, outside either. */
+.chatmsg.user, .chatmsg.agent { max-width: 85%; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-lg); }
+.chatmsg.user { align-self: flex-end; background: var(--chat-you); border-end-end-radius: var(--r-sm); }
+.chatmsg.agent { align-self: flex-start; background: var(--chat-agent); border-end-start-radius: var(--r-sm); }
 .chatmsg.live .chattext { color: var(--text-dim); }
 .chattext { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chatnote { margin: 0; align-self: center; font-size: var(--fs-sm); color: var(--text-faint); text-align: center; white-space: pre-line; }
@@ -1170,8 +1171,11 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
    thing to look at while it lasts (and gone when it ends). */
 .chatworking { margin: 0; align-self: flex-start; font-size: var(--fs-sm); color: var(--accent); }
 .chatfoot { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
-.chatnotes { font-size: var(--fs-sm); color: var(--text-dim); }
-.chatnotes > summary { cursor: pointer; color: var(--text-faint); }
+/* The text colour, a little back: the label greys sank into the agent's
+   green bubble, which is the only place notes are. */
+.chatnotes { font-size: var(--fs-sm); color: color-mix(in srgb, var(--text) 85%, transparent); }
+.chatnotes > summary { cursor: pointer; }
+.chatnotes > summary:hover { color: var(--text); }
 .chatnotes > p { margin: var(--sp-1) 0 0; white-space: pre-wrap; }
 .chatnotes > .chatstats { white-space: normal; }
 .chatstats { font-family: var(--font-num); font-size: var(--fs-micro); }

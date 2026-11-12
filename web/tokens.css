@@ -133,6 +133,8 @@
   --cast-chip-pic: 32px; /* a cast member's picture on its chip in the Prompts panel */
   --star: 28px;          /* the favourite star's disc on a thumbnail */
   --chat-pic: 160px;     /* a picture in the conversation, its height */
+  --chat-you: #3a4458;   /* the person's messages in a chat: slate blue */
+  --chat-agent: #3b594b; /* the agent's replies: a muted green, as light, so neither shouts */
   --story-pic: 144px;    /* a cast picture or a keyframe in the Story panel, its width */
   --story-text-h: 100px; /* a Story panel text box, before it is dragged taller */
   --chat-pic-large: 90vh; /* a large one's cap, so a portrait still fits on screen */

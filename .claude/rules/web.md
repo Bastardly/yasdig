@@ -15,7 +15,9 @@ in **`web/tokens.css`** (linked first) — a hex elsewhere means a missing token
 renamed or removed token breaks `site/style.css` too (grep it). A token only the site
 uses goes in `site/style.css`'s own `:root`. The claude.ai *Design System* artifact
 is a copy for browsing — republish it when tokens change. Ink ramp and state colour are neutral (bone)
-because they sit beside a graded image. `--fold-title`/`--fold-on` for fold headings.
+because they sit beside a graded image — except the Assistant's chat bubbles
+(`--chat-you` slate blue, `--chat-agent` green; asked for, to read as a chat).
+`--fold-title`/`--fold-on` for fold headings.
 **Amber (`.btn-run`) is the dock's main button only** (plus Hi-res above a result,
 the thumbnails' favourite star as a glyph colour, the Shots strip's round + (asked for), and the Assistant's
 `.chatworking` line at the foot of a chat while its job runs — asked for: the header's
