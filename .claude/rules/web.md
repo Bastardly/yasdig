@@ -40,7 +40,7 @@ only `js/app.js`.
 
 | file | holds |
 |------|-------|
-| `dom.js` | `$`, `esc`, `post`, `numOr`, `bar`, `rememberFolds`, `ICONS`/`fillIcons`/`setPlayIcon`, `randomSeed`. No state, no imports |
+| `dom.js` | `$`, `esc`, `post`, `numOr`, `bar`, `rememberFolds`, `ICONS`/`fillIcons`/`setPlayIcon`, `randomSeed`, `copyText` (falls back off a secure context). No state, no imports |
 | `state.js` | `S`, `PANES`, `P`, `clearPane`, `escErr` |
 | `busy.js` | `IDLE_LABELS`, `setBusy`/`setIdle`, `onIdle`, `cancelRun` |
 | `jobs.js` | the `/jobs` poll: Jobs button/dialog, progress lines, `onResult`, `onNotice`, `observable` |

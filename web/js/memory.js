@@ -1,4 +1,4 @@
-import { esc, post } from './dom.js';
+import { copyText, esc, post } from './dom.js';
 import { adoptSaved } from './settings.js';
 
 // The out-of-memory box: what a run that ran out of memory shows in place of
@@ -173,7 +173,8 @@ export function showError(el, msg, oom, opts = {}) {
     <div class="oomopts">${opt.map(([label, why], i) => `
       <button type="button" class="btn btn-choice" data-opt="${i}"${opt[i][2] ? '' : ' disabled'}>${esc(label)}</button>
       <span class="sub">${esc(why)}</span>`).join('')}</div>
-    ${opts.retry ? '<div class="btnrow"><button type="button" class="btn btn-run" data-retry>Try again</button></div>' : ''}
+    <div class="btnrow">${opts.retry ? '<button type="button" class="btn btn-run" data-retry>Try again</button>' : ''}
+      <button type="button" class="btn" data-copy>Copy details</button></div>
     <p class="sub">A choice here is for this run. <i>Save as defaults for this model</i>
     keeps it.</p>
     <details><summary class="sub">Details</summary><pre class="oomlog">${esc(msg)}</pre></details>
@@ -181,6 +182,15 @@ export function showError(el, msg, oom, opts = {}) {
   el.querySelector('.oombox').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
+    // The whole log, for a bug report: selecting it inside the folded,
+    // scrolling block was the hard part.
+    if (b.dataset.copy !== undefined) {
+      copyText(msg).then((ok) => {
+        b.textContent = ok ? 'Copied' : 'Could not copy: open Details and select it';
+        setTimeout(() => { b.textContent = 'Copy details'; }, 2000);
+      });
+      return;
+    }
     if (b.dataset.retry !== undefined) {
       el.textContent = '';
       opts.retry();

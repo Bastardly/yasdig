@@ -150,3 +150,27 @@ export async function decodeFrames(n, url, stills) {
 
 // The segments to decode one still from each, when the clip is narrated stills.
 export const stillsOf = (c) => (c?.video?.family === 'narrated' ? c.segments : null);
+
+// Put `text` on the clipboard. The Clipboard API exists only in a secure
+// context — 127.0.0.1 and localhost are, but the page opened by a LAN name
+// (`[server] names`) isn't — so a hidden textarea and `execCommand('copy')`
+// stand in there. Answers whether it worked.
+export async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* refused: try the old way */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.append(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  ta.remove();
+  return ok;
+}
