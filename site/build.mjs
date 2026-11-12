@@ -89,9 +89,12 @@ async function helpTopics() {
 }
 
 // A meta description from a paragraph: the text alone, one line, cut at a
-// word near 155 characters (about what a results page shows).
+// word near 155 characters (about what a results page shows). Plain text for
+// sure, not just mostly: one pass of tag stripping leaves `<script` from
+// `<scr<b>ipt`, so any `<`/`>` left is dropped too. (Callers `esc` it anyway.)
 function summary(html) {
-  const text = html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
+  const text = html.replace(/<[^>]*>/g, '').replace(/[<>]/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
     .replace(/&amp;/g, '&');
   if (text.length <= 155) return text;
   return text.slice(0, 155).replace(/\s+\S*$/, '') + '…';
