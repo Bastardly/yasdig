@@ -3,6 +3,17 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## 0.11.2 — 2026-11-14
+
+0.11.1's release failed to build, so it shipped no downloads; 0.11.2 is 0.11.1 plus
+this fix.
+
+### Fixed
+
+- On Windows, the Assistant's built-in notes no longer take more of its budget than
+  on Linux (Windows line endings were counted), and a note you write in Notepad
+  reads the same as one written anywhere else.
+
 ## 0.11.1 — 2026-11-14
 
 ### Added
