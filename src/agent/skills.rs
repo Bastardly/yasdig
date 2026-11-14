@@ -82,7 +82,10 @@ fn list(v: &str) -> Vec<String> {
 }
 
 pub fn parse(src: &str, builtin: bool) -> Result<Skill> {
-    let src = src.trim_start_matches('\u{feff}');
+    // A Windows checkout (and Notepad) writes CRLF: the `\r`s would count
+    // against `BUDGET` (25 of them took film.md over its third) and reach
+    // the model.
+    let src = src.trim_start_matches('\u{feff}').replace("\r\n", "\n");
     let Some(rest) = src.strip_prefix("---") else {
         bail!("it doesn't start with a --- front matter block");
     };
@@ -249,6 +252,15 @@ mod tests {
         assert!(!has(&["sdxl"], Mode::Chat, "elements"));
         let (_, used, dropped) = select(&all, &["flux", "minimax_h3"], Mode::Story);
         assert!(used.contains(&"film".to_string()) && used.contains(&"h3".to_string()), "{used:?}, dropped {dropped:?}");
+    }
+
+    /// A Windows checkout's CRLF is the same skill as the LF one.
+    #[test]
+    fn a_crlf_skill_parses_as_its_lf_self() {
+        for (name, src) in BUILTIN {
+            let crlf = src.replace('\n', "\r\n");
+            assert_eq!(parse(&crlf, true).unwrap(), parse(src, true).unwrap(), "{name}");
+        }
     }
 
     #[test]
