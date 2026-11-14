@@ -211,7 +211,7 @@ mountAssistant({
 });
 mountAssistant({ pane: 'video', panel: $('panel-vid-assist') });
 initAssistants();
-// The Video chat's film on the Shots rows and the Cast panel.
+// The Video chat's film: its own Video followed, and the Cast panel.
 initBoard();
 initConvert();
 initModels();

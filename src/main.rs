@@ -1797,6 +1797,8 @@ struct VideoDto {
     #[serde(default)]
     flow_shift: Option<f32>,
     #[serde(default)]
+    flow_shift_own: Option<f32>,
+    #[serde(default)]
     sampler: Option<String>,
     #[serde(default)]
     vae_tiling: Option<bool>,
@@ -1833,6 +1835,7 @@ impl VideoDto {
             high_noise_steps: self.high_noise_steps,
             high_noise_cfg_scale: self.high_noise_cfg_scale,
             flow_shift: self.flow_shift,
+            flow_shift_own: self.flow_shift_own,
             sampler: self.sampler,
             vae_tiling: self.vae_tiling,
             memory: self.memory,
@@ -1876,6 +1879,12 @@ fn handle_plan_clip(conn: &mut http::Connection, cfg: &Config, body: &[u8]) -> R
     let req = dto.request();
     if req.into.as_deref().is_some_and(|id| !workitems::valid_id(id)) {
         return conn.respond(400, "application/json", error_json("not a clip id").as_bytes());
+    }
+    // Autosave only updates a shot that is still there: creating one is
+    // `/videos/new`, `/videos/shot` and a film's write. A page that missed a
+    // delete would otherwise bring the folder back, in no scene.
+    if req.into.as_deref().is_some_and(|id| !video_store(cfg).dir(id).join("clip.json").is_file()) {
+        return conn.respond(400, "application/json", error_json("that shot was removed from its video").as_bytes());
     }
     match pipeline::plan_clip(cfg, &store(cfg), &video_store(cfg), &req) {
         Ok(clip) => {

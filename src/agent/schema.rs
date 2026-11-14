@@ -147,10 +147,10 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
     member.insert("look".into(), text(300));
     member.insert("picture".into(), int(0, attached));
     member.insert("prompt".into(), text(600));
+    // A part: one stretch of action, going on from the frame before.
     let mut shot = Map::new();
     shot.insert("text".into(), text(500));
     shot.insert("cast".into(), json!({ "type": "array", "items": text(40), "maxItems": crate::config::MAX_REFERENCES }));
-    shot.insert("cut".into(), json!({ "type": "boolean" }));
     // How long its action takes; `apply_story` rounds it onto the model's
     // grid and caps it (a grammar holds no float range).
     shot.insert("seconds".into(), json!({ "type": "number" }));
@@ -171,7 +171,6 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
         shot.insert("music".into(), text(200));
     }
     props.insert("title".into(), text(80));
-    props.insert("every".into(), text(300));
     if let Some(models) = videos {
         props.insert("video_model".into(), json!({ "enum": models }));
     }
@@ -179,9 +178,22 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
         props.insert("image_model".into(), json!({ "enum": models }));
     }
     props.insert("cast".into(), json!({ "type": "array", "items": object(member), "maxItems": super::session::MAX_CAST }));
-    props.insert(
+    // A shot (one camera run) is its parts, or `keep` with the id of one
+    // shown, which leaves it as it is — a few tokens instead of its words.
+    let mut camera = Map::new();
+    camera.insert("id".into(), text(12));
+    camera.insert("keep".into(), json!({ "type": "boolean" }));
+    camera.insert("parts".into(), json!({ "type": "array", "items": object(shot), "maxItems": super::session::MAX_PARTS }));
+    let mut scene = Map::new();
+    scene.insert("title".into(), text(80));
+    scene.insert("every".into(), text(300));
+    scene.insert(
         "shots".into(),
-        json!({ "type": "array", "items": object(shot), "minItems": 1, "maxItems": crate::pipeline::MAX_SHOTS }),
+        json!({ "type": "array", "items": object(camera), "minItems": 1, "maxItems": super::session::MAX_SCENE_SHOTS }),
+    );
+    props.insert(
+        "scenes".into(),
+        json!({ "type": "array", "items": object(scene), "minItems": 1, "maxItems": super::session::MAX_SCENES }),
     );
 }
 
@@ -573,7 +585,7 @@ mod tests {
         t.film_off = None;
         assert_eq!(actions(&output(Mode::Chat, &t, 0, 0, false)), ["talk", "draw", "improve", "film", "cast", "compare"]);
         let s = output(Mode::Story, &t, 2, 0, false);
-        assert_eq!(keys(&s), ["notes", "title", "every", "image_model", "cast", "shots", "reply"]);
+        assert_eq!(keys(&s), ["notes", "title", "image_model", "cast", "scenes", "reply"]);
         assert_eq!(s["properties"]["image_model"]["enum"], json!(["sdxl", "klein"]));
         let mut fixed = Rules::default();
         fixed.knobs.remove("model");
@@ -584,7 +596,11 @@ mod tests {
         assert_eq!(keys(member), ["name", "kind", "look", "picture", "prompt"]);
         assert_eq!(member["required"], json!(keys(member)));
         assert_eq!(member["properties"]["picture"]["maximum"], json!(2), "one of the pictures attached, or none");
-        assert_eq!(keys(&s["properties"]["shots"]["items"]), ["text", "cast", "cut", "seconds"]);
+        let scene = &s["properties"]["scenes"]["items"];
+        assert_eq!(keys(scene), ["title", "every", "shots"]);
+        assert_eq!(keys(&scene["properties"]["shots"]["items"]), ["id", "keep", "parts"]);
+        let parts = |s: &Value| s["properties"]["scenes"]["items"]["properties"]["shots"]["items"]["properties"]["parts"].clone();
+        assert_eq!(keys(&parts(&s)["items"]), ["text", "cast", "seconds"]);
         // On H3 a shot says what is spoken, heard and scored.
         let mut h3 = t.clone();
         h3.video = Some(crate::agent::toolkit::VideoView {
@@ -600,10 +616,11 @@ mod tests {
             fps: 24,
             longest_secs: 5.0,
         });
-        let shot = &output(Mode::Story, &h3, 2, 0, false)["properties"]["shots"]["items"];
-        assert_eq!(keys(shot), ["text", "cast", "cut", "seconds", "lines", "sound", "music"]);
+        let shot = &parts(&output(Mode::Story, &h3, 2, 0, false))["items"];
+        assert_eq!(keys(shot), ["text", "cast", "seconds", "lines", "sound", "music"]);
         assert_eq!(keys(&shot["properties"]["lines"]["items"]), ["who", "words", "language", "voiceover"]);
-        assert_eq!(s["properties"]["shots"]["maxItems"], json!(crate::pipeline::MAX_SHOTS));
+        assert_eq!(s["properties"]["scenes"]["maxItems"], json!(crate::agent::session::MAX_SCENES));
+        assert_eq!(parts(&s)["maxItems"], json!(crate::agent::session::MAX_PARTS));
     }
 
     #[test]

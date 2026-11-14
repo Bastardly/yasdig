@@ -131,6 +131,11 @@ pub struct Clip {
     /// before plans existed was always a render.
     #[serde(default = "yes")]
     pub rendered: bool,
+    /// The Shot panel's own flow shift for this shot, over the Generation
+    /// panel's (the Video's default): what the person set, kept so the
+    /// field reads back. `video.flow_shift` is what it was drawn with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow_shift_own: Option<f32>,
     /// The page's unsent edits on this clip (`{rows, every, negative}`), read
     /// from `draft.json` by [`VideoStore::load`] — never part of `clip.json`.
     /// Opaque here: only the page reads it.
@@ -1027,6 +1032,7 @@ t5xxl = "t.gguf"
             shots: Vec::new(),
             shot_starts: Vec::new(),
             rendered: true,
+            flow_shift_own: None,
             draft: None,
         }
     }

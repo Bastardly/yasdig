@@ -154,10 +154,10 @@ function agentMessage(chat, m) {
   const n = chat.session.checks.length;
   const checks = m.mode === 'plan' && n ? `<details class="chatfold"><summary>${n} check${n === 1 ? '' : 's'}</summary><ol class="chatchecklist">${
     chat.session.checks.map((c) => `<li>${esc(c)}</li>`).join('')}</ol></details>` : '';
-  // A storyboard is long; the Story panel holds it.
+  // A storyboard is long; the film's Video holds it.
   const board = m.mode === 'story' && chat.film ? `<div class="chatcard">
       <p class="chatcardhead">Storyboard${chat.film.title ? `: ${esc(chat.film.title)}` : ''}</p>
-      <p class="sub">${chat.film.cast.length} in the cast · ${chat.film.shots.length} shot${chat.film.shots.length === 1 ? '' : 's'}</p>
+      <p class="sub">${chat.film.cast.length} in the cast · ${filmShots(chat.film)} shot${filmShots(chat.film) === 1 ? '' : 's'}</p>
       ${castPics(chat)}
       <div class="btnrow"><button type="button" class="btn" data-open-story>Show the storyboard</button></div></div>` : '';
   // The turn's token counts are for whoever opens the notes, not a line of
@@ -274,11 +274,15 @@ export function sessionHtml(chat) {
 
 // ---- A film's cast, and its rows' first frames ------------------------------------
 //
-// A film's storyboard (`agent::chat::Film`) is the Video tab's Shots rows and
-// its Cast panel (`board.js`). The Cast panel is drawn here: the cast with
+// A film's storyboard (`agent::chat::Film`) is its own Video on the Video
+// tab, and its Cast panel (`board.js`). The Cast panel is drawn here: the cast with
 // their pictures, turnarounds and voices, and the model they are drawn with.
 // An edit is posted as it is made (`/chats/film`), and a picture dropped is
 // drawn again by the agent. `locked` while the agent works on the chat.
+
+// A film's shots: its parts are flat, a shot starting at the first and at
+// every `cut` (`Film::groups`).
+const filmShots = (f) => f.shots.filter((s, k) => k === 0 || s.cut).length;
 
 const KIND = { character: 'Character', place: 'Place', thing: 'Thing' };
 const PHASE = { board: 'Its pictures are not all drawn', ready: 'Every picture is drawn' };
@@ -335,23 +339,23 @@ function castMarks(f, s) {
 // Shot k has no keyframe to start from: none drawn, or one drawn with a
 // cast picture that has changed since (`Film::keyframe_missing`).
 export function keyMissing(f, s, k) {
-  if (f.references || s.no_key || !(k === 0 || s.cut)) return false;
+  if (f.references || s.no_key || !(k === 0 || s.cut) || !(s.text || '').trim()) return false;
   return !s.key_stem || (Array.isArray(s.key_cast) && s.key_cast.join('\n') !== castMarks(f, s).join('\n'));
 }
 
-// What a Shots row of the board offers beside its first frame (`board_rows`
-// row `info`, the shot's `k` on the board): a stale one says so, a drawn one
-// can be drawn again, and a shot that starts from its words can have one
-// drawn — on a model whose cuts start from a picture (`refs` false).
-export function rowKeyHtml(info, k, refs) {
+// What part 1 of a film's shot offers beside its first frame (`info`, from
+// the film's part: `board.js`): a stale one says so, a drawn one can be
+// drawn again, and a shot that starts from its words can have one drawn — on
+// a model whose shots start from a picture (`refs` false).
+export function rowKeyHtml(info, refs) {
   if (!info?.fresh || refs) return '';
   const parts = [];
   if (info.key_stale) parts.push('<span class="sub">Its cast changed: drawn again by Draw the first frames</span>');
   if (info.key && info.key_drawn) {
-    parts.push(`<button type="button" class="btn" data-board-redraw="${k}" title="Draw shot ${k + 1}'s first frame again">Draw again</button>`);
+    parts.push(`<button type="button" class="btn" data-board-redraw title="Draw this shot’s first frame again">Draw again</button>`);
   }
   if (!info.key && info.no_key) {
-    parts.push(`<button type="button" class="btn" data-board-addkey="${k}" title="Have the agent draw the picture shot ${k + 1} starts from">Draw a first frame</button>`);
+    parts.push(`<button type="button" class="btn" data-board-addkey title="Have the agent draw the picture this shot starts from">Draw a first frame</button>`);
   }
   return parts.join('');
 }
@@ -385,10 +389,10 @@ export function castHtml(chat, { busy = false, off = null, models = [] } = {}) {
   const f = chat?.film;
   if (!f && off) return `<p class="sub">No film can be made in this chat now: ${esc(off)}.</p>`;
   if (!f) {
-    return '<p class="sub">No film yet. Tell the Assistant a story, an idea or who is in it, and ask for a film: it writes the shots into the Shots panel and the cast here, and draws their pictures and the shots’ first frames when you press for them. Then Generate clip, as for any clip.</p>';
+    return '<p class="sub">No film yet. Tell the Assistant a story, an idea or who is in it, and ask for a film: it writes a video of its own into the storyboard and the cast here, and draws their pictures and the shots’ first frames when you press for them. Then Generate video, as for any video.</p>';
   }
   const lock = busy ? ' disabled' : '';
-  const n = f.shots.length;
+  const n = filmShots(f);
   return `<p>${f.title ? `<b>${esc(f.title)}</b> · ` : ''}<span class="sub">${esc(PHASE[f.phase] ?? f.phase)} · ${
       n} shot${n === 1 ? '' : 's'} for ${esc(f.video_model)}</span></p>
     ${pictureModel(f, models, lock, chat.settings?.template)}

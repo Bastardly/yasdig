@@ -58,15 +58,17 @@ read over by every part. Names in the UI: Storyboard, Shot
   so an unsaved video still draws a placeholder Scene 1 · Shot 1 to click;
   **Advanced is a fold at the foot of Generation** (`#vfold-adv`, a `<details>`, no
   panel), and **Cast's rail button shows only on a model with `references`**
-  (`syncCastRail`; nothing else uses it while films are off);
+  (`syncCastRail`), or while a Video chat with a film is shown;
   hooks from `video.js`), `video.js` stages one shot (`stageShot`; `applySettings` only
   when a Video is opened from the grid). A new video is saved by a press
   (`ensureVideo`), never by typing. *Generate video*/*scene* queue every shot whose
   mark isn't done (`pressShot`: `/video` or `/videos/extend`) **one at a time** (`videoRun`: a
   dozen requests waiting at once would take every connection the poll and Stop need);
   the rail's Stop ends the run and stops every video job (`stopAllKind`). Drafts are `{rows}`.
-- **The Assistant's films are paused** (`toolkit::FILMS_PAUSED`, `board.js`
-  `FILMS_PAUSED`): its flat rows don't fit; it comes back on the storyboard.
+- **A Video chat's film writes its own Video** (`agent::filmvideo`, `agent.md`): plans
+  for shots not generated, drafts for generated ones, read back before every turn.
+  While the chat's job runs that Video is inert (`holdVideo`); when it ends it is
+  restaged from disk (`followVideo`, never saving the panels over the write).
 - **The stage plays the Video whole** (`showVideo` → player.js `renderVideo`): every
   generated shot in storyboard order as one frame list (`parts`), the playhead at the
   picked shot, decoded frames cached per shot (`decoded`, keyed by id+created+frames),
@@ -93,11 +95,17 @@ read over by every part. Names in the UI: Storyboard, Shot
   Generate video; a new `n` is one past every shot's, and `#cbenlargerest` finishes a
   version with what made it (`ClipVersion`). `Engine::enlarge_clip` refuses an `n` the
   shot has, and clears a leftover `v{n}/` not in the record.
+- **A shot's own flow shift** (`#vshotshift`, `Clip.flow_shift_own`, kept in a draft as
+  `shift` beside its rows): sent as `flow_shift` over Generation's `#vshift`, the Video's
+  default. Not in the lock, never outdated; a drawn shot whose own value changed is
+  drawn again whole (`shots.js` `withShift`), since Extend/Redo run on its recorded
+  settings. The Video's default moving marks nothing.
 - **Enhance sees the storyboard** (`shots.js` `partNeighbours`, tested; `enhanceRow`
   builds the order from `rowsOfShot`, the open shot from its rows): `first` the
   scene's opening part, `scene` this shot's part 1, `before` the part before — for
   part 1 the last words of the shot before, any scene, as a `cut`; `then_continues` a
-  next part in the shot. The server's `enhance::neighbours` is the paused films'.
+  next part in the shot. The server's `enhance::part_neighbours` (a film's parts) is the same rule, pinned by one
+  fixture table in both tests.
 
 ## Clips (shots)
 

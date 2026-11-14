@@ -385,6 +385,10 @@ const HELP = [
     text: 'CFG for the high-noise expert, which is where the composition and the '
         + 'motion are decided — so it is often set higher than the finishing '
         + 'pass, where a hard push only adds harshness.' },
+  { ids: ['vshotshift'],
+    text: 'This shot’s own flow shift, instead of the video’s (Generation › Advanced). Higher steadies large '
+        + 'motion and camera moves; lower keeps fine texture. Empty uses the video’s. Changing it on a drawn shot '
+        + 'draws the whole shot again.' },
   { ids: ['vshift'],
     text: 'Flow shift moves where the schedule spends its time. Higher spends '
         + 'longer at the noisy end, which stabilises large motion and camera '

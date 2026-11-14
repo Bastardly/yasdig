@@ -155,3 +155,17 @@ export function partNeighbours(order, s, k) {
     then_continues: !!t(at.texts[k + 1]),
   };
 }
+
+// The flow shift a shot is drawn with when it has its own: the draft's
+// while one is open (`shift` beside its rows), else what the record kept.
+export const ownShift = (c, draft) => (draft && 'shift' in draft ? draft.shift : c?.flow_shift_own) ?? null;
+
+// A drawn shot whose own flow shift changed is drawn again whole: Extend
+// and Redo run on the shot's recorded settings, so they can't change it.
+// The Video's default moving changes nothing here — it isn't the lock.
+export function withShift(st, own, c) {
+  if (!c || c.rendered === false) return st;
+  const n = (x) => (x == null || x === '' ? null : Number(x));
+  if (n(own) === n(c.flow_shift_own)) return st;
+  return { ...st, action: 'generate', shift: true };
+}

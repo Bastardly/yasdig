@@ -747,36 +747,32 @@ the chat, whose `rev` moves on every write.
   model. `context` (default `image`) is the panel; an Image chat's `settings` are the
   Image tab's controls as a `/generate` body, which its rounds draw with — without them,
   its model's saved defaults (and its catalog Turbo LoRA when installed). A Video chat
-  makes films, and only a Video chat does. `agent` absent is Settings' default; `video`
-  is the Video tab's model, which a storyboard is written for. Answers `{ chat, toolkit }`.
+  makes films, and only a Video chat does; its `settings` are the Generation panel (a
+  `/video` body without its shots), which its film's Video is made with. `agent` absent
+  is Settings' default; `video` is the Video tab's model, which a storyboard is written
+  for. Answers `{ chat, toolkit }`.
 - `POST /chats/settings` — `{ id, settings }`: an Image chat's settings replaced by the
   Image tab's controls as they are now (a `/generate` body), allowed while the agent
   works — the next round or turn draws with them. The same settings (numbers alike
   whatever their spelling) are no write. `409` on a Video chat.
-- `GET /chats/{id}` — `{ chat, toolkit, board }`: the chat as stored, and the knob table
+- `GET /chats/{id}` — `{ chat, toolkit, favorite }`: the chat as stored, and the knob table
   resolved for it under Settings → Agent — each knob's `allowed`, limits, `locked` reason
   and value, the passes, the models it could pick, `locks`, the film's `video` model
   `{name, family, label, chains, references, sounds, width, height, frames, fps}` and
   `film_off`, why no film can be made in it (`null` when one can), and `videos`, every
-  installed video model in that shape. `board` is a Video chat's film as the Shots rows
-  show it (`null` without one): `{ every, source, shots: [{text, seed, frames, cut, refs,
-  audio, key, cast, lines, sound, music, subjects, voices, fresh, no_key, key_drawn,
-  key_stale}], note }` — each row holding everything any model takes (the cast's pictures
-  and voices, then the person's own picks; the first frame, shot 1's too), `source` shot
-  1's first frame, `note` what the Video tab's model won't use and what isn't drawn yet.
+  installed video model in that shape. A Video chat's `chat.film` names its own Video
+  (`film.video`), which every story turn, Enhance and board picture writes — plans for
+  shots not generated, drafts for generated ones — and which is read back before every
+  turn and `/chats/film` edit; its `shots` are parts, each with its `shot` id.
 - `POST /chats/cast` — `{ id, cast, name, kind, look }`: the person's edits in the cast
   editor bound to the chat, onto the member it is making (`chat.cast`, whose `id` must be
   `cast`); what the agent changes on its next turn. A chat's `cast` is `{id, name, kind,
   look}` and `cast_rev` moves when the agent writes it; a try it draws is a message
   `{role: "cast", n, ms, id, name, try_n, image}`.
-- `POST /chats/board` — `{ id, every?, shots?, video?, clip? }`: the Shots rows written back
-  into the film (`shots` as `board` gives them; blank rows are no shots, and at least one
-  must be left). A shot whose words, cast and cut are unchanged keeps its first frame; a
-  `key` the film didn't draw (an output stem) becomes the shot's own, and an emptied one
-  starts it from its words; `refs`/`audio` beyond the cast's own are kept as the shot's
-  picks. `video` is the Video tab's model, which decides whether cuts start from a first
-  frame (and the note); `clip` the clip made from the rows. Answers the chat, with
-  `warning` for names the cast doesn't have. `409` while the agent is working on the chat.
+- `POST /chats/board` — `{ id, video? }`: `video` is the Video tab's model, which decides
+  whether a shot starts from a first frame or follows the cast's pictures; the film's
+  Video is written again for it. Answers the chat, with `warning` when that write
+  failed. `409` while the agent is working on the chat.
 - `GET /chats/{id}/live` — the reply being written while a turn runs: `{ seq, text,
   phase, step, steps }`, or `{ seq: null }`.
 - `GET /chats/{id}/thumb.png`, `GET /chats/{id}/img/{name}.png` — the chat's own copies
@@ -784,16 +780,16 @@ the chat, whose `rev` moves on every write.
 - `POST /chats/agent` — `{ id, agent }`; `POST /chats/rename` — `{ id, title }`.
 - `POST /agent/send` — `{ chat, text, images: [{kind: "item"|"output", id}], video?,
   settings? }`: a chat turn — an Image chat's `settings` written in first, as
-  `/chats/settings` does — whose reply may talk, draw, describe an attached picture as a prompt, propose a
+  `/chats/settings` does, a Video chat's kept as its Generation panel — whose reply may talk, draw, describe an attached picture as a prompt, propose a
   session or a comparison (`chat.session.proposal`, which waits for `/agent/session`), or write a film's storyboard (a story
   turn follows in the same job; its pictures wait for `/chats/film {draw: true}`). `video` is the Video tab's model now. At most four pictures, copied into the
   chat. `409` while the agent is working on the chat.
-- `POST /chats/film` — `{ id, every?, member?, name?, look?, picture?, shot?, text?,
+- `POST /chats/film` — `{ id, every?, member?, name?, look?, picture?, shot?, shot_id?, text?,
   cast?, cut?, lines?, sound?, music?, voice?, redraw_keyframe?, no_keyframe?, draw?, image_model?, from_cast? }`: an edit of the storyboard — `from_cast`, a saved
   cast entry's id, adds it as a member (its look, and its picture, sheet and voice as
   the person's, never drawn again; refused when the film has its name or six members);
   the look every shot shares, cast member `member`'s name, look or picture (`{kind: "output", id}`, or `null`
-  to have it drawn again), shot `shot`'s words, cast (names) or cut. A reworded shot's
+  to have it drawn again), part `shot`'s words, cast (names) or cut — `shot_id`, a Video shot's id, names its part 1 instead. A reworded shot's
   keyframe is dropped, as is one sent with `redraw_keyframe: true` (a row's *Draw
   again*); `no_keyframe: true` starts shot `shot` from its words with none drawn
   (`false` draws one again); on H3, `lines` (`[{who, words, language?, voiceover?}]`, `who` a

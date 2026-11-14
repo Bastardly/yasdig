@@ -5,7 +5,7 @@ import { soonJobs, stopKind, stopAllKind } from './jobs.js';
 import { clip, renderVideo, stopPlayback, clearClip, openStage } from './player.js';
 import { initClipView } from './clipview.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
-import { shotState, rowMatches, sentRow, shotOutdated, partNeighbours, ALL } from './shots.js';
+import { shotState, rowMatches, sentRow, shotOutdated, partNeighbours, ownShift, withShift, ALL } from './shots.js';
 import {
   initStoryboard, setVideo, currentVideo, currentShotId, clipOf, sceneOf, shotName, refreshFrom, followShot,
   drawBoard, fillScene, unlockVideo, sceneLocked, syncHead,
@@ -149,15 +149,14 @@ export const onRowsChange = (fn) => { rowWatchers.push(fn); };
 // The rows as the panel holds them now, blank ones too.
 export const rowsNow = () => rowEls().map(readRow);
 
-// The storyboard the rows show while a Video chat's film is bound to them
-// (`board.js`), or null. Its hooks: `edited()` (a row or Every shot changed),
-// `landed(clip)` (a press drew onto the rows), `left()` (the person put
-// another clip, or a new one, on the stage), `isBoardClip(id)`,
-// `rowExtras(el, k)` (the first-frame buttons of the board's shot k) and
-// `framesLabel()`. The rows hold everything; the hooks keep the film in step.
+// A Video chat's film (`board.js`), or null. The film writes its own Video
+// (`agent::filmvideo`), so the storyboard is the board; its hooks only add
+// to it: `owns()` (the open Video is the film's), `rowExtras(k, refs)`
+// (part k's first-frame buttons) and `framesLabel()`.
 let board = null;
 export function setBoard(b) {
   board = b;
+  syncCastRail(currentVideoModel());
   syncShots();
 }
 
@@ -375,7 +374,6 @@ function rowsChanged() {
   syncShots();
   syncVideoSummaries();
   keepDraft();
-  board?.edited();
 }
 
 // Who the rows' references name, in first-seen order: `{name, stem, shots,
@@ -531,7 +529,7 @@ const clipTake = (c) => {
 };
 
 // The rows against the clip on the stage: which are done, what a press draws.
-const shotsNow = () => shotState(liveRows(), clip, chains(clip), clipTake(clip));
+const shotsNow = () => withShift(shotState(liveRows(), clip, chains(clip), clipTake(clip)), numOr('vshotshift'), clip);
 
 // A row folds to its heading line, a panel's way: the fold is the row's own
 // (`folded` on a row read back), else what row k was before the redraw.
@@ -641,7 +639,7 @@ function writeDraft(id, d, opts = {}) {
   draftsMine.add(id);
   if (d) drafts.set(id, d);
   else drafts.delete(id);
-  post('/videos/draft', { id, draft: d }, opts)
+  return post('/videos/draft', { id, draft: d }, opts)
     .catch((e) => console.warn('[yasdig] a clip draft was not kept', e));
 }
 
@@ -670,12 +668,22 @@ function matchesClip(c, rows) {
 
 // Record the panel as shot `c`'s draft, or drop the draft when there is
 // nothing unsent. `rows` defaults to the panel's.
-function setDraft(c, rows = rowEls().map(readRow), opts = {}) {
+function setDraft(c, rows = rowEls().map(readRow), opts = {}, shift = c.id === clip?.id ? numOr('vshotshift') : ownShift(c, drafts.get(c.id))) {
   // A plan is saved whole instead (`savePlan`).
-  if (c.rendered === false) return;
+  if (c.rendered === false || holding()) return;
   clearTimeout(draftTimer);
-  writeDraft(c.id, matchesClip(c, liveOf(rows)) ? null : { rows }, opts);
+  const same = matchesClip(c, liveOf(rows)) && withShift({ action: 'none' }, shift, c).action === 'none';
+  const sent = writeDraft(c.id, same ? null : { rows, shift }, opts);
   drawBoard();
+  return sent;
+}
+
+// The open shot saved now, for a reader on the server (a chat's turn, a
+// film press): a plan's save or a draft's write, awaited.
+export async function saveStage() {
+  clearTimeout(draftTimer);
+  if (plan) await savePlan({ quiet: true });
+  else if (clip) await setDraft(clip);
 }
 
 // Rows that are parts, their frames on the grid the server rounds them to.
@@ -685,8 +693,11 @@ function liveOf(rows) {
     .map((r) => ({ ...r, frames: m && r.frames != null ? alignFrames(r.frames, m.frame_grid) : r.frames }));
 }
 
-// What the stage holds is kept: a plan saved, a shot's draft written.
+// What the stage holds is kept: a plan saved, a shot's draft written —
+// never while a chat's job writes this Video (`holdVideo`): the panels are
+// what it was, and the job's write would be lost under them.
 function keepDraft(opts = {}) {
+  if (holding()) return;
   if (plan) savePlan({ quiet: true, ...opts });
   else if (clip) setDraft(clip, undefined, opts);
 }
@@ -760,6 +771,7 @@ function ensureVideo() {
 // `quiet`: an autosave, which says nothing and skips a panel with no parts.
 async function savePlan({ quiet = false, keepalive = false } = {}) {
   clearTimeout(draftTimer);
+  if (holding()) return;
   // A new video is saved by a press — Save, Generate, + Shot, + Scene — never
   // by typing alone.
   if (!plan) {
@@ -871,7 +883,7 @@ function setNarrator(stem) {
 function syncShots() {
   const m = currentVideoModel();
   const live = liveRows();
-  const st = shotState(live, clip, chains(clip), clipTake(clip));
+  const st = withShift(shotState(live, clip, chains(clip), clipTake(clip)), numOr('vshotshift'), clip);
   const doneRows = new Set(live.slice(0, st.done).map((r) => r.i));
   const lastDone = st.dropLast >= 0 ? live[st.dropLast]?.i : -1;
   const els = rowEls();
@@ -910,7 +922,7 @@ function syncShots() {
     // Who is in it decides a storyboard's references and first frames on any
     // model; off a board, only H3 reads it. Never on a continue: it starts
     // from the last frame, whoever that shows.
-    el.querySelector('.shotcastrow').hidden = (!m?.sounds && !board) || !fresh;
+    el.querySelector('.shotcastrow').hidden = (!m?.sounds && !board?.owns()) || !fresh;
     drawRowCast(el);
     // Part 1's image is the shot's first frame.
     const keyBtn = el.querySelector('.shotkey');
@@ -963,7 +975,10 @@ function syncShots() {
     note.textContent = `${m.name} can't go on from a last frame, so a shot is one part — `
       + 'TI2V-5B, A14B, H3 and LTX can. Add a shot in the storyboard instead.';
     note.classList.add('err');
-  } else if (st.action === 'redo') {
+  } else if (st.shift) {
+    note.textContent = 'This shot’s own flow shift differs from what drew it: Generate shot again draws it '
+      + 'whole, at the new value.';
+} else if (st.action === 'redo') {
     note.textContent = `Part ${st.done + 1} differs from the shot on screen. ${$('vextend').textContent} keeps the `
       + `${st.done} before it, on the shot's own settings.`;
   } else if (st.action === 'extend') {
@@ -1183,10 +1198,9 @@ function syncVideo() {
 
 // Cast is a rail button only on a model that follows reference pictures (H3):
 // elsewhere a member can't go on a shot, so the panel would only say so.
-// With the Assistant's films off there is no other use for it; hooking them
-// back up brings a film's cast to every model again.
+// A Video chat's film has a cast on any model: its pictures and first frames.
 function syncCastRail(m) {
-  const on = !!m?.references;
+  const on = !!m?.references || !!board;
   $('tab-video').querySelector('.wsrail [data-panel="vid-cast"]').hidden = !on;
   if (!on && $('panel-vid-cast').open) $('panel-vid-cast').open = false;
 }
@@ -1326,7 +1340,9 @@ function vidPayload(rows, scene = sceneNow()) {
     cfg_scale: numOr('vcfg'),
     high_noise_steps: m && m.is_moe ? numOr('vhsteps') : null,
     high_noise_cfg_scale: m && m.is_moe ? numOr('vhcfg') : null,
-    flow_shift: numOr('vshift'),
+    // The shot's own, else the Video's; the own one is kept on the record.
+    flow_shift: numOr('vshotshift') ?? numOr('vshift'),
+    flow_shift_own: numOr('vshotshift'),
     sampler: $('vsampler').value || null,
     vae_tiling: $('vtiling').checked,
     memory: $('vmemory').value || null,
@@ -1342,6 +1358,13 @@ function vidPayload(rows, scene = sceneNow()) {
     // Rolled off the scene's seed, so its shots roll the same words.
     every_seed: scene.seed ?? null,
   };
+}
+
+// The Generation panel for a Video chat (`Chat.video_settings`): what its
+// film's Video is made with. No parts, no scene, no shot's own flow shift.
+export function videoSettings() {
+  const { shots, every, every_seed, source, negative, flow_shift_own, ...rest } = vidPayload([], { negative: '' });
+  return { ...rest, flow_shift: numOr('vshift') };
 }
 
 // After a press: the rows the clip now has, with the seeds they were drawn
@@ -1442,7 +1465,8 @@ function shotMark(c, scene) {
   if (c.rendered === false) return 'new';
   if (shotOutdated(c, wantNow(), scene)) return 'outdated';
   const rows = c.id === clip?.id ? liveRows() : liveOf(rowsOfShot(c));
-  return shotState(rows, c, chains(c), clipTake(c)).action === 'none' ? 'done' : 'changed';
+  const own = c.id === clip?.id ? numOr('vshotshift') : ownShift(c, drafts.get(c.id));
+  return withShift(shotState(rows, c, chains(c), clipTake(c)), own, c).action === 'none' ? 'done' : 'changed';
 }
 
 // What the Video's shots must share, as the Generation panel has it now.
@@ -1819,8 +1843,10 @@ function showVideo(sel, ms, { was = null, seek = true } = {}) {
 // A shot of the open Video onto the stage: its parts into the Shot panel,
 // its frames on the stage (or nothing to play, for one not generated). The
 // Generation panel stays: it is the Video's.
-function stageShot(c) {
-  keepDraft();
+// `keep: false`: the panels are not saved first — the shot was just
+// rewritten on the server (`followVideo`), and they hold the old one.
+function stageShot(c, { keep = true } = {}) {
+  if (keep) keepDraft();
   stageSeq++;
   $('verr').textContent = '';
   $('vsentnote').textContent = '';
@@ -1828,6 +1854,7 @@ function stageShot(c) {
   if (!c) {
     clearClip();
     drawShots([{ text: '', seed: randomSeed(), frames: currentVideoModel()?.frames ?? null, folded: false }]);
+    $('vshotshift').value = '';
   } else if (c.rendered === false) {
     // The Video's other shots stay on the stage, to play through.
     showVideo(null);
@@ -1871,6 +1898,7 @@ export function freshStage() {
   $('vscenehead').textContent = 'Scene 1';
   // A seed of its own from the start, so the first render can be drawn again.
   drawShots([{ text: '', seed: randomSeed(), frames: currentVideoModel()?.frames ?? null, folded: false }]);
+  $('vshotshift').value = '';
   snapShotFrames();
   syncLocks();
   syncVideoSummaries();
@@ -1922,6 +1950,7 @@ function applyRows(c) {
   drawShots(rowsOf(c));
   const d = c.rendered === false ? null : drafts.get(c.id);
   if (d?.rows) drawShots(d.rows);
+  $('vshotshift').value = ownShift(c, d) ?? '';
   syncVideoSummaries();
 }
 
@@ -1932,12 +1961,51 @@ function syncLocks() {
   const locked = !!v?.lock && (v.clips ?? []).some((c) => c.rendered !== false);
   for (const id of ['vmodel', 'vw', 'vh', 'vfps', 'vhires', 'vswapwh']) $(id).disabled = locked || (id === 'vhires' && $('vhires').disabled);
   $('vlockline').hidden = !locked;
+  applyHold();
   $('vgenlocked').hidden = !locked;
   if (locked) {
     const l = v.lock;
     $('vlocktext').textContent = `Locked for this video: ${l.model}, ${l.width}×${l.height}, ${l.fps} fps${l.hires ? ', Hi-res ×2' : ''}.`;
   }
   if (!locked) syncHires();
+}
+
+// A chat's film was written into Video `id` (`agent::filmvideo`): what
+// the page knew of its drafts is the server's again, and when it is open (or
+// `open` asks for it) it is staged afresh, nothing of the panels saved over
+// the write. Answers false when the Video is gone.
+export async function followVideo(id, { open = false } = {}) {
+  for (const k of [...draftsMine]) if (k.startsWith(`${id}-`)) draftsMine.delete(k);
+  await loadClips();
+  const v = grids.flatMap((g) => g.items()).find((x) => x.id === id);
+  if (!v) return false;
+  if (currentVideo()?.id !== id) {
+    if (open) clickClip(v);
+    return true;
+  }
+  clearTimeout(draftTimer);
+  plan = null;
+  setVideo(v, { shot: currentShotId() });
+  stageShot(clipOf(currentShotId()), { keep: false });
+  syncLocks();
+  return true;
+}
+
+// The Video a chat's job is writing, or null: while it is open its
+// storyboard, scene and shot are inert, so nothing typed meanwhile is lost
+// under the agent's write (`followVideo` restages it after).
+let held = null;
+export function holdVideo(id) {
+  held = id;
+  applyHold();
+}
+const holding = () => !!held && currentVideo()?.id === held;
+function applyHold() {
+  const on = holding();
+  for (const id of ['panel-vid-board', 'panel-vid-scene', 'vfold-prompt']) {
+    $(id).querySelector('.fpbody').inert = on;
+  }
+  $('vextendfoot').inert = on;
 }
 
 // A Video, or the shot of one, by id onto the stage — for a clip a chat

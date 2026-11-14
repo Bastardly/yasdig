@@ -494,6 +494,9 @@ pub struct VideoRequest {
     pub high_noise_steps: Option<u32>,
     pub high_noise_cfg_scale: Option<f32>,
     pub flow_shift: Option<f32>,
+    /// The shot's own flow shift when the Shot panel set one (`flow_shift`
+    /// is then the same value): kept on the record, never read for the run.
+    pub flow_shift_own: Option<f32>,
     pub sampler: Option<String>,
     pub vae_tiling: Option<bool>,
     /// Where the weights live; `None` keeps the model's.
@@ -663,6 +666,7 @@ pub fn plan_clip(cfg: &Config, items: &workitems::Store, videos: &VideoStore, re
         shots: Vec::new(),
         shot_starts: Vec::new(),
         rendered: false,
+        flow_shift_own: req.flow_shift_own,
         draft: None,
     };
     videos.save_plan(&mut clip, picture.as_deref())?;
@@ -2516,6 +2520,7 @@ impl Engine {
             shots: Vec::new(),
             shot_starts: Vec::new(),
             rendered: true,
+            flow_shift_own: req.flow_shift_own,
             draft: None,
         };
         self.videos.finish(&mut clip)?;
@@ -5547,6 +5552,7 @@ mod tests {
             high_noise_steps: None,
             high_noise_cfg_scale: None,
             flow_shift: None,
+            flow_shift_own: None,
             sampler: None,
             vae_tiling: None,
             memory: None,

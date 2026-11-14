@@ -383,15 +383,22 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
         .filter(|m| m.exists)
         .map(|m| VideoView { longest_secs, ..VideoView::of(m) })
         .collect();
-    let video = chat.video.as_deref().and_then(|name| installed.iter().find(|v| v.name == name)).cloned();
+    let tab = chat.video.as_deref().and_then(|name| installed.iter().find(|v| v.name == name)).cloned();
+    // A Video chat's film is its own Video, so the model the tab shows is no
+    // reason to refuse one: when it can't go on from shot to shot (narrated
+    // stills, VACE, T2V) or there is none, an installed one that can is the
+    // film's — `apply_story` says so, and the page switches to it.
+    let video = match chat.context {
+        super::chat::Pane::Video if !tab.as_ref().is_some_and(|v| v.chains) => {
+            installed.iter().find(|v| v.chains).cloned().or(tab)
+        }
+        _ => tab,
+    };
     let mut t = build(&rules, &shown(cfg, chat, profile), &locks, models, profile.map(|p| p.family));
     t.film_off = match chat.context {
         // In context: a film is begun from the Video tab's panel.
         super::chat::Pane::Image => Some("films are made from the Assistant on the Video tab".into()),
-        // Video 2.0 (scenes and shots) rebuilt what a film lands on; the
-        // board comes back on the new storyboard.
-        super::chat::Pane::Video if FILMS_PAUSED => Some(FILMS_PAUSED_WHY.into()),
-        super::chat::Pane::Video => film_off(&rules, image, chat.video.as_deref(), video.as_ref()),
+        super::chat::Pane::Video => film_off(&rules, image, video.as_ref().map(|v| v.name.as_str()).or(chat.video.as_deref()), video.as_ref()),
     };
     t.image_tab = chat.context == super::chat::Pane::Image;
     // A story turn reuses the saved cast; a `cast` action may change a
@@ -438,11 +445,6 @@ fn fill_from(o: &mut serde_json::Map<String, Value>, p: &Profile) {
 /// Why a chat can't make a film: it needs the agent allowed to, an image
 /// model for the cast and keyframes, and a video model that goes on from
 /// one shot to the next.
-/// Films wait for the Video tab's storyboard of scenes and shots.
-pub const FILMS_PAUSED: bool = true;
-pub const FILMS_PAUSED_WHY: &str =
-    "films are being rebuilt for the Video tab's scenes and shots; for now, write the shots in the storyboard";
-
 pub fn film_off(rules: &Rules, image: bool, picked: Option<&str>, video: Option<&VideoView>) -> Option<String> {
     if !rules.film {
         return Some("making movies is off in Settings → Agent".into());

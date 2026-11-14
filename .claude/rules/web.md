@@ -19,7 +19,8 @@ because they sit beside a graded image — except the Assistant's chat bubbles
 (`--chat-you` slate blue, `--chat-agent` green; asked for, to read as a chat).
 `--fold-title`/`--fold-on` for fold headings.
 **Amber (`.btn-run`) is the dock's main button only** (plus Hi-res above a result,
-the thumbnails' favourite star as a glyph colour, the Shots strip's round + (asked for), and the Assistant's
+the thumbnails' favourite star as a glyph colour, the Shots strip's round + (asked for), the Shot panel's *Generate shot* and its
+*Flow shift for this shot* label (asked for: grey, it was overlooked), and the Assistant's
 `.chatworking` line at the foot of a chat while its job runs — asked for: the header's
 grey state line was missed) — in Refine & adjust that is
 each panel footer's main action (History's is *Apply adjustments*) and, from the
@@ -74,7 +75,7 @@ only `js/app.js`.
 | `help.js` | Help tab `TOPICS` — also yasdig.com's `/guide/` pages (`site/build.mjs`; a new `fill` needs a `FILLED` row there) |
 | `settings.js` / `modelsettings.js` | Settings form from `FIELDS`; *Per model* card |
 | `assistant.js` | the Assistant panel (`mountAssistant`, per tab): chats, the composer, following a turn, the Image tab's controls both ways |
-| `board.js` | a Video chat's film as the Shots rows (both ways) and the Cast panel |
+| `board.js` | a Video chat's film: following its own Video (`followVideo`, `holdVideo`), part 1's first-frame buttons, the Cast panel |
 | `chatview.js` / `agentperms.js` | a chat as HTML, pure; Settings → Agent's whitelist |
 | `app.js` | `showTab`, boot order |
 

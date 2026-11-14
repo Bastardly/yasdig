@@ -62,6 +62,11 @@ pub struct Chat {
     /// shot on. `None` in a chat begun before films, or with no video model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video: Option<String>,
+    /// The Video tab's Generation panel as the person last wrote (a
+    /// `/video` body, its shots ignored): what a film's shots are planned
+    /// with (`filmvideo::push`). The film's Video lock wins once it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_settings: Option<serde_json::Value>,
     /// The movie this chat is making, once the agent has written a storyboard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub film: Option<Film>,
@@ -143,10 +148,14 @@ pub enum Mode {
 pub struct Film {
     #[serde(default)]
     pub title: String,
-    /// What goes in front of every shot's text: the look (the Shots panel's
-    /// *Every shot*).
+    /// The look of a board from before scenes (the Shots panel's *Every
+    /// shot*): its one scene's description when `scenes` is empty.
     #[serde(default)]
     pub every: String,
+    /// Its scenes, in order; a part's `scene` indexes them. Empty on a
+    /// board from before scenes, which is one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scenes: Vec<FilmScene>,
     #[serde(default)]
     pub cast: Vec<Member>,
     #[serde(default)]
@@ -173,10 +182,27 @@ pub struct Film {
     /// without drawing every frame they are in each time.
     #[serde(default)]
     pub frames: bool,
-    /// The clip made from this board on the Video tab, opened on its stage
-    /// with the chat: the rows' done marks are against it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clip: Option<String>,
+    /// The chat's own Video (`filmvideo`): the board is its storyboard,
+    /// written there after every change and read back before every turn.
+    /// An older chat's `clip` is the same id, which the conversion kept.
+    #[serde(default, alias = "clip", skip_serializing_if = "Option::is_none")]
+    pub video: Option<String>,
+    /// Shots of that Video a story turn left out that were never generated:
+    /// removed by the next write. A generated one is never removed by a turn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drop: Vec<String>,
+}
+
+/// A scene of a film: its header and description, and the Video scene it
+/// was written to (empty until then).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct FilmScene {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub every: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,10 +289,21 @@ pub use crate::videos::Line;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FilmShot {
     pub text: String,
+    /// The scene it is in (`Film.scenes`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub scene: usize,
+    /// The Video shot it is a part of, once written there
+    /// (`filmvideo::push`); every part of a shot holds the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shot: Option<String>,
+    /// That shot is generated: read back with the Video, for the story turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drawn: bool,
     /// The members in it, by name.
     #[serde(default)]
     pub cast: Vec<String>,
-    /// A new scene rather than going on from the shot before. Never shot 1.
+    /// The first part of a shot (a cut from the one before), rather than
+    /// going on from the part before. Never the film's first.
     #[serde(default)]
     pub cut: bool,
     /// The picture it starts from, on a model whose cuts need one.
@@ -324,10 +361,17 @@ fn new_seed() -> i64 {
     -1
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 impl Default for FilmShot {
     fn default() -> Self {
         FilmShot {
             text: String::new(),
+            scene: 0,
+            shot: None,
+            drawn: false,
             cast: Vec::new(),
             cut: false,
             keyframe: None,
@@ -348,10 +392,30 @@ impl Default for FilmShot {
 }
 
 impl Film {
+    /// Its parts grouped into shots, in order: a shot starts at the first
+    /// part and at every cut.
+    pub fn groups(&self) -> Vec<std::ops::Range<usize>> {
+        let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+        for (k, s) in self.shots.iter().enumerate() {
+            match out.last_mut() {
+                Some(g) if !s.cut => g.end = k + 1,
+                _ => out.push(k..k + 1),
+            }
+        }
+        out
+    }
+
+    /// Scene `si`'s description: its own, or a board from before scenes'
+    /// look.
+    pub fn scene_every(&self, si: usize) -> &str {
+        self.scenes.get(si).map_or(self.every.as_str(), |s| s.every.as_str())
+    }
+
     /// Whether shot `k` starts from a keyframe drawn first: shot 1 and every
     /// cut, on a model without references.
     pub fn needs_keyframe(&self, k: usize) -> bool {
-        !self.references && self.shots.get(k).is_some_and(|s| !s.no_key && (k == 0 || s.cut))
+        // A shot with no words yet has nothing to draw from.
+        !self.references && self.shots.get(k).is_some_and(|s| !s.no_key && (k == 0 || s.cut) && !s.text.trim().is_empty())
     }
 
     /// The pictures shot `k`'s keyframe is drawn with, one mark per member
@@ -759,6 +823,7 @@ impl Chat {
             actions: Vec::new(),
             session: Session::default(),
             video: None,
+            video_settings: None,
             film: None,
             context: Pane::Image,
             cast: None,

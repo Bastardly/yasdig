@@ -62,7 +62,7 @@ pub fn board_text(f: &Film) -> String {
     if !f.title.is_empty() {
         s.push_str(&format!("Title: {}\n", f.title));
     }
-    s.push_str(&format!("Every shot: {}\nCast:", if f.every.is_empty() { "(nothing)" } else { &f.every }));
+    s.push_str("Cast:");
     for m in &f.cast {
         let kind = match m.kind {
             MemberKind::Character => "character",
@@ -76,13 +76,38 @@ pub fn board_text(f: &Film) -> String {
         };
         s.push_str(&format!("\n- {} ({kind}, {picture}): {}", m.name, m.look));
     }
-    s.push_str("\nShots:");
-    for (k, shot) in f.shots.iter().enumerate() {
-        let how = if k == 0 { "first" } else if shot.cut { "cut" } else { "goes on" };
-        let who = if shot.cast.is_empty() { String::new() } else { format!(" [{}]", shot.cast.join(", ")) };
-        s.push_str(&format!("\n{}. ({how}) {}{who}", k + 1, shot.words()));
+    // Scenes, each shot under its id (what `keep` names), each part a line.
+    let groups = f.groups();
+    let scenes = f.scenes.len().max(1);
+    for si in 0..scenes {
+        let mine: Vec<&std::ops::Range<usize>> = groups.iter().filter(|g| f.shots[g.start].scene.min(scenes - 1) == si).collect();
+        let title = f.scenes.get(si).map_or("", |c| c.title.as_str());
+        let locked = mine.iter().any(|g| f.shots[g.start].drawn);
+        s.push_str(&format!("\nScene {}{}{}", si + 1, if title.is_empty() { String::new() } else { format!(": {title}") },
+            if locked { " (locked: a shot in it is generated, so its description stays)" } else { "" }));
+        let every = f.scene_every(si);
+        s.push_str(&format!("\n  Every shot: {}", if every.is_empty() { "(nothing)" } else { every }));
+        for g in mine {
+            let first = &f.shots[g.start];
+            let id = first.shot.as_deref().map_or(String::from("new"), short_id);
+            let done = if first.drawn { ", generated" } else { "" };
+            s.push_str(&format!("\n  Shot {id}{done}:"));
+            for k in g.clone() {
+                let part = &f.shots[k];
+                let who = if part.cast.is_empty() { String::new() } else { format!(" [{}]", part.cast.join(", ")) };
+                let words = part.words();
+                // A shot the person added and left empty: the agent may fill it.
+                let words = if words.trim().is_empty() { "(empty: the person added this shot; give it parts or keep it)" } else { words };
+                s.push_str(&format!("\n  - {words}{who}"));
+            }
+        }
     }
     s
+}
+
+/// A Video shot's id as the story names it: `{video}-s3` is `s3`.
+pub fn short_id(id: &str) -> String {
+    id.rsplit('-').next().unwrap_or(id).to_string()
 }
 
 /// The system message: who the agent is, what it may change and how to reply.

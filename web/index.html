@@ -720,14 +720,7 @@
   <section class="fpanel fpboth" id="vfold-prompt" aria-label="Shot" hidden>
     <header class="fphead"><b id="vshothead">Shot</b> <span class="foldstate" id="vsum-prompt"></span><button type="button" class="fpclose" aria-label="Close Shot">&times;</button></header>
     <div class="fpbody">
-      <!-- Whose rows these are while an Assistant chat's film is open on them
-           (`board.js`), or the way back to it after another clip. -->
-      <div class="boardline" id="vboardline" hidden>
-        <span class="sub" id="vboardtext"></span>
-        <button type="button" class="btn" id="vboardback" hidden>Back to the storyboard</button>
-      </div>
       <label class="grouphead" data-help="vshots">Parts</label>
-      <!-- What the storyboard on the rows leaves out on this model (`board.js`). -->
       <p class="sub" id="vsentnote"></p>
       <!-- The shots side by side, left to right as they play; the strip scrolls
            sideways, and + stays at its right edge however far it has gone. -->
@@ -737,14 +730,23 @@
       </div>
       <!-- A shot's starting image from this computer: the row's Upload. -->
       <input type="file" id="vkeyfile" accept="image/*" hidden>
-      <p class="sub" id="vshotnote"></p>
+      <!-- The shot's own flow shift, over Generation › Advanced's, and the
+           shot's note on one line under the parts (a pipe between them), so
+           neither is scrolled off alone; a narrated shot shows the note only. -->
+      <div class="shotshift">
+        <span class="shotshiftpick unnarrated" id="vshotshiftrow">
+          <label for="vshotshift">Flow shift for this shot</label>
+          <input id="vshotshift" type="number" step="0.5" min="0" placeholder="the video's">
+        </span>
+        <p class="sub" id="vshotnote"></p>
+      </div>
     </div>
     <div class="fpfoot" id="vextendfoot" hidden>
       <button type="button" id="venhanceall" class="btn btn-block" hidden
         title="Every part written out in full, in order, each to match the ones before it: the scene's place and light carry on unless a part's words change them. Ctrl+Z in a box undoes its part">Enhance every part</button>
       <button type="button" id="vframes" class="btn btn-block" hidden
         title="The pictures the storyboard's shots start from, drawn with the cast — any of the cast not drawn yet first. Optional">Draw the first frames</button>
-      <button type="button" id="vextend" class="btn btn-block" hidden>Generate shot</button>
+      <button type="button" id="vextend" class="btn btn-block btn-run" hidden>Generate shot</button>
     </div>
   </section>
   <section class="fpanel" id="vfold-gen" aria-label="Generation" hidden>
@@ -929,7 +931,7 @@
   </section>
   <!-- A film's cast (`board.js`): who must look the same in every shot, with
        their pictures, turnarounds and voices, and the model they are drawn
-       with. Its shots are the Shots rows. -->
+       with. Its shots are its own Video's, on the storyboard. -->
   <section class="fpanel" id="panel-vid-cast" aria-label="Cast" hidden>
     <header class="fphead"><b>Cast</b><button type="button" class="fpclose" aria-label="Close Cast">&times;</button></header>
     <div class="fpbody">

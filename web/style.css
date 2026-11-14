@@ -311,6 +311,17 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* A select with its model's note beside it. */
 .withinfo { display: flex; align-items: center; gap: var(--sp-2); }
 .withinfo > select { flex: 1; min-width: 0; }
+/* A shot's own flow shift and its note on one line under the parts, a pipe
+   between them; a long note wraps under. The label is amber (asked for: grey,
+   it was overlooked). */
+.shotshift { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
+.shotshiftpick { display: flex; align-items: center; gap: var(--sp-2); }
+.shotshiftpick > label { margin: 0; color: var(--accent); }
+.shotshiftpick > input { width: 8em; }
+.shotshift > .sub { flex: 1 1 12em; min-width: 0; margin: 0; }
+.shotshift > .sub:empty { display: none; }
+.shotshiftpick + .sub::before { content: "|"; margin-right: var(--sp-2); color: var(--text-dim); }
+#tab-video.narrated .shotshiftpick + .sub::before { content: none; }
 /* The blue i: a model file's note (`notes.js`). Outlined until there is one,
    filled when there is — seen without opening it. Not `.hint`, which is the
    tooltip's icon. */
@@ -382,7 +393,6 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .shotboard { display: contents; }
 .shotboard:empty { display: none; }
 /* Whose rows these are, above Every shot (`board.js`). */
-.boardline { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-2); }
 /* The picture a cut starts from, small beside its buttons. */
 .shotkeythumb { height: calc(var(--thumb-h-chosen) / 2); border-radius: var(--r-sm); }
 /* A shot the clip on the stage already has (`shots.js`): ticked in the

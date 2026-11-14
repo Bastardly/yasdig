@@ -2,7 +2,7 @@
 // the stage (`shots.js`). Not in `web::WEB_FILES`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shotState, sentRow, shotOutdated, partNeighbours } from './shots.js';
+import { shotState, sentRow, shotOutdated, partNeighbours, ownShift, withShift } from './shots.js';
 
 const seg = (text, k) => ({ text, seed: 10 + k, frames: 33, start: k * 32 });
 const clip = (...texts) => ({ segments: texts.map(seg) });
@@ -203,6 +203,8 @@ test('a drawn shot is outdated while its video or scene differs from what made i
     'the negative as typed, before its roll');
 });
 
+// The same table as `the_fixture_table_the_page_checks_too` in
+// `src/agent/enhance.rs`: change both or neither.
 test('a part sees its scene\'s opening, its shot\'s first part and the part before; part 1 cuts from the shot before', () => {
   const order = [
     { scene: 0, texts: ['Dusk on a pier.', 'She turns.'] },
@@ -217,4 +219,18 @@ test('a part sees its scene\'s opening, its shot\'s first part and the part befo
   assert.deepEqual(partNeighbours(order, 2, 0),
     { first: '', scene: '', before: 'She walks.', cut: true, then_continues: false },
     'a new scene opens itself, and cuts from the last words of the one before');
+});
+
+test('a drawn shot whose own flow shift changed is drawn again whole; the video default never marks it', () => {
+  const none = { action: 'none' };
+  const drawn = { rendered: true, flow_shift_own: null };
+  assert.equal(withShift(none, null, drawn).action, 'none');
+  assert.equal(withShift(none, '', drawn).action, 'none', 'an empty box is no override');
+  assert.equal(withShift(none, 7, drawn).action, 'generate');
+  assert.equal(withShift(none, 7, { ...drawn, flow_shift_own: 7 }).action, 'none');
+  assert.equal(withShift(none, null, { ...drawn, flow_shift_own: 7 }).action, 'generate', 'clearing it is a change too');
+  assert.equal(withShift(none, 7, { rendered: false }).action, 'none', 'a plan is drawn with what it holds');
+  assert.equal(ownShift({ flow_shift_own: 5 }, null), 5);
+  assert.equal(ownShift({ flow_shift_own: 5 }, { rows: [], shift: null }), null, "the draft's empty box wins");
+  assert.equal(ownShift({}, { rows: [] }), null, 'an older draft has no shift');
 });

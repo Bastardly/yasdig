@@ -947,23 +947,24 @@ into the prompt layout MiniMax's own guide sets out, and says who stays silent, 
 doesn't invent a narrator, a score or a closing sentence. A shot with none of them
 filled is sent as typed.
 
-**From a storyboard.** Ask the Video tab's Assistant for a short film and it writes the
-shots into these rows and the cast into the **Cast** panel — who each one is, how they
-look, their picture and, on H3, their voice. While its chat is open the rows *are* the
-storyboard: what you change here the agent sees, and what it changes ("make shot 2 at
-night") lands here, keeping what still fits. *Who is in it* decides which of the cast's
-pictures a shot follows; the Cast panel's *Draw the cast* and this panel's *Draw the
-first frames* draw them (optional), and a row's first frame can be drawn again, removed
-or replaced with your own. Each row holds both its first frame and the cast's pictures:
-on H3 it follows the pictures and voices, on Wan it starts from the first frame, so
-switching model loses nothing — the agent may pick the model when it writes the board.
-Each new or changed shot is written out in full for the video model as soon as the
-storyboard is written (*Enhance*, above), one at a time, before the rows appear; the
+**From the Assistant.** Ask the Video tab's Assistant for a short film and it writes a
+video of its own — scenes, shots and their parts — into the storyboard, and the cast
+into the **Cast** panel: who each one is, how they look, their picture and, on H3, their
+voice. The video is an ordinary one: edit it, reorder its shots, generate it as you
+would any other. What you change there the agent sees on its next turn, and when you
+ask for changes ("make the second scene at night") it rewrites only the shots it means
+to change — the rest, and every generated shot's frames, stay. A generated shot it
+rewrites keeps its frames and shows as changed until you generate it again; a generated
+shot it leaves out is kept, and it says so. A scene with a generated shot keeps its
+description. *Who is in it* on a shot's first part decides which of the cast's pictures
+that shot follows; the Cast panel's *Draw the cast* and the Shot panel's *Draw the first
+frames* draw them (optional), and a shot's first frame can be drawn again, removed or
+replaced with your own. On H3 a shot follows the cast's pictures and voices, on Wan it
+starts from its first frame. Each new or changed part is written out in full for the
+video model as soon as the storyboard is written (*Enhance*, above), one at a time; the
 agent keeps its own short words for its next rewrite, and the first frames are drawn
-from those. If enhancing fails, the shots stay as the agent wrote them, with a note.
-Generate clip, Extend and Redo work as for any clip. Opening another clip leaves the
-storyboard; *Back to the storyboard* returns to it and its clip. While the agent works
-on the chat, the rows wait for it.
+from those. If enhancing fails, the parts stay as the agent wrote them, with a note.
+While the agent works on the chat, its video's storyboard and Shot panel wait for it.
 
 **Current and Favorites.** Every clip is kept in `work/videos/` and listed on the
 **Current** panel, the Image tab's way: click once to show it, again to open the clip
@@ -1028,7 +1029,7 @@ language model that runs on your own GPU, the way the image models do. It needs 
 model (Models → *Agent models*; the 4B fits an 8 GB card). Each tab keeps its own
 chats — pick one, or *New chat*, at the top of the panel, with ☆ to keep it in
 Favorites and *Delete*. The Image tab's chats work on pictures (below); the Video tab's
-write storyboards for films (*From a storyboard*, under Video). There is one *Send*:
+write storyboards for films (*From the Assistant*, under Video). There is one *Send*:
 say what you want, and the agent decides whether that is an answer, a picture, a
 description, a session that improves or a comparison.
 

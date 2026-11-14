@@ -139,29 +139,21 @@ fn listing(conn: &mut Connection, cfg: &Config, shelf: Shelf) -> Result<()> {
 
 fn chat_json(cfg: &Config, c: &Chat) -> Value {
     let t = toolkit::resolve(cfg, c);
-    // A Video chat's board as the Shots rows show it, for the tab's model.
-    let board = c.film.as_ref().filter(|_| c.context == Pane::Video).map(|f| session::board_rows(f, t.video.as_ref()));
-    json!({ "chat": c, "toolkit": t, "favorite": c.favorite, "board": board })
+    json!({ "chat": c, "toolkit": t, "favorite": c.favorite })
 }
 
-/// The Shots rows written back into the board (`session::set_rows`), the
-/// Video tab's model it is shot on, and the clip made from it. A first frame
-/// the board didn't draw is copied into the chat first, as a picked picture
-/// is. Answers the chat, with `warning` for names the board doesn't know.
+/// The Video tab's model a film is shot on (`session::set_video`): it
+/// decides whether a shot's part 1 follows the cast's pictures (H3) or
+/// starts from a first frame. The board itself is the film's Video
+/// (`filmvideo`), edited in the storyboard. Answers the chat.
 fn board(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
     #[derive(Deserialize)]
     struct Dto {
         id: String,
         #[serde(default)]
-        every: Option<String>,
-        #[serde(default)]
-        shots: Option<Vec<session::RowIn>>,
-        #[serde(default)]
         video: Option<String>,
-        #[serde(default)]
-        clip: Option<String>,
     }
-    let Some(mut dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
     let store = super::store(cfg);
     let film = match store.load(&dto.id) {
         Ok(c) => c.film,
@@ -176,25 +168,6 @@ fn board(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
         },
         None => None,
     };
-    if let Some(id) = dto.clip.as_deref().filter(|id| !crate::workitems::valid_id(id)) {
-        return err(conn, 400, &format!("'{id}' is not a clip"));
-    }
-    for (k, row) in dto.shots.iter_mut().flatten().enumerate() {
-        let Some(stem) = row.key.clone().filter(|s| !s.is_empty()) else { continue };
-        if film.shots.get(k).and_then(|s| s.key_stem.as_deref()) == Some(stem.as_str()) {
-            continue;
-        }
-        let bytes = match super::attach_bytes(cfg, "output", &stem) {
-            Ok(b) => b,
-            Err(e) => return err(conn, 400, &format!("shot {}'s first frame: {e:#}", k + 1)),
-        };
-        let file = format!("k{}-{k}.png", super::chat::now_ms());
-        if let Err(e) = super::keep_picture(&store, &dto.id, &file, &bytes) {
-            return err(conn, 500, &format!("{e:#}"));
-        }
-        row.key_ref = Some(ImageRef { kind: "output".into(), id: stem, file, seed: None });
-    }
-    let mut warning = Vec::new();
     let r = store.update(&dto.id, |c| {
         if c.session.busy() {
             anyhow::bail!("the agent is working on this chat — wait, or stop it first");
@@ -202,21 +175,16 @@ fn board(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
         if let Some(v) = &to {
             session::set_video(c, v);
         }
-        if let Some(id) = &dto.clip {
-            if let Some(f) = c.film.as_mut() {
-                f.clip = Some(id.clone());
-            }
-        }
-        if dto.every.is_some() || dto.shots.is_some() {
-            warning = session::set_rows(c, dto.every.as_deref(), dto.shots.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
-        }
         session::board_advance(c, shot_seconds, false);
         Ok(c.clone())
     });
     match r {
         Ok(c) => {
+            // The parts' references follow the model: written to the Video.
+            let warning = super::filmvideo::push(cfg, &store, &dto.id).err().map(|e| format!("{e:#}")).unwrap_or_default();
+            let c = store.load(&dto.id).unwrap_or(c);
             let mut v = chat_json(cfg, &c);
-            v["warning"] = json!(warning.join(" "));
+            v["warning"] = json!(warning);
             ok(conn, v)
         }
         Err(e) => err(conn, 409, &format!("{e:#}")),
@@ -271,8 +239,13 @@ fn new_chat(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
     let mut chat = Chat::new(super::chat::new_id(), json!({ "template": dto.template }), agent);
     chat.video = dto.video.filter(|v| !v.is_empty());
     chat.context = dto.context;
-    if let Some(v) = dto.settings.filter(|_| dto.context == Pane::Image) {
-        chat.take_settings(v);
+    match dto.settings {
+        Some(v) if dto.context == Pane::Image => {
+            chat.take_settings(v);
+        }
+        // A Video chat's: the Generation panel, which its film's Video is made with.
+        Some(v) if dto.context == Pane::Video && v.is_object() => chat.video_settings = Some(v),
+        _ => {}
     }
     let store = super::store(cfg);
     match store.create(&chat) {
@@ -440,6 +413,10 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         member: Option<usize>,
         #[serde(default)]
         shot: Option<usize>,
+        /// The Video's shot (`{video}-s3`) whose part 1 `shot` means,
+        /// in place of an index into the film's parts.
+        #[serde(default)]
+        shot_id: Option<String>,
         #[serde(default)]
         name: Option<String>,
         #[serde(default)]
@@ -485,8 +462,22 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         #[serde(default)]
         from_cast: Option<String>,
     }
-    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let Some(mut dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
     let store = super::store(cfg);
+    // The storyboard as it is now, so an edit here lands on it, not on the
+    // film's older copy.
+    if store.load(&dto.id).is_ok_and(|c| !c.session.busy()) {
+        if let Err(e) = super::filmvideo::pull(cfg, &store, &dto.id) {
+            return err(conn, 500, &format!("reading the film's video: {e:#}"));
+        }
+    }
+    if let Some(sid) = &dto.shot_id {
+        let at = store.load(&dto.id).ok().and_then(|c| c.film).and_then(|f| f.shots.iter().position(|s| s.shot.as_deref() == Some(sid.as_str())));
+        match at {
+            Some(k) => dto.shot = Some(k),
+            None => return err(conn, 404, &format!("shot {sid} isn't in this chat's film")),
+        }
+    }
     let add = match &dto.from_cast {
         Some(id) => match super::cast_member(cfg, &store, &dto.id, id) {
             Ok(m) => Some(m),
@@ -576,7 +567,13 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
             enqueue(lanes, &store, &c)?;
             get_chat(conn, cfg, &dto.id)
         }
-        Ok(None) => get_chat(conn, cfg, &dto.id),
+        Ok(None) => {
+            // Nothing to draw: the edit is written into the Video now.
+            if let Err(e) = super::filmvideo::push(cfg, &store, &dto.id) {
+                return err(conn, 500, &format!("writing the film's video: {e:#}"));
+            }
+            get_chat(conn, cfg, &dto.id)
+        }
         Err(e) => err(conn, 409, &format!("{e:#}")),
     }
 }
@@ -628,7 +625,8 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         /// The Video tab's model now, which a film from here on is shot on.
         #[serde(default)]
         video: Option<String>,
-        /// An Image chat's: the Image tab's controls as they are now.
+        /// An Image chat's: the Image tab's controls as they are now. A
+        /// Video chat's: the Generation panel (`vidPayload` without shots).
         #[serde(default)]
         settings: Option<Value>,
     }
@@ -671,8 +669,12 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         if let Some(v) = dto.video.as_ref().filter(|v| !v.is_empty()) {
             c.video = Some(v.clone());
         }
-        if let Some(v) = dto.settings.clone().filter(|_| c.context == Pane::Image) {
-            c.take_settings(v);
+        match dto.settings.clone() {
+            Some(v) if c.context == Pane::Image => {
+                c.take_settings(v);
+            }
+            Some(v) if c.context == Pane::Video && v.is_object() => c.video_settings = Some(v),
+            _ => {}
         }
         // What the person says now overtakes a session left stopped or done.
         session::close_session(c);

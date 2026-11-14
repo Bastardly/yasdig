@@ -180,10 +180,12 @@ Break silently:
   plus the family's mode-free style notes; `select` never gives a chat turn one). The
   page writes the answer with `insertText` (undo). H3 keeps names (its `<Subject N>`
   match) and its fields; `sound` and `spoken` (H3's Spoken lines — its prompt is what is seen, so a
-  line the words asked for had nowhere else to go) each fill only an empty field. **A shot sees its
-  neighbours** (a film's from `enhance::neighbours`: shot 1, the last cut, the shot
-  before; the Video tab's parts from the storyboard, `shots.js` `partNeighbours` — a cut
-  is "the same film", not "nothing carried over"), shed by `trimmed` to fit the
+  line the words asked for had nowhere else to go) each fill only an empty field. **A part sees its
+  neighbours** (`enhance::part_neighbours` for a film, `shots.js` `partNeighbours` on
+  the Video tab — **one rule, one fixture table pins both**
+  (`the_fixture_table_the_page_checks_too`, `shots.test.js`): the scene's opening part,
+  the shot's part 1, the part before — a shot's part 1 cuts from the shot before, "the
+  same film", not "nothing carried over"), shed by `trimmed` to fit the
   context and dropped on a `ContextOverflow` retry; `then_continues` (the next shot goes
   on from this one) asks it to end with every face in view — a continue knows only the
   last frame, so a face that left it comes back a stranger's (film.md says the same); *Enhance every part*
@@ -191,18 +193,30 @@ Break silently:
   shots are enhanced after the turn** (`FilmShot.enhance` → `Next::Enhance` →
   `Step::Enhance`, `session::shot_enhanced`): the story's words move to
   `FilmShot.brief`, which `board_text`, `apply_story`'s match (`words()`) and
-  `keyframe_prompt` use. `set_rows` keeps `brief` only while the row's text is the
+  `keyframe_prompt` use. `row_shot` keeps `brief` only while the part's text is the
   enhanced one; an unchanged shot is never re-enhanced (the person's edit stands). A
   failure clears every flag with a note; a Stop is a Stop.
 - **A film** (`Chat.film: Film`, `session::apply_story`): a chat turn's `film` action
-  hands over to a `Mode::Story` turn (its own schema, `n_predict` 3072), whose board is
-  **rewritten whole**, never patched; what survives is matched by the server — a member
-  keeps its picture by name and an unchanged look (or when it is the person's), a shot
-  its keyframe when its words, cast and cut are unchanged. **A continue that names someone not in the shot before is made a cut** (`recut` in `apply_story` against the story's own names, then a continue's `cast` is emptied; `recut_board` after a panel edit, for older boards): a continue carries only the last frame, so a return would be drawn from words. **Nothing is drawn unasked, and
-  drawing is optional**: an undrawn member is words, an undrawn first frame a cut from
-  words. *Draw the cast* (Cast footer) and *Draw the first frames* (Shots footer,
-  `#vframes`) are `/chats/film {draw, frames}` → `board_press_for`; a row's *Draw again*
-  and *Draw a first frame* (`rowKeyHtml`) keep `board_press`'s automatic pick.
+  hands over to a `Mode::Story` turn (its own schema, `n_predict` 3072): **scenes ›
+  shots › parts** (`SceneJson`/`CameraJson`/`ShotJson`; caps `MAX_SCENES`,
+  `MAX_SCENE_SHOTS`, `MAX_PARTS`, `MAX_FILM_SHOTS`). **`Film.shots` stays a flat list of
+  parts**: `cut` starts a shot (`Film::groups`), `scene` indexes `Film.scenes` (each its
+  own `every`: `scene_every`), `shot` is the Video shot's id, `drawn` that it is
+  generated. A shot not `keep`ed is **rewritten whole**, never patched; `keep` names a
+  shown shot (`context::short_id`: `s3`) to copy as it is — a few tokens instead of
+  its words. Matched by shot id (by place for a board with no ids, or a flat old-form
+  `shots` reply, read as one scene): a member keeps its picture by name and an
+  unchanged look (or when it is the person's), a part its first frame, seed and picks
+  when its words and cast are unchanged. Plans the reply left out go to `Film.drop`; a
+  generated shot never does. **A part that names someone not in the part before starts
+  a new shot** (`recut` against the story's own names, then a later part's `cast` is
+  emptied): a part carries only the last frame, so they would be drawn from words.
+  **Nothing is drawn unasked, and
+  drawing is optional**: an undrawn member is words, an undrawn first frame a shot from
+  words. *Draw the cast* (Cast footer) and *Draw the first frames* (the Shot footer,
+  `#vframes`, on the film's Video) are `/chats/film {draw, frames}` → `board_press_for`;
+  part 1's *Draw again* and *Draw a first frame* (`rowKeyHtml`, `{shot_id}` → the
+  shot's first part) keep `board_press`'s automatic pick.
   **A cast press stops at the cast**: keyframes need a press of their own
   (`Film.frames`, set only when the cast is whole;
   `draw_step` reads it, `board_step` doesn't), so redrawing a member never redraws every
@@ -215,44 +229,71 @@ Break silently:
   one's sheet first and its front picture drawn from it, the person's picture first
   and the sheet from it — so both are one person. Keyframes reference sheets; video
   references stay the single front picture (`stem`). `Next::Film` then draws what is missing (`board_step`: the cast first, since keyframes use their pictures; a
-  keyframe for shot 1 and every cut unless `Film.references`, H3's), and
+  keyframe for each shot's part 1 unless `Film.references`, H3's, drawn on its scene's
+  `every`), and
   `board_advance` sets `Phase::Ready` and ends the leg. **Every board picture is also an
   output** (`stem`, `key_stem`): a shot's references and first frames are output stems.
-  The video model is `Chat.video`, the Video tab's as the person last sent; `film_off`
-  says why none can be made (`Rules.film`, no image model, no video model, one that
-  doesn't `chains()`). A new chat's settings have no `prompt` key, which `GenerateDto`
+  The video model is `Chat.video`, the Video tab's as the person last sent — **unless it
+  can't make a film** (narrated stills, VACE, T2V, none): then `toolkit::resolve` gives
+  a Video chat the first installed one that `chains()`, and `apply_story` says so and
+  makes it the chat's (a film is its own Video, so the tab's pick is no reason to
+  refuse; Gemma turned the old refusal into "I only generate still images"). `film_off`
+  says why none can be made (`Rules.film`, no image model, no installed video model
+  that `chains()`). A new chat's settings have no `prompt` key, which `GenerateDto`
   requires: a board picture inserts its own, a round an empty one. A film's turns get the video family's skills too
   (`skills::select` takes both families' names, which never collide).
-- **The board is the Shots rows, while its chat is open** (`web/js/board.js`, *bound*;
-  no Story panel, no Send — a copy sent over lost every later edit on either side).
-  Film → rows: `chat_json`'s `board` (`session::board_rows`: `shot_spec` per shot — on a
-  references model (`Film.references`, H3) the pictured cast as references with
-  `subjects`, the speakers' voices as `audio` with `voices`, then the shot's own picks;
-  else, or when the person gave it a first frame, the key, shot 1's too — never both;
-  `set_rows` keeps the H3 picks while a Wan board's rows carry none), drawn when its JSON
-  moves and the person isn't typing in the panel. Rows → film: `/chats/board` →
-  `session::set_rows` (debounced, deduplicated): matched by place, a shot keeps its
-  first frame while words/cast/cut hold (the person's always), a key the film didn't
-  draw is the person's (copied into the chat by the route), an emptied one `no_key`,
-  `refs`/`audio` less the cast's own are `FilmShot.references`/`audio`; then
-  `recut_board`. `FilmShot.seed`/`frames` are the row's, a story's `seconds` the first `frames`
+- **A chat's film writes its own Video** (`agent::filmvideo`, `Film.video`, read from
+  an old chat's `clip`): the storyboard is the board — no copy on the page (a copy synced
+  both ways lost every edit made while the other side was busy). **`push`** (`write`)
+  after a story turn, an Enhance and every board picture (`step`), and after a
+  `/chats/film` edit that draws nothing: a Video made when there is none (`create_video`),
+  a scene per film scene (**a locked one — any generated shot — keeps its `every` and
+  negative**: its shots were made with them), a plan per not-generated shot
+  (`plan_clip` with `into`, carrying the shot's own `flow_shift_own`), a **draft** for a
+  generated one whose rows differ from the film's — **every field** (`same_rows`), so a
+  draft of the person's (a new length, a sound) is never dropped as "the same"; the
+  draft keeps `shift`. A shot the film left out is deleted only when in `Film.drop` and
+  still a plan; any other stays where it was (after the shot it followed), and a
+  generated one is said — once: **`push` reads the Video back** (`pull`) after
+  writing, so it is the film's again. New ids are `new_shot_id` (numeric; each plan is
+  on disk before the next is drawn). Settings are `Chat.video_settings` (the page's
+  Generation panel, `videoSettings()`, sent with `/chats/new` and `/agent/send` as
+  `settings` on a Video chat), used only when they were for the model the shots are
+  made with (a story may pick another), the lock's model/size/fps/Hi-res over them.
+  **Written then read back, a film is itself** on Wan and on H3
+  (`a_film_written_and_read_back_is_unchanged`): keep it so.
+  **`pull`** (`read_back`) before every turn and every `/chats/film`: the film becomes
+  the Video's scenes and shots in storyboard order, each shot's rows (`rows_of`: its
+  draft's, else its parts with `source` as part 1's key) through `session::row_shot`,
+  matched to the film's parts of the same shot id by place; a first frame the film
+  didn't draw is the person's, copied into the chat (`keep_keys`). A film with no ids
+  (an old chat's, `Film.clip` read as `video`) is matched by place. A Video whose
+  `video.json` is gone clears `Film.video` and the ids and the next push makes
+  another; one that won't load is an error, never a second Video (`gone`). **One writer at a
+  time**: while the chat's job runs the film's Video is inert on the page
+  (`holdVideo`: the Storyboard, Scene and Shot bodies and the Shot footer), and when
+  it ends `board.js` `follow` restages it from disk (`followVideo`: the page's
+  `draftsMine` for its shots forgotten, `stageShot(…, {keep: false})` so the stale
+  panels aren't saved over the write), letting go of the hold only after. While held,
+  `keepDraft`/`savePlan`/`setDraft` are no-ops (`holding`) — a Generation change
+  autosaves the open plan otherwise. `follow` records the Video as seen only when
+  the job has ended: the first film's Video is named mid-job and must still open. Before a send or a film press the open shot is
+  saved (`saveStage`, awaited). No `rev` on `video.json`: `update_video`'s
+  `RECORD` lock, `/videos/story`'s shot-set check and the inert page cover it.
+  `/chats/board {id, video}` is only `session::set_video` (`Film.references`, so what
+  *Draw the first frames* draws follows the model), then a push. `FilmShot.seed`/`frames`
+  are the part's, a story's `seconds` the first `frames`
   (`VideoView::frames_for`: never under `toolkit::action_seconds`, the words' floor,
   capped at `VideoView::longest`, Settings' `storyboard_shot_seconds` (5) on the nearest
   grid point — the tab's Frames is where a new row starts, 1.4 s on LTX, and once
-  capped every shot) (a reworded shot −1;
-  `FilmShot`'s `Default` is by hand for that). `#vmodel` → `{video}` →
-  `session::set_video` (`Film.references`, so what *Draw the first frames* draws follows
-  the model); a press that lands → `{clip}` (`Film.clip`, staged on bind; its rows keep
-  no draft — `setBoard` hooks `isBoardClip`). The person opening another clip or New
-  clip leaves (`board.flush()` before the stage changes, `left()` after);
-  `#vboardback` binds again. While the chat is busy the rows are `inert`: the story
-  turn rewrites the board whole and would overtake an edit. A story turn may pick the
+  capped every shot) (a reworded part −1;
+  `FilmShot`'s `Default` is by hand for that). A story turn may pick the
   video model (`video_model`, `schema::board_videos`, needs Model allowed and two that
-  `chains()`); `apply_story` writes `Chat.video` first and keeps an unchanged shot's
+  `chains()`); `apply_story` writes `Chat.video` first and keeps an unchanged part's
   seed, length and picks.
 - **The agent never films** (checked 2026-10-28; it used to shoot and judge each take).
-  **A board's rows are built for the board's model** (`shot_spec` on
-  `Film.references`, redrawn when `set_video` moves it); unbound, *Add cast…* adds
+  **A film's parts are written for the film's model** (`shot_spec` on
+  `Film.references`, rewritten when `set_video` moves it); with no film, *Add cast…* adds
   pictures and voices only on a model that follows them (`castOnRow`), the name
   elsewhere. **`shots.js` `sentRow` still picks what is sent** (references/sounds on
   H3, the image only beside neither; Wan the image), the guard for old drafts. `shotState`

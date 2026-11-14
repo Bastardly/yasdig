@@ -13,6 +13,7 @@ pub mod chat;
 pub mod check;
 pub mod context;
 pub mod enhance;
+pub mod filmvideo;
 pub mod knobs;
 pub mod routes;
 pub mod schema;
@@ -217,6 +218,13 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
                 Mode::Story => "writing the storyboard",
                 Mode::Take => "watching the shot",
             }));
+            // The storyboard as the person left it is what the turn sees.
+            if chat.film.as_ref().is_some_and(|f| f.video.is_some()) {
+                if let Err(e) = filmvideo::pull(&cfg, &store, id) {
+                    eprintln!("[yasdig] agent: reading the film's Video: {e:#}");
+                }
+                chat = store.load(id)?;
+            }
             turn(engine, &store, &mut chat, mode)
         }
         Step::Image { round, k } => {
@@ -234,7 +242,7 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
         }
         Step::Enhance(k) => {
             let n = chat.film.as_ref().map_or(0, |f| f.shots.len());
-            queue.relabel(job, label(&format!("writing shot {}/{n} in full", k + 1)));
+            queue.relabel(job, label(&format!("writing part {}/{n} in full", k + 1)));
             enhance_shot(engine, &store, &chat, k)
         }
         Step::CastPicture(_) | Step::CastSheet(_) | Step::Keyframe(_) => {
@@ -242,6 +250,20 @@ pub fn step(engine: &mut Engine, queue: &crate::Jobs, id: &str, job: u64) -> Res
             board_picture(engine, &store, &chat, step_now)
         }
     };
+    // What the film changed is written into its Video.
+    // A cast picture is part 1's reference on H3, so it is written too.
+    let writes = matches!(
+        step_now,
+        Step::Turn(Mode::Story) | Step::Enhance(_) | Step::Keyframe(_) | Step::CastPicture(_) | Step::CastSheet(_)
+    );
+    if result.is_ok() && writes {
+        if let Err(e) = filmvideo::push(&cfg, &store, id) {
+            let _ = store.update(id, |c| {
+                c.note(format!("The film couldn't be written into its video: {e:#}"));
+                Ok(())
+            });
+        }
+    }
     match result {
         Ok(()) => {
             let c = store.load(id)?;
@@ -772,7 +794,7 @@ fn keyframe_prompt(film: &chat::Film, shot: &chat::FilmShot) -> String {
         .collect();
     // The story's short words: a paragraph written for the video model
     // tells of motion and sound a still can't show.
-    crate::cast::compose(&looks, &with_look(shot.words(), &film.every))
+    crate::cast::compose(&looks, &with_look(shot.words(), film.scene_every(shot.scene)))
 }
 
 /// A storyboard shot written out in full for the film's video model, from
@@ -790,18 +812,21 @@ fn enhance_shot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: us
             let view = toolkit::VideoView::of(&v);
             // The shots before are enhanced already (`next_step` goes in
             // order), so this one is written to match them.
-            let all: Vec<(&str, bool)> = film.shots.iter().map(|s| (s.text.as_str(), s.cut)).collect();
-            let (first, scene, before) = enhance::neighbours(&all, k);
+            let groups = film.groups();
+            let order: Vec<(usize, Vec<&str>)> =
+                groups.iter().map(|g| (film.shots[g.start].scene, film.shots[g.clone()].iter().map(|s| s.text.as_str()).collect())).collect();
+            let s = groups.iter().position(|g| g.contains(&k)).unwrap_or(0);
+            let n = enhance::part_neighbours(&order, s, k - groups.get(s).map_or(0, |g| g.start));
             let req = enhance::Request {
                 kind: "video".into(),
                 model: v.name.clone(),
                 text: shot.text.clone(),
-                every: film.every.clone(),
-                before,
-                first,
-                scene,
-                then_continues: film.shots.get(k + 1).is_some_and(|n| !n.cut),
-                cut: k > 0 && shot.cut,
+                every: film.scene_every(shot.scene).to_string(),
+                before: n.before,
+                first: n.first,
+                scene: n.scene,
+                then_continues: n.then_continues,
+                cut: n.cut,
                 picture: None,
                 seconds: Some(shot.frames.map_or(view.shot_seconds(), |f| f as f32 / view.fps.max(1) as f32)),
                 cast: shot.cast.clone(),

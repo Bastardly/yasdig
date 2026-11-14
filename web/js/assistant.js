@@ -6,6 +6,7 @@ import { renderChat, sessionHtml, stateText } from './chatview.js';
 import { flushBoard, follow as followBoard, showBoard } from './board.js';
 import { openModels } from './getmodels.js';
 import { openCastEditor } from './casteditor.js';
+import { videoSettings } from './video.js';
 import { wireHints } from './hints.js';
 
 // ---- The Assistant panel ------------------------------------------------------
@@ -20,8 +21,8 @@ import { wireHints } from './hints.js';
 // the agent works from it from its next round or turn; what the agent
 // changes lands in the controls (`apply`). Its pictures land on the stage, as
 // Generate's do. What it may change is Settings → Agent, for every chat. On
-// the Video tab a chat makes films: its storyboard is the Shots rows and the
-// Cast panel while the chat is open (`board.js`).
+// the Video tab a chat makes films: each writes a Video of its own, which the
+// storyboard shows, and its cast is the Cast panel (`board.js`).
 //
 // The server holds the chat (`work/chats/{id}/chat.json`, `agent::chat`); the
 // panel draws it and re-reads it as its `rev` moves, polled with the jobs
@@ -282,7 +283,7 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
 
   function drawPanels() {
     if (onImage) $('asessionbody').innerHTML = data ? sessionHtml(data.chat) : '<p class="sub">No chat yet.</p>';
-    // The film is the Shots rows and the Cast panel (`board.js`).
+    // The film's Video and the Cast panel (`board.js`).
     if (story) followBoard(data, (g) => show(g, { scroll: false }));
     if (data?.chat.agent && q('amodel').value !== data.chat.agent
         && agentsList.models.some((m) => m.name === data.chat.agent)) {
@@ -300,12 +301,13 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
     if (data) return data.chat.id;
     // The Image tab's model, which brings its own saved defaults, and on the
     // Image tab its controls whole. And the Video tab's, which a film is shot on.
-    const body = onImage ? settings() : null;
+    // On the Video tab, the Generation panel: what the film's Video is made with.
+    const body = onImage ? settings() : videoSettings();
     const got = await post('/chats/new', {
       template: $('template').value, agent: q('amodel').value || null, video: videoModel(), context: pane, settings: body,
     });
     seq++;
-    sentJSON = body ? JSON.stringify(body) : null;
+    sentJSON = onImage ? JSON.stringify(body) : null;
     appliedRev = got.chat.settings_rev;
     show(got);
     loadChats();
@@ -323,8 +325,8 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
       const id = await ensureChat();
       clearTimeout(editTimer);
       if (story) await flushBoard();
-      const body = onImage ? settings() : null;
-      if (body) sentJSON = JSON.stringify(body);
+      const body = onImage ? settings() : videoSettings();
+      if (onImage) sentJSON = JSON.stringify(body);
       await post('/agent/send', {
         chat: id, text, images: attachments.map(({ kind, id }) => ({ kind, id })), video: videoModel(), settings: body,
       });

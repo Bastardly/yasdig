@@ -124,7 +124,7 @@ const film = (over = {}) => ({
   ...over,
 });
 
-test('the cast is escaped and locks while the agent works; the shots are the Shots rows', () => {
+test('the cast is escaped and locks while the agent works; the shots are the film’s Video', () => {
   const html = castHtml(chat({ film: film() }));
   assert.ok(html.includes('Rain &lt;b&gt;') && html.includes('value="Leo&quot;"'));
   assert.ok(html.includes('Draw one') && html.includes('Draw again'), 'the person’s picture is drawn only if asked');
@@ -171,15 +171,15 @@ test('a first frame drawn with a cast picture since redrawn is drawn again', () 
   assert.equal(drawLabel(words), null, 'shot 1 from its words needs nothing drawn');
 });
 
-test('a storyboard row offers its first frame drawn again, or one drawn, on a model whose cuts start from one', () => {
+test('a film shot\'s part 1 offers its first frame drawn again, or one drawn, on a model whose shots start from one', () => {
   const row = { fresh: true, key: 'k0', key_drawn: true, key_stale: false, no_key: false };
-  assert.ok(rowKeyHtml(row, 0, false).includes('data-board-redraw="0"'));
-  assert.equal(rowKeyHtml({ ...row, key_drawn: false }, 0, false), '', 'the person’s own is theirs to change');
-  assert.ok(rowKeyHtml({ ...row, key_stale: true }, 0, false).includes('Its cast changed'));
-  assert.ok(rowKeyHtml({ ...row, key: null, no_key: true }, 2, false).includes('data-board-addkey="2"'));
-  assert.equal(rowKeyHtml(row, 0, true), '', 'H3 follows the cast instead');
-  assert.equal(rowKeyHtml({ ...row, fresh: false }, 1, false), '', 'a continue goes on from the last frame');
-  assert.equal(rowKeyHtml(undefined, 3, false), '', 'a row the board doesn’t have yet');
+  assert.ok(rowKeyHtml(row, false).includes('data-board-redraw'));
+  assert.equal(rowKeyHtml({ ...row, key_drawn: false }, false), '', 'the person’s own is theirs to change');
+  assert.ok(rowKeyHtml({ ...row, key_stale: true }, false).includes('Its cast changed'));
+  assert.ok(rowKeyHtml({ ...row, key: null, no_key: true }, false).includes('data-board-addkey'));
+  assert.equal(rowKeyHtml(row, true), '', 'H3 follows the cast instead');
+  assert.equal(rowKeyHtml({ ...row, fresh: false }, false), '', 'a part that goes on starts from the last frame');
+  assert.equal(rowKeyHtml(undefined, false), '', 'a part the film doesn’t have yet');
 });
 
 test('on a model that follows references a character is whole only with its turnaround', () => {

@@ -1,215 +1,109 @@
 import { $, esc, post } from './dom.js';
 import { soonJobs } from './jobs.js';
-import { castHtml, castLabel, framesLabel, rowKeyHtml } from './chatview.js';
+import { castHtml, castLabel, framesLabel, keyMissing, rowKeyHtml } from './chatview.js';
 import {
-  addCastToShots, castEntry, clipCast, drawShots, freshStage, onRowsChange, removeCastFromShots, rowsNow, setBoard, stageClipById, videoTakes,
+  addCastToShots, castEntry, clipCast, followVideo, holdVideo, onRowsChange, removeCastFromShots, saveStage, setBoard, videoTakes,
 } from './video.js';
+import { currentShotId, currentVideo } from './storyboard.js';
 import { choosePicture, chooseSound, upload } from './source-slot.js';
 import { askForSound, playSound } from './sounds.js';
 import { chooseCastEntry } from './castpicks.js';
 import { openCastEditor } from './casteditor.js';
 
-// ---- A film's storyboard, on the Video tab ------------------------------------------
+// ---- A film's Video, on the Video tab -----------------------------------------------
 //
-// A Video chat's film (`agent::chat::Film`) is not a copy the person sends
-// somewhere: its shots are the Shots rows and its cast is the Cast panel,
-// while its chat is open in the Assistant panel — *bound*. Both ways:
-//
-// - film → rows: the chat comes with `board` (`session::board_rows`), the rows
-//   as the Shots panel draws them, the cast's pictures and voices filled in.
-//   When it changes, the rows are drawn from it — not while the person is
-//   typing in one; then once they leave it.
-// - rows → film: an edit of the rows or Every shot is written back
-//   (`/chats/board`, debounced and only when it differs from what was last
-//   written), as the Image tab's controls are into an Image chat. A press that
-//   drew onto the rows writes its seeds back, and names the clip.
-//
-// Generate clip, Extend and Redo are the Video tab's own: the rows are marked
-// against the film's clip like any clip's. Opening another clip, or New clip,
-// leaves the board (the rows are that clip's); *Back to the storyboard* comes
-// back. While the agent works on the chat the rows are locked: its rewrite
-// would overtake an edit made meanwhile.
+// A Video chat's film (`agent::chat::Film`) writes its own Video
+// (`agent::filmvideo`): scenes, shots, each shot's parts as a plan, or as a
+// draft once the shot is generated. The storyboard *is* the board — the
+// person edits it as any Video, and the server reads it back before every
+// turn and press. This module only follows: when a turn or a press lands it
+// stages the film's Video afresh (`followVideo`), and while the chat's job
+// runs that Video's panels are inert (`holdVideo`), so nothing typed then is
+// lost under the agent's write. And the Cast panel, below.
 
-let got = null; // the Video Assistant's chat shown, `{ chat, toolkit, board }`
+let got = null; // the Video Assistant's chat shown, `{ chat, toolkit }`
 let show = null; // the Assistant's `show`, for an answer that is the chat
-let bound = false;
-let applied = null; // the board last drawn into the rows, as JSON
-let sent = null; // the rows last written into the film, as JSON
 let seenModel = null; // the film's video model last put in #vmodel
-let ownClip = null; // a clip just landed on the rows, before the film names it
-let stale = false; // a redraw waiting for the person to leave a box
-let timer = null;
+let seen = null; // what the film's Video was last followed at: chat, video, busy
 let pickFor = null; // the cast member an upload is for
-let warning = '';
 
-// Paused for Video 2.0: a film's flat rows don't fit scenes and shots, so a
-// chat's old film is not bound onto the storyboard until it is rebuilt for it
-// (the server says so too, `toolkit::FILMS_PAUSED`). The Cast panel stays.
-const FILMS_PAUSED = true;
-const film = () => (FILMS_PAUSED ? null : got?.chat.film ?? null);
+const film = () => got?.chat.film ?? null;
 // `session::MAX_CAST`: past it the server refuses an added member.
 const MAX_CAST = 6;
 const busy = () => ['queued', 'running'].includes(got?.chat.session.state);
 const chatId = () => got?.chat.id ?? null;
 const err = (msg) => { $('casterr').textContent = msg ?? ''; };
-
-// What the rows hold, for `/chats/board` (`session::RowIn`).
-const payload = () => ({ every: $('veverytext').value, shots: rowsNow() });
-
-// The person is in a box of the Shots panel: a redraw would take it away.
+// The person is in a box of the Cast panel: a redraw would take it away.
 const typing = (root) => root.contains(document.activeElement) && document.activeElement.matches('input, textarea');
+const owns = () => !!film()?.video && film().video === currentVideo()?.id;
+
+// Part 1 of the open shot, as the film has it: its first-frame buttons.
+function partOfShot(id) {
+  const f = film();
+  return f ? f.shots.findIndex((s) => s.shot === id) : -1;
+}
 
 const HOOKS = {
-  edited() {
-    if (!bound || busy()) return;
-    clearTimeout(timer);
-    timer = setTimeout(flush, 600);
+  owns,
+  rowExtras(k, refs) {
+    if (!owns() || busy() || k !== 0) return '';
+    const f = film();
+    const i = partOfShot(currentShotId());
+    if (i < 0) return '';
+    const s = f.shots[i];
+    const info = {
+      fresh: true,
+      key: s.key_stem ?? null,
+      no_key: !!s.no_key,
+      key_drawn: s.keyframe?.kind === 'item',
+      key_stale: !!s.key_stem && keyMissing(f, s, i),
+    };
+    return rowKeyHtml(info, refs);
   },
-  // A press drew onto the rows: their seeds, and the clip, into the film.
-  landed(c) {
-    if (!bound) return;
-    ownClip = c.id;
-    flush({ clip: c.id });
-  },
-  flush() {
-    if (bound) flush();
-  },
-  left() {
-    if (!bound) return;
-    bound = false;
-    setBoard(null);
-    lock();
-    drawLine();
-  },
-  isBoardClip: (id) => bound && !!id && (id === ownClip || id === film()?.clip),
-  rowExtras: (k, refs) => (k >= 0 ? rowKeyHtml(got?.board?.shots?.[k], k, refs) : ''),
-  framesLabel: () => (bound && !busy() ? framesLabel(film()) : null),
+  framesLabel: () => (owns() && !busy() ? framesLabel(film()) : null),
 };
-
-// The rows into the film, now. Read before anything else changes them, so a
-// leave can call it just before the stage takes another clip's rows.
-async function flush(extra = {}, opts = {}) {
-  clearTimeout(timer);
-  timer = null;
-  if (!bound || !got || busy()) return;
-  const body = payload();
-  const json = JSON.stringify(body);
-  if (json === sent && !extra.clip) return;
-  sent = json;
-  try {
-    const g = await post('/chats/board', { id: chatId(), ...body, ...extra }, opts);
-    warning = g.warning ?? '';
-    show?.(g);
-  } catch (e) {
-    $('verr').textContent = String(e.message || e);
-  }
-}
 
 // The Video Assistant's chat, as it was just shown (or null). `showFn` is how
 // an answer that is the chat reaches the panel again.
 export function follow(g, showFn) {
   show = showFn;
-  const was = got;
   got = g && g.chat.context === 'video' ? g : null;
   drawCast();
   const f = film();
-  if (!f) {
-    if (bound) HOOKS.left();
-    drawLine();
+  setBoard(f ? HOOKS : null);
+  const id = got?.chat.id ?? null;
+  const opened = seen?.chat !== id;
+  // While the job runs: its Video held, and nothing recorded as seen — the
+  // first film's Video is named mid-job, and must still open when it ends.
+  if (busy()) {
+    if (f?.video) holdVideo(f.video);
+    seen = { chat: id, video: opened ? null : seen.video, busy: true };
     return;
   }
-  // A film just written, or a chat with one opened: the rows and the cast.
-  if (got.chat.id !== was?.chat.id || !was?.chat.film) {
-    bind(true);
+  if (!f?.video) {
+    holdVideo(null);
+    seen = id ? { chat: id, video: null, busy: false } : null;
     return;
   }
-  if (bound) {
-    redraw();
-    // The marks and the footer read the board too: a cast just drawn moves
-    // *Draw the first frames* though no row changed.
-    setBoard(HOOKS);
-  }
-  lock();
-  drawLine();
-}
-
-// The board onto the rows: its model first, its clip on the stage (or a new
-// one), then its shots.
-async function bind(open = false) {
-  const id = chatId();
-  const f = film();
-  if (!f) return;
-  bound = true;
-  applied = null;
-  ownClip = null;
-  seenModel = null;
-  setBoard(HOOKS);
   modelFrom(f);
-  const staged = f.clip ? await stageClipById(f.clip) : false;
-  if (chatId() !== id || !bound) return;
-  if (!staged) freshStage();
-  redraw(true);
-  lock();
-  drawLine();
-  if (open) {
-    $('vfold-prompt').open = true;
-    $('panel-vid-cast').open = true;
-  }
+  // A chat opened, a film's new Video, or a job that just ended: the Video
+  // as the server now has it, the hold let go only once it is restaged.
+  const fresh = opened || seen.video !== f.video;
+  const ended = !!seen?.busy;
+  seen = { chat: id, video: f.video, busy: false };
+  if (fresh || ended) followVideo(f.video, { open: fresh }).finally(() => holdVideo(null));
+  else holdVideo(null);
 }
 
 // The film's video model into #vmodel when it moved (the agent picked one,
-// or the board was opened): the board is written for it.
+// or the film was opened): its Video is made with it.
 function modelFrom(f) {
   if (!f.video_model || f.video_model === seenModel) return;
   seenModel = f.video_model;
   const sel = $('vmodel');
-  if (sel.value === f.video_model || ![...sel.options].some((o) => o.value === f.video_model)) return;
+  if (sel.disabled || sel.value === f.video_model || ![...sel.options].some((o) => o.value === f.video_model)) return;
   sel.value = f.video_model;
   sel.dispatchEvent(new Event('change', { bubbles: true }));
-}
-
-function redraw(force = false) {
-  const b = got?.board;
-  if (!b) return;
-  modelFrom(film());
-  const json = JSON.stringify(b);
-  if (!force && json === applied) {
-    note();
-    return;
-  }
-  if (typing($('vfold-prompt'))) {
-    stale = true;
-    return;
-  }
-  stale = false;
-  applied = json;
-  drawShots(b.shots);
-  $('veverytext').value = b.every ?? '';
-  sent = JSON.stringify(payload());
-  note();
-}
-
-function note() {
-  $('vsentnote').textContent = [got?.board?.note, warning].filter(Boolean).join(' ');
-}
-
-// The agent is working on the chat: the rows wait for it.
-function lock() {
-  const on = bound && busy();
-  for (const id of ['vshots', 'vshotadd', 'veverytext']) $(id).inert = on;
-}
-
-// The Shots panel's first line: whose rows these are, or the way back.
-function drawLine() {
-  const f = film();
-  const line = $('vboardline');
-  line.hidden = !f;
-  if (!f) return;
-  const title = f.title ? `“${f.title}”` : 'the storyboard';
-  $('vboardtext').textContent = bound
-    ? `These shots are ${title}, from the Assistant’s chat: what you change here, it sees.${busy() ? ' The agent is working on it; the shots open again when it is done.' : ''}`
-    : `The Assistant’s chat has ${title}.`;
-  $('vboardback').hidden = bound;
 }
 
 // ---- The Cast panel -------------------------------------------------------------
@@ -282,41 +176,44 @@ async function addToClip(id) {
   }
 }
 
-// One edit of the board (`/chats/film`): the cast, a draw press. Pending row
-// edits go first, so the press works on the rows as they are.
+// One edit of the film (`/chats/film`): the cast, a draw press. The open
+// shot is saved first, so the server reads the storyboard as it is; an edit
+// that draws nothing was written into the Video, which is followed.
 async function edit(fields) {
   if (!got) return;
   err('');
-  await flush();
+  await saveStage();
   try {
-    show?.(await post('/chats/film', { id: chatId(), ...fields }));
+    const g = await post('/chats/film', { id: chatId(), ...fields });
+    show?.(g);
     soonJobs();
+    if (!busy() && film()?.video) followVideo(film().video);
   } catch (e) {
     err(String(e.message || e));
     drawCast();
   }
 }
 
-// Before a message is sent: an edit still waiting goes first, or the turn
-// (which locks the rows) would overtake it.
+// Before a message is sent: the open shot saved, or the turn (which reads
+// the storyboard) would miss what was typed a moment ago.
 export async function flushBoard() {
-  await flush();
+  await saveStage();
 }
 
-// From the chat's storyboard card: back onto the rows, the panels open.
-export function showBoard() {
-  if (!film()) return;
-  if (!bound) bind(true);
-  else {
-    $('vfold-prompt').open = true;
-    $('panel-vid-cast').open = true;
+// From the chat's storyboard card: the film's Video on the stage, the
+// storyboard and Cast panels open.
+export async function showBoard() {
+  const id = film()?.video;
+  if (!id) return;
+  if (!(await followVideo(id, { open: true }))) {
+    err('The film’s video is gone; the next storyboard turn makes another.');
+    return;
   }
+  $('panel-vid-board').open = true;
+  $('panel-vid-cast').open = true;
 }
 
 export function initBoard() {
-  // An edit still inside its debounce when the page goes would be lost: the
-  // film is a storyboard clip's only draft.
-  window.addEventListener('pagehide', () => { if (timer) flush({}, { keepalive: true }); });
   const body = $('castbody');
   body.addEventListener('change', (e) => {
     const t = e.target;
@@ -384,26 +281,22 @@ export function initBoard() {
     }
   });
   $('castdraw').addEventListener('click', () => edit({ draw: true, frames: false }));
-  // The rows' first-frame buttons (`rowKeyHtml`) and the Shots footer's.
+  // Part 1's first-frame buttons (`rowKeyHtml`) and the Shot footer's.
   $('vshots').addEventListener('click', (e) => {
     const b = e.target.closest('[data-board-redraw], [data-board-addkey]');
-    if (!b || !bound) return;
+    const shot = currentShotId();
+    if (!b || !owns() || !shot) return;
     if (b.dataset.boardRedraw != null) {
-      const k = Number(b.dataset.boardRedraw);
-      if (confirm(`Draw shot ${k + 1}'s first frame again? The one there now is replaced.`)) {
-        edit({ shot: k, redraw_keyframe: true, draw: true });
+      if (confirm('Draw this shot’s first frame again? The one there now is replaced.')) {
+        edit({ shot_id: shot, redraw_keyframe: true, draw: true });
       }
-    } else edit({ shot: Number(b.dataset.boardAddkey), no_keyframe: false, draw: true });
+    } else edit({ shot_id: shot, no_keyframe: false, draw: true });
   });
   $('vframes').addEventListener('click', () => edit({ draw: true, frames: true }));
-  $('vboardback').addEventListener('click', () => bind(true));
-  $('vfold-prompt').addEventListener('focusout', () => {
-    if (stale) setTimeout(() => redraw(), 0);
-  });
-  // The tab's model is the one the board is shot on: H3 follows the cast's
-  // pictures, the rest start a cut from a first frame.
+  // The tab's model is the one the film is shot on: H3 follows the cast's
+  // pictures, the rest start a shot from a first frame.
   $('vmodel').addEventListener('change', async () => {
-    if (!bound || busy() || !$('vmodel').value || $('vmodel').value === film()?.video_model) return;
+    if (!owns() || busy() || !$('vmodel').value || $('vmodel').value === film()?.video_model) return;
     seenModel = $('vmodel').value;
     try {
       show?.(await post('/chats/board', { id: chatId(), video: $('vmodel').value }));

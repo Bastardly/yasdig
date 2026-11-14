@@ -283,15 +283,46 @@ fn continuity(out: &mut String, req: &Request, sees_picture: bool) {
     }
 }
 
-/// Shot `k`'s neighbours from every shot's `(text, cut)`: shot 1, the last
-/// cut before it, and the shot before — `Request`'s `first`, `scene`,
-/// `before`. Empty for shot 1. The page's `enhanceRow` picks the same.
-pub fn neighbours(shots: &[(&str, bool)], k: usize) -> (String, String, String) {
-    if k == 0 || k > shots.len() {
-        return Default::default();
+/// What Enhance shows a part of what is around it: `Request`'s fields.
+#[derive(Debug, Default, PartialEq)]
+pub struct Neighbours {
+    pub first: String,
+    pub scene: String,
+    pub before: String,
+    pub cut: bool,
+    pub then_continues: bool,
+}
+
+/// Part `k` of shot `s`'s neighbours, from every shot in storyboard order
+/// as `(scene, each part's words)`: its scene's opening part, its shot's
+/// first part, and the part before — inside the shot that one goes on from
+/// its last frame; a shot's part 1 cuts from the last words of the shot
+/// before, in this scene or the one before it. **The page's
+/// `partNeighbours` (`shots.js`) is the same rule**; one fixture table pins
+/// both (`the_fixture_table_the_page_checks_too`, `shots.test.js`).
+pub fn part_neighbours(order: &[(usize, Vec<&str>)], s: usize, k: usize) -> Neighbours {
+    let Some(at) = order.get(s) else { return Neighbours::default() };
+    let t = |x: &str| x.trim().to_string();
+    let opener = order.iter().position(|o| o.0 == at.0).unwrap_or(s);
+    let first = if opener == s && k == 0 { String::new() } else { order[opener].1.iter().map(|x| t(x)).find(|x| !x.is_empty()).unwrap_or_default() };
+    let mut before = String::new();
+    if k > 0 {
+        before = at.1.get(k - 1).map_or(String::new(), |x| t(x));
+    } else {
+        for j in (0..s).rev() {
+            before = order[j].1.iter().rev().map(|x| t(x)).find(|x| !x.is_empty()).unwrap_or_default();
+            if !before.is_empty() {
+                break;
+            }
+        }
     }
-    let scene = (1..k).rev().find(|&j| shots[j].1).map_or("", |j| shots[j].0);
-    (shots[0].0.to_string(), scene.to_string(), shots[k - 1].0.to_string())
+    Neighbours {
+        first,
+        scene: if k > 0 { at.1.first().map_or(String::new(), |x| t(x)) } else { String::new() },
+        cut: k == 0 && !before.is_empty(),
+        before,
+        then_continues: at.1.get(k + 1).is_some_and(|x| !x.trim().is_empty()),
+    }
 }
 
 /// `req` with less of its neighbours, so the brief fits `budget` tokens of
@@ -538,24 +569,46 @@ mod tests {
         assert!(!img.contains("Spoken") && !img.contains("seconds"), "{img}");
     }
 
+    /// The same table as `partNeighbours`'s in `shots.test.js`: change
+    /// both or neither.
+    #[test]
+    fn the_fixture_table_the_page_checks_too() {
+        let order = [
+            (0, vec!["Dusk on a pier.", "She turns."]),
+            (0, vec!["Close on her face.", "", "She smiles.", "She walks."]),
+            (1, vec!["A cafe at noon."]),
+        ];
+        let n = |first: &str, scene: &str, before: &str, cut: bool, then_continues: bool| Neighbours {
+            first: first.into(),
+            scene: scene.into(),
+            before: before.into(),
+            cut,
+            then_continues,
+        };
+        assert_eq!(part_neighbours(&order, 0, 0), n("", "", "", false, true));
+        assert_eq!(part_neighbours(&order, 1, 0), n("Dusk on a pier.", "", "She turns.", true, false));
+        assert_eq!(part_neighbours(&order, 1, 2), n("Dusk on a pier.", "Close on her face.", "", false, true));
+        assert_eq!(part_neighbours(&order, 2, 0), n("", "", "She walks.", true, false), "a new scene opens itself");
+    }
+
     #[test]
     fn every_later_shot_keeps_to_shot_one_and_a_cut_to_the_shot_it_cuts_from() {
         let t = Target::Video(VideoFamily::Ltx25, false);
-        let rows = [("Dusk on a pier, orange light.", false), ("Mara walks on.", false), ("Leo in a cafe.", true), ("He sips.", false), ("Mara looks back.", true)];
-        assert_eq!(neighbours(&rows, 0), Default::default());
-        let (first, scene, before) = neighbours(&rows, 4);
-        assert_eq!((first.as_str(), scene.as_str(), before.as_str()), ("Dusk on a pier, orange light.", "Leo in a cafe.", "He sips."));
+        let order = [(0, vec!["Dusk on a pier, orange light.", "Mara walks on."]), (0, vec!["Leo in a cafe.", "He sips.", "Mara looks back."])];
+        assert_eq!(part_neighbours(&order, 0, 0), Neighbours { then_continues: true, ..Default::default() });
+        let n = part_neighbours(&order, 1, 2);
+        assert_eq!((n.first.as_str(), n.scene.as_str(), n.before.as_str()), ("Dusk on a pier, orange light.", "Leo in a cafe.", "He sips."));
         let mut r = shot("Mara looks back.");
-        (r.first, r.scene, r.before, r.cut) = (first, scene, before, true);
+        (r.first, r.scene, r.before, r.cut) = (n.first, n.scene, n.before, true);
         let b = brief(t, &r, &[], false);
         assert!(b.contains("opens with:\nDusk on a pier, orange light.\nKeep to what it set up"), "{b}");
         assert!(b.contains("camera shot began with:\nLeo in a cafe."), "{b}");
         assert!(b.contains("a new camera shot of the same film. It cuts from:\nHe sips."), "{b}");
         assert!(!b.contains("nothing carried over"), "{b}");
         // A continue goes on from the shot before; shot 1 isn't quoted twice.
-        let (first, scene, before) = neighbours(&rows, 1);
+        let n = part_neighbours(&order, 0, 1);
         let mut r = shot("Mara walks on.");
-        (r.first, r.scene, r.before) = (first, scene, before);
+        (r.first, r.scene, r.before) = (n.first, n.scene, n.before);
         let b = brief(t, &r, &[], false);
         assert!(b.contains("which was:\nDusk on a pier") && b.contains("don't set the scene again"), "{b}");
         assert!(!b.contains("opens with"), "{b}");
