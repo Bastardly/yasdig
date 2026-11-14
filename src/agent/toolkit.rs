@@ -108,6 +108,7 @@ pub struct SavedCast {
     pub name: String,
     pub kind: super::chat::MemberKind,
     pub look: String,
+    pub speaks: String,
 }
 
 /// The saved cast a turn may reuse: only what the person asked for. Listing
@@ -439,7 +440,13 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
             .list()
             .into_iter()
             .filter(|v| !v.entry.draft && v.picture)
-            .map(|v| SavedCast { id: v.entry.id, name: v.entry.name.trim().to_string(), kind: v.entry.kind, look: v.entry.look })
+            .map(|v| SavedCast {
+                id: v.entry.id,
+                name: v.entry.name.trim().to_string(),
+                kind: v.entry.kind,
+                look: v.entry.look,
+                speaks: v.entry.speaks,
+            })
             .collect();
         t.library = offered(std::mem::take(&mut t.library), chat);
     }

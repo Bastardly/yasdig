@@ -249,7 +249,7 @@ export function initBoard() {
       const m = film()?.cast[Number(d.filmTocast)];
       if (!m) return;
       openCastEditor(null, {
-        name: m.name, kind: m.kind, look: m.look,
+        name: m.name, kind: m.kind, look: m.look, speaks: m.speaks ?? '',
         picture: m.stem ?? undefined, sheet: (m.stem && m.sheet_stem) || undefined, voice: m.voice ?? undefined,
       });
     }

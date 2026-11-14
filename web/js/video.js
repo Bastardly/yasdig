@@ -565,7 +565,7 @@ export function drawShots(rows) {
           <div class="withbtn">
             <input type="text" class="shotcastadd" placeholder="Type a name, or Add cast…"
               aria-label="Add someone to shot ${k + 1}">
-            <button type="button" class="btn shotcastpick" title="Someone from the Cast tab: on H3 their picture and voice come too">Add cast…</button>
+            <button type="button" class="btn shotcastpick" title="Someone from the Cast tab: Enhance writes in their look and how they speak; on H3 their picture and voice come too">Add cast…</button>
           </div>
         </div>
         <div class="shotsoundrows" hidden>
@@ -938,13 +938,14 @@ function syncShots() {
     sounds.textContent = a ? `Sounds (${a})` : 'Sounds…';
     el.querySelector('.shotwhy').hidden = !refsOk || fresh;
     el.querySelector('.shotsoundrows').hidden = !m?.sounds;
-    // Who is in it is H3's alone (`features.references`): the shot follows
-    // those pictures and voices. On Wan or LTX it would only steer which
-    // pictures a film's first frame is drawn from, which reads as if the
-    // shot followed them, so it is hidden; the names stay on the row
-    // (`data-cast`) for *Draw the first frames*. Never on a continue: it
-    // starts from the last frame, whoever that shows.
-    el.querySelector('.shotcastrow').hidden = !m?.features?.references || !fresh;
+    // Who is in it: on H3 (`features.references`) the shot follows those
+    // pictures and voices; on Wan or LTX the names are words only — Enhance
+    // writes in each saved member's look and how they speak, and a film's
+    // *Draw the first frames* picks pictures by them. The chips show no
+    // picture there (`drawRowCast`), so nothing reads as followed. Not on a
+    // narrated model (a voice is all it takes, through Sounds), and never on a
+    // continue: it starts from the last frame, whoever that shows.
+    el.querySelector('.shotcastrow').hidden = !m || !!m.narrated || !fresh;
     drawRowCast(el);
     // Part 1's image is the shot's first frame.
     const keyBtn = el.querySelector('.shotkey');

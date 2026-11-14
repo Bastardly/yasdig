@@ -1063,6 +1063,9 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
             m.name = e.name.clone();
             m.kind = e.kind;
             m.look = e.look.clone();
+            if !e.speaks.trim().is_empty() {
+                m.speaks = e.speaks.clone();
+            }
             m.cast_id = Some(e.id.clone());
         }
         let adopted = (c.picture as usize).checked_sub(1).and_then(|i| attached.get(i));
@@ -2568,6 +2571,7 @@ mod tests {
             name: "Leo".into(),
             kind: MemberKind::Character,
             look: "Leo is a boy of eight in a yellow raincoat and green boots.".into(),
+            speaks: "a boy of eight, quick and bright".into(),
         }];
         let mut b = board();
         b["cast"][1]["name"] = json!("leo");
@@ -2575,6 +2579,7 @@ mod tests {
         let f = c.film.as_ref().unwrap();
         let leo = &f.cast[1];
         assert_eq!((leo.name.as_str(), leo.cast_id.as_deref()), ("Leo", Some("c1")), "spelt as saved");
+        assert_eq!(leo.speaks, "a boy of eight, quick and bright", "the saved voice in words comes with the look");
         assert_eq!(leo.look, t.library[0].look, "the saved look, so the words match the picture");
         assert_eq!(f.shots[2].cast, ["Leo"]);
         assert_eq!(f.cast[0].cast_id, None, "Mara isn't in the saved cast");

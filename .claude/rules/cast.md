@@ -141,3 +141,8 @@ Page: the editor holds `cur = {id, entry, pick, voice, chat}` and sends nothing 
 until Save; `pick` is `{try}`, `{output}`, `{outputs: {picture, sheet}}` or `null`
 (keep), the wire shape of `cast::Pick`. Refine & adjust's *Save as cast…* (`#lbcast`) goes through
 `/download-image` and `/upload`, so the entry copies an output in like any other.
+
+**How they speak** (`Entry.speaks`, `Fields.speaks`, the editor's `#cespeaks`, a
+character's only — `set_fields` empties it on a place or prop): words, never drawn
+(`derived_prompt` takes the look). Enhance is told `chat::look_with_voice`, except on
+H3 when the entry has `voice.wav` — the sound is what H3 follows (`agent.md`).

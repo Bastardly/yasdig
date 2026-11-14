@@ -352,6 +352,8 @@ Break silently:
   `speaks`, the Cast panel's box on a character; not `voice`, which is H3's sound stem):
   Enhance is told `look_and_voice()` (look, then "Leo speaks: …"), the channel the
   `PAIR_CASES` showed reaching both parts word for word on 3 of 3 seeds (2026-11-14);
-  a picture prompt takes the look alone. The saved cast library has no `speaks` yet,
-  so a hand-made Video's Enhance voices from its look only.
+  a picture prompt takes the look alone. The saved cast has it too (`cast::Entry.speaks`,
+  the editor's *How they speak*), adopted with the look by a story that names the entry,
+  and told to the Video tab's Enhance through the library looks. **On H3 a voice sound
+  wins**: a member with `voice` (or an entry with `voice.wav`) is told its look alone.
 - **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.

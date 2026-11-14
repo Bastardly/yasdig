@@ -525,8 +525,12 @@ start a real pass from a saved picture at a strength you choose, pick it in the
 
 The **Cast** tab keeps someone or something under a name — a character, a place, a
 prop — so a picture or a clip can have them again. Each entry is a name, a **look**
-(how they look, in words), a picture, and for a character a turnaround sheet and a
-voice. They live in `user/cast/`, one folder each, which nothing sweeps: *Close
+(how they look, in words), a picture, and for a character a turnaround sheet, a
+voice recording and **How they speak** in words (*"a man of sixty, low and dry"*):
+Enhance puts those words into every part the character talks in, so each part voices
+them alike — on MiniMax H3 the recording is followed instead, when there is one. A film
+the Assistant writes gives each character who talks the same words, in the Cast panel's
+card. They live in `user/cast/`, one folder each, which nothing sweeps: *Close
 server*'s clear never reaches them, so there is no Favorites shelf here.
 
 **New cast…** opens the cast editor. Give it a name and write the look starting with
@@ -953,7 +957,9 @@ that do.
 
 **What is said, heard and scored (MiniMax H3).** With its audio VAE, an H3 part also
 has **Who is in it** (a chip per name: type one, or *Add cast…* — on a shot that starts
-fresh that brings the member's picture as a reference and their voice as a sound),
+fresh that brings the member's picture as a reference and their voice as a sound; on
+LTX and Wan the row is there too, names only, and Enhance writes in each saved member's
+look and how they speak),
 **Spoken** — one line each, `Mara: Who's there?`, with `(voiceover)` after the name for
 a voice heard over the shot with closed lips, and a language other than English the
 same way, `Leo (Danish): Hej.` — **Sound** (empty is silence) and **Music** (only the
@@ -1015,8 +1021,8 @@ When you ask for a change it rewrites only what it means to change:
   is open when you send.
 
 On H3, *Who is in it* on a shot's first part decides which of the cast's pictures and
-voices that shot follows; on Wan it isn't shown, and the names the agent gave each shot
-only pick the pictures its first frame is drawn from. The Cast panel's *Draw the cast*
+voices that shot follows; on Wan and LTX the names the agent gave each shot are words
+for Enhance and only pick the pictures its first frame is drawn from. The Cast panel's *Draw the cast*
 and the Shot panel's *Draw the first frames* draw them (optional), and a shot's first
 frame can be drawn again, removed or replaced with your own. Each new or changed part
 is written out in full for the video model as soon as the storyboard is written

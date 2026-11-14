@@ -307,9 +307,9 @@ read over by every part. Names in the UI: Storyboard, Shot
   the layout would make its soundscape `N/A`, i.e. silence. `every` goes inside.
   H3's encoder takes the prompt whole (`prompt_attn_range {0,0}`), so `(S1)` and
   `[Shot 1]` survive. Page: the rows' *Who is in it* / *Spoken* / *Sound* / *Music*
-  (`m.sounds`; *Who is in it* on `features.references` only — on Wan/LTX a film's names
-  only pick which pictures a first frame is drawn from, so the row would read as if the
-  shot followed them; `data-cast` keeps them), names in the borrowed
+  (`m.sounds`; *Who is in it* on every model but narrated, a fresh part only — on
+  Wan/LTX names only, no chip pictures: Enhance looks each up in the cast for its look
+  and `speaks`, and a film's names pick which pictures a first frame is drawn from), names in the borrowed
   References/Sounds dialogs (`editRefs(…, names)`, `editSounds(…, voices)`).
 - **References are H3's alone** (`VideoFamily::takes_references`,
   `references` on `/video-models`): sd.cpp refuses H3's Ref2VA beside a keyframe, so

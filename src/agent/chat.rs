@@ -290,14 +290,20 @@ impl Member {
     /// channel `agent-check`'s pair case showed reaching every part word
     /// for word (3 of 3 seeds, 2026-11-14).
     pub fn look_and_voice(&self) -> String {
-        match self.speaks.trim() {
-            "" => self.look.clone(),
-            v => {
-                let voice = format!("{} speaks: {}.", self.name.trim(), v.trim_end_matches('.'));
-                match self.look.trim().trim_end_matches('.') {
-                    "" => voice,
-                    look => format!("{look}. {voice}"),
-                }
+        look_with_voice(&self.name, &self.look, &self.speaks)
+    }
+}
+
+/// A look, then "Name speaks: …" when there are words for the voice: what
+/// Enhance is told of a film member or a saved cast entry.
+pub fn look_with_voice(name: &str, look: &str, speaks: &str) -> String {
+    match speaks.trim() {
+        "" => look.to_string(),
+        v => {
+            let voice = format!("{} speaks: {}.", name.trim(), v.trim_end_matches('.'));
+            match look.trim().trim_end_matches('.') {
+                "" => voice,
+                look => format!("{look}. {voice}"),
             }
         }
     }

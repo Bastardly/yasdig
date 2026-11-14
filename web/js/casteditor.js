@@ -54,6 +54,7 @@ function fields() {
     name: $('cename').value.trim(),
     kind: kindNow(),
     look: $('celook').value.trim(),
+    speaks: kindNow() === 'character' ? $('cespeaks').value.trim() : '',
     image_model: $('cemodel').value,
   };
 }
@@ -115,6 +116,9 @@ function drawVoice() {
   $('cevoicetext').textContent = v?.output ? v.output : has ? 'Saved' : 'None';
   $('cevoiceplay').hidden = !has;
   $('cevoicenone').hidden = !has;
+  $('cespeakshint').textContent = has
+    ? 'MiniMax H3 voices them from the sound above; these words are for the other video models.'
+    : 'Enhance is told this beside the look, so every part voices them alike.';
 }
 
 function drawForm() {
@@ -180,6 +184,7 @@ export async function openCastEditor(id = null, prefill = {}, onSaved = null, op
   const words = (k) => (chat ? prefill[k] ?? entry?.[k] : entry?.[k] ?? prefill[k]) ?? '';
   $('cename').value = words('name');
   $('celook').value = words('look');
+  $('cespeaks').value = words('speaks');
   const model = entry?.image_model;
   $('cemodel').value = models.some((m) => m.name === model) ? model : defaultModel();
   setKind((chat ? prefill.kind ?? entry?.kind : entry?.kind ?? prefill.kind) ?? 'character');
@@ -366,7 +371,7 @@ export function initCastEditor() {
     setKind(b.dataset.kind);
     writeBack();
   });
-  for (const id of ['cename', 'celook']) $(id).addEventListener('input', writeBack);
+  for (const id of ['cename', 'celook', 'cespeaks']) $(id).addEventListener('input', writeBack);
   $('cemodel').addEventListener('change', drawForm);
   queueChanged.subscribe(refreshWhileDrawn);
   $('cedraw').addEventListener('click', drawTry);

@@ -183,8 +183,8 @@ const HELP = [
   { ids: ['vshotcast'],
     text: 'Who is in the shot, by the names Spoken uses: type a name, or Add cast… '
         + 'for someone from the Cast tab — their picture becomes a reference '
-        + 'and their voice a sound. MiniMax H3 only: other models start a shot from its '
-        + 'first frame instead. Only a shot’s first part has it: a part that goes '
+        + 'and their voice a sound on MiniMax H3. On LTX and Wan only the name goes on: '
+        + 'Enhance writes in their look and how they speak. Only a shot’s first part has it: a part that goes '
         + 'on starts from the last frame, with whoever it shows. Anyone here with no line is '
         + 'told to stay silent, lips closed: MiniMax H3 fills time nobody accounted '
         + 'for with speech nobody wrote.' },

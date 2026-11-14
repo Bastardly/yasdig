@@ -71,6 +71,12 @@ pub struct Entry {
     /// its picture is told.
     #[serde(default)]
     pub look: String,
+    /// How a character speaks, in words ("a man of sixty, low and dry"):
+    /// what Enhance is told after the look, so every part voices them alike.
+    /// Not drawn. On H3 a voice sound (`voice.wav`) is what is followed, and
+    /// these words are left out there.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub speaks: String,
     /// The image model it is drawn with.
     #[serde(default)]
     pub image_model: String,
@@ -170,6 +176,8 @@ pub struct Fields {
     pub kind: MemberKind,
     #[serde(default)]
     pub look: String,
+    #[serde(default)]
+    pub speaks: String,
     #[serde(default)]
     pub image_model: String,
 }
@@ -474,6 +482,8 @@ fn set_fields(e: &mut Entry, f: &Fields) {
     e.name = f.name.trim().to_string();
     e.kind = f.kind;
     e.look = f.look.trim().to_string();
+    // Only a character talks: a place or a prop keeps no voice.
+    e.speaks = if f.kind == MemberKind::Character { f.speaks.trim().to_string() } else { String::new() };
     e.image_model = f.image_model.clone();
 }
 
@@ -835,6 +845,18 @@ mod tests {
         assert!(dir.join("thumb.png").is_file());
         assert!(!dir.join("tries").exists());
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A character keeps how it speaks; a place or a prop keeps no voice.
+    #[test]
+    fn only_a_character_keeps_how_it_speaks() {
+        let mut e = Entry::default();
+        let f = Fields { kind: MemberKind::Character, speaks: " low and dry ".into(), ..fields("Elias") };
+        set_fields(&mut e, &f);
+        assert_eq!(e.speaks, "low and dry");
+        set_fields(&mut e, &Fields { kind: MemberKind::Place, ..f });
+        assert!(e.speaks.is_empty());
+        assert!(!serde_json::to_string(&e).unwrap().contains("speaks"), "an entry without one stays as it was on disk");
     }
 
     #[test]

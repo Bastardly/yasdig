@@ -475,7 +475,10 @@ pub fn run(cfg: &Config, monitor: &Monitor, req: &Request) -> Result<Enhanced> {
         for v in store.list() {
             let e = v.entry;
             if !e.draft && !looks.iter().any(|(n, _)| n.eq_ignore_ascii_case(&e.name)) {
-                looks.push((e.name, e.look));
+                // H3 follows the entry's voice sound; words beside it would
+                // describe another voice.
+                let speaks = if t.fields() && v.voice { "" } else { e.speaks.as_str() };
+                looks.push((e.name.clone(), super::chat::look_with_voice(&e.name, &e.look, speaks)));
             }
         }
     }
