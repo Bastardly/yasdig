@@ -3,10 +3,10 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
-## 0.11.2 — 2026-11-14
+## 0.11.3 — 2026-11-14
 
-0.11.1's release failed to build, so it shipped no downloads; 0.11.2 is 0.11.1 plus
-this fix.
+0.11.1's and 0.11.2's releases failed to build, so neither shipped downloads; 0.11.3
+is 0.11.1 plus this fix.
 
 ### Fixed
 
