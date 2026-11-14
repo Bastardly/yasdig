@@ -78,6 +78,11 @@ pub struct Toolkit {
     pub videos: Vec<VideoView>,
     /// Why this chat can't make a film, or `None` when it can.
     pub film_off: Option<String>,
+    /// When the only reason is the Video tab's model (it can't make one, or
+    /// none is picked): the installed models that can, in their usual order.
+    /// A "film" then asks the person to pick one (`Session::pick`) — the
+    /// agent recommends, never chooses.
+    pub film_pick: Vec<VideoView>,
     /// An Image chat's: the settings shown are the Image tab's own controls.
     pub image_tab: bool,
     /// The agent model sees pictures. Set by a turn, which knows the model.
@@ -194,8 +199,16 @@ pub struct VideoView {
     pub name: String,
     pub family: &'static str,
     pub label: &'static str,
-    /// It goes on from one shot's last frame to the next: a film of several.
+    /// A film can be made on it (`VideoFeatures::films`): its parts go on
+    /// from the last frame, and they describe motion.
     pub chains: bool,
+    /// What it is for, in a few words (`VideoFeatures::about`): the
+    /// film-model card's buttons, and what the agent recommends from.
+    pub about: &'static str,
+    /// The most characters a part's words may run to with its scene's
+    /// description (`VideoFeatures::prompt_chars`): LTX's cliff.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_chars: Option<u32>,
     /// Its cuts follow the cast's pictures (H3) rather than a keyframe.
     pub references: bool,
     /// And sounds, voices among them: H3 with its audio VAE.
@@ -212,16 +225,17 @@ pub struct VideoView {
 
 impl VideoView {
     pub fn of(m: &crate::config::VideoModel) -> VideoView {
+        // The one source the page reads too (`/video-models`' `features`).
+        let f = m.features();
         VideoView {
             name: m.name.clone(),
             family: m.family.as_str(),
             label: m.family.label(),
-            // A narrated model "chains" (shots of their own pictures) but a
-            // storyboard's rows describe motion, not what a voice reads, so a
-            // film is never made on one.
-            chains: m.family.chains() && m.family != crate::config::VideoFamily::Narrated,
-            references: m.family.takes_references(),
-            sounds: m.family.takes_references() && m.audio_vae.is_some(),
+            chains: f.films,
+            about: f.about,
+            prompt_chars: f.prompt_chars,
+            references: f.references,
+            sounds: f.sounds,
             width: m.width,
             height: m.height,
             frames: m.frames,
@@ -308,6 +322,11 @@ impl Toolkit {
         self.film_off.is_none()
     }
 
+    /// Whether a "film" asks the person which video model first.
+    pub fn picks_film_model(&self) -> bool {
+        self.film_off.is_some() && !self.film_pick.is_empty()
+    }
+
     /// It may make a cast member: allowed in Settings → Agent, and an image
     /// model to draw it with.
     pub fn casts(&self) -> bool {
@@ -383,23 +402,24 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
         .filter(|m| m.exists)
         .map(|m| VideoView { longest_secs, ..VideoView::of(m) })
         .collect();
-    let tab = chat.video.as_deref().and_then(|name| installed.iter().find(|v| v.name == name)).cloned();
-    // A Video chat's film is its own Video, so the model the tab shows is no
-    // reason to refuse one: when it can't go on from shot to shot (narrated
-    // stills, VACE, T2V) or there is none, an installed one that can is the
-    // film's — `apply_story` says so, and the page switches to it.
-    let video = match chat.context {
-        super::chat::Pane::Video if !tab.as_ref().is_some_and(|v| v.chains) => {
-            installed.iter().find(|v| v.chains).cloned().or(tab)
-        }
-        _ => tab,
-    };
+    // The film is made on the Video tab's model, the person's pick: never
+    // swapped for another behind their back. When it can't make one (narrated
+    // stills, VACE, T2V) or none is picked, the person is asked which of the
+    // installed models that can (`film_pick`).
+    let video = chat.video.as_deref().and_then(|name| installed.iter().find(|v| v.name == name)).cloned();
     let mut t = build(&rules, &shown(cfg, chat, profile), &locks, models, profile.map(|p| p.family));
     t.film_off = match chat.context {
         // In context: a film is begun from the Video tab's panel.
         super::chat::Pane::Image => Some("films are made from the Assistant on the Video tab".into()),
-        super::chat::Pane::Video => film_off(&rules, image, video.as_ref().map(|v| v.name.as_str()).or(chat.video.as_deref()), video.as_ref()),
+        super::chat::Pane::Video => film_off(&rules, image, chat.video.as_deref(), video.as_ref()),
     };
+    if chat.context == super::chat::Pane::Video {
+        let can: Vec<VideoView> = installed.iter().filter(|v| v.chains).cloned().collect();
+        // Only the model in the way: with one that can, nothing else would be.
+        if t.film_off.is_some() && can.first().is_some_and(|v| film_off(&rules, image, None, Some(v)).is_none()) {
+            t.film_pick = can;
+        }
+    }
     t.image_tab = chat.context == super::chat::Pane::Image;
     // A story turn reuses the saved cast; a `cast` action may change a
     // saved entry it names.
@@ -520,6 +540,7 @@ pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelCh
         video: None,
         videos: Vec::new(),
         film_off: Some("no video model".into()),
+        film_pick: Vec::new(),
         image_tab: false,
         vision: false,
         rules: rules.clone(),
@@ -638,7 +659,7 @@ mod tests {
     #[test]
     fn a_film_needs_the_rule_an_image_model_and_a_video_model_that_chains() {
         let wan = VideoView {
-            name: "wan".into(), family: "wan22_ti2v_5b", label: "Wan 2.2 TI2V 5B", chains: true, references: false, sounds: false,
+            name: "wan".into(), family: "wan22_ti2v_5b", label: "Wan 2.2 TI2V 5B", about: "silent", prompt_chars: None, chains: true, references: false, sounds: false,
             width: 1280, height: 704, frames: 121, fps: 24, longest_secs: 5.0,
         };
         let rules = Rules::default();

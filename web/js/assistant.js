@@ -3,7 +3,7 @@ import { onJobs, queueChanged, soonJobs } from './jobs.js';
 import { openWorkItem } from './workitems.js';
 import { choosePicture, upload } from './source-slot.js';
 import { renderChat, sessionHtml, stateText } from './chatview.js';
-import { flushBoard, follow as followBoard, showBoard } from './board.js';
+import { flushBoard, follow as followBoard, showBoard, showCast } from './board.js';
 import { openModels } from './getmodels.js';
 import { openCastEditor } from './casteditor.js';
 import { videoSettings } from './video.js';
@@ -509,6 +509,12 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
         await post('/agent/session', body);
         soonJobs();
         await openChat(id);
+      } else if (d.pickVideo) {
+        // The film-model card: the chat's video model, and its story turn.
+        for (const b of t.closest('.chatcard').querySelectorAll('button')) b.disabled = true;
+        await post('/agent/film-model', { chat: id, video: d.pickVideo });
+        soonJobs();
+        await openChat(id);
       } else if (d.again) {
         t.disabled = true;
         await post('/agent/again', { chat: id, count: Number(d.again) });
@@ -523,6 +529,8 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
         openBoundEditor(data.chat, d.castOpen);
       } else if (d.openStory != null) {
         showBoard();
+      } else if (d.openCast != null) {
+        showCast();
       } else if (d.openItem) {
         // On the Image tab's stage, in Refine & adjust, like any work item.
         await openWorkItem(d.openItem);

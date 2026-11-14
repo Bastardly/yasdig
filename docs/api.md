@@ -25,7 +25,7 @@ yasdig doctor [models.toml]      # run the startup checks and report, without st
 yasdig upscale in.png out.png <model> [factor=2.0] [models.toml]  # the model enlarge alone
 yasdig fold-scales <file.gguf>...  # fold a scaled-fp8 GGUF's scales into its weights
 yasdig llm-selftest [agent|-] [picture.png] [models.toml]  # one agent turn, no server
-yasdig agent-check [agent|-] [models.toml]  # nine scored turns: what this agent model gets right
+yasdig agent-check [agent|-] [models.toml]  # twelve scored turns: what this agent model gets right
 yasdig fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]  # no colour knobs: UI only
 yasdig fsr-selftest [out.png]    # synthesize patterns and check the filters
 yasdig sr-selftest               # the upscaler shaders against CPU references, plus speed
@@ -493,7 +493,10 @@ needs a Vulkan device and nothing else.
   plus the `[[video]]` table, built fresh per call so a finished download shows up
   without a restart. Each entry is the config verbatim plus what the
   page would otherwise have to re-derive from `family`: `size_multiple`, `frame_grid`
-  (`{multiple, offset, min, round_up}`), `forced_fps`, `is_moe`, `missing` (the component
+  (`{multiple, offset, min, round_up}`), `forced_fps`, `is_moe`, `features` (what it can do,
+  which the Assistant reads too: `continues`, `references`, `sounds`, `audio`, `narrated`,
+  `films`, `about`, and `prompt_chars`, the most characters a part's prompt may run to with
+  its scene's description, `null` with no limit — LTX's is 3200), `missing` (the component
   files not on disk), `duration`, and `parts`: one row per separate file its family runs
   with (`VideoFamily::slots`), in `/models`' `parts` shape — `slot`, `label`, `optional`,
   `current`, `auto` and `options`, every file under the models dir that fits. Served rather than reimplemented in the page on
@@ -758,9 +761,11 @@ the chat, whose `rev` moves on every write.
 - `GET /chats/{id}` — `{ chat, toolkit, favorite }`: the chat as stored, and the knob table
   resolved for it under Settings → Agent — each knob's `allowed`, limits, `locked` reason
   and value, the passes, the models it could pick, `locks`, the film's `video` model
-  `{name, family, label, chains, references, sounds, width, height, frames, fps}` and
-  `film_off`, why no film can be made in it (`null` when one can), and `videos`, every
-  installed video model in that shape. A Video chat's `chat.film` names its own Video
+  `{name, family, label, chains, about, references, sounds, width, height, frames, fps}`
+  (from the model's `features`, as `/video-models` serves them), `film_off`, why no film
+  can be made in it (`null` when one can), `film_pick`, the installed models that can
+  when only the tab's model is in the way (a "film" then waits on `chat.session.pick`),
+  and `videos`, every installed video model in that shape. A Video chat's `chat.film` names its own Video
   (`film.video`), which every story turn, Enhance and board picture writes — plans for
   shots not generated, drafts for generated ones — and which is read back before every
   turn and `/chats/film` edit; its `shots` are parts, each with its `shot` id.
@@ -826,6 +831,11 @@ the chat, whose `rev` moves on every write.
   drawn once instead (`409` when it has none). `false` drops it with a note and
   answers the chat. `409` with no proposal, or while the agent is working on the chat.
   A new `/agent/send` drops an unanswered one.
+- `POST /agent/film-model` — `{ chat, video }`: a button on the film-model card
+  (`chat.session.pick`, set when a "film" was asked for and the Video tab's model can't
+  make one): `video` becomes the chat's model and the story turn runs on it; answers
+  `{job}`. `400` when the model isn't installed whole, `409` when it isn't on the card,
+  there is no card, or the agent is working on the chat. A new `/agent/send` drops it.
 - `POST /agent/again` — `{ chat, count? }`: draw the chat's settings again on new seeds,
   `count` pictures (1), with no agent turn; answers `{job}`. `409` with no round yet, a
   blank prompt, or while the agent is working on the chat.

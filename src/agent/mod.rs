@@ -725,7 +725,7 @@ fn board_picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, step
             let m = film.cast.get(k).ok_or_else(|| anyhow!("that cast member is gone"))?;
             // The person's picture is who the sheet shows; else the look is.
             let refs: Vec<String> = m.stem.clone().filter(|_| m.theirs()).into_iter().collect();
-            let who = if refs.is_empty() { m.look.clone() } else { format!("The person in the reference picture. {}", m.look) };
+            let who = if refs.is_empty() { m.look.clone() } else { format!("The character in the reference picture. {}", m.look) };
             let pic = Pic {
                 prompt: with_look(&format!("{SHEET} {who}"), &film.every),
                 size: board_size(&cfg, &settings, 2.0),
@@ -772,12 +772,12 @@ fn board_picture(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, step
 
 /// A character's turnaround: the angles the person asked for, one figure
 /// each, so every later picture has a side to follow.
-pub(crate) const SHEET: &str = "Character turnaround sheet: the same person shown four times side by side on one plain light grey \
+pub(crate) const SHEET: &str = "Character turnaround sheet: the same character shown four times side by side on one plain light grey \
                      background, full body and standing — front view, three-quarter view, side view in profile, back \
                      view. The same face, hair and clothes in every view, even light, no text.";
 
 /// A front picture drawn from that sheet.
-pub(crate) const FRONT: &str = "The person in the reference picture, alone, seen from the front, full body and standing, on a plain \
+pub(crate) const FRONT: &str = "The character in the reference picture, alone, seen from the front, full body and standing, on a plain \
                      light grey background.";
 
 /// A prompt with the film's look after it.

@@ -849,7 +849,10 @@ can ignore the prompt and draw a stock scene. If you have the bf16 from an earli
 download, the Video tab says so; get the card's file, or convert the bf16 to q8_0 on
 **Models → Convert** (about 15 GB, a few minutes). Either is used from then on. 2.5's
 default video VAE decodes by diffusion, which sd.cpp doesn't run: use the
-`-conv` VAE the card fetches. **Hi-res ×2** (Generation panel, LTX only) draws at the
+`-conv` VAE the card fetches. LTX reads at most 1024 tokens of prompt (a part's words
+with its scene's description); past that it ignores the prompt and makes an unrelated
+clip, so on LTX each part's prompt shows a count in its corner, out of 3200 characters,
+which turns red when over. **Hi-res ×2** (Generation panel, LTX only) draws at the
 size you set, enlarges the latent with LTX's latent upscaler and refines it at twice
 the size in the same run — far cheaper than drawing big from the start. 640×352 with
 Hi-res comes out at 1280×704.
@@ -948,16 +951,19 @@ doesn't invent a narrator, a score or a closing sentence. A shot with none of th
 filled is sent as typed.
 
 **From the Assistant.** Ask the Video tab's Assistant for a short film and it writes a
-video of its own — scenes, shots and their parts — into the storyboard, and the cast
-into the **Cast** panel: who each one is, how they look, their picture and, on H3, their
+video of its own on the Video tab's model. If that model can't make one (narrated
+stills, VACE), the chat asks which installed model to use, one button each, with the
+one it recommends for your story marked; nothing is written until you pick. It writes
+scenes, shots and their parts into the storyboard, and the cast into the **Cast** panel: who each one is, how they look, their picture and, on H3, their
 voice. The video is an ordinary one: edit it, reorder its shots, generate it as you
 would any other. What you change there the agent sees on its next turn, and when you
 ask for changes ("make the second scene at night") it rewrites only the shots it means
 to change — the rest, and every generated shot's frames, stay. A generated shot it
 rewrites keeps its frames and shows as changed until you generate it again; a generated
 shot it leaves out is kept, and it says so. A scene with a generated shot keeps its
-description. *Who is in it* on a shot's first part decides which of the cast's pictures
-that shot follows; the Cast panel's *Draw the cast* and the Shot panel's *Draw the first
+description. On H3, *Who is in it* on a shot's first part decides which of the cast's
+pictures and voices that shot follows; on Wan it isn't shown, and the names the agent
+gave each shot only pick the pictures its first frame is drawn from; the Cast panel's *Draw the cast* and the Shot panel's *Draw the first
 frames* draw them (optional), and a shot's first frame can be drawn again, removed or
 replaced with your own. On H3 a shot follows the cast's pictures and voices, on Wan it
 starts from its first frame. Each new or changed part is written out in full for the

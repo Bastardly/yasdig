@@ -114,6 +114,18 @@ pub fn short_id(id: &str) -> String {
 /// Saved cast entries a story turn is shown at most, and characters of a
 /// look: the list is context, not the story, and a long library would crowd
 /// out the board.
+/// What a "film" is for, in the person's words rather than ours: they don't
+/// know "storyboard", "scene" or "part", and on 2026-11-14 a 4 s "clip",
+/// "shot" and "4 seconds of" were each answered with "I can't make video
+/// clips" — the line this replaced told the agent so. The storyboard *is*
+/// how a video is made here: the person presses Generate on it.
+const FILM_ASKS: &str = "make a video. On the Video tab any request for something that moves is a film, \
+     however short and whatever it is called: a clip, a shot, a scene, a video, an animation, a movie, \
+     \"4 seconds of a dog stealing a sausage\", \"a short movie about a lighthouse keeper\". You write it as a \
+     storyboard — its cast, scenes and shots — and the person generates the video from it with one press, so \
+     never say you can't make video. Only when you can't tell whether they want a still picture or a moving \
+     video, ask which in one sentence, with \"talk\".";
+
 const LIBRARY_MAX: usize = 24;
 const LIBRARY_LOOK_CHARS: usize = 240;
 
@@ -208,6 +220,13 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                 v.longest(),
                 v.fps
             ));
+            if let Some(n) = v.prompt_chars {
+                s.push_str(&format!(
+                    " A part's words and its scene's `every` together stay under {n} characters: past that \
+                     {} ignores the prompt and draws something unrelated.",
+                    v.label
+                ));
+            }
         }
     } else if turn.mode != Mode::Describe {
         if offered.is_empty() {
@@ -304,21 +323,29 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                          unchanged when it already asks for everything.",
                     );
                 }
-                if let Some(why) = &t.film_off {
+                if t.picks_film_model() {
+                    // The tab's model can't make a film: the person picks one
+                    // on a card of buttons; the agent's pick is a recommendation.
+                    let list: Vec<String> =
+                        t.film_pick.iter().map(|v| format!("{} ({}: {})", v.name, v.label, v.about)).collect();
+                    s.push_str(&format!(
+                        "\n- \"film\": {FILM_ASKS} The Video tab's model can't make one ({why}), so the person picks the video model from buttons first: `video_model` is \
+                         the one you recommend for this story, one of {list} — the one the person named, else one \
+                         with speech and sound when people talk or sound matters. `reply` says in a sentence which \
+                         you recommend and why; don't ask whether to go ahead, the buttons do.",
+                        why = t.film_off.as_deref().unwrap_or_default(),
+                        list = list.join(", "),
+                    ));
+                } else if let Some(why) = &t.film_off {
                     s.push_str(&format!(
                         "\n- A film can't be made in this chat: {why}. If the person asks for one, say so and what would fix it."
                     ));
                 } else {
-                    s.push_str(
-                        "\n- \"film\": write a storyboard for a short movie from the person's story, idea or \
-                         pictures: its cast and shots, whose pictures are drawn when the person presses for them. \
-                         \"Make a film of this story\", \"a short movie about a lighthouse keeper\". With a \
-                         storyboard already, \"film\" changes it: \"make shot 2 at night\", \"add a dog\", \
-                         \"Leo says something kinder\". The storyboard is written next, so `reply` only says in a \
-                         sentence that you are writing it.\n\
-                         You can't make the video clip itself: the person sends the storyboard to the Video tab and \
-                         generates it there. Asked to film, render or shoot it, say so in `reply`, with \"talk\".",
-                    );
+                    s.push_str(&format!(
+                        "\n- \"film\": {FILM_ASKS} With a storyboard already, \"film\" changes it: \"make shot 2 \
+                         at night\", \"add a dog\", \"Leo says something kinder\". The storyboard is written next, \
+                         so `reply` only says in one sentence that you are writing it — never the storyboard itself."
+                    ));
                 }
                 if t.offered_knobs().any(|k| super::knobs::COMPARABLE.contains(&k.key)) {
                     s.push_str(

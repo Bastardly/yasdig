@@ -242,7 +242,7 @@ pub fn write(cfg: &Config, settings: Option<&serde_json::Value>, f: &Film) -> Re
         }
     };
     // The Generation panel as the person last sent it — only when it was
-    // for the model the shots are made with (a story may pick another; its
+    // for the model the shots are made with (the film-model card may pick another; its
     // steps and size would be the wrong model's), else that model's own
     // defaults. Once a shot is generated, the lock's model, size, fps and
     // Hi-res.

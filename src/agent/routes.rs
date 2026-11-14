@@ -43,6 +43,7 @@ pub fn route(
         ("POST", "/agent/undo") => undo(conn, cfg, body),
         ("POST", "/agent/stop") => stop(conn, cfg, lanes, monitor, body),
         ("POST", "/agent/session") => answer_proposal(conn, cfg, lanes, body),
+        ("POST", "/agent/film-model") => answer_film_model(conn, cfg, lanes, body),
         ("POST", "/agent/again") => again(conn, cfg, lanes, body),
         ("GET", p) if p.starts_with("/chats/") => {
             let rest = &p["/chats/".len()..];
@@ -690,6 +691,37 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
     let c = match started {
         Ok(c) => c,
         Err(e) => return err(conn, 500, &format!("{e:#}")),
+    };
+    let job = enqueue(lanes, &store, &c)?;
+    ok(conn, json!({ "job": job }))
+}
+
+/// A button on the film-model card: the chat's video model from now on,
+/// and the story turn the "film" asked for, queued on it.
+fn answer_film_model(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Dto {
+        chat: String,
+        video: String,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let Some(view) = cfg.video_models().iter().find(|m| m.name == dto.video && m.exists).map(super::toolkit::VideoView::of) else {
+        return err(conn, 400, &format!("the video model '{}' isn't installed whole", dto.video));
+    };
+    let store = super::store(cfg);
+    let r = store.update(&dto.chat, |c| {
+        if c.session.busy() {
+            anyhow::bail!("the agent is working on this chat — stop it, or wait");
+        }
+        session::pick_film_model(c, &dto.video, &view).map_err(|e| anyhow::anyhow!(e))?;
+        c.session.state = State::Queued;
+        c.session.job = None;
+        c.session.error = None;
+        Ok(c.clone())
+    });
+    let c = match r {
+        Ok(c) => c,
+        Err(e) => return err(conn, 409, &format!("{e:#}")),
     };
     let job = enqueue(lanes, &store, &c)?;
     ok(conn, json!({ "job": job }))

@@ -486,6 +486,28 @@ pub struct Proposal {
     pub prompt: Option<String>,
 }
 
+/// A film asked for while the Video tab's model can't make one: the
+/// person picks the model from the card's buttons (`/agent/film-model`),
+/// and the story turn runs on it. The agent only recommends.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoPick {
+    /// The agent message that asked, which the card is drawn under.
+    pub n: u32,
+    /// The installed models that can make a film, in their usual order.
+    pub choices: Vec<PickChoice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PickChoice {
+    pub name: String,
+    pub label: String,
+    /// What it is for (`VideoFeatures::about`).
+    pub about: String,
+    /// The agent's recommendation: tagged in place, never moved first.
+    #[serde(default)]
+    pub recommended: bool,
+}
+
 /// A picture a message shows.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ImageRef {
@@ -778,6 +800,9 @@ pub struct Session {
     /// round after round on its own, so it never starts unasked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal: Option<Proposal>,
+    /// A film waiting for the person to pick its video model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pick: Option<VideoPick>,
     /// The job carrying the session now, while queued or running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<u64>,

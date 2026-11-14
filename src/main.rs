@@ -1359,6 +1359,10 @@ struct VideoModelDto {
     /// Whether a shot can follow reference sounds: references and an audio
     /// VAE to hear them with ([`pipeline::MAX_REF_AUDIO`]).
     sounds: bool,
+    /// What the model can do, the one source the page and the Assistant read
+    /// ([`config::VideoFeatures`]); `chains`, `references`, `sounds` and
+    /// `narrated` are copied from it.
+    features: config::VideoFeatures,
     /// LTX: the page offers *Hi-res ×2* (with a latent upscaler in its parts).
     ltx: bool,
     /// Narrated stills: each row is a picture, the words a voice reads and
@@ -1696,21 +1700,23 @@ fn handle_video_models(conn: &mut http::Connection, cfg: &Config) -> Result<()> 
     let models: Vec<VideoModelDto> = cfg
         .video_models()
         .into_iter()
-        .map(|m| VideoModelDto {
+        .map(|m| (m.features(), m))
+        .map(|(features, m)| VideoModelDto {
+            features,
             tuned: saved.video.contains_key(&m.name) || saved.video_parts.contains_key(&m.name),
             note_id: inventory::id_of(cfg, &m.diffusion_model),
             parts: cfg.video_part_views(&m, &scan),
             family: m.family.as_str(),
             ltx: m.family.is_ltx(),
-            narrated: m.family == config::VideoFamily::Narrated,
+            narrated: features.narrated,
             languages: narration::offered(&m.languages),
             size_multiple: m.family.size_multiple(),
             frame_grid: m.family.frame_grid(),
             forced_fps: m.family.forced_fps(),
             is_moe: m.family.is_moe(),
-            chains: m.family.chains(),
-            references: m.family.takes_references(),
-            sounds: m.family.takes_references() && m.audio_vae.is_some(),
+            chains: features.continues,
+            references: features.references,
+            sounds: features.sounds,
             memory_mode: m.memory_mode().to_string(),
             missing: m.missing().iter().map(|p| p.display().to_string()).collect(),
             duration: m.duration(),

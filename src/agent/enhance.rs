@@ -347,8 +347,23 @@ fn trimmed(req: &Request, t: Target, fixed: usize, budget: usize) -> Option<Requ
 
 /// The output's shape: the prompt, and H3's sound line and Spoken lines
 /// beside it.
-fn schema(t: Target) -> serde_json::Value {
-    let mut props = serde_json::json!({ "prompt": { "type": "string", "minLength": 1, "maxLength": 2400 } });
+/// The longest an enhanced prompt may be: 2400 characters, less on a model
+/// with a prompt limit (`VideoFeatures::prompt_chars`, LTX's cliff) — what
+/// is left of it beside the scene's description, which the server joins on
+/// (`videos::shot_prompt`).
+const PROMPT_CHARS: u32 = 2400;
+
+fn prompt_cap(cfg: &Config, req: &Request) -> u32 {
+    let limit = (req.kind == "video")
+        .then(|| cfg.video_models().into_iter().find(|m| m.name == req.model))
+        .flatten()
+        .and_then(|m| m.features().prompt_chars);
+    let every = req.every.trim().chars().count() as u32;
+    limit.map_or(PROMPT_CHARS, |n| n.saturating_sub(every + 2).clamp(200, PROMPT_CHARS))
+}
+
+fn schema(t: Target, max: u32) -> serde_json::Value {
+    let mut props = serde_json::json!({ "prompt": { "type": "string", "minLength": 1, "maxLength": max } });
     let mut required = vec!["prompt"];
     if t.fields() {
         props["sound"] = serde_json::json!({ "type": "string", "maxLength": 500 });
@@ -410,6 +425,7 @@ pub fn run(cfg: &Config, monitor: &Monitor, req: &Request) -> Result<Enhanced> {
         bail!("there is nothing to enhance — write a few words first");
     }
     let t = target(cfg, req)?;
+    let cap = prompt_cap(cfg, req);
     let model = agent_for(cfg, req.agent.as_deref())?;
     let tune = tuning(cfg, &model);
     let (all, _) = skills::load(&user_skills_dir(cfg));
@@ -470,7 +486,7 @@ pub fn run(cfg: &Config, monitor: &Monitor, req: &Request) -> Result<Enhanced> {
             n_predict: N_PREDICT,
             thinking: false,
             sampling: Sampling { seed: (super::rand_seed() & 0xffff_ffff) as u32, ..tune.sampling },
-            json_schema: Some(schema(t)),
+            json_schema: Some(schema(t, cap)),
             messages: vec![llm::Message::text(llm::Role::System, system.clone()), llm::Message { role: llm::Role::User, content }],
         }
     };
@@ -664,13 +680,13 @@ mod tests {
         assert_eq!(e.prompt, "A tenor sings.");
         assert!(parse("{\"prompt\": \"  \"}").is_err());
         assert!(parse("no object").is_err());
-        let s = schema(Target::Video(VideoFamily::MinimaxH3, true));
+        let s = schema(Target::Video(VideoFamily::MinimaxH3, true), PROMPT_CHARS);
         assert_eq!(s["required"], serde_json::json!(["prompt", "sound", "spoken"]));
         let e = parse(r#"{"prompt": "Mara waves.", "sound": "", "spoken": [
             {"who": "Mara", "words": "\"Hello there.\"", "voiceover": false}, {"who": "Leo", "words": " ", "voiceover": false}]}"#)
         .unwrap();
         assert_eq!(e.spoken.len(), 1, "a line with no words is dropped");
         assert_eq!((e.spoken[0].who.as_str(), e.spoken[0].words.as_str()), ("Mara", "Hello there."));
-        assert_eq!(schema(Target::Video(VideoFamily::Ltx23, false))["required"], serde_json::json!(["prompt"]));
+        assert_eq!(schema(Target::Video(VideoFamily::Ltx23, false), PROMPT_CHARS)["required"], serde_json::json!(["prompt"]));
     }
 }

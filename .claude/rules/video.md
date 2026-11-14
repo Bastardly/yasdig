@@ -134,7 +134,14 @@ read over by every part. Names in the UI: Storyboard, Shot
   `Unsupported` naming the `-conv` file. 2.3's encoder is a stock Gemma 3 plus
   `--embeddings-connectors`; 2.5's is Lightricks' Gemma 4 *with*
   `text_embedding_projection` (`Gemma4Ltx`) — a stock Gemma 4 is `Unknown`.
-  Frames `8k+1` down, sizes 32. **2.5's bf16 encoder ignores prompts**: it drew a
+  Frames `8k+1` down, sizes 32. **A prompt of 1024+ Gemma tokens is ignored** (both
+  releases): `LTXAVEmbedder` keeps only the real tokens and `ltxv.hpp` takes a context
+  that long as already processed, skipping the connectors — an unrelated clip, not a
+  truncation. `VideoFeatures::prompt_chars` = `LTX_PROMPT_CHARS` (3200, the worst rate
+  measured: Danish 3.2 chars/token, English 4.05–4.95) holds it in characters: the
+  page's `.promptcount` per part (scene description joined, `shots.js` `promptChars`),
+  the story context's line, Enhance's `maxLength` (`prompt_cap`). Counted, not
+  refused: an English prompt past 3200 may still fit. **2.5's bf16 encoder ignores prompts**: it drew a
   man talking to camera where its q8_0 copy drew the prompt, same seed
   (2026-11-07). The card fetches Rootport's Q4_K_M (`LTX25_LLM.file`);
   Convert takes a bf16 through `-m` (`Slot::for_role`), and `video_components`
@@ -276,7 +283,9 @@ read over by every part. Names in the UI: Storyboard, Shot
   the layout would make its soundscape `N/A`, i.e. silence. `every` goes inside.
   H3's encoder takes the prompt whole (`prompt_attn_range {0,0}`), so `(S1)` and
   `[Shot 1]` survive. Page: the rows' *Who is in it* / *Spoken* / *Sound* / *Music*
-  (`m.sounds`; *Who is in it* on any model while a storyboard is bound), names in the borrowed
+  (`m.sounds`; *Who is in it* on `features.references` only — on Wan/LTX a film's names
+  only pick which pictures a first frame is drawn from, so the row would read as if the
+  shot followed them; `data-cast` keeps them), names in the borrowed
   References/Sounds dialogs (`editRefs(…, names)`, `editSounds(…, voices)`).
 - **References are H3's alone** (`VideoFamily::takes_references`,
   `references` on `/video-models`): sd.cpp refuses H3's Ref2VA beside a keyframe, so

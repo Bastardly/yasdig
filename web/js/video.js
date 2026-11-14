@@ -5,7 +5,7 @@ import { soonJobs, stopKind, stopAllKind } from './jobs.js';
 import { clip, renderVideo, stopPlayback, clearClip, openStage } from './player.js';
 import { initClipView } from './clipview.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
-import { shotState, rowMatches, sentRow, shotOutdated, partNeighbours, ownShift, withShift, ALL } from './shots.js';
+import { shotState, rowMatches, sentRow, shotOutdated, partNeighbours, ownShift, withShift, promptChars, ALL } from './shots.js';
 import {
   initStoryboard, setVideo, currentVideo, currentShotId, clipOf, sceneOf, shotName, refreshFrom, followShot,
   drawBoard, fillScene, unlockVideo, sceneLocked, syncHead,
@@ -552,8 +552,9 @@ export function drawShots(rows) {
         <label data-help="vshotframes">Frames</label>
         <input class="shotframes" type="number" value="${r.frames ?? ''}" aria-label="Shot ${k + 1} frames">
         <label data-help="vprompt">Prompt</label>
-        <prompt-box><textarea class="short" aria-label="Shot ${k + 1} prompt"
+        <div class="countedbox"><prompt-box><textarea class="short" aria-label="Shot ${k + 1} prompt"
           placeholder="${k ? 'what happens next: an action, where the camera is' : 'the crab lifts a claw, slow camera push in'}">${esc(r.text ?? '')}</textarea></prompt-box>
+          <span class="promptcount" hidden></span></div>
         <div class="btnrow shotenhancerow">
           <button type="button" class="btn shotenhance" title="${ENHANCE_TIP}" data-title="${ENHANCE_TIP}">Enhance</button>
           <span class="sub shotenhanceerr" hidden></span>
@@ -880,6 +881,22 @@ function setNarrator(stem) {
   $('vnarratorclear').hidden = !stem;
 }
 
+// A model with a hard prompt limit (`features.prompt_chars`, LTX's cliff)
+// gets a count in the corner of each part's prompt: what the model is sent,
+// the scene's description joined on (`promptChars`, as the server joins it).
+// No limit, no count.
+function countPrompt(el, m) {
+  const out = el.querySelector('.promptcount');
+  const max = m?.features?.prompt_chars;
+  out.hidden = !max;
+  if (!max) return;
+  const n = promptChars($('veverytext').value, el.querySelector('textarea').value);
+  out.textContent = `${n} / ${max}`;
+  out.classList.toggle('over', n > max);
+  out.title = `Keep a part under ${max} characters on ${m.name}, the scene's description included: `
+    + 'past that it ignores the prompt and makes something unrelated. Shorten the part or the description.';
+}
+
 function syncShots() {
   const m = currentVideoModel();
   const live = liveRows();
@@ -898,6 +915,7 @@ function syncShots() {
     el.classList.toggle('fresh', i === 0);
     // What a folded row still says: the start of its prompt.
     el.querySelector('.shotsum').textContent = el.querySelector('textarea').value.trim();
+    countPrompt(el, m);
     const cut = false;
     // References on a cut, or on shot 1, never beside its image: H3 can't
     // follow them and go on from a frame at once, so each hides the other's
@@ -919,10 +937,13 @@ function syncShots() {
     sounds.textContent = a ? `Sounds (${a})` : 'Sounds…';
     el.querySelector('.shotwhy').hidden = !refsOk || fresh;
     el.querySelector('.shotsoundrows').hidden = !m?.sounds;
-    // Who is in it decides a storyboard's references and first frames on any
-    // model; off a board, only H3 reads it. Never on a continue: it starts
-    // from the last frame, whoever that shows.
-    el.querySelector('.shotcastrow').hidden = (!m?.sounds && !board?.owns()) || !fresh;
+    // Who is in it is H3's alone (`features.references`): the shot follows
+    // those pictures and voices. On Wan or LTX it would only steer which
+    // pictures a film's first frame is drawn from, which reads as if the
+    // shot followed them, so it is hidden; the names stay on the row
+    // (`data-cast`) for *Draw the first frames*. Never on a continue: it
+    // starts from the last frame, whoever that shows.
+    el.querySelector('.shotcastrow').hidden = !m?.features?.references || !fresh;
     drawRowCast(el);
     // Part 1's image is the shot's first frame.
     const keyBtn = el.querySelector('.shotkey');

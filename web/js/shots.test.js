@@ -2,7 +2,7 @@
 // the stage (`shots.js`). Not in `web::WEB_FILES`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shotState, sentRow, shotOutdated, partNeighbours, ownShift, withShift } from './shots.js';
+import { shotState, sentRow, shotOutdated, partNeighbours, ownShift, withShift, promptChars } from './shots.js';
 
 const seg = (text, k) => ({ text, seed: 10 + k, frames: 33, start: k * 32 });
 const clip = (...texts) => ({ segments: texts.map(seg) });
@@ -233,4 +233,12 @@ test('a drawn shot whose own flow shift changed is drawn again whole; the video 
   assert.equal(ownShift({ flow_shift_own: 5 }, null), 5);
   assert.equal(ownShift({ flow_shift_own: 5 }, { rows: [], shift: null }), null, "the draft's empty box wins");
   assert.equal(ownShift({}, { rows: [] }), null, 'an older draft has no shift');
+});
+
+test('a part is counted as the server joins it to its scene', () => {
+  assert.equal(promptChars('', 'a dog runs'), 10);
+  assert.equal(promptChars('warm light ', ' a dog runs'), 'warm light. a dog runs'.length);
+  assert.equal(promptChars('warm light', ''), 10);
+  assert.equal(promptChars('', ''), 0);
+  assert.equal(promptChars('', 'køkken – æ'), 10, 'code points, as Rust counts');
 });

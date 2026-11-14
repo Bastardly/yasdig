@@ -169,3 +169,12 @@ export function withShift(st, own, c) {
   if (n(own) === n(c.flow_shift_own)) return st;
   return { ...st, action: 'generate', shift: true };
 }
+
+// How long the prompt a part is sent is, in characters (code points, as
+// Rust counts them): the scene's description and the part's words joined
+// as `videos::shot_prompt` joins them. What `features.prompt_chars` limits.
+export function promptChars(every, text) {
+  const e = (every ?? '').trim();
+  const t = (text ?? '').trim();
+  return [...(e && t ? `${e}. ${t}` : e || t)].length;
+}

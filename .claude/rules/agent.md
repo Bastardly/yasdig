@@ -65,6 +65,12 @@ Break silently:
 - **A chat is one tab's** (`Chat.context: Pane`, `image` by serde default; `ChatStore::load`
   makes one with a film `video`). Each panel lists only its own (`/chats` carries
   `context`). Only a Video chat films (`toolkit::resolve` sets `film_off` on an Image one).
+  **The person doesn't know our words**: a 4 s "clip", "shot" and "4 seconds of…" were
+  each answered "I can't make video clips" (2026-11-14) — the old film line said so.
+  `context::FILM_ASKS` makes anything that moves a film (ask only picture-or-video),
+  the "film" reply is capped at `FILM_REPLY_CHARS` (Gemma wrote the whole board into an
+  800-char reply), `general.md` says "image and video generator", and `film.md` keeps
+  to the length asked. Three `agent-check` cases hold the three phrasings.
 - **An Image chat's settings are the Image tab's controls**, both ways: the page writes
   them in (`/chats/new`/`/agent/send` `settings`, and `/chats/settings` debounced on any
   edit of the tab outside the panel, while the agent works too — the person's edit wins),
@@ -211,6 +217,9 @@ Break silently:
   generated shot never does. **A part that names someone not in the part before starts
   a new shot** (`recut` against the story's own names, then a later part's `cast` is
   emptied): a part carries only the last frame, so they would be drawn from words.
+  **Only a `character` does** — a place or thing coming into view goes on (a sausage
+  typed `character` split a one-shot film, 2026-11-14; `film.md` now says what `kind`
+  is). The sheet/front prompts say "character", not "person" (a dog was "the person").
   **Nothing is drawn unasked, and
   drawing is optional**: an undrawn member is words, an undrawn first frame a shot from
   words. *Draw the cast* (Cast footer) and *Draw the first frames* (the Shot footer,
@@ -233,13 +242,22 @@ Break silently:
   `every`), and
   `board_advance` sets `Phase::Ready` and ends the leg. **Every board picture is also an
   output** (`stem`, `key_stem`): a shot's references and first frames are output stems.
-  The video model is `Chat.video`, the Video tab's as the person last sent — **unless it
-  can't make a film** (narrated stills, VACE, T2V, none): then `toolkit::resolve` gives
-  a Video chat the first installed one that `chains()`, and `apply_story` says so and
-  makes it the chat's (a film is its own Video, so the tab's pick is no reason to
-  refuse; Gemma turned the old refusal into "I only generate still images"). `film_off`
-  says why none can be made (`Rules.film`, no image model, no installed video model
-  that `chains()`). A new chat's settings have no `prompt` key, which `GenerateDto`
+  The video model is `Chat.video`, the Video tab's as the person last sent. **The
+  person picks it, never the agent** (asked for 2026-11-14; the silent swap to the first
+  model that chains is gone). When the tab's model can't make a film (narrated stills,
+  VACE, T2V, none) and some installed one can, `Toolkit.film_pick` lists them and the
+  chat schema's "film" carries a `video_model` enum — the agent's *recommendation*
+  (context says why: speech and sound → H3). The "film" then sets `Session.pick`
+  (`film_pick`, a `VideoPick` under that message) and stops; the card's buttons post
+  `/agent/film-model` (`pick_film_model`: `set_video`, a note, the story turn queued).
+  Models in their usual order, the recommendation tagged in place
+  (`recommend-without-reordering`); a new message drops it (`close_session`), as a
+  proposal. **What a model can do is `VideoModel::features`** (`config::VideoFeatures`:
+  `continues`, `references`, `sounds`, `audio`, `narrated`, `films`, `about`), the one
+  source for `VideoView` and the page's `/video-models` `features` — the card's words are
+  its `about`. `film_off` says why none can be made (`Rules.film`, no image model, the
+  tab's model; Gemma once turned a bare refusal into "I only generate still images", so
+  with a model to pick the agent is never told it can't). A new chat's settings have no `prompt` key, which `GenerateDto`
   requires: a board picture inserts its own, a round an empty one. A film's turns get the video family's skills too
   (`skills::select` takes both families' names, which never collide).
 - **A chat's film writes its own Video** (`agent::filmvideo`, `Film.video`, read from
@@ -287,10 +305,8 @@ Break silently:
   capped at `VideoView::longest`, Settings' `storyboard_shot_seconds` (5) on the nearest
   grid point — the tab's Frames is where a new row starts, 1.4 s on LTX, and once
   capped every shot) (a reworded part −1;
-  `FilmShot`'s `Default` is by hand for that). A story turn may pick the
-  video model (`video_model`, `schema::board_videos`, needs Model allowed and two that
-  `chains()`); `apply_story` writes `Chat.video` first and keeps an unchanged part's
-  seed, length and picks.
+  `FilmShot`'s `Default` is by hand for that). The story schema has no `video_model`
+  (the person's pick); `apply_story` keeps an unchanged part's seed, length and picks.
 - **The agent never films** (checked 2026-10-28; it used to shoot and judge each take).
   **A film's parts are written for the film's model** (`shot_spec` on
   `Film.references`, rewritten when `set_video` moves it); with no film, *Add cast…* adds
@@ -302,5 +318,5 @@ Break silently:
   `Board`/`Ready`; old `shooting`/`done` and `next: shoot|take` read through serde
   aliases; `Mode::Take` only so old messages read). The Lines/sound/music are plain
   fields; the H3 layout is the engine's (`video.md`). A board's `video_model` is
-  the Video tab's (`set_video`) or the story turn's pick.
+  the Video tab's (`set_video`) or the film-model card's.
 - **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.

@@ -95,8 +95,8 @@ export function follow(g, showFn) {
   else holdVideo(null);
 }
 
-// The film's video model into #vmodel when it moved (the agent picked one,
-// or the film was opened): its Video is made with it.
+// The film's video model into #vmodel when it moved (picked on the
+// film-model card, or the film was opened): its Video is made with it.
 function modelFrom(f) {
   if (!f.video_model || f.video_model === seenModel) return;
   seenModel = f.video_model;
@@ -210,6 +210,12 @@ export async function showBoard() {
     return;
   }
   $('panel-vid-board').open = true;
+  $('panel-vid-cast').open = true;
+}
+
+// From the chat's storyboard card: the Cast panel alone — who the film
+// is about, their pictures and (on H3) voices — without moving the stage.
+export function showCast() {
   $('panel-vid-cast').open = true;
 }
 

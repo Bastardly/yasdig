@@ -28,6 +28,8 @@ use serde_json::{json, Map, Value};
 
 pub const NOTES_CHARS: u32 = 600;
 pub const REPLY_CHARS: u32 = 800;
+/// A chat turn's "film" reply: one sentence, or two with the card's recommendation.
+pub const FILM_REPLY_CHARS: u32 = 300;
 /// A cast member's look: a few sentences a stranger could draw from.
 const CAST_LOOK_CHARS: u32 = 700;
 pub const MAX_CHECKS: u32 = 6;
@@ -155,12 +157,8 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
     // grid and caps it (a grammar holds no float range).
     shot.insert("seconds".into(), json!({ "type": "number" }));
     // H3 films sound; its prompt says what is spoken, heard and scored
-    // (`h3prompt`), so the board asks for each — and when the agent may pick
-    // H3 for it, since the board is written for the model it picks.
-    let videos = board_videos(t);
-    let h3 = t.video.as_ref().is_some_and(|v| v.references)
-        || videos.as_ref().is_some_and(|v| t.videos.iter().any(|m| m.references && v.contains(&m.name)));
-    if h3 {
+    // (`h3prompt`), so the board asks for each.
+    if t.video.as_ref().is_some_and(|v| v.references) {
         let mut line = Map::new();
         line.insert("who".into(), text(40));
         line.insert("words".into(), text(300));
@@ -171,9 +169,6 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
         shot.insert("music".into(), text(200));
     }
     props.insert("title".into(), text(80));
-    if let Some(models) = videos {
-        props.insert("video_model".into(), json!({ "enum": models }));
-    }
     if let Some(models) = board_models(t) {
         props.insert("image_model".into(), json!({ "enum": models }));
     }
@@ -195,13 +190,6 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
         "scenes".into(),
         json!({ "type": "array", "items": object(scene), "minItems": 1, "maxItems": super::session::MAX_SCENES }),
     );
-}
-
-/// The video models a storyboard may be written for, when the model knob is
-/// allowed and there is a choice: those that go on from shot to shot.
-pub fn board_videos(t: &Toolkit) -> Option<Vec<String>> {
-    let names: Vec<String> = t.videos.iter().filter(|v| v.chains).map(|v| v.name.clone()).collect();
-    (t.knob("model").is_some_and(|k| k.allowed) && names.len() > 1).then_some(names)
 }
 
 /// The models a storyboard may draw its pictures with, when it has a choice.
@@ -380,10 +368,18 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32, sweep: bool) -> 
             // chat on a CFG-1 model otherwise had nothing to vary but the model.
             let vary: Vec<&str> = t.knobs.iter().filter(|k| k.allowed).map(|k| k.key).filter(|k| COMPARABLE.contains(k)).collect();
             // A movie: the storyboard is the next turn's (`Mode::Story`).
-            if t.films() {
+            if t.films() || t.picks_film_model() {
                 let mut film = props.clone();
                 film.insert("action".into(), json!({ "const": "film" }));
-                film.insert("reply".into(), text(REPLY_CHARS));
+                // The person picks the model; this is the one recommended.
+                if t.picks_film_model() {
+                    let names: Vec<&str> = t.film_pick.iter().map(|v| v.name.as_str()).collect();
+                    film.insert("video_model".into(), json!({ "enum": names }));
+                }
+                // One sentence: the storyboard is the next turn's. Given 800,
+                // Gemma wrote the whole storyboard here (2026-11-14), slowly,
+                // and the story turn wrote it again.
+                film.insert("reply".into(), text(FILM_REPLY_CHARS));
                 branches.push(object(film));
             }
             // A cast member: drawn into a draft in the cast editor, which the
@@ -607,6 +603,8 @@ mod tests {
             name: "h3".into(),
             family: "minimax_h3",
             label: "MiniMax H3",
+            about: "speech and sound",
+            prompt_chars: None,
             chains: true,
             references: true,
             sounds: true,

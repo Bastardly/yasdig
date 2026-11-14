@@ -2602,7 +2602,82 @@ fn default_video_negative() -> String {
         .to_string()
 }
 
+/// What a video model can do, in one place ([`VideoModel::features`]): the
+/// Video tab's controls (`/video-models`' `features`), the Assistant's film
+/// rules (`agent::toolkit::VideoView`) and the film-model card all read this,
+/// so the card's words, the controls shown and what the agent is told can't
+/// drift apart. The DTO's older flat fields (`chains`, `references`, `sounds`)
+/// are copied from it.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct VideoFeatures {
+    /// A shot of many parts, each going on from the last one's last frame
+    /// ([`VideoFamily::chains`]).
+    pub continues: bool,
+    /// A shot follows reference pictures, the cast's among them: H3's Ref2VA
+    /// ([`VideoFamily::takes_references`]). Elsewhere the cast only steers
+    /// which pictures a first frame is drawn from, so a shot's *Who is in it*
+    /// is H3's alone.
+    pub references: bool,
+    /// A shot follows reference sounds (voices): references plus an audio VAE.
+    pub sounds: bool,
+    /// The clip comes with a sound track of its own (an audio VAE).
+    pub audio: bool,
+    /// Narrated stills: a voice reading over pictures, no diffusion.
+    pub narrated: bool,
+    /// The Assistant can make a film on it: shots of parts that go on, and
+    /// motion to describe — narrated stills read words, so not those.
+    pub films: bool,
+    /// What it is for, in a few words: the film-model card's buttons.
+    pub about: &'static str,
+    /// The most characters a shot's prompt may run to — its scene's
+    /// description and its words as `videos::shot_prompt` joins them — where
+    /// a model has a hard edge: [`LTX_PROMPT_CHARS`]. The page counts against
+    /// it under each part's prompt; the agent is told it, and Enhance's
+    /// paragraph is capped by it.
+    pub prompt_chars: Option<u32>,
+}
+
+/// LTX's prompt limit, in characters. sd.cpp keeps a prompt's real Gemma
+/// tokens (`LTXAVEmbedder` trims the padding to `valid_tokens`), and the
+/// transformer takes a context of **1024 tokens or more as already
+/// processed** (`ltxv.hpp`, `is_fully_processed_context`): the embeddings
+/// connectors are skipped and the clip comes out unrelated to the prompt —
+/// a cliff, not a fade. We have no Gemma tokenizer, so the edge is put in
+/// characters at the worst rate measured (2026-11-14, `llama-tokenize` on
+/// both the Gemma 3 and Gemma 4 vocabularies, which agreed): English 4.05–4.95
+/// characters a token over the 25 conditioned prompts on disk (the longest,
+/// 2143 characters, was 511 tokens), Danish 3.2. 3200 characters is at most
+/// ~1000 tokens at 3.2, under the 1023 that fit beside the BOS.
+pub const LTX_PROMPT_CHARS: u32 = 3200;
+
 impl VideoModel {
+    /// What this model can do ([`VideoFeatures`]).
+    pub fn features(&self) -> VideoFeatures {
+        let f = self.family;
+        let references = f.takes_references();
+        let audio = self.audio_vae.is_some();
+        let narrated = f == VideoFamily::Narrated;
+        let continues = f.chains();
+        let about = match () {
+            _ if narrated => "a voice reading over still pictures",
+            _ if !continues => "one part per shot",
+            _ if references && audio => "speech and sound; follows the cast's pictures",
+            _ if references => "follows the cast's pictures; silent",
+            _ if audio => "with sound; each shot from its first frame",
+            _ => "silent; each shot from its first frame",
+        };
+        VideoFeatures {
+            continues,
+            references,
+            sounds: references && audio,
+            audio,
+            narrated,
+            films: continues && !narrated,
+            about,
+            prompt_chars: f.is_ltx().then_some(LTX_PROMPT_CHARS),
+        }
+    }
+
     /// The memory mode this model runs with: `memory` when set, else the old
     /// `offload_to_cpu` key's meaning, else `ram`.
     pub fn memory_mode(&self) -> &str {
@@ -3981,6 +4056,32 @@ fn unique_key(taken: &[ModelEntry], base: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One record per model, which the page and the agent both read: a film
+    /// only where parts go on and describe motion, references on H3, the
+    /// prompt limit on LTX alone (its 1024-token cliff).
+    #[test]
+    fn a_video_models_features_say_what_it_can_do() {
+        let of = |f: VideoFamily, audio: bool| {
+            let mut m = VideoModel::discovered("m".into(), f, PathBuf::from("m.gguf"));
+            m.audio_vae = audio.then(|| PathBuf::from("a.safetensors"));
+            m.features()
+        };
+        let h3 = of(VideoFamily::MinimaxH3, true);
+        assert!(h3.films && h3.references && h3.sounds && h3.prompt_chars.is_none());
+        let wan = of(VideoFamily::Wan22Ti2v5b, false);
+        assert!(wan.films && !wan.references && !wan.audio && wan.prompt_chars.is_none());
+        assert_eq!(wan.about, "silent; each shot from its first frame");
+        let ltx = of(VideoFamily::Ltx25, true);
+        assert!(ltx.films && ltx.audio && !ltx.sounds);
+        assert_eq!(ltx.prompt_chars, Some(LTX_PROMPT_CHARS));
+        assert_eq!(of(VideoFamily::Ltx23, false).prompt_chars, Some(LTX_PROMPT_CHARS));
+        let narrated = of(VideoFamily::Narrated, false);
+        assert!(narrated.continues && !narrated.films);
+        assert!(!of(VideoFamily::Wan21Vace, false).films);
+        // What the page's `promptChars` counts (shots.test.js has the same).
+        assert_eq!(crate::videos::shot_prompt("warm light ", " a dog runs"), "warm light. a dog runs");
+    }
 
     fn parse(toml_src: &str) -> Result<Config> {
         let mut cfg: Config = toml::from_str(toml_src)?;

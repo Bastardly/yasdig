@@ -38,8 +38,21 @@ struct Case {
     checks: &'static [&'static str],
     /// The prompt already in the box, where the case needs its own.
     prompt: Option<&'static str>,
+    /// A Video tab chat, where a film can be made (on H3).
+    video: bool,
     /// What a model that understood wrote, or what was wrong.
     want: fn(&ReplyJson) -> Result<(), String>,
+}
+
+/// A request for something that moves, in the person's words: a film, and
+/// no "I can't make video" (2026-11-14: all three were answered so).
+fn films(r: &ReplyJson) -> Result<(), String> {
+    action(r, "film")?;
+    let reply = r.reply.to_lowercase();
+    match ["can't", "cannot", "can not", "unable"].iter().find(|w| reply.contains(*w)) {
+        Some(w) => Err(format!("its reply says \"{w}\": {:?}", r.reply)),
+        None => Ok(()),
+    }
 }
 
 fn action(r: &ReplyJson, want: &str) -> Result<(), String> {
@@ -60,6 +73,7 @@ const CASES: &[Case] = &[
         says: "Draw a lighthouse on a cliff in a storm.",
         checks: &[],
         prompt: None,
+        video: false,
         want: |r| {
             action(r, "draw")?;
             let p = new_prompt(r).unwrap_or("").to_lowercase();
@@ -78,6 +92,7 @@ const CASES: &[Case] = &[
         says: "Give me three pictures of a castle at night.",
         checks: &[],
         prompt: None,
+        video: false,
         want: |r| {
             action(r, "draw")?;
             if r.count == Some(3) { Ok(()) } else { Err(format!("count {:?} where 3 were asked for", r.count)) }
@@ -89,6 +104,7 @@ const CASES: &[Case] = &[
         says: "What does CFG scale do? Don't draw anything.",
         checks: &[],
         prompt: None,
+        video: false,
         want: |r| {
             action(r, "talk")?;
             match new_prompt(r) {
@@ -104,6 +120,7 @@ const CASES: &[Case] = &[
         says: "Keep trying until the fox is wearing a red knitted hat.",
         checks: &[],
         prompt: None,
+        video: false,
         want: |r| {
             action(r, "improve")?;
             let g = r.goal.as_deref().unwrap_or("").to_lowercase();
@@ -121,6 +138,7 @@ const CASES: &[Case] = &[
         says: "Which CFG works best for this prompt? Try a few values.",
         checks: &[],
         prompt: None,
+        video: false,
         want: |r| {
             action(r, "compare")?;
             if r.vary.as_deref() != Some("cfg_scale") {
@@ -145,6 +163,7 @@ const CASES: &[Case] = &[
         says: "Add a red knitted hat and draw it.",
         checks: &[],
         prompt: Some(VAR_PROMPT),
+        video: false,
         want: |r| {
             action(r, "draw")?;
             let p = new_prompt(r).unwrap_or("");
@@ -161,6 +180,7 @@ const CASES: &[Case] = &[
         says: "Make a character for my cast: Elias, a weathered fisherman in his fifties with a grey beard.",
         checks: &[],
         prompt: None,
+        video: false,
         want: |r| {
             action(r, "cast")?;
             let m = r.member.as_ref().ok_or("no member")?;
@@ -176,11 +196,39 @@ const CASES: &[Case] = &[
         },
     },
     Case {
+        name: "makes a film when asked for a clip",
+        mode: Mode::Chat,
+        says: "A 4s clip of a dog stealing a sausage from the kitchen",
+        checks: &[],
+        prompt: None,
+        video: true,
+        want: films,
+    },
+    Case {
+        name: "makes a film when asked for a shot",
+        mode: Mode::Chat,
+        says: "Please create a 4s shot of a dog stealing a sausage from the kitchen",
+        checks: &[],
+        prompt: None,
+        video: true,
+        want: films,
+    },
+    Case {
+        name: "makes a film when asked for seconds of something",
+        mode: Mode::Chat,
+        says: "4 seconds of a dog stealing a sausage from the kitchen",
+        checks: &[],
+        prompt: None,
+        video: true,
+        want: films,
+    },
+    Case {
         name: "writes checks that can be answered by looking",
         mode: Mode::Plan,
         says: "A fox wearing a red knitted hat in a snowy forest.",
         checks: &[],
         prompt: None,
+        video: false,
         want: |r| {
             let checks: Vec<&str> = r.checks.as_ref().and_then(|c| c.as_array()).into_iter().flatten().filter_map(|c| c.as_str()).collect();
             if !(2..=5).contains(&checks.len()) {
@@ -202,6 +250,7 @@ const CASES: &[Case] = &[
         // The picture has the square alone (`test_picture`).
         checks: &["Is there a red square?", "Is there a blue circle?"],
         prompt: None,
+        video: false,
         want: |r| {
             let row: Vec<bool> = r
                 .checks
@@ -234,6 +283,9 @@ fn test_picture() -> Result<Vec<u8>> {
 /// critique the round it judges.
 fn chat_for(case: &Case) -> Chat {
     let mut chat = Chat::new("agent-check".into(), json!({ "prompt": case.prompt.unwrap_or(PROMPT), "cfg_scale": 6.0 }), None);
+    if case.video {
+        chat.context = super::chat::Pane::Video;
+    }
     match case.mode {
         Mode::Chat => chat.messages.push(Msg::User { n: 0, ms: 0, text: case.says.into(), images: vec![] }),
         Mode::Critique => {
@@ -278,6 +330,26 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
         };
         let mut tk = toolkit::build(&Rules::default(), &settings, &Locks::default(), models, Some(family));
         tk.vision = model.vision();
+        if case.video {
+            let h3 = toolkit::VideoView {
+                name: "h3".into(),
+                family: "minimax_h3",
+                label: "MiniMax H3",
+                chains: true,
+                about: "speech and sound; follows the cast's pictures",
+                prompt_chars: None,
+                references: true,
+                sounds: true,
+                width: 832,
+                height: 480,
+                frames: 97,
+                fps: 24,
+                longest_secs: 5.0,
+            };
+            tk.videos = vec![h3.clone()];
+            tk.video = Some(h3);
+            tk.film_off = None;
+        }
         if case.prompt.is_some() {
             tk.variables.insert("animal".into(), vec!["fox".into(), "owl".into(), "hare".into()]);
         }
@@ -349,7 +421,7 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
     if passed < ran {
         println!(
             "[agent-check] A failed case is a choice this model gets wrong on this build's instructions, not a broken install \
-             (`llm-selftest` checks that). The first seven are chat turns; the last two are what a session needs."
+             (`llm-selftest` checks that). The chat turns come first (three of them a Video tab's films); the last two are what a session needs."
         );
     }
     Ok(())

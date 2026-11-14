@@ -141,6 +141,20 @@ function proposalCard(p) {
     </div></div>`;
 }
 
+// A film asked for while the Video tab's model can't make one: the person
+// picks the model (`/agent/film-model`, `data-pick-video`: the Cast panel's
+// image-model select is `data-film-model`), and nothing is written until then.
+// The models stay in their usual order; the agent's recommendation is
+// tagged in place (the Models tab's badge), never moved first.
+function filmPickCard(p) {
+  return `<div class="chatcard">
+    <p class="chatcardhead">Make the film with which video model?</p>
+    <p class="sub">The Video tab's model can't make a film. The storyboard is written once you pick.</p>
+    <div class="filmpicks">${p.choices.map((c) => `<button type="button" class="btn filmpick" data-pick-video="${esc(c.name)}">
+      <span class="filmpickname"><b>${esc(c.name)}</b>${c.recommended ? ' <span class="gmbadge">Recommended</span>' : ''}</span>
+      <span class="sub">${esc(c.about)}</span></button>`).join('')}</div></div>`;
+}
+
 function agentMessage(chat, m) {
   const changes = (m.changes ?? []).map((id) => chat.changes.find((c) => c.id === id)).filter(Boolean);
   const action = m.action != null ? chat.actions.find((a) => a.id === m.action) : null;
@@ -159,7 +173,8 @@ function agentMessage(chat, m) {
       <p class="chatcardhead">Storyboard${chat.film.title ? `: ${esc(chat.film.title)}` : ''}</p>
       <p class="sub">${chat.film.cast.length} in the cast · ${filmShots(chat.film)} shot${filmShots(chat.film) === 1 ? '' : 's'}</p>
       ${castPics(chat)}
-      <div class="btnrow"><button type="button" class="btn" data-open-story>Show the storyboard</button></div></div>` : '';
+      <div class="btnrow"><button type="button" class="btn" data-open-story>Show the storyboard</button>${
+  chat.film.cast.length ? '<button type="button" class="btn" data-open-cast>Show the cast</button>' : ''}</div></div>` : '';
   // The turn's token counts are for whoever opens the notes, not a line of
   // their own under every reply.
   const notesOf = (stats) => (m.notes || stats ? `<details class="chatnotes"><summary>Notes</summary>${
@@ -170,6 +185,7 @@ function agentMessage(chat, m) {
     ${m.reply ? `<p class="chattext">${replyHtml(m.reply)}</p>` : ''}
     ${checks}${describe}${board}${changes.map(changeCard).join('')}${action ? actionCard(chat, action) : ''}
     ${chat.session.proposal?.n === m.n ? proposalCard(chat.session.proposal) : ''}
+    ${chat.session.pick?.n === m.n ? filmPickCard(chat.session.pick) : ''}
     <div class="chatfoot">${notesOf(stats)}</div></div>`;
 }
 

@@ -17,7 +17,7 @@
 use super::chat::{
     FilmScene,
     ActionRec, ActionState, Change, ChangeState, Chat, CheckRow, Film, FilmShot, ImageRef, Member, MemberKind, Mode, Msg, Next, Phase,
-    Proposal, State, Sweep,
+    PickChoice, Proposal, State, Sweep, VideoPick,
 };
 use super::knobs::{self, Locks, MAX_BATCH, MAX_ROUNDS};
 use super::toolkit::Toolkit;
@@ -826,7 +826,8 @@ pub struct ReplyJson {
     pub title: Option<String>,
     #[serde(default)]
     pub image_model: Option<String>,
-    /// A story turn's: the video model the board is written for.
+    /// A chat turn's "film" while the person must pick the video model: the
+    /// one the agent recommends (`film_pick`). Never chosen by the agent.
     #[serde(default)]
     pub video_model: Option<String>,
     #[serde(default)]
@@ -914,12 +915,14 @@ pub const MAX_FILM_SHOTS: usize = 40;
 pub const MAX_CAST: usize = 6;
 
 /// Part `k` made the start of a new shot when it goes on from the part
-/// before but names someone that part doesn't (`prev`, its names): a part
-/// that goes on starts from the last frame and nothing else, so they would
-/// be drawn from words alone, where a shot starts from their picture (H3's
-/// references, Wan's keyframe drawn with the cast). Its number when it was.
-fn recut(prev: &[String], shot: &mut FilmShot, k: usize) -> Option<usize> {
-    if k == 0 || shot.cut || shot.cast.iter().all(|n| prev.contains(n)) {
+/// before but names a character that part doesn't (`prev`, its names): a
+/// part that goes on starts from the last frame and nothing else, so they
+/// would be drawn from words alone, where a shot starts from their picture
+/// (H3's references, Wan's keyframe drawn with the cast). A place or a thing
+/// coming into view is not a new shot: "the dog grabs the sausage" split a
+/// one-shot film in two (2026-11-14). Its number when it was.
+fn recut(prev: &[String], shot: &mut FilmShot, k: usize, character: impl Fn(&str) -> bool) -> Option<usize> {
+    if k == 0 || shot.cut || shot.cast.iter().all(|n| prev.contains(n) || !character(n)) {
         return None;
     }
     shot.cut = true;
@@ -936,7 +939,9 @@ pub fn recut_board(film: &mut Film) -> Option<String> {
     // from before that still may.
     for k in 1..film.shots.len() {
         let (before, rest) = film.shots.split_at_mut(k);
-        if let Some(n) = recut(&before[k - 1].cast, &mut rest[0], k) {
+        let cast = &film.cast;
+        let character = |n: &str| cast.iter().find(|m| m.name.eq_ignore_ascii_case(n)).is_none_or(|m| m.kind == MemberKind::Character);
+        if let Some(n) = recut(&before[k - 1].cast, &mut rest[0], k, character) {
             made.push(n);
         }
     }
@@ -947,11 +952,42 @@ fn recut_note(shots: &[usize]) -> Option<String> {
     let list: Vec<String> = shots.iter().map(usize::to_string).collect();
     (!list.is_empty()).then(|| {
         format!(
-            "Shot {} brings in someone who isn't in the part before, so it starts a new shot: a part that goes on \
+            "Shot {} brings in a character who isn't in the part before, so it starts a new shot: a part that goes on \
              keeps only what the last frame shows, and a new shot starts from their picture.",
             list.join(", ")
         )
     })
+}
+
+/// The card a "film" waits on when the Video tab's model can't make one:
+/// every installed model that can, in order, `recommended` the agent's.
+pub fn film_pick(n: u32, t: &Toolkit, recommended: Option<&str>) -> VideoPick {
+    let choices = t
+        .film_pick
+        .iter()
+        .map(|v| PickChoice {
+            name: v.name.clone(),
+            label: v.label.to_string(),
+            about: v.about.to_string(),
+            recommended: recommended == Some(v.name.as_str()),
+        })
+        .collect();
+    VideoPick { n, choices }
+}
+
+/// The person's pick on the card: the chat's video model from now on, and
+/// the story turn the "film" asked for runs on it.
+pub fn pick_film_model(chat: &mut Chat, name: &str, to: &super::toolkit::VideoView) -> Result<(), String> {
+    let pick = chat.session.pick.as_ref().ok_or("there is no film waiting for a video model")?;
+    if !pick.choices.iter().any(|c| c.name == name) || to.name != name || !to.chains {
+        return Err(format!("'{name}' can't make a film"));
+    }
+    chat.session.pick = None;
+    set_video(chat, to);
+    chat.note(format!("The film is made with {}.", to.label));
+    chat.session.mode = Mode::Story;
+    chat.session.next = Next::Turn;
+    Ok(())
 }
 
 /// A storyboard from a Story reply: scenes, shots, parts. Every shot not
@@ -965,25 +1001,13 @@ fn recut_note(shots: &[usize]) -> Option<String> {
 /// `filmvideo::write`; a generated shot never is. The reply is whole: one
 /// cut off by its length is retried or refused before this (`turn`).
 pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut Vec<String>) {
-    // The video model first, when the agent picked one: the board is
-    // written for it (its cuts, its sound).
-    let picked = r.video_model.as_deref().and_then(|n| t.videos.iter().find(|v| v.name == n && v.chains));
-    let video = picked.cloned().or_else(|| t.video.clone());
-    if let Some(v) = picked {
-        chat.video = Some(v.name.clone());
-    }
-    let Some(video) = video.filter(|_| t.films() || picked.is_some()) else {
+    // The board is written for the chat's video model (its cuts, its
+    // sound): the person's pick, on the Video tab or the film-model card.
+    let Some(video) = t.video.clone().filter(|_| t.films()) else {
         notes.push(format!("No storyboard: {}.", t.film_off.as_deref().unwrap_or("no video model")));
         return;
     };
-    // The Video tab had a model that can't make a film (`toolkit::resolve`
-    // picked one that can): said, and the chat's model from here on.
-    if chat.video.as_deref() != Some(video.name.as_str()) {
-        if let Some(was) = chat.video.as_deref().filter(|_| picked.is_none()) {
-            notes.push(format!("{was} can't go on from one shot to the next, so this film is made with {}.", video.label));
-        }
-        chat.video = Some(video.name.clone());
-    }
+    chat.video = Some(video.name.clone());
     let attached: Vec<ImageRef> = chat
         .messages
         .iter()
@@ -1153,7 +1177,8 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
                     ..Default::default()
                 };
                 if let Some(prev) = &said {
-                    if recut(prev, &mut shot, k).is_some() {
+                    let character = |n: &str| cast.iter().find(|m| m.name.eq_ignore_ascii_case(n)).is_none_or(|m| m.kind == MemberKind::Character);
+                    if recut(prev, &mut shot, k, character).is_some() {
                         recuts.push(groups + 1);
                         split = true;
                         if groups < MAX_FILM_SHOTS {
@@ -1366,6 +1391,7 @@ pub fn close_session(chat: &mut Chat) {
     s.checks.clear();
     s.sweep = None;
     s.proposal = None;
+    s.pick = None;
     s.rounds = 0;
     s.per_round = 0;
     s.count = 0;
@@ -1792,6 +1818,13 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
                     chat.session.mode = Mode::Story;
                     Next::Turn
                 }
+                // The Video tab's model can't make a film: the person picks
+                // one on the card (`pick_film_model`), the agent's
+                // recommendation tagged in place.
+                Some("film") if t.picks_film_model() => {
+                    chat.session.pick = Some(film_pick(n, t, r.video_model.as_deref()));
+                    Next::Nothing
+                }
                 Some("film") => {
                     notes_out.push(format!("No film: {}.", t.film_off.as_deref().unwrap_or("")));
                     Next::Nothing
@@ -1983,6 +2016,8 @@ mod tests {
             name: if h3 { "h3" } else { "wan5b" }.into(),
             family: if h3 { "minimax_h3" } else { "wan22_ti2v_5b" },
             label: "a video model",
+            about: "",
+            prompt_chars: None,
             chains: true,
             references: h3,
             sounds: h3,
@@ -2157,16 +2192,44 @@ mod tests {
         assert!(f.drop.contains(&"v1-s1".to_string()), "s1 was rewritten without its id: a new shot");
     }
 
-    /// The Video tab showed narrated stills: the film is made with the model
-    /// `toolkit::resolve` found that can, said, and the chat's from then on.
+    /// The Video tab showed narrated stills: a "film" asks the person which
+    /// model, every one that can in order, the agent's tagged in place; the
+    /// pick sets the chat's model and runs the story turn on it.
     #[test]
-    fn a_film_asked_for_on_a_model_that_cant_make_one_uses_one_that_can() {
+    fn a_film_asked_for_on_a_model_that_cant_make_one_asks_which() {
         let mut c = film_chat();
         c.video = Some("Narrated stills".into());
-        let t = film_tk(&c, false);
-        story(&mut c, &t, board());
-        assert_eq!(c.video.as_deref(), Some("wan5b"));
-        assert!(c.messages.iter().any(|m| matches!(m, Msg::Note { text, .. } if text.starts_with("Narrated stills can't go on"))));
+        let mut t = tk(&c);
+        t.film_off = Some("Narrated stills can't go on from one shot to the next".into());
+        t.film_pick = vec![video(false), video(true)];
+        assert!(t.picks_film_model() && !t.films());
+        apply_reply(
+            &mut c,
+            Mode::Chat,
+            reply(json!({"notes": "", "action": "film", "video_model": "h3", "reply": "H3, for the voices."})),
+            &t,
+            &Locks::default(),
+            vec![],
+            Default::default(),
+        );
+        assert_eq!(next_step(&c), Step::End, "nothing is written until the person picks");
+        let p = c.session.pick.clone().expect("asked");
+        let names: Vec<(&str, bool)> = p.choices.iter().map(|x| (x.name.as_str(), x.recommended)).collect();
+        assert_eq!(names, [("wan5b", false), ("h3", true)], "in order, the recommendation tagged in place");
+        assert_eq!(c.video.as_deref(), Some("Narrated stills"), "the agent picks nothing");
+        assert!(pick_film_model(&mut c, "vace", &video(false)).is_err(), "only a model on the card");
+        pick_film_model(&mut c, "wan5b", &video(false)).unwrap();
+        assert!(c.session.pick.is_none() && c.video.as_deref() == Some("wan5b"));
+        assert_eq!(next_step(&c), Step::Turn(Mode::Story));
+    }
+
+    /// A new message drops an unanswered card, as it does a proposal.
+    #[test]
+    fn a_new_message_drops_the_film_model_card() {
+        let mut c = film_chat();
+        c.session.pick = Some(VideoPick { n: 1, choices: vec![] });
+        close_session(&mut c);
+        assert!(c.session.pick.is_none());
     }
 
     #[test]
@@ -2259,6 +2322,27 @@ mod tests {
         assert_eq!(c.film.as_ref().unwrap().shots[2].cast, ["Mara", "Leo"], "a cut keeps its cast");
         assert!(c.film.as_ref().unwrap().shots[1].cast.is_empty());
         assert!(c.messages.iter().any(|m| matches!(m, Msg::Note { text, .. } if text.starts_with("Shot 2 brings in"))));
+    }
+
+    /// A thing coming into view goes on: "the dog grabs the sausage" split a
+    /// one-shot film in two when the sausage counted as someone (2026-11-14).
+    #[test]
+    fn a_thing_coming_into_a_continue_is_not_a_cut() {
+        let mut c = film_chat();
+        let t = film_tk(&c, false);
+        let mut b = board();
+        b["cast"] = json!([
+            {"name": "Buster", "kind": "character", "look": "a Jack Russell", "picture": 0, "prompt": "Buster"},
+            {"name": "Sausage", "kind": "thing", "look": "a grilled bratwurst", "picture": 0, "prompt": "a sausage"}
+        ]);
+        b["shots"] = json!([
+            {"text": "Buster creeps up to the counter.", "cast": ["Buster"], "cut": false},
+            {"text": "He snatches the sausage and runs.", "cast": ["Buster", "Sausage"], "cut": false}
+        ]);
+        story(&mut c, &t, b);
+        let cuts: Vec<bool> = c.film.as_ref().unwrap().shots.iter().map(|s| s.cut).collect();
+        assert_eq!(cuts, [false, false], "one shot");
+        assert!(!c.messages.iter().any(|m| matches!(m, Msg::Note { text, .. } if text.contains("brings in"))));
     }
 
     #[test]
@@ -2712,7 +2796,7 @@ mod tests {
     }
 
     #[test]
-    fn a_story_rewrite_keeps_a_shots_seed_and_length_and_may_pick_the_video_model() {
+    fn a_story_rewrite_keeps_a_shots_seed_and_length_and_never_picks_the_video_model() {
         let mut c = ready(false);
         let mut rows = rows_of(&c);
         rows[0].seed = 7;
@@ -2727,7 +2811,7 @@ mod tests {
         let f = c.film.as_ref().unwrap();
         assert_eq!((f.shots[0].seed, f.shots[0].frames), (7, Some(49)), "unchanged, so kept");
         assert_eq!(f.shots[2].seed, -1, "reworded, a new seed");
-        assert!(f.references && f.video_model == "h3" && c.video.as_deref() == Some("h3"));
+        assert!(!f.references && f.video_model == "wan5b" && c.video.as_deref() == Some("wan5b"), "the person's model");
     }
 
     #[test]

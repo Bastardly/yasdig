@@ -360,6 +360,15 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 /* The prompt is what a card is for, so it starts tall; the seed comes last,
    since a shot's seed is rarely the thing being changed. */
 .shotrow prompt-box textarea { min-height: var(--shot-prompt-h); }
+/* A part's prompt count on a model with a prompt limit (LTX): small, in the
+   box's lower right corner, left of the resize grip, red once over. It takes
+   the pointer only for its tooltip. */
+.countedbox { position: relative; }
+.promptcount {
+  position: absolute; right: var(--sp-4); bottom: var(--sp-1);
+  font-size: var(--fs-micro); color: var(--text-dim);
+}
+.promptcount.over { color: var(--danger-text); }
 /* Add shot: round, and held at the strip's top right while it scrolls
    either way. */
 .shotadd {
@@ -1294,6 +1303,12 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .chatsizes { display: flex; flex-wrap: wrap; gap: var(--sp-3); font-size: var(--fs-sm); color: var(--text-dim); }
 .chatsize { display: flex; align-items: center; gap: var(--sp-1); }
 .chatsize input { width: 5em; }
+/* The film-model card: one button per model that can make a film, stacked,
+   its name (and the Recommended badge) over what it is for. */
+.filmpicks { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-1); }
+.filmpick { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-1); text-align: left; }
+.filmpick .sub { margin: 0; }
+.filmpickname { display: flex; align-items: center; gap: var(--sp-2); }
 
 /* The Cast panel: the cast as cards of picture and fields. Wide from the
    start and wider or taller by its corner (`both`); the cast fills as many

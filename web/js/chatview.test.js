@@ -139,6 +139,9 @@ test('the cast is escaped and locks while the agent works; the shots are the fil
 test('a storyboard reply is a card that opens the panel, and the header says what is drawn', () => {
   const c = chat({ film: film(), messages: [{ role: 'agent', n: 0, mode: 'story', reply: 'Two shots.' }] });
   assert.ok(renderChat(c).includes('data-open-story'));
+  assert.ok(renderChat(c).includes('data-open-cast'), 'a cast: Show the cast beside it');
+  const nobody = chat({ film: film({ cast: [] }), messages: c.messages });
+  assert.ok(!renderChat(nobody).includes('data-open-cast'), 'no cast, no button');
   const drawing = film({ phase: 'board', cast: [{ ...film().cast[0], stem: null, picture: null }] });
   assert.equal(stateText(chat({ film: drawing, session: { state: 'running', next: 'film', goal: '', checks: [], round: 0 } })), 'Drawing the cast');
   assert.equal(stateText(chat({ film: film(), session: { state: 'running', next: 'film', goal: '', checks: [], round: 0 } })), 'Drawing the first frames');
@@ -271,4 +274,23 @@ test('Again is under the newest round only, and never while the agent works', ()
   assert.ok(html.includes('data-again="2"'));
   c.session.state = 'running';
   assert.ok(!renderChat(c).includes('data-again'));
+});
+
+test('the film-model card keeps the models in order and tags the recommendation in place', () => {
+  const html = renderChat(chat({
+    messages: [{ role: 'agent', n: 3, mode: 'chat', reply: 'H3, for the voices.' }],
+    session: {
+      state: 'idle', goal: '', checks: [], round: 0,
+      pick: { n: 3, choices: [
+        { name: 'wan5b', label: 'Wan 2.2 TI2V 5B', about: 'silent; each shot from its first frame', recommended: false },
+        { name: 'h3', label: 'MiniMax H3', about: 'speech and sound; follows the cast\'s pictures', recommended: true },
+      ] },
+    },
+  }));
+  const wan = html.indexOf('data-pick-video="wan5b"');
+  const h3 = html.indexOf('data-pick-video="h3"');
+  assert.ok(wan > 0 && h3 > wan, 'usual order');
+  const badge = html.indexOf('Recommended');
+  assert.ok(badge > h3, 'the badge is on H3, where it stands');
+  assert.equal(html.split('Recommended').length, 2, 'once');
 });
