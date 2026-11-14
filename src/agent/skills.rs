@@ -258,8 +258,10 @@ mod tests {
     #[test]
     fn a_crlf_skill_parses_as_its_lf_self() {
         for (name, src) in BUILTIN {
-            let crlf = src.replace('\n', "\r\n");
-            assert_eq!(parse(&crlf, true).unwrap(), parse(src, true).unwrap(), "{name}");
+            // On Windows `src` is already CRLF: make both from an LF copy.
+            let lf = src.replace("\r\n", "\n");
+            let crlf = lf.replace('\n', "\r\n");
+            assert_eq!(parse(&crlf, true).unwrap(), parse(&lf, true).unwrap(), "{name}");
         }
     }
 
