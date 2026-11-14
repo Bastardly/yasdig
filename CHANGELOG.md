@@ -3,7 +3,18 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
-## Unreleased
+## 0.11.1 — 2026-11-14
+
+### Added
+
+- **How a character speaks.** A cast character has a **How they speak** box ("a man of
+  sixty, low and dry"), and a film's speaking characters get one from the Assistant.
+  Enhance writes it in beside their look in every part, so the same person sounds
+  alike from shot to shot on LTX. On MiniMax H3, a character with a voice recording
+  is voiced from the recording instead.
+- **Who is in it on LTX and Wan.** A shot's first part can now name cast members on
+  any video model, not only H3: type a name or *Add cast…*, and Enhance writes in
+  their look and voice.
 
 ### Changed
 
@@ -11,6 +22,11 @@ What changed in each release of yasdig. Each release's executables are on the
   [yasdig.com/guide](https://yasdig.com/guide/) in a new tab — the same pages, plus
   Video, kept in one place. Tooltips that pointed to Help point there, and the footer's
   *Licences* opens the licence notices directly.
+
+### Fixed
+
+- A shot's prompt no longer gets a double full stop where the scene description
+  already ends a sentence.
 
 ## 0.11.0 — 2026-11-14
 
