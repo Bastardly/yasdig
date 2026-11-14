@@ -60,6 +60,10 @@ pub struct Request {
     /// the people in it in view, or they come back with new faces.
     #[serde(default)]
     pub then_continues: bool,
+    /// The next shot of the scene, which this part cuts to (its last
+    /// part's): led into, so a shot put first knows what it opens.
+    #[serde(default)]
+    pub next: String,
     #[serde(default)]
     pub cut: bool,
     /// Shot 1, or a cut, starting from a picture (an output stem).
@@ -161,6 +165,14 @@ pub fn brief(t: Target, req: &Request, looks: &[(String, String)], sees_picture:
         }
     }
     let named: Vec<&String> = req.cast.iter().filter(|n| !n.trim().is_empty()).collect();
+    // "Who is in it" and "every voice described" read as a call for people:
+    // an empty street came back with two strangers in it (2026-11-14).
+    if named.is_empty() && matches!(t, Target::Video(..)) {
+        out.push_str(
+            "\nNo one is named in it: put in only the people its words, or the parts it goes on from, put there. \
+             A place with no one in it stays empty.\n",
+        );
+    }
     if !named.is_empty() {
         out.push_str("\nWho is in it:\n");
         for n in named {
@@ -270,15 +282,24 @@ fn continuity(out: &mut String, req: &Request, sees_picture: bool) {
         }
         out.push_str(
             "Keep the film's light, time of day and colours unless this part's words move to another place or time, \
-             and say again who is where.\n",
+             and say again who is where, if anyone is.\n",
         );
+    }
+    let next = req.next.trim();
+    if !next.is_empty() && !req.then_continues {
+        out.push_str(&format!(
+            "\nThe next shot, which this one cuts to, begins:\n{}\nLead into it — the place, the light, the weather, \
+             the mood — but leave its people and what they do to that shot, unless this part's words put them here.\n",
+            quote(next, NEIGHBOUR_CHARS)
+        ));
     }
     // The next shot knows only this one's last frame: a face turned away or
     // framed out there comes back as a stranger's.
     if req.then_continues {
         out.push_str(
-            "\nThe next part goes on from this one's last frame and knows only what it shows: end with everyone in \
-             it in view, faces visible, no one turned away, leaving or cut off by the frame.\n",
+            "\nThe next part goes on from this one's last frame and knows only what it shows: if anyone is in it, \
+             end with them in view, faces visible, no one turned away, leaving or cut off by the frame. Add no one \
+             for this.\n",
         );
     }
 }
@@ -291,6 +312,7 @@ pub struct Neighbours {
     pub before: String,
     pub cut: bool,
     pub then_continues: bool,
+    pub next: String,
 }
 
 /// Part `k` of shot `s`'s neighbours, from every shot in storyboard order
@@ -316,12 +338,21 @@ pub fn part_neighbours(order: &[(usize, Vec<&str>)], s: usize, k: usize) -> Neig
             }
         }
     }
+    let then_continues = at.1.get(k + 1).is_some_and(|x| !x.trim().is_empty());
+    // The first words of the next shot in this scene, for a part that ends
+    // its shot: a new scene is another place, which this one doesn't lead to.
+    let next = if then_continues {
+        String::new()
+    } else {
+        order[s + 1..].iter().take_while(|o| o.0 == at.0).find_map(|o| o.1.iter().map(|x| t(x)).find(|x| !x.is_empty())).unwrap_or_default()
+    };
     Neighbours {
         first,
         scene: if k > 0 { at.1.first().map_or(String::new(), |x| t(x)) } else { String::new() },
         cut: k == 0 && !before.is_empty(),
         before,
-        then_continues: at.1.get(k + 1).is_some_and(|x| !x.trim().is_empty()),
+        then_continues,
+        next,
     }
 }
 
@@ -336,6 +367,9 @@ fn trimmed(req: &Request, t: Target, fixed: usize, budget: usize) -> Option<Requ
     }
     let mut r = req.clone();
     r.scene.clear();
+    if !fits(&r) {
+        r.next.clear();
+    }
     if !fits(&r) {
         r.first.clear();
     }
@@ -594,17 +628,19 @@ mod tests {
             (0, vec!["Close on her face.", "", "She smiles.", "She walks."]),
             (1, vec!["A cafe at noon."]),
         ];
-        let n = |first: &str, scene: &str, before: &str, cut: bool, then_continues: bool| Neighbours {
+        let n = |first: &str, scene: &str, before: &str, cut: bool, then_continues: bool, next: &str| Neighbours {
             first: first.into(),
             scene: scene.into(),
             before: before.into(),
             cut,
             then_continues,
+            next: next.into(),
         };
-        assert_eq!(part_neighbours(&order, 0, 0), n("", "", "", false, true));
-        assert_eq!(part_neighbours(&order, 1, 0), n("Dusk on a pier.", "", "She turns.", true, false));
-        assert_eq!(part_neighbours(&order, 1, 2), n("Dusk on a pier.", "Close on her face.", "", false, true));
-        assert_eq!(part_neighbours(&order, 2, 0), n("", "", "She walks.", true, false), "a new scene opens itself");
+        assert_eq!(part_neighbours(&order, 0, 0), n("", "", "", false, true, ""));
+        assert_eq!(part_neighbours(&order, 0, 1), n("Dusk on a pier.", "Dusk on a pier.", "Dusk on a pier.", false, false, "Close on her face."));
+        assert_eq!(part_neighbours(&order, 1, 0), n("Dusk on a pier.", "", "She turns.", true, false, ""));
+        assert_eq!(part_neighbours(&order, 1, 2), n("Dusk on a pier.", "Close on her face.", "", false, true, ""));
+        assert_eq!(part_neighbours(&order, 2, 0), n("", "", "She walks.", true, false, ""), "a new scene opens itself, and the last shot of one leads to nothing");
     }
 
     #[test]
@@ -612,6 +648,12 @@ mod tests {
         let t = Target::Video(VideoFamily::Ltx25, false);
         let order = [(0, vec!["Dusk on a pier, orange light.", "Mara walks on."]), (0, vec!["Leo in a cafe.", "He sips.", "Mara looks back."])];
         assert_eq!(part_neighbours(&order, 0, 0), Neighbours { then_continues: true, ..Default::default() });
+        // A shot put first leads into the next: its last part is told what that one opens with.
+        let n = part_neighbours(&order, 0, 1);
+        let r = super::Request { next: n.next, ..shot("Mara walks on.") };
+        let b = brief(t, &r, &[], false);
+        assert!(b.contains("cuts to, begins:\nLeo in a cafe.\nLead into it") && b.contains("leave its people"), "{b}");
+        assert!(!brief(t, &super::Request { then_continues: true, ..r }, &[], false).contains("cuts to, begins"), "a part going on in its shot leads nowhere");
         let n = part_neighbours(&order, 1, 2);
         assert_eq!((n.first.as_str(), n.scene.as_str(), n.before.as_str()), ("Dusk on a pier, orange light.", "Leo in a cafe.", "He sips."));
         let mut r = shot("Mara looks back.");
@@ -632,7 +674,12 @@ mod tests {
         assert!(!brief(t, &shot("Dusk on a pier."), &[], false).contains("part before"));
         // One the next shot goes on from ends with its people in view.
         let r = super::Request { then_continues: true, ..shot("Dusk on a pier.") };
-        assert!(brief(t, &r, &[], false).contains("faces visible"));
+        let b = brief(t, &r, &[], false);
+        assert!(b.contains("if anyone is in it, end with them in view, faces visible"), "{b}");
+        // An empty place stays empty: that line once filled a street with strangers.
+        assert!(b.contains("Add no one") && b.contains("A place with no one in it stays empty"), "{b}");
+        let r = super::Request { cast: vec!["Mara".into()], ..r };
+        assert!(!brief(t, &r, &[], false).contains("No one is named"));
     }
 
     #[test]

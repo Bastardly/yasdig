@@ -211,14 +211,16 @@ test('a part sees its scene\'s opening, its shot\'s first part and the part befo
     { scene: 0, texts: ['Close on her face.', '', 'She smiles.', 'She walks.'] },
     { scene: 1, texts: ['A cafe at noon.'] },
   ];
-  assert.deepEqual(partNeighbours(order, 0, 0), { first: '', scene: '', before: '', cut: false, then_continues: true });
+  assert.deepEqual(partNeighbours(order, 0, 0), { first: '', scene: '', before: '', cut: false, then_continues: true, next: '' });
+  assert.deepEqual(partNeighbours(order, 0, 1), { first: 'Dusk on a pier.', scene: 'Dusk on a pier.',
+    before: 'Dusk on a pier.', cut: false, then_continues: false, next: 'Close on her face.' });
   assert.deepEqual(partNeighbours(order, 1, 0),
-    { first: 'Dusk on a pier.', scene: '', before: 'She turns.', cut: true, then_continues: false });
+    { first: 'Dusk on a pier.', scene: '', before: 'She turns.', cut: true, then_continues: false, next: '' });
   assert.deepEqual(partNeighbours(order, 1, 2),
-    { first: 'Dusk on a pier.', scene: 'Close on her face.', before: '', cut: false, then_continues: true });
+    { first: 'Dusk on a pier.', scene: 'Close on her face.', before: '', cut: false, then_continues: true, next: '' });
   assert.deepEqual(partNeighbours(order, 2, 0),
-    { first: '', scene: '', before: 'She walks.', cut: true, then_continues: false },
-    'a new scene opens itself, and cuts from the last words of the one before');
+    { first: '', scene: '', before: 'She walks.', cut: true, then_continues: false, next: '' },
+    'a new scene opens itself, cuts from the last words of the one before, and its last shot leads to nothing');
 });
 
 test('a drawn shot whose own flow shift changed is drawn again whole; the video default never marks it', () => {

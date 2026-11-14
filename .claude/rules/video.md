@@ -123,7 +123,8 @@ read over by every part. Names in the UI: Storyboard, Shot
   builds the order from `rowsOfShot`, the open shot from its rows): `first` the
   scene's opening part, `scene` this shot's part 1, `before` the part before — for
   part 1 the last words of the shot before, any scene, as a `cut`; `then_continues` a
-  next part in the shot. The server's `enhance::part_neighbours` (a film's parts) is the same rule, pinned by one
+  next part in the shot; `next` the scene's next shot's first words, for a shot's last
+  part (a shot put first leads into the rest). The server's `enhance::part_neighbours` (a film's parts) is the same rule, pinned by one
   fixture table in both tests.
 
 ## Clips (shots)
@@ -160,9 +161,13 @@ read over by every part. Names in the UI: Storyboard, Shot
   measured: Danish 3.2 chars/token, English 4.05–4.95) holds it in characters: the
   page's `.promptcount` per part (scene description joined, `shots.js` `promptChars`),
   the story context's line, Enhance's `maxLength` (`prompt_cap`). Counted, not
-  refused: an English prompt past 3200 may still fit. **2.5's bf16 encoder ignores prompts**: it drew a
-  man talking to camera where its q8_0 copy drew the prompt, same seed
-  (2026-11-07). The card fetches Rootport's Q4_K_M (`LTX25_LLM.file`);
+  refused: an English prompt past 3200 may still fit. **2.5 distilled ignores the prompt on
+  some seed × frame-count pairs** (a man talking to camera, a kitchen): upstream
+  leejet/stable-diffusion.cpp#2220, open, no fix (2026-11-14) — the encoder's precision
+  changes nothing (the issue's bf16/Q8_0/Q4_K are pixel-identical; the user swapped
+  ours, same clip), nor does the DiT's quant. So the 2026-11-07 "bf16 encoder ignores
+  prompts, q8_0 follows" was this bug on one seed, not the encoder. The only remedy
+  here is another seed or length; check #2220 when bumping sd.cpp. The card fetches Rootport's Q4_K_M (`LTX25_LLM.file`);
   Convert takes a bf16 through `-m` (`Slot::for_role`), and `video_components`
   prefers a GGUF beside it after the named file; `#vpartnote` says so while
   the bf16 is picked. LTX prompts go

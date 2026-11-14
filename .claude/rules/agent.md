@@ -194,7 +194,10 @@ Break silently:
   same film", not "nothing carried over"), shed by `trimmed` to fit the
   context and dropped on a `ContextOverflow` retry; `then_continues` (the next shot goes
   on from this one) asks it to end with every face in view — a continue knows only the
-  last frame, so a face that left it comes back a stranger's (film.md says the same); *Enhance every part*
+  last frame, so a face that left it comes back a stranger's (film.md says the same) —
+  **only "if anyone is in it"**, and a part with no `cast` is told an empty place stays
+  empty: unconditional, it put two strangers in an empty street (2026-11-14); `next` (the
+  scene's next shot, for a shot's last part) is led into without taking its people; *Enhance every part*
   (`enhanceAll`) runs the rows in order. **A story's new or changed
   shots are enhanced after the turn** (`FilmShot.enhance` → `Next::Enhance` →
   `Step::Enhance`, `session::shot_enhanced`): the story's words move to

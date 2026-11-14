@@ -138,7 +138,7 @@ export function shotOutdated(c, want, scene) {
 // `agent::enhance::Request`.
 export function partNeighbours(order, s, k) {
   const at = order[s];
-  if (!at) return { first: '', scene: '', before: '', cut: false, then_continues: false };
+  if (!at) return { first: '', scene: '', before: '', cut: false, then_continues: false, next: '' };
   const t = (x) => String(x ?? '').trim();
   const opener = order.find((o) => o.scene === at.scene) ?? at;
   const first = opener === at && k === 0 ? '' : t(opener.texts.find((x) => t(x)));
@@ -147,12 +147,20 @@ export function partNeighbours(order, s, k) {
   else {
     for (let j = s - 1; j >= 0 && !before; j--) before = t([...order[j].texts].reverse().find((x) => t(x)));
   }
+  const thenContinues = !!t(at.texts[k + 1]);
+  // The first words of the next shot in this scene, for a part that ends its
+  // shot: a new scene is another place, which this one doesn't lead to.
+  let next = '';
+  for (let j = s + 1; !thenContinues && !next && j < order.length && order[j].scene === at.scene; j++) {
+    next = t(order[j].texts.find((x) => t(x)));
+  }
   return {
     first,
     scene: k > 0 ? t(at.texts[0]) : '',
     before,
     cut: k === 0 && !!before,
-    then_continues: !!t(at.texts[k + 1]),
+    then_continues: thenContinues,
+    next,
   };
 }
 

@@ -826,6 +826,7 @@ fn enhance_shot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: us
                 first: n.first,
                 scene: n.scene,
                 then_continues: n.then_continues,
+                next: n.next,
                 cut: n.cut,
                 picture: None,
                 seconds: Some(shot.frames.map_or(view.shot_seconds(), |f| f as f32 / view.fps.max(1) as f32)),
