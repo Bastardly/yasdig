@@ -570,8 +570,12 @@ export function openHelp(id) {
 }
 
 export function initHelp() {
-  $('helpnav').innerHTML = menuOrder().map((t) =>
-    `<button type="button" class="btn btn-choice" data-topic="${t.id}">${esc(t.title)}</button>`).join('');
+  // The guide is moving to yasdig.com, which already has pages this tab
+  // doesn't (Video): pointed to first.
+  $('helpnav').innerHTML = `<p class="sub">The full guide, Video included, is on
+    <a href="https://yasdig.com/guide/" target="_blank" rel="noopener noreferrer">yasdig.com/guide</a>.</p>`
+    + menuOrder().map((t) =>
+      `<button type="button" class="btn btn-choice" data-topic="${t.id}">${esc(t.title)}</button>`).join('');
   $('helpnav').addEventListener('click', (e) => {
     const b = e.target.closest('[data-topic]');
     if (b) show(b.dataset.topic);

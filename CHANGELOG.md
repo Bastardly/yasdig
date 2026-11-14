@@ -3,6 +3,72 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### Added
+
+- **Video 2.0: a storyboard.** A video is now scenes, a scene is shots, and a shot is
+  parts. A **scene** is one place and time, with a description and negative every shot
+  in it shares. A **shot** is one camera run, with a cut between two shots. A **part**
+  is one run of the model, going on from the last frame of the part before. The
+  **Storyboard** panel shows them all, each shot marked generated, changed, outdated or
+  not generated, and opens the Shot, Scene and Generation panels. **Generate video**,
+  **Generate scene** and **Generate shot** draw only what isn't done.
+- **The stage plays the whole video**, shot after shot, each with its own sound, with
+  a strip of shots under the scrubber. The video dialog's Download, *Save to output*
+  and Enlarge work on the whole video: one file, every shot joined, its sound in step.
+  Enlarge makes one version across the shots, and offers to finish the shots a version
+  doesn't cover.
+- **Flow shift for this shot**, under its parts: one shot can override the video's
+  flow shift.
+- **The Assistant works on a video you made yourself**: open it and start a new chat
+  beside it, and the chat takes that video as its film.
+- **Enhance sees the storyboard**: a part is written to match the scene's first part,
+  its shot's first part and the part before it, and a shot's last part leads into the
+  next shot. On H3 it fills an empty *Spoken* with the lines your words ask for.
+- **A prompt length count on each LTX part**, out of 3200 characters. Past about 1024
+  tokens LTX ignores the prompt altogether.
+- **yasdig.com has a Video guide**, at `/guide/video/`. The Help tab links to the
+  site's guide.
+- `agent-check` has fifteen cases: films keep to the length asked, and the agent
+  changes the shot you name, fills a shot you added and leaves your part alone.
+
+### Changed
+
+- **The Assistant's films are written straight into a video** of their own on the
+  storyboard, with no board to send across. If the video's model can't make a film,
+  the chat asks which installed model to use, its recommendation marked, and writes
+  nothing until you pick; it no longer swaps models behind your back.
+- **Clips from earlier versions are converted** the first time this version starts:
+  each becomes a video, split into shots at its cut marks.
+- **The model, size, frame rate and Hi-res belong to the whole video**, so its shots
+  join. There is no Unlock button. Once a shot is generated, changing one of them asks
+  first, saying the shots already made would need generating again; Cancel puts the
+  value back. A generated scene's description and negative ask the same way.
+- **A narrated shot is one picture**, part 1's, with every part read over it; a
+  new picture is a new shot.
+- **The agent keeps what you change in its film.** It sees the storyboard as you left
+  it on every turn, and names shots the way the storyboard numbers them. A part you
+  wrote stays yours unless you ask: a shot of yours it leaves out is kept, and the chat
+  names any part of yours a rewrite dropped. A film's settings are its own video's,
+  whichever video is open when you send.
+
+### Fixed
+
+- **Opening a film's chat could switch a hand-made video's model.**
+- **Enhance put two strangers into an empty street.** It now adds no one your words
+  don't put there.
+- **The agent could set the Image tab's prompt to the word "null".**
+- **A narrated line without a full stop** began with a held vowel.
+
+### Known issue
+
+- **LTX-2.5 distilled sometimes ignores the prompt** on some pairs of seed and length,
+  and draws something unrelated, such as a kitchen. This is a fault in
+  stable-diffusion.cpp
+  ([#2220](https://github.com/leejet/stable-diffusion.cpp/issues/2220)). Give the shot
+  a new seed, or change its length by one step, and generate it again.
+
 ## 0.10.3 — 2026-11-12
 
 ### Added

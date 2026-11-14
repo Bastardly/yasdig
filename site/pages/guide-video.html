@@ -1,0 +1,111 @@
+<!--
+title: Video
+description: How a video is built in YASDIG: a storyboard of scenes, shots and parts; generating cheap first; the video's settings; first frames, references and sounds; Enhance; and films with the Assistant.
+-->
+<h1>Video</h1>
+<p>A video model of this size runs out of memory a few seconds in, so the Video tab
+builds a video from pieces, on the <b>Storyboard</b>: a video holds scenes, a scene
+holds shots, and a shot holds parts. This page is how they fit together; the
+<a href="/video/">Video page</a> lists the models.</p>
+
+<h3>Video › Scene › Shot › Part</h3>
+<ul>
+  <li>A <b>video</b> has a title and a <b>Generation</b> button under it: the model and
+    its files, LoRAs, size, frame rate, Hi-res, steps, CFG, sampler and the
+    <i>Advanced</i> fold. Every shot is made with these, so the shots join.</li>
+  <li>A <b>scene</b> is one place and time. Click its name for the Scene panel: a short
+    header, the <b>Scene description</b> — who and where, and the look, put in front of
+    every part of its shots (its <code>{variables}</code> roll once for the scene, so a
+    rolled character stays the same) — and the <b>Negative prompt</b>.</li>
+  <li>A <b>shot</b> is one camera run. Between two shots is a cut: the next one starts
+    fresh. <b>+ Shot</b> adds one, ↑↓ move it (across scenes too), × deletes it. Click
+    a shot to put it on the stage and open the <b>Shot</b> panel.</li>
+  <li>A <b>part</b> is one run of the model: its own <b>seed</b>, <b>frames</b> and
+    <b>prompt</b>, side by side in the Shot panel. Each part after the first goes on
+    from the last frame of the one before. A part is conditioned on its own words after
+    the scene description, so a line spoken in part 1 is spoken once — say only what
+    happens in it. Part 1's <b>Start from image</b> is the shot's first frame; without
+    one the model runs as plain text-to-video.</li>
+</ul>
+<p>Only one frame carries across a part's seam, so a face that leaves the picture and
+comes back is drawn anew: write parts that agree, and change camera, place or who is in
+view at a cut. Wan TI2V-5B and A14B, MiniMax H3 and LTX go on from a last frame; other
+models make one part per shot.</p>
+<table class="helptable">
+  <thead><tr><th>Mark</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td>✓</td><td>Generated.</td></tr>
+    <tr><td>✎</td><td>Changed since it was made: generate it to draw the change.</td></tr>
+    <tr><td>↻</td><td>Outdated: made before its scene or the video's settings changed.</td></tr>
+    <tr><td>○</td><td>Not generated yet.</td></tr>
+  </tbody>
+</table>
+
+<h3>Generating: cheap first, then good</h3>
+<p><b>Generate video</b> on the rail draws every shot that isn't done, in storyboard
+order, one at a time; <b>Generate scene</b> does a scene, <b>Generate shot</b> the shot
+on the stage. Stop ends the run; the shots already made stay.</p>
+<p>After a render every part shows the seed it was drawn with. Change one part's seed,
+length or words and the button becomes <b>Redo from part k</b>: the parts before it are
+kept, and that one and the ones after it are drawn again from the last frame kept. Add a
+part and it draws only the new one onto the end. So draft at a few steps, fix each shot
+until it works, then raise the steps and generate again — the same seeds, drawn
+properly. A shot drawn again keeps its old frames until the new ones are done.</p>
+
+<h3>The video's settings ask first</h3>
+<p>Once a shot is generated, the model, size, frame rate and Hi-res belong to the whole
+video: shots made differently can't be joined. Changing one asks first, since the shots
+already generated would need generating again — say yes and they are marked outdated,
+cancel and the value goes back. A generated scene's description and negative ask the
+same way. Steps, CFG, LoRAs and memory are free to change. <b>Flow shift for this
+shot</b>, under its parts, overrides the video's for one shot.</p>
+
+<h3>First frames, references and sounds</h3>
+<p>Any shot's part 1 can start from an image — a keyframe drawn on the Image tab, the way
+a Wan video changes scene. With MiniMax H3 a shot that starts fresh may instead follow
+up to four <b>reference pictures</b> (a face, a costume, a place) and up to three
+<b>sounds</b> (a voice to speak in, 15 seconds in all), and its parts have <b>Who is in
+it</b>, <b>Spoken</b> (<code>Mara: Who's there?</code>), <b>Sound</b> and <b>Music</b>,
+which YASDIG writes into MiniMax's own prompt layout. Not a first frame and references
+on one shot: sd.cpp can't give H3 both.</p>
+
+<h3>Enhance</h3>
+<p><b>Enhance</b> under a part's prompt has the Assistant's model write it out in full
+for the video's model: on LTX one paragraph with the action, the camera and every sound,
+since LTX makes the soundtrack from the same words; on Wan picture and motion only; on
+H3 what is seen, with Spoken and Sound filled when empty. It is shown the scene's first
+part, the part before and how the next shot begins, so the place, light and people carry
+on — and a shot you put first leads into the ones after it. It adds no one your words
+don't put there. <b>Enhance every part</b> does a shot's parts in order. Ctrl+Z puts
+your words back.</p>
+
+<h3>Films with the Assistant</h3>
+<p>Ask the Video tab's Assistant for a short film and it writes it straight into a
+storyboard of its own, with the cast in the Cast panel. To work on a video you made
+yourself, open it and start a new chat beside it: the chat takes the open video as its
+film on your first message.</p>
+<ul>
+  <li>It sees the storyboard as you left it on every turn, and names shots the way the
+    storyboard numbers them — say “shot 2” as you see it.</li>
+  <li>Parts you wrote or changed are yours: it changes them only when you ask, and a shot
+    of yours it leaves out is kept. Only a shot it wrote, untouched and not generated, is
+    removed when it leaves it out, and the chat says which.</li>
+  <li>A generated shot it rewrites keeps its frames and shows as changed until you
+    generate it again. The settings are the video's own.</li>
+</ul>
+
+<h3>Playing, saving and sharing</h3>
+<p>The stage plays the whole video, shot after shot, each with its own sound; the strip
+under the scrubber jumps to a shot. Click the picture for the video dialog:
+<b>Enlarge</b> runs FSR over every frame, or with LTX installed redraws each shot at
+twice its size without flicker; <b>Save to output</b> writes the video as one file,
+every shot joined; <b>Download</b> makes an MP4, WebM or GIF in your browser. A video
+saves itself once it is generated or saved; star it to keep it past <i>Delete all</i>.</p>
+
+<h3>When LTX-2.5 ignores the prompt</h3>
+<p>On some pairs of seed and length, LTX-2.5 distilled draws something unrelated to the
+words — a man talking to camera, someone chopping vegetables — while the same words at
+another seed or length come out right. It is a known fault in stable-diffusion.cpp
+(<a href="https://github.com/leejet/stable-diffusion.cpp/issues/2220" target="_blank" rel="noopener noreferrer">#2220</a>),
+not in your prompt: give the shot a new seed, or change its length by one step, and
+generate it again.</p>

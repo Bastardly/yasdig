@@ -137,6 +137,9 @@ so they read `sdxl/x` on Windows too.
     (stubs as in `modules.test.js`) and writes each `TOPICS` row in `menuOrder()`. A
     topic with `fill(el)` needs a `FILLED` row (its placeholder → a link) or the
     build stops. Adding a Help topic adds a page and a rail item, nothing else.
+    **A guide page the app's Help doesn't have** is `site/pages/guide-{id}.html` plus a
+    `GUIDE` row (`after:` the topic it follows): Video is one (asked for, 2026-11-14:
+    the Help tab is to give way to the site's guide, so new guide pages go here).
   - **`<media src=…>`** in a page: a file from `site/media/` (picture, or a muted
     looping webm that plays while in view). A missing file is a labelled empty frame
     **in the preview only** (`build({preview})`, `--preview`); the deploy leaves it

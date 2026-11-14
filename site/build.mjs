@@ -12,6 +12,7 @@
 //   site/partials/*.html    pasted in by `<!-- include name -->`
 //   web/js/help.js TOPICS   the guide: one page per Help topic, the app's own
 //                           text, so a sentence is written once (help.js's rule)
+//   site/pages/guide-*.html guide pages the app's Help doesn't have (`GUIDE`)
 //   web/tokens.css          the app's tokens, copied as they are — the site
 //                           can't drift from the app's palette
 //
@@ -43,6 +44,14 @@ const FEATURES = [
 const TOP = [
   { page: 'index', path: '/', label: 'Overview' },
   { page: 'download', path: '/download/', label: 'Download' },
+];
+
+// Guide pages written for the site alone (`site/pages/guide-{id}.html`, the
+// same leading comment as a feature page, `title:` being the rail's label),
+// each placed after the Help topic `after` names. The app's Help is to give
+// way to the site's guide, so a new guide page goes here, not in help.js.
+const GUIDE = [
+  { id: 'video', after: 'cast' },
 ];
 
 // A Help topic whose `fill(el)` asks the running server for part of its page
@@ -226,6 +235,12 @@ export async function build(opts = {}) {
   rmSync(OUT, { recursive: true, force: true });
   mkdirSync(OUT, { recursive: true });
   const topics = await helpTopics();
+  for (const g of GUIDE) {
+    const { meta: m, body } = meta(read(join(SITE, 'pages', `guide-${g.id}.html`)));
+    if (!m.title || !m.description) throw new Error(`site/pages/guide-${g.id}.html: its comment needs title: and description:`);
+    const at = topics.findIndex((t) => t.id === g.after);
+    topics.splice(at < 0 ? topics.length : at + 1, 0, { id: g.id, title: m.title, html: body, description: m.description, site: true });
+  }
   const routes = [];
 
   for (const r of [...TOP, ...FEATURES, { page: '404', path: '/404.html' }]) {
@@ -245,8 +260,8 @@ export async function build(opts = {}) {
       path, current: path, topics,
       title: `${t.title} — YASDIG guide`,
       description: t.description,
-      body: `<p class="crumb"><a href="/guide/">Guide</a> · from the app's Help tab</p>
-<article class="card helpdoc">${t.html}</article>`,
+      body: `<p class="crumb"><a href="/guide/">Guide</a>${t.site ? '' : " · from the app's Help tab"}</p>
+<article class="card helpdoc">${media(includes(t.html), `guide-${t.id}`)}</article>`,
     }));
     routes.push(path);
   }
@@ -255,9 +270,9 @@ export async function build(opts = {}) {
   write('/guide/', page({
     path: '/guide/', current: '/guide/', topics,
     title: 'Guide — YASDIG',
-    description: 'How YASDIG works, from the app\'s own Help tab: models and their parts, memory, samplers, schedulers, step caching, references, cast, and Refine & adjust.',
+    description: 'How YASDIG works: models and their parts, memory, samplers, schedulers, step caching, references, cast, video, and Refine & adjust.',
     body: `<h1>Guide</h1>
-<p class="lede">The app's Help tab, page for page: what to pick, and why.</p>
+<p class="lede">How each part works: what to pick, and why.</p>
 ${topics.map((t) => `<a class="strip card" href="/guide/${t.id}/"><div><h3>${esc(t.title)}</h3>
   <p>${esc(t.description)}</p><span class="more">Read →</span></div></a>`).join('\n')}`,
   }));

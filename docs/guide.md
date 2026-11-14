@@ -824,13 +824,14 @@ image you want to keep is one **Save to output** away (or tick **Save Output** i
 
 ## Video
 
-The Video tab makes clips with Wan 2.2 (TI2V-5B, the I2V-A14B pair), Wan 2.1 VACE
+The Video tab makes videos with Wan 2.2 (TI2V-5B, the I2V-A14B pair), Wan 2.1 VACE
 and dense models, MiniMax H3 (with sound), and LTX-2.3 and LTX-2.5 (with sound). Get
-models has cards for the first two, H3 and both LTX releases. It is laid out like the Image tab: the size with a swap button (snapped to what
-the model runs), LoRAs picked from `models/loras/` (only the ones for the model's size;
-on the A14B pair each says which expert it patches), and *Save as defaults for this
-model*. While a clip renders the status card
-loops a blurry preview of it, and you can open other clips and set up the next one.
+models has cards for the first two, H3 and both LTX releases. Like the Image tab it is
+a rail of panels over the picture: **Storyboard**, **Info**, **Current**,
+**Favorites**, the **Assistant**, and **Cast** on a model that follows reference
+pictures (H3) or while a film's chat is open. At the rail's foot are **New video**,
+**Save** and **Generate video**. While a shot renders the status card loops a blurry
+preview of it, and you can open other videos and set up the next one.
 
 **Turbo (MiniMax H3).** The H3 card also fetches an 8-step DMD LoRA made for the
 pruned H3 files, and with it installed the Generation panel shows the Image tab's
@@ -844,167 +845,230 @@ of 32. The cards fetch the *distilled* checkpoints, which run 8 steps at CFG 1 o
 fixed schedule; set other steps and it runs the ordinary schedule instead. 2.3 uses
 a Gemma 3 text encoder plus a separate text projection file; 2.5 uses Lightricks'
 Gemma 4 with the projection inside (a stock Gemma 4 won't do, and is listed greyed
-out). The 2.5 card fetches a Q4_K_M of that encoder: on Lightricks' bf16 file 2.5
-can ignore the prompt and draw a stock scene. If you have the bf16 from an earlier
-download, the Video tab says so; get the card's file, or convert the bf16 to q8_0 on
-**Models → Convert** (about 15 GB, a few minutes). Either is used from then on. 2.5's
-default video VAE decodes by diffusion, which sd.cpp doesn't run: use the
-`-conv` VAE the card fetches. LTX reads at most 1024 tokens of prompt (a part's words
-with its scene's description); past that it ignores the prompt and makes an unrelated
-clip, so on LTX each part's prompt shows a count in its corner, out of 3200 characters,
-which turns red when over. **Hi-res ×2** (Generation panel, LTX only) draws at the
-size you set, enlarges the latent with LTX's latent upscaler and refines it at twice
-the size in the same run — far cheaper than drawing big from the start. 640×352 with
-Hi-res comes out at 1280×704.
+out). The 2.5 card fetches a Q4_K_M of that encoder; a bf16 copy can be converted to
+q8_0 on **Models → Convert**, and either works. 2.5's default video VAE decodes by
+diffusion, which sd.cpp doesn't run: use the `-conv` VAE the card fetches. LTX reads
+at most 1024 tokens of prompt (a part's words with its scene's description); past that
+it ignores the prompt and makes an unrelated clip, so on LTX each part's prompt shows a
+count in its corner, out of 3200 characters, which turns red when over. **Hi-res ×2**
+(Generation panel, LTX only) draws at the size you set, enlarges the latent with LTX's
+latent upscaler and refines it at twice the size in the same run — far cheaper than
+drawing big from the start. 640×352 with Hi-res comes out at 1280×704.
 
-**A clip is shots.** A model of this size runs out of memory a few seconds in, so a
-longer clip is made a shot at a time, in the **Shots** panel: **Every shot** first,
-then the **Negative prompt**, then the shots. Each shot has its own **Seed** (-1 picks
-one), **Frames** (rounded to what the model allows) and **Prompt**, and is one render;
-shot 1's **Start from image** (from your outputs, an upload, a drop or a paste) is the
-clip's first frame, and without one the model runs as plain text-to-video;
-each after the first goes on from the previous shot's last frame. A shot is conditioned
-on **its own words**, so a line spoken in shot 1 is spoken once. What every shot should
-share — the characters, the place, the look — goes in **Every shot**, which is put in
-front of each one (its `{variables}` roll once, so a rolled character stays the same).
-Five shots of 3 s are a 15 s clip, up to 20. Only one frame carries across a seam, so
-motion can change direction there; write shots that agree. TI2V-5B, A14B and H3 can do
-it (the others don't take a first frame). Stop, or a failing shot, keeps the shots
-already made.
+**When LTX-2.5 ignores the prompt.** On some pairs of seed and length, LTX-2.5
+distilled draws something unrelated to the words — a man talking to camera, someone
+chopping vegetables in a kitchen — while the same words at another seed or length come
+out right. It is a known fault in stable-diffusion.cpp
+([#2220](https://github.com/leejet/stable-diffusion.cpp/issues/2220)), not in your
+prompt or the encoder file: give the shot a new seed, or change its length by one
+step, and generate it again.
 
-**Enhance** under a shot's prompt writes it out in full for the Video tab's model,
-knowing the clip's *Every shot*, the shot before it, its first frame (when the agent's
-model can see), who is in it and their looks, and how long it runs. Video models fill
-whatever a prompt leaves open, and LTX makes the sound from the same words — "a man
-sings opera" can come back as a woman talking. So on LTX it writes one paragraph with
-the action, the camera and every sound: who speaks, word for word and in what voice,
-singing, the sounds of the place, music only when you asked. On Wan it writes picture
-and motion only. On H3 it writes what is seen, keeps names as they are (they are
-matched to the references), leaves Spoken, Sound and Music to their fields, and fills
-an empty Sound, and an empty Spoken with the lines your words have someone say. Ctrl+Z puts your words back.
+### The storyboard: Video › Scene › Shot › Part
 
-A later part is written to belong to the same video: Enhance shows the agent the
-scene's first part, this shot's first part and the part before — for a shot's part 1,
-the last part of the shot before it on the storyboard — and asks it to keep the place,
-the light, the time of day and how people look unless the part's own words change
-them. A part goes on from the one before; a shot's part 1 is a new camera shot of the
-same film. A part that another follows is written to end with everyone in it in view:
-the next part knows only that last frame, so a face turned away or framed out there
-would come back as someone else's.
-**Enhance every part**, under the parts, does them in order, each one waiting for the
-one before, so part 5 is written to match parts 1 to 4 as they now read. Stop ends it
-where it is: the parts done stay written.
+A model of this size runs out of memory a few seconds in, so a video is built from
+pieces, in the **Storyboard** panel:
 
-**Cheap first, then good.** After a render every row shows the seed it was drawn with,
-and the rows on the clip on the stage are ticked green. Change one row's seed, length or
-words and **Redo from shot k** appears at the foot of the panel: it keeps the shots
+- A **Video** has a **Title** and a **Generation** button under it: the model, its
+  files, LoRAs, the size, frame rate, Hi-res, steps, CFG, sampler and the *Advanced*
+  fold (flow shift, the high-noise expert's steps, memory). Every shot is made with
+  these, so the shots join.
+- A **scene** is one place and time. Click its name for the **Scene** panel: *What
+  happens* (a short header), the **Scene description** — who and where, and the look:
+  it is put in front of every part of the scene's shots, and its `{variables}` roll
+  once for the scene, so a rolled character stays the same — and the **Negative
+  prompt**. **+ Scene** adds one; ↑↓ move it; × deletes it.
+- A **shot** is one camera run. Between two shots is a cut: the next starts fresh. **+
+  Shot** under a scene adds one; ↑↓ move it, across scene edges too; × deletes it.
+  Click a shot to put it on the stage and open the **Shot** panel. Each shot has a mark:
+  ✓ generated, ↻ outdated (made before its scene or the video's settings changed), ✎
+  changed since it was made, ○ not generated, … generating.
+- A **part** is one run of the model inside a shot, side by side in the Shot panel:
+  its own **Seed** (-1 picks one), **Frames** (rounded to what the model allows) and
+  **Prompt**. Each part after the first goes on from the last frame of the one
+  before. A part is conditioned on **its own words** after the scene description, so a
+  line spoken in part 1 is spoken once — say only what happens in it. Part 1's **Start
+  from image** (from your outputs, an upload, a drop or a paste) is the shot's first
+  frame; without one the model runs as plain text-to-video. TI2V-5B, A14B, H3 and LTX
+  go on from a last frame; the others make one part per shot.
+
+Only one frame carries across a part's seam, so motion can change direction there, and
+a face that leaves the picture and comes back is drawn anew: write parts that agree. A
+cut is the place to change camera, place or who is in view.
+
+### Generating
+
+**Generate video** on the rail draws every shot that isn't done, in storyboard order,
+one at a time. **Generate scene** under a scene does the same for that scene, and
+**Generate shot** at the foot of the Shot panel for the shot on the stage. Stop on the
+rail ends the run and every video job behind it; the shots already made stay.
+
+**Cheap first, then good.** After a render every part shows the seed it was drawn with,
+and the parts the shot already has are ticked green. Change one part's seed, length or
+words and the Shot panel's button becomes **Redo from part k**: it keeps the parts
 before it and draws that one and every one after it again, from the last kept frame,
-with the clip's own model and settings. Add a row under a whole clip and the button is
-**Extend clip**. The **×** on the clip's last shot cuts it off and leaves its text in
-the row. So: draft at a few steps, try shots until each works, then raise the steps and
-press **Generate clip** — the same seeds, drawn properly. Shot 1 is the clip itself;
-changing it means a new clip. A clip's enlarged versions are removed when it changes,
-since they no longer cover it.
+with the shot's own model and settings. Add a part under a whole shot and it becomes
+**Generate shot — N more parts**; the × on a shot's last part cuts it off and leaves its
+text in place. So: draft at a few steps, fix each shot until it works, then raise the
+steps and generate again — the same seeds, drawn properly. A shot drawn again keeps its
+old frames until the new ones are done.
 
-**Save without generating.** **Save** on the rail keeps the clip as it stands — every
-shot, *Every shot*, the negative, the model, its parts, LoRAs and settings — without
-drawing a frame. It waits in Current with a **Not generated** mark (its first picture,
-if a shot has one), opens like any clip, and saves itself as you change it; star it to
-keep it past *Delete all* and Close server's clear. **Generate clip** draws it into the
-same tile. Generate on a new clip does the same by itself: the clip is saved first, so
-it shows in Current at once, marked **Generating…**, and its tile becomes the clip when
-it is done; if it fails or you stop it, it stays there as **Not generated** and on the
-stage, so the next Generate draws into it. Edits on a generated clip that you haven't
-drawn yet are kept with the clip too, so a reload or another browser shows them.
+**The video's settings ask first.** Once a shot is generated, the model, size, frame
+rate and Hi-res belong to the whole video, since shots made differently can't be joined.
+Changing one asks first, saying that the shots already generated would need generating
+again; say yes and they are marked outdated, and Generate video makes them again;
+cancel and the value goes back. A generated scene's description and negative ask the
+same way on the first keystroke. Steps, CFG, LoRAs and memory are free to change.
 
-**Continue or cut.** One frame is all that carries across a seam, so a face that
-leaves the picture and comes back is drawn anew and may not match. A shot can be a
-**Cut** instead of *Continue*: it starts fresh, a new camera shot, and doesn't join the
-frame before. A cut can **start from an image** (*Start from image*: *Choose…* from your
-outputs, or *Upload…*): a keyframe you drew on the Image tab, which is how a TI2V-5B or A14B clip
-changes scene. With MiniMax H3 a cut may instead follow up to four **reference
-pictures** (a face, a costume, a place) from your outputs or an upload — say in its
-prompt who is who, or name each in the References dialog. Not both on one shot: sd.cpp
-can't give H3 references and a starting frame at once, which is also why a continue
-takes none. Shot 1 can take references too when it has no image to start from. Other
-models have no references. The Shots panel can be dragged wider as well as taller.
+**Flow shift for this shot**, under its parts, overrides the video's flow shift (in
+Generation › Advanced) for one shot. Changing it draws the shot again whole.
+
+**Saving.** A new video is saved the first time you generate it, press **Save**, or add
+a shot or a scene; from then on it saves itself as you change it, and edits you haven't
+generated yet are kept with each shot, so a reload or another browser shows them. A
+video saved without generating waits in Current marked **Not generated**. **New video**
+starts an empty storyboard; the one open stays in Current. Clips made before the
+storyboard are converted the first time this version starts: a clip becomes a video,
+split into shots at its cut marks.
+
+### First frames, references and sounds
+
+**A shot from a picture.** Any shot's part 1 can **start from an image**: a keyframe you
+drew on the Image tab, which is how a TI2V-5B or A14B video changes scene. With MiniMax
+H3 a shot that starts fresh may instead follow up to four **reference pictures** (a
+face, a costume, a place) from your outputs or an upload — say in its prompt who is
+who, or name each in the References dialog. Not both on one shot: sd.cpp can't give H3
+references and a starting frame at once, which is also why a later part takes none.
+Other models have no references.
 
 **Sounds.** Where an H3 shot may take references it may also take **sounds**, when the
 model has its audio VAE: *Sounds…* picks up to three from your outputs or uploads one —
 a voice to speak in, a sound to match — 15 seconds in all, each at least 2 (MiniMax's
-limits). Name them in the shot's prompt as `<Audio 1>`, `<Audio 2>`: "the woman speaks
-in the voice of `<Audio 1>`". Any sound the browser can play uploads; it is kept as a
-32 kHz stereo WAV, cut to 15 seconds. A sound can be named as someone's **voice** in
-the Sounds dialog, by the name its speaker has in *Spoken* (below). H3 comes as two files with the same shape, so
-yasdig can't tell them apart: the Models tab has both, and the **Ref2VA** one is the one
-MiniMax made for following references — pick it for shots that do.
+limits). Name them in the prompt as `<Audio 1>`, `<Audio 2>`: "the woman speaks in the
+voice of `<Audio 1>`". Any sound the browser can play uploads; it is kept as a 32 kHz
+stereo WAV, cut to 15 seconds. A sound can be named as someone's **voice** in the
+Sounds dialog, by the name its speaker has in *Spoken* (below). H3 comes as two files
+with the same shape, so yasdig can't tell them apart: the Models tab has both, and the
+**Ref2VA** one is the one MiniMax made for following references — pick it for shots
+that do.
 
-**What is said, heard and scored (MiniMax H3).** With its audio VAE, an H3 shot also
+**What is said, heard and scored (MiniMax H3).** With its audio VAE, an H3 part also
 has **Who is in it** (a chip per name: type one, or *Add cast…* — on a shot that starts
 fresh that brings the member's picture as a reference and their voice as a sound),
-**Spoken** — one line each, `Mara: Who's there?`, with
-`(voiceover)` after the name for a voice heard over the shot with closed lips, and a
-language other than English the same way, `Leo (Danish): Hej.` — **Sound** (empty is
-silence) and **Music** (only the audience hears it; empty is none). yasdig writes these
-into the prompt layout MiniMax's own guide sets out, and says who stays silent, so H3
-doesn't invent a narrator, a score or a closing sentence. A shot with none of them
-filled is sent as typed.
+**Spoken** — one line each, `Mara: Who's there?`, with `(voiceover)` after the name for
+a voice heard over the shot with closed lips, and a language other than English the
+same way, `Leo (Danish): Hej.` — **Sound** (empty is silence) and **Music** (only the
+audience hears it; empty is none). yasdig writes these into the prompt layout
+MiniMax's own guide sets out, and says who stays silent, so H3 doesn't invent a
+narrator, a score or a closing sentence. A part with none of them filled is sent as
+typed.
 
-**From the Assistant.** Ask the Video tab's Assistant for a short film and it writes a
-video of its own on the Video tab's model. If that model can't make one (narrated
-stills, VACE), the chat asks which installed model to use, one button each, with the
-one it recommends for your story marked; nothing is written until you pick. It writes
-scenes, shots and their parts into the storyboard, and the cast into the **Cast** panel: who each one is, how they look, their picture and, on H3, their
-voice. The video is an ordinary one: edit it, reorder its shots, generate it as you
-would any other. What you change there the agent sees on its next turn, and when you
-ask for changes ("make the second scene at night") it rewrites only the shots it means
-to change — the rest, and every generated shot's frames, stay. A generated shot it
-rewrites keeps its frames and shows as changed until you generate it again; a generated
-shot it leaves out is kept, and it says so. A scene with a generated shot keeps its
-description. On H3, *Who is in it* on a shot's first part decides which of the cast's
-pictures and voices that shot follows; on Wan it isn't shown, and the names the agent
-gave each shot only pick the pictures its first frame is drawn from; the Cast panel's *Draw the cast* and the Shot panel's *Draw the first
-frames* draw them (optional), and a shot's first frame can be drawn again, removed or
-replaced with your own. On H3 a shot follows the cast's pictures and voices, on Wan it
-starts from its first frame. Each new or changed part is written out in full for the
-video model as soon as the storyboard is written (*Enhance*, above), one at a time; the
-agent keeps its own short words for its next rewrite, and the first frames are drawn
-from those. If enhancing fails, the parts stay as the agent wrote them, with a note.
-While the agent works on the chat, its video's storyboard and Shot panel wait for it.
+### Enhance
 
-**Current and Favorites.** Every clip is kept in `work/videos/` and listed on the
-**Current** panel, the Image tab's way: click once to show it, again to open the clip
-dialog; *Click to delete* marks clips for *Delete N selected*, and *Delete all
-unstarred* clears the shelf. The **star** on a tile moves a clip to
-`user/favorite_clips/`, where Delete all and Close server's clear never reach it; it
-stays in Current and shows on **Favorites** too. Nothing goes to Outputs on its own.
+**Enhance** under a part's prompt writes it out in full for the video's model, knowing
+the scene description, the parts around it, its first frame (when the agent's model can
+see), who is in it and their looks, and how long it runs. Video models fill whatever a
+prompt leaves open, and LTX makes the sound from the same words — "a man sings opera"
+can come back as a woman talking. So on LTX it writes one paragraph with the action, the
+camera and every sound: who speaks, word for word and in what voice, singing, the
+sounds of the place, music only when you asked. On Wan it writes picture and motion
+only. On H3 it writes what is seen, keeps names as they are (they are matched to the
+references), leaves Spoken, Sound and Music to their fields, and fills an empty Sound,
+and an empty Spoken with the lines your words have someone say. It adds no one your
+words don't put there: an empty street stays empty. Ctrl+Z puts your words back.
 
-**The clip dialog.** Click the clip on the stage. *Enlarge* runs FSR over every frame
-into a new version (sharpness and clarity are fixed kernels, so they don't flicker),
-or, with an LTX model and its latent upscaler installed, **LTX**: each shot is redrawn
-at twice its size by LTX from its own words — any clip, Wan's and H3's too. It sees
-all of a shot's frames at once, so the new detail holds still instead of flickering.
-*Strength* is how much it redraws (0.3–0.5 keeps the clip, higher invents more); the
-sound stays the clip's. It is slow and heavy on memory: a long or large clip may run
-out, and *Stream from SSD* on the LTX model is the first thing to try.
+A part is written to belong to the same video. Enhance shows the agent the scene's
+first part, the shot's first part and the part before — for a shot's part 1, the last
+part of the shot before it — and asks it to keep the place, the light, the time of day
+and how people look unless the part's own words change them. A shot's last part is
+also shown how the scene's next shot begins, and leads into it: a shot you put first
+sets up the place and weather the next one opens in, without borrowing its people. A
+part that another follows ends with everyone in it in view: the next part knows only
+that last frame, so a face turned away or framed out there would come back as someone
+else's. **Enhance every part**, at the foot of the Shot panel, does a shot's parts in
+order, each waiting for the one before. Stop ends it where it is: the parts done stay
+written.
+
+### From the Assistant
+
+Ask the Video tab's Assistant for a short film and it writes it as a video of its own,
+on the video's model. If that model can't make one (narrated stills, VACE), the chat
+asks which installed model to use, one button each, with the one it recommends for your
+story marked; nothing is written until you pick. It writes scenes, shots and their
+parts into the storyboard, and the cast into the **Cast** panel: who each one is, how
+they look, their picture and, on H3, their voice. To work on a video you made yourself,
+open it and start a new chat beside it: the chat takes the open video as its film on
+your first message ("change the man in shot 2 into an old woman").
+
+The film's video is an ordinary one: edit it, reorder it, generate it as you would any
+other. The agent sees the storyboard as you left it on every turn, and names shots the
+way the storyboard numbers them ("Scene 2 · Shot 1"), so say "shot 2" as you see it.
+When you ask for a change it rewrites only what it means to change:
+
+- **Your words stay yours.** A part you wrote or changed is marked as yours. The agent
+  can change it when you ask, but a shot of yours it leaves out of its answer is kept,
+  and a part of yours that a rewritten shot drops is named in the chat.
+- Only a shot the agent wrote, and you haven't touched or generated, is removed when it
+  leaves it out, and the chat says which.
+- A generated shot it rewrites keeps its frames and shows as changed until you generate
+  it again. A shot drawn again keeps its first frame and picks.
+- The settings are the video's own: what you set in Generation stays, whichever video
+  is open when you send.
+
+On H3, *Who is in it* on a shot's first part decides which of the cast's pictures and
+voices that shot follows; on Wan it isn't shown, and the names the agent gave each shot
+only pick the pictures its first frame is drawn from. The Cast panel's *Draw the cast*
+and the Shot panel's *Draw the first frames* draw them (optional), and a shot's first
+frame can be drawn again, removed or replaced with your own. Each new or changed part
+is written out in full for the video model as soon as the storyboard is written
+(*Enhance*, above), one at a time; the agent keeps its own short words for its next
+rewrite, and the first frames are drawn from those. If enhancing fails, the parts stay
+as the agent wrote them, with a note. While the agent works on the chat, its video's
+storyboard and Shot panel wait for it.
+
+### Playing, Current and Favorites
+
+The stage plays the **whole video**: every generated shot in storyboard order, one
+after another, each with its own sound. A strip under the scrubber shows the shots,
+each as wide as it is long; click one to jump to it. Clicking a shot in the storyboard
+puts the playhead at its start. Videos don't play by themselves: press Play.
+
+Every video is kept in `work/videos/` and listed on the **Current** panel, the Image
+tab's way: click once to open it, again to open the video dialog; *Click to delete*
+marks videos for *Delete N selected*, and *Delete all unstarred* clears the shelf. The
+**star** on a tile moves a video to `user/favorite_clips/`, where Delete all and Close
+server's clear never reach it; it stays in Current and shows on **Favorites** too.
+Nothing goes to Outputs on its own.
+
+### The video dialog
+
+Click the picture on the stage. *Enlarge* runs FSR over every frame of every shot into
+a new version of the video (sharpness and clarity are fixed kernels, so they don't
+flicker), or, with an LTX model and its latent upscaler installed, **LTX**: each shot
+is redrawn at twice its size by LTX from its own words — any video, Wan's and H3's too.
+It sees all of a shot's frames at once, so the new detail holds still instead of
+flickering. *Strength* is how much it redraws (0.3–0.5 keeps the video, higher invents
+more); the sound stays the video's. It is slow and heavy on memory: a long or large
+shot may run out, and *Stream from SSD* on the LTX model is the first thing to try. A
+version covers the shots it was made from; change a shot and that shot drops out of it,
+and *Enlarge the N shots this version doesn't cover* finishes it.
+
 *History* lists the original and each version — click to show one, *Compare* to split
 the frame between it and the original — and *Save to output* writes the version on
-screen to the output folder, where it shows in Outputs with a play mark and opens in
-the same dialog. Clips don't play by themselves: press Play. Opening the dialog stops
-the clip on the stage.
+screen, every shot joined, to the output folder, where it shows in Outputs with a play
+mark and opens in the same dialog. Opening the dialog stops the stage's player.
 
-**Download** (in the dialog's rail, for a saved clip too) makes a file to share of the
+**Download** (in the dialog's rail, for a saved video too) makes a file to share of the
 version on screen, encoded by your browser, so it offers what the browser can make:
 **MP4 (H.264)** plays everywhere, Discord and phones included; **WebM (VP9)** nearly
 everywhere; **MP4 (AV1)** is smallest, for newer players; **GIF** loops on its own in a
-chat, without sound, at most 480 px wide; and **AVI (original)** is the file yasdig keeps.
-*Under 10 MB (Discord)* sizes the file for Discord without Nitro — a long clip then looks
-soft, and *Half size* helps. The sound goes in as Opus, which some Apple players skip.
-Firefox on Linux may have no H.264 encoder; Chrome has.
+chat, without sound, at most 480 px wide; and **AVI (original)** is the file yasdig
+keeps. *Under 10 MB (Discord)* sizes the file for Discord without Nitro — a long video
+then looks soft, and *Half size* helps. The sound goes in as Opus, which some Apple
+players skip. Firefox on Linux may have no H.264 encoder; Chrome has.
 
 ### Narrated stills
 
-A clip made of pictures you already have, with a voice reading over them: picture 1
+A video made of pictures you already have, with a voice reading over them: picture 1
 while the voice explains one thing, picture 2 while it goes on. Get **Models → Voice
 models** (Chatterbox Turbo for English, Chatterbox Multilingual for 23 languages, or
 Qwen3-TTS — run by llama.cpp beside the Assistant's models), then pick
@@ -1012,7 +1076,7 @@ Qwen3-TTS — run by llama.cpp beside the Assistant's models), then pick
 read over it in turn — a new picture is a new shot on the storyboard. The Generation panel holds the size, the fps, the **Language** (on a model
 that reads more than one) and the
 **Default voice**: a 2–15 s recording of the voice to read in, a sound in Outputs or a
-cast member's voice. *Save as defaults for this model* keeps it. Each row has:
+cast member's voice. *Save as defaults for this model* keeps it. Each part has:
 
 - **Picture** — on part 1 only: an output, a cast member's picture or an upload, picked
   like a first frame. Every shot needs one. It is fitted inside the video's size on
@@ -1020,13 +1084,13 @@ cast member's voice. *Save as defaults for this model* keeps it. Each row has:
 - **What the voice says** — read as written, in the panel's **Language**. Long text is
   fine: it is spoken a few sentences at a time and joined, and the picture stays up as
   long as the words take, plus half a second.
-- **Voice…** — a voice for this row alone, instead of the default (*Add cast…* on the
-  row takes only the member's voice). With no voice anywhere, Chatterbox reads in a
-  voice of its own; Qwen3-TTS makes one up, a different one each row.
+- **Voice…** — a voice for this part alone, instead of the default (*Add cast…* on the
+  part takes only the member's voice). With no voice anywhere, Chatterbox reads in a
+  voice of its own; Qwen3-TTS makes one up, a different one each part.
 
-Generate reads every row in one run. Each row has its own seed, so *Redo* on a row with
-a new seed is another reading of the same words. Extend, the ×, Download, *Save to
-output* and Enlarge work as on any clip; Enlarge sharpens each picture once.
+Generate reads every part in one run. Each part has its own seed, so *Redo* on a part
+with a new seed is another reading of the same words. More parts, the ×, Download,
+*Save to output* and Enlarge work as on any shot; Enlarge sharpens each picture once.
 
 ## The agent
 
