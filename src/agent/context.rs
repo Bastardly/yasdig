@@ -57,7 +57,7 @@ pub struct Turn<'a> {
 
 /// A storyboard as text: what a chat turn is told the film is, and what a
 /// Story turn rewrites.
-pub fn board_text(f: &Film) -> String {
+pub fn board_text(f: &Film, fps: Option<u32>) -> String {
     let mut s = String::new();
     if !f.title.is_empty() {
         s.push_str(&format!("Title: {}\n", f.title));
@@ -76,33 +76,96 @@ pub fn board_text(f: &Film) -> String {
         };
         s.push_str(&format!("\n- {} ({kind}, {picture}): {}", m.name, m.look));
     }
-    // Scenes, each shot under its id (what `keep` names), each part a line.
+    // Scenes, each shot under the number the storyboard shows it by and its
+    // id (what `keep` names), each part a line.
     let groups = f.groups();
     let scenes = f.scenes.len().max(1);
     for si in 0..scenes {
         let mine: Vec<&std::ops::Range<usize>> = groups.iter().filter(|g| f.shots[g.start].scene.min(scenes - 1) == si).collect();
-        let title = f.scenes.get(si).map_or("", |c| c.title.as_str());
+        let sc = f.scenes.get(si);
+        let title = sc.map_or("", |c| c.title.as_str());
+        let id = sc.map_or("", |c| c.id.as_str());
         let locked = mine.iter().any(|g| f.shots[g.start].drawn);
-        s.push_str(&format!("\nScene {}{}{}", si + 1, if title.is_empty() { String::new() } else { format!(": {title}") },
-            if locked { " (locked: a shot in it is generated, so its description stays)" } else { "" }));
+        s.push_str(&format!(
+            "\nScene {}{}{}{}",
+            si + 1,
+            if title.is_empty() { String::new() } else { format!(": {title}") },
+            if id.is_empty() { String::new() } else { format!(" (id {id})") },
+            if locked { " (locked: a shot in it is generated, so its description stays)" } else { "" }
+        ));
         let every = f.scene_every(si);
-        s.push_str(&format!("\n  Every shot: {}", if every.is_empty() { "(nothing)" } else { every }));
-        for g in mine {
+        s.push_str(&format!("\n  Description: {}", if every.is_empty() { "(nothing)" } else { every }));
+        for (k, g) in mine.iter().enumerate() {
             let first = &f.shots[g.start];
+            let name = shot_number(si, k, scenes);
             let id = first.shot.as_deref().map_or(String::from("new"), short_id);
             let done = if first.drawn { ", generated" } else { "" };
-            s.push_str(&format!("\n  Shot {id}{done}:"));
-            for k in g.clone() {
+            s.push_str(&format!("\n  {name} (id {id}{done}):"));
+            for k in (*g).clone() {
                 let part = &f.shots[k];
                 let who = if part.cast.is_empty() { String::new() } else { format!(" [{}]", part.cast.join(", ")) };
-                let words = part.words();
+                let words = shown_words(part);
                 // A shot the person added and left empty: the agent may fill it.
-                let words = if words.trim().is_empty() { "(empty: the person added this shot; give it parts or keep it)" } else { words };
-                s.push_str(&format!("\n  - {words}{who}"));
+                let words = if words.is_empty() { "(empty: the person added this shot; give it parts or keep it)".to_string() } else { words };
+                let len = part.frames.zip(fps).map_or(String::new(), |(n, r)| format!(" ({:.1} s)", n as f32 / r.max(1) as f32));
+                let theirs = if part.theirs && !part.text.trim().is_empty() { " (the person's)" } else { "" };
+                s.push_str(&format!("\n  - {words}{who}{len}{theirs}"));
+                if !part.lines.is_empty() {
+                    let said: Vec<String> = part.lines.iter().map(|l| format!("{}: \"{}\"", l.who, l.words)).collect();
+                    s.push_str(&format!("\n    lines: {}", said.join(" ")));
+                }
+                if !part.sound.is_empty() {
+                    s.push_str(&format!("\n    sound: {}", part.sound));
+                }
+                if !part.music.is_empty() {
+                    s.push_str(&format!("\n    music: {}", part.music));
+                }
             }
         }
     }
     s
+}
+
+/// How the storyboard names the `k`th shot of scene `si` (`storyboard.js`
+/// `shotName`): "Scene 2 · Shot 1", or "Shot 1" in a one-scene film — the
+/// person's words for it.
+pub fn shot_number(si: usize, k: usize, scenes: usize) -> String {
+    if scenes > 1 { format!("Scene {} · Shot {}", si + 1, k + 1) } else { format!("Shot {}", k + 1) }
+}
+
+/// The storyboard's name for the shot part `k` of `f` is in.
+pub fn shot_name_of(f: &Film, k: usize) -> String {
+    let groups = f.groups();
+    let scenes = f.scenes.len().max(1);
+    let Some(gi) = groups.iter().position(|g| g.contains(&k)) else { return format!("Shot {}", k + 1) };
+    let si = f.shots[groups[gi].start].scene.min(scenes - 1);
+    let n = groups[..gi].iter().filter(|g| f.shots[g.start].scene.min(scenes - 1) == si).count();
+    shot_number(si, n, scenes)
+}
+
+/// Characters of a part's words a storyboard shows at most: a part the
+/// person wrote out at length (an enhanced paragraph runs to 2400) would
+/// crowd the board, and could never be written back whole under the
+/// reply's cap. A reply that gives the words as shown keeps the part.
+pub const SHOWN_WORDS: usize = 400;
+
+/// A part's words as a storyboard shows them: the story's own words, else
+/// its text, on one line, cut at [`SHOWN_WORDS`] with "…".
+pub fn shown_words(part: &super::chat::FilmShot) -> String {
+    let one: String = part.words().split_whitespace().collect::<Vec<_>>().join(" ");
+    if one.chars().count() <= SHOWN_WORDS {
+        return one;
+    }
+    let cut: String = one.chars().take(SHOWN_WORDS).collect();
+    format!("{}…", cut.trim_end())
+}
+
+/// Whether a reply's words for a part are the words it was shown: the same
+/// on one line, a cut part's shown start (with or without its "…").
+pub fn same_words(reply: &str, part: &super::chat::FilmShot) -> bool {
+    let norm = |s: &str| s.trim().trim_end_matches('…').trim_end_matches("...").split_whitespace().collect::<Vec<_>>().join(" ");
+    let r = norm(reply);
+    !r.is_empty() && r == norm(&shown_words(part))
 }
 
 /// A Video shot's id as the story names it: `{video}-s3` is `s3`.
@@ -378,7 +441,11 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
         }
     }
     if let Some(f) = turn.film.filter(|_| turn.mode == Mode::Chat) {
-        s.push_str(&format!("\n\nThis chat's storyboard:\n{}", board_text(f)));
+        s.push_str(&format!(
+            "\n\nThis chat's storyboard, as the person sees it on the Video tab now — they may have changed it since \
+             you wrote it. They name shots by these numbers; in `reply`, so do you, never by id:\n{}",
+            board_text(f, t.video.as_ref().map(|v| v.fps))
+        ));
     }
     if let Some(c) = turn.cast.filter(|_| turn.mode == Mode::Chat && t.casts()) {
         let kind = match c.kind {
@@ -459,7 +526,7 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
                 push(&mut out, Role::User, vec![Part::Text { text: format!("[yasdig] {text}") }]);
             }
             Msg::Clip { id, .. } => {
-                let text = format!("[yasdig] The film is done: clip {id}, in the Video tab's Current.");
+                let text = format!("[yasdig] The film is done: video {id}, in the Video tab's Current.");
                 push(&mut out, Role::User, vec![Part::Text { text }]);
             }
             Msg::Cast { name, try_n, .. } => {
@@ -604,37 +671,39 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
             }
             if let Some(f) = turn.film {
                 text.push_str(&format!(
-                    "\nThe storyboard now:\n{}\nWrite it again whole with the person's change. Keep every name, \
-                     look, shot and line they didn't ask to change, word for word: asked to change one thing, \
-                     change only that.",
-                    board_text(f)
+                    "\nThe storyboard now, as the person sees it on the Video tab — they may have changed it since you \
+                     wrote it, and what they changed stands:\n{}\n\
+                     The person names scenes and shots by these numbers (\"shot 2\" is the second shot listed in its \
+                     scene); `id` is only for `keep` and for the shot you change. In `reply`, name shots by their number, \
+                     never by id. Change only what they asked: every shot you don't change is `keep`, and in a shot you \
+                     change, a part you don't is `{{\"keep\": true}}` in its place. A part marked (the person's) is \
+                     theirs: keep it unless they asked to change it. A scene you keep gives its `id`.",
+                    board_text(f, t.video.as_ref().map(|v| v.fps))
                 ));
             }
             text.push_str(&format!(
-                "\nOne shot is one action, and runs about {:.0} s. When the person says how long the film is, \
-                 that many seconds is that many shots of it (\"10 seconds\" is {} shots). When they say neither, \
-                 4 to 6 shots; at most {}.\n\
-                 `cut` true starts a new scene: {} false goes on from the last frame of the shot before, so the \
-                 same people and place carry on. Shot 1 is never a cut.\n\
+                "\nA part is one action, and runs about {:.0} s. When the person says how long the film is, \
+                 that many seconds is that many parts of it (\"10 seconds\" is {} parts). When they say neither, \
+                 4 to 6 parts in all.\n\
+                 A shot starts fresh: {} Its later parts go on from the last frame of the part before, so the same \
+                 people and place carry on.\n\
                  `cast`: each person, place or thing that must look the same in more than one shot, with its `look` \
                  in words and a `prompt` for its picture: that one subject alone, whole, on a plain background, in \
-                 the film's look. A shot's `cast` names who is in it, at most {}. A shot that goes on takes no cast of \
-                 its own: its people are the ones its first frame shows, so name only them, and cut to bring anyone \
-                 in. Its first frame is the last of the shot before, so that shot must end with their faces in view; \
-                 when someone leaves, turns away or is framed out, cut after it.\n\
-                 `every`: the film's look in a few words (style, light, colour), put in front of every shot.\n\
-                 A shot's `text` says what happens, in the present tense, naming who is in it.\n\
-                 `seconds`: how long the shot's action takes at a natural pace, at most {:.1}. Add up its \
+                 the film's look. A shot's first part's `cast` names who is in it, at most {}. A later part names only \
+                 who its first frame shows; start a new shot to bring anyone in. The part before must end with their \
+                 faces in view; when someone leaves, turns away or is framed out, start a new shot after it.\n\
+                 A scene's `every`: its look in a few words (style, light, colour), put in front of every part of it.\n\
+                 A part's `text` says what happens, in the present tense, naming who is in it.\n\
+                 `seconds`: how long the part's action takes at a natural pace, at most {:.1}. Add up its \
                  actions: a look or a smile 1-2 s, a step or a turn 2 s, someone walking into frame 2-3 s, kneeling, \
                  sitting down or standing up 2 s, crossing a room 3-4 s. \"She walks into frame and kneels by the \
-                 oasis\" is about 5 s. An action longer than that is two shots.",
+                 oasis\" is about 5 s. An action longer than that is two parts.",
                 secs,
                 (10.0 / secs.max(0.1)).round().max(1.0),
-                crate::pipeline::MAX_SHOTS,
                 if refs {
-                    "it is drawn from the pictures of the cast it names, so name everyone in it."
+                    "it is drawn from the pictures of the cast its first part names, so name everyone in it."
                 } else {
-                    "it starts from a picture drawn first, with the cast it names."
+                    "it starts from a picture drawn first, with the cast its first part names."
                 },
                 crate::config::MAX_REFERENCES,
                 longest,

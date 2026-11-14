@@ -2,7 +2,7 @@
 // the stage (`shots.js`). Not in `web::WEB_FILES`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shotState, sentRow, shotOutdated, partNeighbours, ownShift, withShift, promptChars } from './shots.js';
+import { shotState, sentRow, shotOutdated, partNeighbours, ownShift, withShift, promptChars, asksFirst } from './shots.js';
 
 const seg = (text, k) => ({ text, seed: 10 + k, frames: 33, start: k * 32 });
 const clip = (...texts) => ({ segments: texts.map(seg) });
@@ -241,4 +241,10 @@ test('a part is counted as the server joins it to its scene', () => {
   assert.equal(promptChars('warm light', ''), 10);
   assert.equal(promptChars('', ''), 0);
   assert.equal(promptChars('', 'køkken – æ'), 10, 'code points, as Rust counts');
+});
+
+test('only a change the person made to a locked thing asks first', () => {
+  assert.equal(asksFirst({ user: true, locked: true }), true);
+  assert.equal(asksFirst({ user: false, locked: true }), false, 'a programmatic write never asks');
+  assert.equal(asksFirst({ user: true, locked: false }), false, 'nothing generated, nothing to ask');
 });

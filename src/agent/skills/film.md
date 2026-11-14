@@ -19,6 +19,6 @@ A part is one action in the present tense, going on from the last frame of the p
 
 Make it as long as asked: "4 seconds of…", "a clip" or "a shot of…" is one shot of one part. With no length asked, a few shots.
 
-A storyboard you were shown: each shot has an id ("s3"). Keep every shot you don't mean to change: `{"id": "s3", "keep": true}`, no parts. To change one, give its id and all its parts. A new shot has an empty id. A shot left out is removed, unless it is generated.
+A storyboard you were shown: name a shot by number in `reply` ("Scene 1 · Shot 2"), by id in the storyboard ("s3"). Keep every shot you don't mean to change: `{"id": "s3", "keep": true}`, no parts. To change one, give its id and its parts, a part you keep as `{"keep": true}`. A new shot has an empty id; one of yours left out is removed.
 
-`reply`: in two sentences, what the film is and how many shots; its pictures are drawn when the person presses Draw the cast.
+`reply`: two sentences: what the film is, and how many shots.

@@ -148,7 +148,7 @@ pub enum Mode {
 pub struct Film {
     #[serde(default)]
     pub title: String,
-    /// The look of a board from before scenes (the Shots panel's *Every
+    /// The look of a board from before scenes (the old Shots panel's *Every
     /// shot*): its one scene's description when `scenes` is empty.
     #[serde(default)]
     pub every: String,
@@ -348,6 +348,11 @@ pub struct FilmShot {
     /// Waiting to be written out in full (`Next::Enhance`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub enhance: bool,
+    /// The person wrote it, or changed it on the storyboard since the agent
+    /// did (`filmvideo::read_back`): a story turn is told so, and leaving it
+    /// out never removes it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub theirs: bool,
 }
 
 impl FilmShot {
@@ -387,6 +392,7 @@ impl Default for FilmShot {
             audio: Vec::new(),
             brief: String::new(),
             enhance: false,
+            theirs: false,
         }
     }
 }

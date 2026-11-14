@@ -112,7 +112,7 @@ export function shotState(rows, clip, chains, take = ALL) {
 
 // Whether a drawn shot no longer fits its Video: made at another model, size,
 // frame rate or Hi-res than the Video's (`want`, as the Generation panel has
-// it — the lock holds these until unlocked), or with other words than its
+// it — a change to these asks first), or with other words than its
 // scene's description and negative. Computed, never stored, so putting a
 // field back clears the mark. A plan is never outdated: it is drawn with what
 // is there when it is drawn.
@@ -177,4 +177,11 @@ export function promptChars(every, text) {
   const e = (every ?? '').trim();
   const t = (text ?? '').trim();
   return [...(e && t ? `${e}. ${t}` : e || t)].length;
+}
+
+// Pure: whether an edit of the locked things asks before it goes on — only
+// one the person made (a trusted event, or `<prompt-box>`'s weighting), on
+// something a generated shot was made with. Programmatic writes never ask.
+export function asksFirst({ user, locked }) {
+  return !!user && !!locked;
 }

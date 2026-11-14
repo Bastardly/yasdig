@@ -73,7 +73,8 @@ pub fn read_back(f: &mut Film, v: &Video, keys: &[(String, ImageRef)]) -> Vec<St
             let olds: Vec<&FilmShot> = if by_place {
                 groups.get(n).map_or(Vec::new(), |g| f.shots[g.clone()].iter().collect())
             } else {
-                f.shots.iter().filter(|s| s.shot.as_deref() == Some(sid.as_str())).collect()
+                // Its id now, or one it was drawn again from (`replaces`).
+                f.shots.iter().filter(|s| s.shot.as_deref().is_some_and(|x| x == sid || c.replaces.iter().any(|r| r == x))).collect()
             };
             n += 1;
             let mut rows: Vec<RowIn> = rows_of(c).into_iter().filter(|r| !r.text.trim().is_empty()).collect();
@@ -90,11 +91,19 @@ pub fn read_back(f: &mut Film, v: &Video, keys: &[(String, ImageRef)]) -> Vec<St
                     row.key_ref = Some(r.clone());
                 }
                 let first = shots.is_empty();
-                let mut part = session::row_shot(f, &names, &row, j == 0, first, olds.get(j).copied(), &mut unknown);
+                // The film's own part with these words, wherever it stood (a
+                // part the person put before it moves nothing), else the one
+                // in its place.
+                let same = olds.iter().copied().find(|o| o.text.trim() == row.text.trim() && !row.text.trim().is_empty());
+                let was = same.or(olds.get(j).copied());
+                let mut part = session::row_shot(f, &names, &row, j == 0, first, was, &mut unknown);
                 part.scene = si;
                 part.shot = Some(sid.clone());
                 part.drawn = c.rendered;
-                part.enhance = olds.get(j).is_some_and(|o| o.enhance && o.text == part.text);
+                part.enhance = was.is_some_and(|o| o.enhance && o.text == part.text);
+                // The person's: words the film didn't write (added, changed,
+                // or a shot added empty), or a part that already was.
+                part.theirs = empty || same.is_none_or(|o| o.theirs);
                 if empty {
                     part.brief.clear();
                 }
@@ -182,6 +191,50 @@ fn gone(videos: &crate::videos::VideoStore, vid: &str) -> bool {
     !videos.dir(vid).join("video.json").is_file()
 }
 
+/// A shot's recorded settings as the `/video` body has them: what a
+/// rewrite of it starts from, so nothing set on it by hand is put back.
+fn recorded_settings(cfg: &Config, c: &Clip) -> serde_json::Value {
+    let m = &c.video;
+    // The model files picked for it, by slot, as the Models rows name them
+    // (under the models folder); an optional slot left empty stays empty.
+    let root = cfg.models_dir();
+    let mut parts = serde_json::Map::new();
+    for slot in m.family.slots() {
+        match m.part(slot.key) {
+            // A file since deleted is left to the model's own: naming it
+            // would refuse the whole write.
+            Some(p) if p.is_file() => {
+                if let Ok(rel) = p.strip_prefix(&root) {
+                    parts.insert(slot.key.to_string(), serde_json::json!(rel.to_string_lossy()));
+                }
+            }
+            None if slot.optional => {
+                parts.insert(slot.key.to_string(), serde_json::Value::Null);
+            }
+            _ => {}
+        }
+    }
+    serde_json::json!({
+        "parts": parts,
+        "memory": m.memory,
+        "model": c.model,
+        "width": m.width,
+        "height": m.height,
+        "fps": m.fps,
+        "steps": m.steps,
+        "cfg_scale": m.cfg_scale,
+        "sampler": m.sampler,
+        "flow_shift": m.flow_shift,
+        "high_noise_steps": m.high_noise_steps,
+        "high_noise_cfg_scale": m.high_noise_cfg_scale,
+        "vae_tiling": m.vae_tiling,
+        "hires": m.hires,
+        "language": m.language,
+        "narrator": m.narrator,
+        "loras": m.picked_loras,
+    })
+}
+
 /// Whether two shots' rows say the same: every field the Shot panel holds.
 fn same_rows(a: &[RowIn], b: &[RowIn]) -> bool {
     a.len() == b.len()
@@ -241,29 +294,38 @@ pub fn write(cfg: &Config, settings: Option<&serde_json::Value>, f: &Film) -> Re
             v
         }
     };
-    // The Generation panel as the person last sent it — only when it was
-    // for the model the shots are made with (the film-model card may pick another; its
-    // steps and size would be the wrong model's), else that model's own
-    // defaults. Once a shot is generated, the lock's model, size, fps and
-    // Hi-res.
+    // What a shot is written with, weakest first: the model's defaults; a
+    // shot's own recorded settings (its own when it has a record, else the
+    // Video's first); the Generation panel the person last sent from this
+    // Video (`Chat::video_settings`, kept only while it is fresh — see
+    // `routes::from_film_video`) when it was for the model the shots are
+    // made with; and once a shot is generated, the lock's model, size, fps
+    // and Hi-res. One rewrite must never put back what the person changed.
     let model = v.lock.as_ref().map_or(f.video_model.clone(), |l| l.model.clone());
-    let mut body = settings
-        .filter(|s| s.get("model").and_then(|x| x.as_str()) == Some(model.as_str()))
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
-    body["model"] = serde_json::json!(model);
-    body["shots"] = serde_json::json!([]);
-    let dto: crate::VideoDto = serde_json::from_value(body).context("reading the Video tab's settings")?;
-    let mut base = dto.request();
-    base.into = None;
-    base.source = None;
-    if let Some(l) = &v.lock {
-        base.model = l.model.clone();
-        base.width = Some(l.width);
-        base.height = Some(l.height);
-        base.fps = Some(l.fps);
-        base.hires = Some(l.hires);
-    }
+    let sent = settings.filter(|s| s.get("model").and_then(|x| x.as_str()) == Some(model.as_str())).cloned();
+    let first_record = v.clips.iter().find(|c| c.rendered).or(v.clips.first()).map(|c| recorded_settings(cfg, c));
+    let base_for = |own: Option<&Clip>| -> Result<crate::pipeline::VideoRequest> {
+        let mut body = own.map(|c| recorded_settings(cfg, c)).or_else(|| first_record.clone()).filter(|r| r["model"] == model.as_str()).unwrap_or_else(|| serde_json::json!({}));
+        if let (Some(b), Some(s)) = (body.as_object_mut(), sent.as_ref().and_then(|s| s.as_object())) {
+            for (k, x) in s {
+                b.insert(k.clone(), x.clone());
+            }
+        }
+        body["model"] = serde_json::json!(model);
+        body["shots"] = serde_json::json!([]);
+        let dto: crate::VideoDto = serde_json::from_value(body).context("reading the Video tab's settings")?;
+        let mut base = dto.request();
+        base.into = None;
+        base.source = None;
+        if let Some(l) = &v.lock {
+            base.model = l.model.clone();
+            base.width = Some(l.width);
+            base.height = Some(l.height);
+            base.fps = Some(l.fps);
+            base.hires = Some(l.hires);
+        }
+        Ok(base)
+    };
 
     let rendered = |id: &str| v.clips.iter().any(|c| c.id == id && c.rendered);
     let film_scenes: Vec<FilmScene> = if f.scenes.is_empty() {
@@ -345,8 +407,14 @@ pub fn write(cfg: &Config, settings: Option<&serde_json::Value>, f: &Film) -> Re
                     videos.save_draft(&sid, draft.as_ref())?;
                 }
             }
+            // A plan that already says this — its parts, its scene's words,
+            // its model — is left as it is: what the person set on it stays.
+            Some(c) if same_rows(&rows_of(c), &rows.iter().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect::<Vec<RowIn>>())
+                && c.every.as_deref().unwrap_or("").trim() == scene.every.trim()
+                && c.negative == scene.negative
+                && c.model == model => {}
             had => {
-                let mut req = base.clone();
+                let mut req = base_for(had)?;
                 req.flow_shift_own = had.and_then(|c| c.flow_shift_own);
                 req.shots = specs;
                 req.source = key;
@@ -413,24 +481,13 @@ pub fn push(cfg: &Config, store: &ChatStore, id: &str) -> Result<()> {
     let chat = store.load(id)?;
     let Some(f) = chat.film.as_ref().filter(|f| !f.shots.is_empty()) else { return Ok(()) };
     let (film, w) = write(cfg, chat.video_settings.as_ref(), f)?;
+    // What the story left out is said by `apply_story`, by the numbers
+    // the agent was shown.
+    let _ = w;
     store.update(id, |c| {
         if let Some(cur) = c.film.as_mut() {
             cur.video = film.video.clone();
             cur.drop.clear();
-        }
-        if !w.kept.is_empty() {
-            let one = w.kept.len() == 1;
-            c.note(format!(
-                "{} generated shot{} the story left out {} kept in the video, where {} {} — delete {} in the \
-                 storyboard if you don't want {}.",
-                w.kept.len(),
-                if one { "" } else { "s" },
-                if one { "is" } else { "are" },
-                if one { "it" } else { "they" },
-                if one { "was" } else { "were" },
-                if one { "it" } else { "them" },
-                if one { "it" } else { "them" },
-            ));
         }
         Ok(())
     })?;
@@ -486,6 +543,82 @@ mod tests {
         assert_eq!((f.scene_every(1), f.title.as_str()), ("grey", "Rain"));
     }
 
+    /// What the person wrote is marked theirs, read back: a part they put
+    /// before the film's own leaves those the film's, matched by words.
+    #[test]
+    fn the_persons_parts_are_marked_theirs() {
+        let mut f = Film {
+            shots: vec![
+                FilmShot { text: "Mara opens the door.".into(), seed: 7, shot: Some("v-s1".into()), ..Default::default() },
+                FilmShot { text: "She steps out.".into(), shot: Some("v-s1".into()), ..Default::default() },
+                FilmShot { text: "Leo waits.".into(), cut: true, shot: Some("v-s2".into()), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let v = Video {
+            id: "v".into(),
+            created_ms: 1,
+            title: String::new(),
+            lock: None,
+            scenes: vec![scene("c1", "warm", &["v-s1", "v-s2"])],
+            favorite: false,
+            clips: vec![
+                shot("v-s1", false, &["A shadow crosses the hall.", "Mara opens the door.", "She steps out."]),
+                shot("v-s2", false, &["Leo waits in the rain."]),
+            ],
+        };
+        read_back(&mut f, &v, &[]);
+        let theirs: Vec<bool> = f.shots.iter().map(|s| s.theirs).collect();
+        assert_eq!(theirs, [true, false, false, true], "added and reworded are theirs; the film's own aren't");
+        read_back(&mut f, &v, &[]);
+        assert_eq!(f.shots.iter().filter(|s| s.theirs).count(), 2, "and stay theirs");
+    }
+
+    /// A hand-made Video taken as a chat's film (`routes::adopt_video`, an
+    /// empty film) reads back whole, every part the person's, so a rewrite
+    /// leaving one out never removes it.
+    #[test]
+    fn an_adopted_video_reads_back_as_the_persons() {
+        let mut f = Film { video: Some("v".into()), ..Default::default() };
+        let v = Video {
+            id: "v".into(),
+            created_ms: 1,
+            title: "Dancing girl".into(),
+            lock: None,
+            scenes: vec![scene("c1", "rain at night", &["v-s1", "v-s2"])],
+            favorite: false,
+            clips: vec![shot("v-s1", true, &["A young girl dances."]), shot("v-s2", true, &["A man in his late forties."])],
+        };
+        read_back(&mut f, &v, &[]);
+        let got: Vec<(&str, Option<&str>, bool, bool)> =
+            f.shots.iter().map(|s| (s.text.as_str(), s.shot.as_deref(), s.drawn, s.theirs)).collect();
+        assert_eq!(got, [("A young girl dances.", Some("v-s1"), true, true), ("A man in his late forties.", Some("v-s2"), true, true)]);
+        assert_eq!((f.title.as_str(), f.scenes[0].every.as_str()), ("Dancing girl", "rain at night"));
+    }
+
+    /// A shot drawn again lands under a new id; its parts are still the
+    /// film's, with their story words, through `replaces`.
+    #[test]
+    fn a_redrawn_shot_is_still_the_films() {
+        let mut f = Film {
+            shots: vec![FilmShot { text: "Mara opens the door, in full.".into(), brief: "Mara opens the door.".into(), shot: Some("v-s1".into()), ..Default::default() }],
+            ..Default::default()
+        };
+        let mut s6 = shot("v-s6", true, &["Mara opens the door, in full."]);
+        s6.replaces = vec!["v-s1".into(), "v-s4".into()];
+        let v = Video {
+            id: "v".into(),
+            created_ms: 1,
+            title: String::new(),
+            lock: None,
+            scenes: vec![scene("c1", "warm", &["v-s6"])],
+            favorite: false,
+            clips: vec![s6],
+        };
+        read_back(&mut f, &v, &[]);
+        assert_eq!((f.shots[0].shot.as_deref(), f.shots[0].brief.as_str(), f.shots[0].theirs), (Some("v-s6"), "Mara opens the door.", false));
+    }
+
     #[test]
     fn a_shot_the_person_left_empty_is_shown_to_the_agent() {
         let mut f = Film { shots: vec![part("Mara waits.", 0, true)], ..Default::default() };
@@ -503,8 +636,8 @@ mod tests {
         assert_eq!(f.groups(), [0..1, 1..2], "the empty shot is a shot of its own");
         assert_eq!(f.shots[1].shot.as_deref(), Some("v-s8"));
         assert!(!f.needs_keyframe(1), "no words, nothing to draw a first frame from");
-        let board = super::super::context::board_text(&f);
-        assert!(board.contains("Shot s8:\n  - (empty"), "{board}");
+        let board = super::super::context::board_text(&f, None);
+        assert!(board.contains("Shot 2 (id s8):\n  - (empty"), "{board}");
     }
 
     fn cfg(dir: &std::path::Path) -> Config {
@@ -631,6 +764,42 @@ t5xxl = "t.gguf"
             shots,
             ..Default::default()
         }
+    }
+
+    /// A plan's steps, set by hand, stay through a rewrite that leaves it
+    /// as it was; a scene's new description reaches its plans, written from
+    /// what each recorded, not from the panel sent with an older message.
+    #[test]
+    fn a_rewrite_never_puts_back_what_was_set_on_a_plan() {
+        let (dir, cfg) = tmp("hand");
+        let f = film();
+        let stale = serde_json::json!({ "model": "5b", "steps": 3 });
+        let once = round(&cfg, &f);
+        let videos = crate::video_store(&cfg);
+        let set_steps = |id: &str, n: u32| {
+            let path = videos.dir(id).join("clip.json");
+            let mut rec: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            rec["video"]["steps"] = serde_json::json!(n);
+            std::fs::write(&path, serde_json::to_vec(&rec).unwrap()).unwrap();
+        };
+        let s1 = once.shots[0].shot.clone().unwrap();
+        let s2 = once.shots[2].shot.clone().unwrap();
+        set_steps(&s1, 17);
+        set_steps(&s2, 19);
+        // A press: nothing changed but the second scene's description.
+        let mut f2 = once.clone();
+        f2.scenes[1].every = "cold dusk".into();
+        let (_, w) = write(&cfg, None, &f2).unwrap();
+        let v = videos.load_video_full(&w.video).unwrap();
+        let rec = |id: &str| v.clips.iter().find(|c| c.id == id).unwrap().clone();
+        assert_eq!(rec(&s1).video.steps, 17, "a plan that says the same is left as it is");
+        assert_eq!((rec(&s2).video.steps, rec(&s2).every.as_deref()), (19, Some("cold dusk")), "rewritten from its own record");
+        // A panel sent from this Video wins over the record.
+        let mut f3 = f2.clone();
+        f3.shots[0].text = "Mara opens the red door.".into();
+        write(&cfg, Some(&stale), &f3).unwrap();
+        assert_eq!(videos.load_video_full(&w.video).unwrap().clips.iter().find(|c| c.id == s1).unwrap().video.steps, 3);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// What `push` does after `write`: the Video read back into the film.

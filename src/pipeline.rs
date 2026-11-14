@@ -667,6 +667,7 @@ pub fn plan_clip(cfg: &Config, items: &workitems::Store, videos: &VideoStore, re
         shot_starts: Vec::new(),
         rendered: false,
         flow_shift_own: req.flow_shift_own,
+        replaces: Vec::new(),
         draft: None,
     };
     videos.save_plan(&mut clip, picture.as_deref())?;
@@ -2521,6 +2522,7 @@ impl Engine {
             shot_starts: Vec::new(),
             rendered: true,
             flow_shift_own: req.flow_shift_own,
+            replaces: Vec::new(),
             draft: None,
         };
         self.videos.finish(&mut clip)?;
@@ -2531,6 +2533,8 @@ impl Engine {
         dir.keep();
         if let Some(old) = &replacing {
             self.videos.replace_shot(old, &clip.id)?;
+            // As `replace_shot` recorded it, so the answer says the same.
+            clip.replaces = self.videos.load(&clip.id).map(|c| c.replaces).unwrap_or_default();
         }
         self.videos.take_lock(&clip.id, crate::story::VideoLock::of(&clip))?;
         Ok(VideoResult { clip, gen_ms, note })

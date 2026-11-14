@@ -138,6 +138,33 @@ fn listing(conn: &mut Connection, cfg: &Config, shelf: Shelf) -> Result<()> {
     ok(conn, Value::Array(list))
 }
 
+/// Whether what the page sent with a Video chat's request is the film's own
+/// Video's — its Generation panel and model — rather than another Video's
+/// open on the tab: the film has no Video yet, or `video_id` is it. Only
+/// then are they the film's; otherwise its Video's own record stands.
+fn from_film_video(c: &Chat, video_id: Option<&str>) -> bool {
+    match c.film.as_ref().and_then(|f| f.video.as_deref()) {
+        None => true,
+        Some(v) => video_id == Some(v),
+    }
+}
+
+/// The page's Generation panel onto a Video chat, by [`from_film_video`].
+fn take_video_settings(c: &mut Chat, video_id: Option<&str>, settings: Option<Value>) {
+    c.video_settings = if from_film_video(c, video_id) { settings.filter(Value::is_object) } else { None };
+}
+
+/// Video `vid` as the film of chat `c`, which has none: empty but for the
+/// Video, so the turn's `filmvideo::pull` reads every shot back as the
+/// person's (none is the film's), and `Ready`, its pictures being whatever
+/// the person gave it. On `view`, the model it is shot on.
+fn adopt_video(c: &mut Chat, vid: &str, view: Option<&toolkit::VideoView>) {
+    c.film = Some(super::chat::Film { video: Some(vid.to_string()), phase: super::chat::Phase::Ready, ..Default::default() });
+    if let Some(v) = view {
+        session::set_video(c, v);
+    }
+}
+
 fn chat_json(cfg: &Config, c: &Chat) -> Value {
     let t = toolkit::resolve(cfg, c);
     json!({ "chat": c, "toolkit": t, "favorite": c.favorite })
@@ -153,6 +180,11 @@ fn board(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
         id: String,
         #[serde(default)]
         video: Option<String>,
+        /// The Generation panel, and the Video open on the tab it is of.
+        #[serde(default)]
+        settings: Option<Value>,
+        #[serde(default)]
+        video_id: Option<String>,
     }
     let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
     let store = super::store(cfg);
@@ -176,6 +208,7 @@ fn board(conn: &mut Connection, cfg: &Config, body: &[u8]) -> Result<()> {
         if let Some(v) = &to {
             session::set_video(c, v);
         }
+        take_video_settings(c, dto.video_id.as_deref(), dto.settings.clone());
         session::board_advance(c, shot_seconds, false);
         Ok(c.clone())
     });
@@ -462,12 +495,24 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         /// A saved cast entry's id, added to the film's cast (*Add from cast…*).
         #[serde(default)]
         from_cast: Option<String>,
+        /// The Generation panel, and the Video open on the tab it is of: the
+        /// film's Video is written with it only when that is the one.
+        #[serde(default)]
+        settings: Option<Value>,
+        #[serde(default)]
+        video_id: Option<String>,
     }
     let Some(mut dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
     let store = super::store(cfg);
     // The storyboard as it is now, so an edit here lands on it, not on the
-    // film's older copy.
+    // film's older copy; and the panel it is made with, when it is the film's.
     if store.load(&dto.id).is_ok_and(|c| !c.session.busy()) {
+        let _ = store.update(&dto.id, |c| {
+            if !c.session.busy() {
+                take_video_settings(c, dto.video_id.as_deref(), dto.settings.clone());
+            }
+            Ok(())
+        });
         if let Err(e) = super::filmvideo::pull(cfg, &store, &dto.id) {
             return err(conn, 500, &format!("reading the film's video: {e:#}"));
         }
@@ -630,6 +675,9 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         /// Video chat's: the Generation panel (`vidPayload` without shots).
         #[serde(default)]
         settings: Option<Value>,
+        /// The Video open on the tab, whose panel `settings` is.
+        #[serde(default)]
+        video_id: Option<String>,
     }
     // Every message is a chat turn: the agent decides whether it talks,
     // draws, describes a picture or starts a session (`session::apply_reply`).
@@ -662,20 +710,37 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         }
         refs.push(ImageRef { kind: p.kind.clone(), id: p.id.clone(), file: name, seed: None });
     }
+    // A Video chat with no film yet, sent with a saved Video open, takes
+    // that Video as its film (`adopt`): the person made it by hand and asks
+    // about "shot 2", so the turn is shown it, read back as theirs.
+    let adopt = dto.video_id.as_deref().and_then(|vid| {
+        let v = crate::video_store(cfg).load_video(vid).ok()?;
+        let model = v.lock.as_ref().map(|l| l.model.clone()).or_else(|| dto.video.clone()).filter(|m| !m.is_empty());
+        let view = model.and_then(|name| cfg.video_models().iter().find(|m| m.name == name && m.exists).map(toolkit::VideoView::of));
+        Some((vid.to_string(), view))
+    });
     let started = store.update(&dto.chat, |c| {
+        if c.context == Pane::Video && c.film.is_none() {
+            if let Some((vid, view)) = &adopt {
+                adopt_video(c, vid, view.as_ref());
+            }
+        }
         if c.agent.is_none() {
             c.agent = super::agent_for(cfg, None).ok().map(|m| m.name);
         }
         c.name_from(&text);
-        if let Some(v) = dto.video.as_ref().filter(|v| !v.is_empty()) {
-            c.video = Some(v.clone());
-        }
-        match dto.settings.clone() {
-            Some(v) if c.context == Pane::Image => {
+        if c.context == Pane::Image {
+            if let Some(v) = dto.settings.clone() {
                 c.take_settings(v);
             }
-            Some(v) if c.context == Pane::Video && v.is_object() => c.video_settings = Some(v),
-            _ => {}
+        } else if from_film_video(c, dto.video_id.as_deref()) {
+            if let Some(v) = dto.video.as_ref().filter(|v| !v.is_empty()) {
+                c.video = Some(v.clone());
+            }
+            c.video_settings = dto.settings.clone().filter(Value::is_object);
+        } else {
+            // Sent from another Video: its panel isn't the film's.
+            c.video_settings = None;
         }
         // What the person says now overtakes a session left stopped or done.
         session::close_session(c);
@@ -846,4 +911,38 @@ fn stop(conn: &mut Connection, cfg: &Config, lanes: &Lanes, monitor: &Monitor, b
         });
     }
     ok(conn, json!({ "stopped": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The page's panel is a film's only when sent from its own Video, or
+    /// before it has one: another Video's panel clears what was kept, so the
+    /// film's Video's own record stands.
+    #[test]
+    fn a_film_takes_the_panel_only_from_its_own_video() {
+        let mut c = Chat::new("1-0".into(), json!({}), None);
+        c.context = Pane::Video;
+        let panel = json!({ "model": "5b", "steps": 9 });
+        take_video_settings(&mut c, Some("other"), Some(panel.clone()));
+        assert_eq!(c.video_settings, Some(panel.clone()), "no Video yet: the panel it will be made with");
+        c.film = Some(super::super::chat::Film { video: Some("v".into()), ..Default::default() });
+        take_video_settings(&mut c, Some("other"), Some(panel.clone()));
+        assert_eq!(c.video_settings, None, "another Video's panel");
+        take_video_settings(&mut c, Some("v"), Some(panel.clone()));
+        assert_eq!(c.video_settings, Some(panel));
+    }
+
+    /// A Video chat with no film takes the open Video as one, ready (no
+    /// pictures to draw first), and its panel is then that film's.
+    #[test]
+    fn a_chat_with_no_film_adopts_the_open_video() {
+        let mut c = Chat::new("1-0".into(), json!({}), None);
+        c.context = Pane::Video;
+        adopt_video(&mut c, "v", None);
+        let f = c.film.as_ref().unwrap();
+        assert_eq!((f.video.as_deref(), f.phase, f.shots.len()), (Some("v"), super::super::chat::Phase::Ready, 0));
+        assert!(from_film_video(&c, Some("v")));
+    }
 }

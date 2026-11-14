@@ -27,7 +27,7 @@ cargo run --release -- fsr-selftest         # full wgpu path, no sd.cpp or check
 cargo run --release -- fsr in.png out.png [scale] [sharpness] [clarity]
 cargo run --release -- upscale in.png out.png <model> [factor]  # model enlarge + consistency dB
 cargo run --release -- sr-selftest          # `src/sr/` shader ops vs CPU references, matmul TFLOPS
-cargo run --release -- agent-check [agent]  # twelve scored agent turns (`agent/check.rs`): run before and after a skill edit
+cargo run --release -- agent-check [agent]  # fifteen scored agent turns (`agent/check.rs`): run before and after a skill edit
 cargo run --release -- fold-scales f.gguf   # fold a scaled-fp8 GGUF's scales into its weights, in place
 node --test 'web/js/*.test.js'              # prompt-weight maths, OOM box choices, module graph evaluates.
                                             #   Node's built-in runner; no npm/package.json; runtime needs no Node.

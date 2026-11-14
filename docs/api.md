@@ -25,7 +25,7 @@ yasdig doctor [models.toml]      # run the startup checks and report, without st
 yasdig upscale in.png out.png <model> [factor=2.0] [models.toml]  # the model enlarge alone
 yasdig fold-scales <file.gguf>...  # fold a scaled-fp8 GGUF's scales into its weights
 yasdig llm-selftest [agent|-] [picture.png] [models.toml]  # one agent turn, no server
-yasdig agent-check [agent|-] [models.toml]  # twelve scored turns: what this agent model gets right
+yasdig agent-check [agent|-] [models.toml]  # fifteen scored turns: what this agent model gets right
 yasdig fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]  # no colour knobs: UI only
 yasdig fsr-selftest [out.png]    # synthesize patterns and check the filters
 yasdig sr-selftest               # the upscaler shaders against CPU references, plus speed
@@ -768,15 +768,18 @@ the chat, whose `rev` moves on every write.
   and `videos`, every installed video model in that shape. A Video chat's `chat.film` names its own Video
   (`film.video`), which every story turn, Enhance and board picture writes — plans for
   shots not generated, drafts for generated ones — and which is read back before every
-  turn and `/chats/film` edit; its `shots` are parts, each with its `shot` id.
+  turn and `/chats/film` edit; its `shots` are parts, each with its `shot` id and
+  `theirs` when the person wrote or changed it. A story reply's scenes carry `id`, a
+  shot is `{id, keep, parts}`, and a part is its words or `{"keep": true}`.
 - `POST /chats/cast` — `{ id, cast, name, kind, look }`: the person's edits in the cast
   editor bound to the chat, onto the member it is making (`chat.cast`, whose `id` must be
   `cast`); what the agent changes on its next turn. A chat's `cast` is `{id, name, kind,
   look}` and `cast_rev` moves when the agent writes it; a try it draws is a message
   `{role: "cast", n, ms, id, name, try_n, image}`.
-- `POST /chats/board` — `{ id, video? }`: `video` is the Video tab's model, which decides
+- `POST /chats/board` — `{ id, video?, settings?, video_id? }`: `video` is the Video tab's model, which decides
   whether a shot starts from a first frame or follows the cast's pictures; the film's
-  Video is written again for it. Answers the chat, with `warning` when that write
+  Video is written again for it. `settings` (the Generation panel) and `video_id` (the
+  Video open on the tab) as on `/agent/send`. Answers the chat, with `warning` when that write
   failed. `409` while the agent is working on the chat.
 - `GET /chats/{id}/live` — the reply being written while a turn runs: `{ seq, text,
   phase, step, steps }`, or `{ seq: null }`.
@@ -784,13 +787,18 @@ the chat, whose `rev` moves on every write.
   of its pictures; names are `[a-z0-9-]+.png`.
 - `POST /chats/agent` — `{ id, agent }`; `POST /chats/rename` — `{ id, title }`.
 - `POST /agent/send` — `{ chat, text, images: [{kind: "item"|"output", id}], video?,
-  settings? }`: a chat turn — an Image chat's `settings` written in first, as
-  `/chats/settings` does, a Video chat's kept as its Generation panel — whose reply may talk, draw, describe an attached picture as a prompt, propose a
+  settings?, video_id? }`: a chat turn — an Image chat's `settings` written in first, as
+  `/chats/settings` does, a Video chat's kept as its Generation panel, and `video` as its
+  model, **only when `video_id` (the Video open on the tab) is the film's** or it has none
+  yet; from another Video the kept panel is cleared and the film's Video's own records
+  stand. A Video chat with no film takes the saved Video `video_id` names as its film,
+  every shot read back as the person's — whose reply may talk, draw, describe an attached picture as a prompt, propose a
   session or a comparison (`chat.session.proposal`, which waits for `/agent/session`), or write a film's storyboard (a story
   turn follows in the same job; its pictures wait for `/chats/film {draw: true}`). `video` is the Video tab's model now. At most four pictures, copied into the
   chat. `409` while the agent is working on the chat.
 - `POST /chats/film` — `{ id, every?, member?, name?, look?, picture?, shot?, shot_id?, text?,
-  cast?, cut?, lines?, sound?, music?, voice?, redraw_keyframe?, no_keyframe?, draw?, image_model?, from_cast? }`: an edit of the storyboard — `from_cast`, a saved
+  cast?, cut?, lines?, sound?, music?, voice?, redraw_keyframe?, no_keyframe?, draw?, image_model?, from_cast?,
+  settings?, video_id? }`: an edit of the storyboard (`settings`/`video_id` as on `/agent/send`) — `from_cast`, a saved
   cast entry's id, adds it as a member (its look, and its picture, sheet and voice as
   the person's, never drawn again; refused when the film has its name or six members);
   the look every shot shares, cast member `member`'s name, look or picture (`{kind: "output", id}`, or `null`

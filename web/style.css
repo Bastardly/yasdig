@@ -450,8 +450,6 @@ input[type=number] { font-family: var(--font-num); font-variant-numeric: tabular
 .sbshot.outdated .sbmark, .sbshot.changed .sbmark { color: var(--fold-title); }
 .sbfoot { margin-top: var(--sp-2); padding-left: var(--sb-indent); }
 /* A lock over fields a made shot was drawn with, and the way to let go. */
-.lockline { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin: var(--sp-2) 0; }
-.lockline .sub { flex: 1; min-width: 0; margin: 0; }
 /* The A14B pair's expert choice, under its row. */
 .loraexpert { width: 100%; margin-top: var(--sp-1); }
 

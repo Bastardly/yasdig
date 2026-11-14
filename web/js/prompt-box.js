@@ -75,6 +75,11 @@ class PromptBox extends HTMLElement {
     // `value` wipes the field's native undo stack, so one Ctrl+Z after a few
     // nudges would throw the entire prompt away. `insertText` records a single
     // undo entry per adjustment and fires `input` on its own.
+    // Asked first, as a typed key is: a box that confirms a change (a made
+    // scene's words) may refuse it. execCommand fires no `beforeinput`.
+    const ask = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertReplacementText', data: next.text });
+    ask.fromUser = true;
+    if (!f.dispatchEvent(ask)) return;
     f.focus();
     f.setSelectionRange(0, f.value.length);
     let wrote = false;

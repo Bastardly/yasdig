@@ -16,9 +16,9 @@
 //! an SDXL-shaped model (a real CFG, a negative prompt), whatever is
 //! installed, so two machines' results compare.
 
-use super::chat::{Chat, ImageRef, Mode, Msg};
+use super::chat::{Chat, Film, FilmScene, FilmShot, ImageRef, Member, MemberKind, Mode, Msg};
 use super::knobs::{Locks, Rules};
-use super::session::ReplyJson;
+use super::session::{CameraJson, ReplyJson};
 use super::{agent_for, context, n_predict, schema, session, skills, toolkit, tuning, user_skills_dir, Staged};
 use crate::config::{Config, ImageFamily};
 use crate::llm::{self, LlmRunner, Request, Sampling};
@@ -40,6 +40,9 @@ struct Case {
     prompt: Option<&'static str>,
     /// A Video tab chat, where a film can be made (on H3).
     video: bool,
+    /// A story turn's storyboard as the person left it (on Wan): the turn
+    /// rewrites it.
+    film: Option<fn() -> Film>,
     /// What a model that understood wrote, or what was wrong.
     want: fn(&ReplyJson) -> Result<(), String>,
 }
@@ -66,6 +69,110 @@ fn new_prompt(r: &ReplyJson) -> Option<&str> {
     r.change.as_ref()?.get("prompt")?.as_str()
 }
 
+/// The story fixture: a Video whose shot ids have drifted from the numbers
+/// the storyboard shows (deleted and redrawn shots), with a shot the person
+/// added and left empty at the start of scene 1 — the user's horror film of
+/// 2026-11-14, where "shot 1" was answered as "Shot s2".
+fn drifted() -> Film {
+    let part = |text: &str, scene: usize, shot: &str, cut: bool, cast: &[&str]| FilmShot {
+        text: text.into(),
+        brief: String::new(),
+        scene,
+        shot: Some(format!("v-{shot}")),
+        cut,
+        cast: cast.iter().map(|c| c.to_string()).collect(),
+        ..Default::default()
+    };
+    let member = |name: &str, look: &str| Member { name: name.into(), kind: MemberKind::Character, look: look.into(), ..Default::default() };
+    Film {
+        title: "Unseen".into(),
+        scenes: vec![
+            FilmScene { id: "c1".into(), title: "The house".into(), every: "35mm film, dark, cold blue light".into() },
+            FilmScene { id: "c2".into(), title: "The living room".into(), every: "35mm film, warm lamp light".into() },
+        ],
+        cast: vec![
+            member("Elias", "a pale man in his late 20s with short messy dark hair"),
+            member("Clara", "a woman in her late 20s with long wavy blonde hair"),
+        ],
+        shots: vec![
+            part("", 0, "s9", false, &[]),
+            part("Elias presses himself against the wall of a dark hallway, breathing hard.", 0, "s6", true, &["Elias"]),
+            part("Elias slides down the wall and covers his mouth with both hands.", 0, "s7", true, &["Elias"]),
+            part("Clara sits on the sofa with a radio playing and types a text message.", 1, "s3", true, &["Clara"]),
+        ],
+        video_model: "wan".into(),
+        video: Some("v".into()),
+        ..Default::default()
+    }
+}
+
+/// The same, with a part the person rewrote by hand at length: no story
+/// words stand behind it, so the turn is shown it whole.
+fn hand_edited() -> Film {
+    let mut f = drifted();
+    f.shots.remove(0);
+    f.shots[0].cut = false;
+    f.shots[1].text = "Elias slides slowly down the peeling wallpaper of the hallway until he sits on the dusty floorboards, \
+        knees drawn up to his chest, both hands pressed hard over his mouth to keep his breathing silent. His eyes are wide \
+        and wet, flicking from the dark doorway at the end of the hall to the staircase beside him. A thin line of cold \
+        moonlight from a cracked window falls across his face and the floor. Somewhere above him a floorboard creaks, \
+        slowly, then again, closer. He squeezes his eyes shut and holds completely still, his shoulders trembling, the \
+        camera holding close on his face as a faint shadow passes over the moonlight on the wall behind him."
+        .into();
+    f
+}
+
+/// A story reply's shots, in order: its `id` (as written), whether it is a
+/// `keep`, and its parts' words.
+fn story_shots(r: &ReplyJson) -> Vec<(&CameraJson, String)> {
+    r.scenes.iter().flatten().flat_map(|s| s.shots.iter()).map(|c| (c, c.id.trim().trim_start_matches("v-").to_lowercase())).collect()
+}
+
+/// Every shot id in `ids` is in the reply — kept, or written — and none
+/// twice: a shot the turn left out is one the server would remove.
+fn none_left_out(r: &ReplyJson, ids: &[&str]) -> Result<(), String> {
+    let shots = story_shots(r);
+    if shots.is_empty() {
+        return Err("no storyboard".into());
+    }
+    for id in ids {
+        match shots.iter().filter(|(_, i)| i == id).count() {
+            0 => return Err(format!("shot {id} is left out")),
+            1 => {}
+            n => return Err(format!("shot {id} is in it {n} times")),
+        }
+    }
+    Ok(())
+}
+
+/// Shot `id` of the reply: kept (`keep`, or only parts kept in place —
+/// a kept part has no words), or its parts' words joined. Written against
+/// fields every build has, so the same file scores HEAD for a baseline.
+fn shot_words(r: &ReplyJson, id: &str) -> Option<(bool, String)> {
+    story_shots(r).into_iter().find(|(_, i)| i == id).map(|(c, _)| {
+        let words = c.parts.iter().map(|p| p.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ");
+        (c.keep || words.is_empty(), words)
+    })
+}
+
+/// Words compared as a board shows them: on one line, a long part cut at
+/// 400 characters (`context::SHOWN_WORDS`) with its "…".
+fn as_shown(s: &str) -> String {
+    let one = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cut: String = one.chars().take(400).collect();
+    cut.trim_end().trim_end_matches('…').trim_end_matches("...").trim_end().to_string()
+}
+
+/// Shot `id` is kept: `keep`, or its words as shown.
+fn kept(r: &ReplyJson, id: &str, shown: &str) -> Result<(), String> {
+    match shot_words(r, id) {
+        Some((true, _)) => Ok(()),
+        Some((false, w)) if as_shown(&w) == as_shown(shown) => Ok(()),
+        Some((false, w)) => Err(format!("shot {id} was rewritten, unasked: {w:?}")),
+        None => Err(format!("shot {id} is left out")),
+    }
+}
+
 const CASES: &[Case] = &[
     Case {
         name: "draws when asked to draw",
@@ -74,6 +181,7 @@ const CASES: &[Case] = &[
         checks: &[],
         prompt: None,
         video: false,
+        film: None,
         want: |r| {
             action(r, "draw")?;
             let p = new_prompt(r).unwrap_or("").to_lowercase();
@@ -93,6 +201,7 @@ const CASES: &[Case] = &[
         checks: &[],
         prompt: None,
         video: false,
+        film: None,
         want: |r| {
             action(r, "draw")?;
             if r.count == Some(3) { Ok(()) } else { Err(format!("count {:?} where 3 were asked for", r.count)) }
@@ -105,6 +214,7 @@ const CASES: &[Case] = &[
         checks: &[],
         prompt: None,
         video: false,
+        film: None,
         want: |r| {
             action(r, "talk")?;
             match new_prompt(r) {
@@ -121,6 +231,7 @@ const CASES: &[Case] = &[
         checks: &[],
         prompt: None,
         video: false,
+        film: None,
         want: |r| {
             action(r, "improve")?;
             let g = r.goal.as_deref().unwrap_or("").to_lowercase();
@@ -139,6 +250,7 @@ const CASES: &[Case] = &[
         checks: &[],
         prompt: None,
         video: false,
+        film: None,
         want: |r| {
             action(r, "compare")?;
             if r.vary.as_deref() != Some("cfg_scale") {
@@ -164,6 +276,7 @@ const CASES: &[Case] = &[
         checks: &[],
         prompt: Some(VAR_PROMPT),
         video: false,
+        film: None,
         want: |r| {
             action(r, "draw")?;
             let p = new_prompt(r).unwrap_or("");
@@ -181,6 +294,7 @@ const CASES: &[Case] = &[
         checks: &[],
         prompt: None,
         video: false,
+        film: None,
         want: |r| {
             action(r, "cast")?;
             let m = r.member.as_ref().ok_or("no member")?;
@@ -202,6 +316,7 @@ const CASES: &[Case] = &[
         checks: &[],
         prompt: None,
         video: true,
+        film: None,
         want: films,
     },
     Case {
@@ -211,6 +326,7 @@ const CASES: &[Case] = &[
         checks: &[],
         prompt: None,
         video: true,
+        film: None,
         want: films,
     },
     Case {
@@ -220,7 +336,69 @@ const CASES: &[Case] = &[
         checks: &[],
         prompt: None,
         video: true,
+        film: None,
         want: films,
+    },
+    Case {
+        name: "changes the shot the person names by its storyboard number",
+        mode: Mode::Story,
+        // Scene 1 · Shot 2 is s6: s9 (empty) is shot 1.
+        says: "In scene 1, make shot 2 calmer: Elias just stands still in the hallway, listening.",
+        checks: &[],
+        prompt: None,
+        video: false,
+        film: Some(drifted),
+        want: |r| {
+            none_left_out(r, &["s9", "s6", "s7", "s3"])?;
+            match shot_words(r, "s6") {
+                Some((false, w)) if w.to_lowercase().contains("listen") || w.to_lowercase().contains("still") => {}
+                Some((_, w)) => return Err(format!("Scene 1 · Shot 2 (s6) wasn't changed as asked: {w:?}")),
+                None => return Err("s6 is left out".into()),
+            }
+            kept(r, "s7", &drifted().shots[2].text)?;
+            kept(r, "s3", &drifted().shots[3].text)
+        },
+    },
+    Case {
+        name: "fills the empty shot the person added",
+        mode: Mode::Story,
+        says: "I've added an empty shot at the start of scene 1. Put a short glimpse of the monster in it.",
+        checks: &[],
+        prompt: None,
+        video: false,
+        film: Some(drifted),
+        want: |r| {
+            none_left_out(r, &["s9", "s6", "s7", "s3"])?;
+            match shot_words(r, "s9") {
+                Some((false, w)) if !w.is_empty() => {}
+                _ => return Err("the shot the person added (s9) is still empty".into()),
+            }
+            if let Some((c, _)) = story_shots(r).into_iter().find(|(_, i)| !["s9", "s6", "s7", "s3"].contains(&i.as_str())) {
+                return Err(format!("it made a new shot {:?} instead of filling s9", c.id));
+            }
+            kept(r, "s6", &drifted().shots[1].text)?;
+            kept(r, "s7", &drifted().shots[2].text)
+        },
+    },
+    Case {
+        name: "leaves a part the person wrote alone",
+        mode: Mode::Story,
+        says: "Call the film \"The Hideout\".",
+        checks: &[],
+        prompt: None,
+        video: false,
+        film: Some(hand_edited),
+        want: |r| {
+            none_left_out(r, &["s6", "s7", "s3"])?;
+            let f = hand_edited();
+            kept(r, "s6", &f.shots[0].text)?;
+            kept(r, "s7", &f.shots[1].text)?;
+            kept(r, "s3", &f.shots[2].text)?;
+            match r.title.as_deref() {
+                Some(t) if t.to_lowercase().contains("hideout") => Ok(()),
+                t => Err(format!("the title is {t:?}")),
+            }
+        },
     },
     Case {
         name: "writes checks that can be answered by looking",
@@ -229,6 +407,7 @@ const CASES: &[Case] = &[
         checks: &[],
         prompt: None,
         video: false,
+        film: None,
         want: |r| {
             let checks: Vec<&str> = r.checks.as_ref().and_then(|c| c.as_array()).into_iter().flatten().filter_map(|c| c.as_str()).collect();
             if !(2..=5).contains(&checks.len()) {
@@ -251,6 +430,7 @@ const CASES: &[Case] = &[
         checks: &["Is there a red square?", "Is there a blue circle?"],
         prompt: None,
         video: false,
+        film: None,
         want: |r| {
             let row: Vec<bool> = r
                 .checks
@@ -283,11 +463,12 @@ fn test_picture() -> Result<Vec<u8>> {
 /// critique the round it judges.
 fn chat_for(case: &Case) -> Chat {
     let mut chat = Chat::new("agent-check".into(), json!({ "prompt": case.prompt.unwrap_or(PROMPT), "cfg_scale": 6.0 }), None);
-    if case.video {
+    if case.video || case.film.is_some() {
         chat.context = super::chat::Pane::Video;
     }
+    chat.film = case.film.map(|f| f());
     match case.mode {
-        Mode::Chat => chat.messages.push(Msg::User { n: 0, ms: 0, text: case.says.into(), images: vec![] }),
+        Mode::Chat | Mode::Story => chat.messages.push(Msg::User { n: 0, ms: 0, text: case.says.into(), images: vec![] }),
         Mode::Critique => {
             chat.session.goal = case.says.into();
             chat.session.checks = case.checks.iter().map(|c| c.to_string()).collect();
@@ -350,6 +531,26 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
             tk.video = Some(h3);
             tk.film_off = None;
         }
+        if case.film.is_some() {
+            let wan = toolkit::VideoView {
+                name: "wan".into(),
+                family: "wan22_ti2v_5b",
+                label: "Wan 2.2 TI2V 5B",
+                chains: true,
+                about: "silent; each shot from its first frame",
+                prompt_chars: None,
+                references: false,
+                sounds: false,
+                width: 832,
+                height: 480,
+                frames: 121,
+                fps: 24,
+                longest_secs: 5.0,
+            };
+            tk.videos = vec![wan.clone()];
+            tk.video = Some(wan);
+            tk.film_off = None;
+        }
         if case.prompt.is_some() {
             tk.variables.insert("animal".into(), vec!["fox".into(), "owl".into(), "hare".into()]);
         }
@@ -374,7 +575,9 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
         }
         let chat = chat_for(case);
         let tk = toolkit_for(case);
-        let (skill_text, _, _) = skills::select(&all_skills, &[family.as_str()], case.mode);
+        // A storyboard is written for the video model too (`agent::turn`).
+        let families: Vec<&str> = std::iter::once(family.as_str()).chain(tk.video.as_ref().map(|v| v.family).filter(|_| case.mode == Mode::Story)).collect();
+        let (skill_text, _, _) = skills::select(&all_skills, &families, case.mode);
         let turn = context::Turn {
             mode: case.mode,
             images: staged.0.clone(),
@@ -385,7 +588,7 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
             goal: &chat.session.goal,
             round: chat.session.round,
             history: usize::MAX,
-            film: None,
+            film: chat.film.as_ref(),
             cast: None,
             cast_shown: false,
         };
@@ -421,7 +624,7 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
     if passed < ran {
         println!(
             "[agent-check] A failed case is a choice this model gets wrong on this build's instructions, not a broken install \
-             (`llm-selftest` checks that). The chat turns come first (three of them a Video tab's films); the last two are what a session needs."
+             (`llm-selftest` checks that). The chat turns come first (three of them a Video tab's films), then three storyboard rewrites; the last two are what a session needs."
         );
     }
     Ok(())
@@ -450,7 +653,7 @@ mod tests {
                 goal: &chat.session.goal,
                 round: chat.session.round,
                 history: usize::MAX,
-                film: None,
+                film: chat.film.as_ref(),
                 cast: None,
                 cast_shown: false,
             };

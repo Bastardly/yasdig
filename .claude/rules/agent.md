@@ -208,13 +208,23 @@ Break silently:
   `MAX_SCENE_SHOTS`, `MAX_PARTS`, `MAX_FILM_SHOTS`). **`Film.shots` stays a flat list of
   parts**: `cut` starts a shot (`Film::groups`), `scene` indexes `Film.scenes` (each its
   own `every`: `scene_every`), `shot` is the Video shot's id, `drawn` that it is
-  generated. A shot not `keep`ed is **rewritten whole**, never patched; `keep` names a
-  shown shot (`context::short_id`: `s3`) to copy as it is — a few tokens instead of
-  its words. Matched by shot id (by place for a board with no ids, or a flat old-form
-  `shots` reply, read as one scene): a member keeps its picture by name and an
-  unchanged look (or when it is the person's), a part its first frame, seed and picks
-  when its words and cast are unchanged. Plans the reply left out go to `Film.drop`; a
-  generated shot never does. **A part that names someone not in the part before starts
+  generated. **The server keeps the person's edits, not the model** (bug 4,
+  2026-11-14: "shot 1" was answered as "Shot s2", and a part put first cost every later
+  part its seed): `board_text` names each shot as the storyboard does ("Scene 1 · Shot 2
+  (id s6)", `context::shot_number`), with its parts' lengths, H3's lines/sound/music,
+  and **(the person's)** on a part `FilmShot.theirs` marks (`read_back` sets it on words
+  the film didn't write; an empty shot the person added is theirs). A shot is `keep`
+  (`context::short_id`: `s3`) or its parts; **a part may be `{"keep": true}`** (the next
+  shown part not yet placed, whole), and a written part **matches by its words**
+  (`context::same_words` against `shown_words`, one line, cut at `SHOWN_WORDS` 400 with
+  "…" — a long hand-written part can be written back as shown), wherever it now stands:
+  a match keeps its full text, brief, seed, picks, its length while `seconds` is the one
+  shown, and lines/sound/music given back unchanged or not at all; a first frame stays
+  only at the shot's first place. A scene matches by its `id` (`c1`), so its negative
+  and seed stay. **Left out of a reply, only a plan the agent wrote and nobody touched
+  goes** (`Film.drop`, said "Removed Scene 1 · Shot 3…"); a generated shot or one with
+  a part of the person's stays (said); a part of theirs a rewritten shot dropped is
+  named. Notes use the storyboard's numbers. **A part that names someone not in the part before starts
   a new shot** (`recut` against the story's own names, then a later part's `cast` is
   emptied): a part carries only the last frame, so they would be drawn from words.
   **Only a `character` does** — a place or thing coming into view goes on (a sausage
@@ -274,16 +284,30 @@ Break silently:
   still a plan; any other stays where it was (after the shot it followed), and a
   generated one is said — once: **`push` reads the Video back** (`pull`) after
   writing, so it is the film's again. New ids are `new_shot_id` (numeric; each plan is
-  on disk before the next is drawn). Settings are `Chat.video_settings` (the page's
-  Generation panel, `videoSettings()`, sent with `/chats/new` and `/agent/send` as
-  `settings` on a Video chat), used only when they were for the model the shots are
-  made with (a story may pick another), the lock's model/size/fps/Hi-res over them.
+  on disk before the next is drawn). **What a shot is written with**, weakest first:
+  the model's defaults; the shot's own recorded settings (`recorded_settings`, its
+  picked parts and memory too; a new shot takes the Video's first shot's); the page's
+  Generation panel (`Chat::video_settings`, sent with `/chats/new`, `/agent/send`,
+  `/chats/film`, `/chats/board` beside `video_id`) **only when sent from the film's own
+  Video** (`routes::from_film_video`; from another Video it is cleared, never kept
+  stale) and for the model the shots are made with; the lock's model/size/fps/Hi-res
+  over all. **A plan that already says what the film says (rows, scene words, model)
+  is not rewritten**, so a press never puts back what was set on it. The chat's model
+  is the film's Video's lock when it has one (`toolkit::resolve`), and `/agent/send`
+  changes `chat.video` only from the film's Video — another Video open on the tab is
+  not the film's. A shot drawn again carries `Clip.replaces` (every id it stood for),
+  which `read_back` matches parts through.
+  **A Video chat with no film adopts the Video open when it sends** (`routes::adopt_video`:
+  an empty `Ready` film naming it, on its lock's model): the turn's `pull` reads every
+  shot back as the person's. Without it a hand-made Video was never shown to the
+  agent ("change shot 2" → "please share the storyboard", 2026-11-14).
   **Written then read back, a film is itself** on Wan and on H3
   (`a_film_written_and_read_back_is_unchanged`): keep it so.
   **`pull`** (`read_back`) before every turn and every `/chats/film`: the film becomes
   the Video's scenes and shots in storyboard order, each shot's rows (`rows_of`: its
   draft's, else its parts with `source` as part 1's key) through `session::row_shot`,
-  matched to the film's parts of the same shot id by place; a first frame the film
+  matched to the film's parts of the same shot id (or one it `replaces`) by words, else
+  by place; a first frame the film
   didn't draw is the person's, copied into the chat (`keep_keys`). A film with no ids
   (an old chat's, `Film.clip` read as `video`) is matched by place. A Video whose
   `video.json` is gone clears `Film.video` and the ids and the next push makes
@@ -295,8 +319,9 @@ Break silently:
   panels aren't saved over the write), letting go of the hold only after. While held,
   `keepDraft`/`savePlan`/`setDraft` are no-ops (`holding`) — a Generation change
   autosaves the open plan otherwise. `follow` records the Video as seen only when
-  the job has ended: the first film's Video is named mid-job and must still open. Before a send or a film press the open shot is
-  saved (`saveStage`, awaited). No `rev` on `video.json`: `update_video`'s
+  the job has ended: the first film's Video is named mid-job and must still open. Before a send or a film press the open shot and
+  a storyboard edit still waiting are saved (`flushBoard`: `saveStage` and
+  `flushStory`, awaited). No `rev` on `video.json`: `update_video`'s
   `RECORD` lock, `/videos/story`'s shot-set check and the inert page cover it.
   `/chats/board {id, video}` is only `session::set_video` (`Film.references`, so what
   *Draw the first frames* draws follows the model), then a push. `FilmShot.seed`/`frames`

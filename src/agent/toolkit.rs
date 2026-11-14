@@ -406,12 +406,23 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     // swapped for another behind their back. When it can't make one (narrated
     // stills, VACE, T2V) or none is picked, the person is asked which of the
     // installed models that can (`film_pick`).
-    let video = chat.video.as_deref().and_then(|name| installed.iter().find(|v| v.name == name)).cloned();
+    // A film's Video with generated shots is locked to the model they were
+    // made with: that is the film's, whatever another Video open on the tab
+    // shows.
+    let locked = chat
+        .film
+        .as_ref()
+        .and_then(|f| f.video.as_deref())
+        .and_then(|id| crate::video_store(cfg).load_video(id).ok())
+        .and_then(|v| v.lock)
+        .map(|l| l.model);
+    let name = locked.as_deref().or(chat.video.as_deref());
+    let video = name.and_then(|name| installed.iter().find(|v| v.name == name)).cloned();
     let mut t = build(&rules, &shown(cfg, chat, profile), &locks, models, profile.map(|p| p.family));
     t.film_off = match chat.context {
         // In context: a film is begun from the Video tab's panel.
         super::chat::Pane::Image => Some("films are made from the Assistant on the Video tab".into()),
-        super::chat::Pane::Video => film_off(&rules, image, chat.video.as_deref(), video.as_ref()),
+        super::chat::Pane::Video => film_off(&rules, image, name, video.as_ref()),
     };
     if chat.context == super::chat::Pane::Video {
         let can: Vec<VideoView> = installed.iter().filter(|v| v.chains).cloned().collect();

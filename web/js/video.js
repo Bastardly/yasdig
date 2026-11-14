@@ -5,10 +5,10 @@ import { soonJobs, stopKind, stopAllKind } from './jobs.js';
 import { clip, renderVideo, stopPlayback, clearClip, openStage } from './player.js';
 import { initClipView } from './clipview.js';
 import { gridMarks, star, wireStars } from './gridmark.js';
-import { shotState, rowMatches, sentRow, shotOutdated, partNeighbours, ownShift, withShift, promptChars, ALL } from './shots.js';
+import { shotState, rowMatches, sentRow, shotOutdated, partNeighbours, ownShift, withShift, promptChars, asksFirst, ALL } from './shots.js';
 import {
-  initStoryboard, setVideo, currentVideo, currentShotId, clipOf, sceneOf, shotName, refreshFrom, followShot,
-  drawBoard, fillScene, unlockVideo, sceneLocked, syncHead,
+  initStoryboard, setVideo, currentVideo, currentShotId, clipOf, shotNow, sceneOf, shotName, refreshFrom, followShot,
+  drawBoard, fillScene, sceneMade, syncHead, letGoLock, confirmVideoChange,
 } from './storyboard.js';
 import { editRefs } from './refs.js';
 import { chooseCastEntry } from './castpicks.js';
@@ -894,7 +894,8 @@ function countPrompt(el, m) {
   out.textContent = `${n} / ${max}`;
   out.classList.toggle('over', n > max);
   out.title = `Keep a part under ${max} characters on ${m.name}, the scene's description included: `
-    + 'past that it ignores the prompt and makes something unrelated. Shorten the part or the description.';
+    + 'past that it ignores the prompt and makes something unrelated. Shorten the part or the description. '
+    + '{Variables} count as typed: what they roll to may be longer.';
 }
 
 function syncShots() {
@@ -1170,7 +1171,7 @@ function syncVideo() {
   if (!m) return;
   // The open scene's negative becomes the model's, as the box always did on
   // a model change — through `input`, so the scene keeps it.
-  if (!sceneLocked(sceneOf())) {
+  if (!sceneMade(sceneOf())) {
     $('vnegative').value = m.negative_prompt ?? '';
     $('vnegative').dispatchEvent(new Event('input', { bubbles: true }));
   }
@@ -1345,7 +1346,9 @@ export async function loadVideoModels({ refill = true } = {}) {
 
 // ---- Generating -------------------------------------------------------------
 
-function vidPayload(rows, scene = sceneNow()) {
+// `own` is the shot's own flow shift: the Shot panel's for the shot on the
+// stage, else the shot's recorded one (`pressShot`), none for a new shot.
+function vidPayload(rows, scene = sceneNow(), own = numOr('vshotshift')) {
   const m = currentVideoModel();
   return {
     model: $('vmodel').value,
@@ -1362,8 +1365,8 @@ function vidPayload(rows, scene = sceneNow()) {
     high_noise_steps: m && m.is_moe ? numOr('vhsteps') : null,
     high_noise_cfg_scale: m && m.is_moe ? numOr('vhcfg') : null,
     // The shot's own, else the Video's; the own one is kept on the record.
-    flow_shift: numOr('vshotshift') ?? numOr('vshift'),
-    flow_shift_own: numOr('vshotshift'),
+    flow_shift: own ?? numOr('vshift'),
+    flow_shift_own: own,
     sampler: $('vsampler').value || null,
     vae_tiling: $('vtiling').checked,
     memory: $('vmemory').value || null,
@@ -1511,12 +1514,14 @@ async function pressShot(c) {
   const rows = liveOf(rowsOfShot(c));
   if (!rows.length || busyClips.has(c.id)) return;
   const mark = shotMark(c, scene);
-  const st = shotState(rows, c.rendered === false ? null : c, chains(c), clipTake(c));
+  // Its own flow shift, not the one of the shot on the stage.
+  const own = ownShift(c, drafts.get(c.id)) ?? null;
+  const st = withShift(shotState(rows, c.rendered === false ? null : c, chains(c), clipTake(c)), own, c);
   let route;
   let body;
   if (mark === 'new' || mark === 'outdated' || st.action === 'generate') {
     route = '/video';
-    body = { ...vidPayload(rows, scene), id: c.id };
+    body = { ...vidPayload(rows, scene, own), id: c.id };
   } else if (st.action === 'extend' || st.action === 'redo') {
     const keep = st.action === 'redo' ? st.done : c.segments.length;
     route = '/videos/extend';
@@ -1808,6 +1813,14 @@ async function loadClips() {
   takeDrafts(videos.flatMap((v) => v.clips ?? []));
   refreshFrom(videos);
   const v = currentVideo();
+  // The shot on the stage was drawn again off it (Generate video, a film's
+  // press): its new id takes the stage, or the old one would play on after
+  // the Video's end, a shot that is gone.
+  const now = clip && v ? shotNow(clip.id) : null;
+  if (now && now.id !== clip.id && !busyClips.has(clip.id)) {
+    followShot(now.id);
+    stageShot(now, { keep: false });
+  }
   if (plan) plan = v?.clips?.find((c) => c.id === plan.id) ?? plan;
   // A shot landed off the stage: the Video plays with it now.
   if (v && $('vresult').hasChildNodes()) showVideo(clip ? (clipOf(clip.id) ?? clip) : null, undefined, { seek: false });
@@ -1853,7 +1866,11 @@ function showVideo(sel, ms, { was = null, seek = true } = {}) {
     const c = sel && (id === sel.id || id === was) ? sel : clipOf(id);
     if (c && c.rendered !== false && c.frames && !list.some((x) => x.c.id === c.id)) list.push({ c, label: shotName(id) });
   }
-  if (sel && sel.rendered !== false && !list.some((x) => x.c.id === sel.id)) list.push({ c: sel, label: shotName(sel.id) });
+  // A shot just landed that the storyboard doesn't list yet — never one a
+  // listed shot was drawn again in place of.
+  if (sel && sel.rendered !== false && !list.some((x) => x.c.id === sel.id || x.c.replaces?.includes(sel.id))) {
+    list.push({ c: sel, label: shotName(sel.id) });
+  }
   if (!list.length) {
     clearClip();
     return;
@@ -1975,20 +1992,48 @@ function applyRows(c) {
   syncVideoSummaries();
 }
 
-// The Video's model, size, frame rate and Hi-res, held while a shot made
-// with them stands: shots join only at one of each.
-function syncLocks() {
+// The Video's model, size, frame rate and Hi-res: shots join only at one
+// of each, so once a shot is made with them a change asks first
+// (`askLetGo`) — the boxes stay editable.
+const LOCKED = ['vmodel', 'vw', 'vh', 'vfps', 'vhires'];
+
+// The open Video's lock, while a shot made with it stands.
+function heldLock() {
   const v = currentVideo();
-  const locked = !!v?.lock && (v.clips ?? []).some((c) => c.rendered !== false);
-  for (const id of ['vmodel', 'vw', 'vh', 'vfps', 'vhires', 'vswapwh']) $(id).disabled = locked || (id === 'vhires' && $('vhires').disabled);
-  $('vlockline').hidden = !locked;
+  return v?.lock && (v.clips ?? []).some((c) => c.rendered !== false) ? v.lock : null;
+}
+
+function syncLocks() {
+  const l = heldLock();
   applyHold();
-  $('vgenlocked').hidden = !locked;
-  if (locked) {
-    const l = v.lock;
-    $('vlocktext').textContent = `Locked for this video: ${l.model}, ${l.width}×${l.height}, ${l.fps} fps${l.hires ? ', Hi-res ×2' : ''}.`;
+  $('vgenlocked').hidden = !l;
+  if (l) {
+    $('vgenlocked').textContent = `Its shots are made with ${l.model}, ${l.width}×${l.height}, ${l.fps} fps${l.hires ? ', Hi-res ×2' : ''}. `
+      + 'Changing any of these asks first: generated shots would need generating again.';
   }
-  if (!locked) syncHires();
+}
+
+// A change by the person to what the lock holds: yes lets the lock go (the
+// shots made with it are marked outdated); no puts its values back, and the
+// change never reaches the boxes' own listeners.
+function askLetGo(e) {
+  const l = heldLock();
+  if (!asksFirst({ user: e.isTrusted, locked: !!l })) return;
+  if (confirmVideoChange(l)) {
+    letGoLock();
+    return;
+  }
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  $('vmodel').value = l.model;
+  $('vw').value = l.width;
+  $('vh').value = l.height;
+  $('vfps').value = l.fps;
+  $('vhires').checked = !!l.hires;
+  syncHires();
+  syncVideoSummaries();
+  // Typing a size already redrew the marks for it.
+  syncShots();
 }
 
 // A chat's film was written into Video `id` (`agent::filmvideo`): what
@@ -2233,7 +2278,13 @@ export function initVideo() {
   for (const ev of ['input', 'change', 'click']) $('vfold-prompt').addEventListener(ev, keepDraftSoon);
   window.addEventListener('pagehide', () => keepDraft({ keepalive: true }));
   $('vextend').addEventListener('click', generateShot);
-  $('vunlock').addEventListener('click', unlockVideo);
+  // What a Video's generated shots were made with asks before a change:
+  // ahead of the boxes' own listeners (capture), so a no puts the lock's
+  // value back before anything acts on the new one.
+  $('vfold-gen').addEventListener('change', (e) => {
+    if (LOCKED.includes(e.target.id)) askLetGo(e);
+  }, true);
+  $('vswapwh').addEventListener('click', askLetGo, true);
   $('vopengen').addEventListener('click', () => { $('vfold-gen').open = !$('vfold-gen').open; });
   $('vclearmodel').addEventListener('click', () => saveVideoDefaults(true));
   $('vstop').addEventListener('click', cancelClip);
@@ -2318,7 +2369,7 @@ export function initVideo() {
       const m = currentVideoModel();
       return `${w.width}×${w.height} · ${w.fps} fps · ${m?.name ?? w.model}${w.hires ? ' · Hi-res ×2' : ''}`;
     },
-    shotPlan: (scene) => vidPayload([{ text: '', seed: randomSeed(), frames: currentVideoModel()?.frames ?? null }], scene),
+    shotPlan: (scene) => vidPayload([{ text: '', seed: randomSeed(), frames: currentVideoModel()?.frames ?? null }], scene, null),
     defaultNegative: () => currentVideoModel()?.negative_prompt ?? $('vnegative').value,
     ensureVideo,
     generate: (scene) => generateVideo(scene),

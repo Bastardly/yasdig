@@ -175,11 +175,18 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
     props.insert("cast".into(), json!({ "type": "array", "items": object(member), "maxItems": super::session::MAX_CAST }));
     // A shot (one camera run) is its parts, or `keep` with the id of one
     // shown, which leaves it as it is — a few tokens instead of its words.
+    // In a shot it changes, a part it doesn't is `{"keep": true}` in its
+    // place: its words, length, lines and first frame stay as they are.
+    let mut same = Map::new();
+    same.insert("keep".into(), json!({ "const": true }));
+    let part = json!({ "anyOf": [object(shot), object(same)] });
     let mut camera = Map::new();
     camera.insert("id".into(), text(12));
     camera.insert("keep".into(), json!({ "type": "boolean" }));
-    camera.insert("parts".into(), json!({ "type": "array", "items": object(shot), "maxItems": super::session::MAX_PARTS }));
+    camera.insert("parts".into(), json!({ "type": "array", "items": part, "maxItems": super::session::MAX_PARTS }));
+    // A scene shown keeps its id, so its negative and seed stay with it.
     let mut scene = Map::new();
+    scene.insert("id".into(), text(12));
     scene.insert("title".into(), text(80));
     scene.insert("every".into(), text(300));
     scene.insert(
@@ -593,10 +600,12 @@ mod tests {
         assert_eq!(member["required"], json!(keys(member)));
         assert_eq!(member["properties"]["picture"]["maximum"], json!(2), "one of the pictures attached, or none");
         let scene = &s["properties"]["scenes"]["items"];
-        assert_eq!(keys(scene), ["title", "every", "shots"]);
+        assert_eq!(keys(scene), ["id", "title", "every", "shots"]);
         assert_eq!(keys(&scene["properties"]["shots"]["items"]), ["id", "keep", "parts"]);
         let parts = |s: &Value| s["properties"]["scenes"]["items"]["properties"]["shots"]["items"]["properties"]["parts"].clone();
-        assert_eq!(keys(&parts(&s)["items"]), ["text", "cast", "seconds"]);
+        // A part is written, or `{"keep": true}` in its place.
+        assert_eq!(keys(&parts(&s)["items"]["anyOf"][0]), ["text", "cast", "seconds"]);
+        assert_eq!(parts(&s)["items"]["anyOf"][1]["properties"]["keep"], json!({ "const": true }));
         // On H3 a shot says what is spoken, heard and scored.
         let mut h3 = t.clone();
         h3.video = Some(crate::agent::toolkit::VideoView {
@@ -614,7 +623,7 @@ mod tests {
             fps: 24,
             longest_secs: 5.0,
         });
-        let shot = &parts(&output(Mode::Story, &h3, 2, 0, false))["items"];
+        let shot = &parts(&output(Mode::Story, &h3, 2, 0, false))["items"]["anyOf"][0];
         assert_eq!(keys(shot), ["text", "cast", "seconds", "lines", "sound", "music"]);
         assert_eq!(keys(&shot["properties"]["lines"]["items"]), ["who", "words", "language", "voiceover"]);
         assert_eq!(s["properties"]["scenes"]["maxItems"], json!(crate::agent::session::MAX_SCENES));

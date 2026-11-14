@@ -16,18 +16,24 @@
 // `video.js` owns the stage and the rows, and hands its part in as hooks
 // (`initStoryboard`), so this module imports nothing of it.
 import { $, esc, post, randomSeed } from './dom.js';
+import { asksFirst } from './shots.js';
 
 let video = null;
 let shotId = null;
 let H = null;
 let saveTimer = null;
 let saving = Promise.resolve();
-// Scenes whose description and negative the person unlocked, this visit.
-const unlocked = new Set();
+// Scenes whose description and negative the person said yes to changing,
+// this visit: by id, what the scene's generated shots were then. A shot
+// generated since was made with the words as they are, so it asks again.
+const unlocked = new Map();
 
 export const currentVideo = () => video;
 export const currentShotId = () => shotId;
 export const clipOf = (id) => video?.clips?.find((c) => c.id === id) ?? null;
+// Shot `id` as the Video now has it: itself, or the shot drawn again in its
+// place under a new id (`Clip.replaces` lists every id it stood for).
+export const shotNow = (id) => clipOf(id) ?? video?.clips?.find((c) => c.replaces?.includes(id)) ?? null;
 export const sceneOf = (id = shotId) => video?.scenes.find((s) => s.shots.includes(id)) ?? null;
 
 // "Scene 2 · Shot 3" for a shot id, numbered within its scene.
@@ -38,11 +44,15 @@ export function shotName(id) {
   return video.scenes.length > 1 ? `Scene ${si + 1} · Shot ${k + 1}` : `Shot ${k + 1}`;
 }
 
-// A scene whose shots were made with its words keeps them, until unlocked:
-// changing them would make every one of those shots outdated.
+// A scene with a generated shot: its shots were made with its description
+// and negative, so changing them makes every one of them outdated.
+export const sceneMade = (scene) => !!scene && scene.shots.some((id) => clipOf(id)?.rendered);
+
+// Whether changing the scene's words asks first: made, and not yet let go
+// this visit.
+const madeKey = (scene) => scene.shots.filter((id) => clipOf(id)?.rendered).map((id) => `${id}@${clipOf(id).created_ms}`).join(' ');
 export function sceneLocked(scene) {
-  if (!scene || unlocked.has(scene.id)) return false;
-  return scene.shots.some((id) => clipOf(id)?.rendered);
+  return sceneMade(scene) && unlocked.get(scene.id) !== madeKey(scene);
 }
 
 // The Video as the server last answered, onto the board. `shot` stages that
@@ -57,7 +67,11 @@ export function setVideo(v, { shot = null } = {}) {
     if (v.id !== was) unlocked.clear();
     const ids = v.scenes.flatMap((s) => s.shots);
     if (shot && ids.includes(shot)) shotId = shot;
-    else if (!ids.includes(shotId)) shotId = ids[0] ?? null;
+    else if (!ids.includes(shotId)) {
+      // Drawn again under a new id: the same shot, still the one open.
+      const now = shotId ? shotNow(shotId) : null;
+      shotId = now && ids.includes(now.id) ? now.id : ids[0] ?? null;
+    }
   }
   drawBoard();
   fillScene();
@@ -186,13 +200,6 @@ export function fillScene() {
     $('veverytext').value = s.every ?? '';
     $('vnegative').value = s.negative ?? '';
   }
-  syncSceneLock();
-}
-
-function syncSceneLock() {
-  const locked = sceneLocked(sceneOf());
-  for (const id of ['veverytext', 'vnegative']) $(id).readOnly = locked;
-  $('vscenelock').hidden = !locked;
 }
 
 // ---- Saving ----------------------------------------------------------------------
@@ -226,31 +233,45 @@ export function saveStory(extra = {}) {
   return saving;
 }
 
+// Before something reads the storyboard on the server (a chat turn, a
+// film press): an edit still waiting is saved, and any save on its way lands.
+export function flushStory() {
+  if (saveTimer) saveStory();
+  return saving;
+}
+
 function saveSoon() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => saveStory(), 500);
 }
 
+// How many of the open Video's shots are generated.
+export const madeShots = () => (video?.clips ?? []).filter((c) => c.rendered).length;
+const shotsWere = (n) => `${n} shot${n === 1 ? ' was' : 's were'}`;
+
 // The Video's lock let go: the next render sets a new one, and the shots
-// made the old way are marked outdated.
-export async function unlockVideo() {
+// made the old way are marked outdated. Asked first by `video.js`.
+export async function letGoLock() {
   if (!video) return;
-  const n = video.clips.filter((c) => c.rendered).length;
-  if (!confirm(`${n} shot${n === 1 ? ' was' : 's were'} made with this model, size and frame rate. `
-    + 'Changing them marks those shots outdated, and Generate video makes them again.')) return;
   await saveStory({ unlock: true });
   H.changed();
 }
 
-function unlockScene() {
-  const s = sceneOf();
-  if (!s) return;
+// The confirm before a change to what a Video's generated shots were made
+// with (`video.js` asks it for the Generation panel).
+export function confirmVideoChange(l) {
+  return confirm(`${shotsWere(madeShots())} made with ${l.model}, ${l.width}×${l.height}, ${l.fps} fps${l.hires ? ', Hi-res ×2' : ''}.\n\n`
+    + 'Changing it means generating them again: they are marked outdated, and Generate video makes them again.');
+}
+
+// The confirm before the first change to a made scene's description or
+// negative this visit; yes lets the scene go until the Video is left.
+function confirmSceneChange(s) {
   const n = s.shots.filter((id) => clipOf(id)?.rendered).length;
-  if (!confirm(`${n} shot${n === 1 ? ' was' : 's were'} made with this scene's description and negative. `
-    + 'Changing them marks those shots outdated, and Generate scene makes them again.')) return;
-  unlocked.add(s.id);
-  syncSceneLock();
-  $('veverytext').focus();
+  if (!confirm(`${shotsWere(n)} made with this scene's description and negative.\n\n`
+    + 'Changing them means generating those shots again: they are marked outdated, and Generate scene makes them again.')) return false;
+  unlocked.set(s.id, madeKey(s));
+  return true;
 }
 
 // ---- Changing the order ------------------------------------------------------------
@@ -389,10 +410,29 @@ export function initStoryboard(hooks) {
   });
   // The Scene panel's boxes are the scene's: kept as typed, saved a moment
   // later; the marks follow, since a changed description outdates its shots.
+  // A made scene's words ask before the first change. A typed key, a paste
+  // or a drop is cancelled before it lands; a composition (a dead key)
+  // can't be, so its text is put back on the `input` after it.
+  let refused = false;
+  for (const id of ['veverytext', 'vnegative']) {
+    $(id).addEventListener('beforeinput', (e) => {
+      const s = sceneOf();
+      if (!asksFirst({ user: e.isTrusted || e.fromUser, locked: sceneLocked(s) })) return;
+      if (confirmSceneChange(s)) return;
+      e.preventDefault();
+      if (!e.cancelable) refused = true;
+    }, true);
+  }
   for (const id of ['vscenetitle', 'veverytext', 'vnegative']) {
     $(id).addEventListener('input', () => {
       const s = sceneOf();
       if (!s) return;
+      if (refused) {
+        refused = false;
+        $('veverytext').value = s.every ?? '';
+        $('vnegative').value = s.negative ?? '';
+        return;
+      }
       s.title = $('vscenetitle').value;
       s.every = $('veverytext').value;
       s.negative = $('vnegative').value;
@@ -401,7 +441,6 @@ export function initStoryboard(hooks) {
       saveSoon();
     });
   }
-  $('vsceneunlock').addEventListener('click', unlockScene);
   window.addEventListener('pagehide', () => {
     if (saveTimer && video) post('/videos/story', storyBody(), { keepalive: true }).catch(() => {});
   });

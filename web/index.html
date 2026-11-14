@@ -680,15 +680,10 @@
     <div class="fpbody">
       <label for="vtitle">Title</label>
       <input type="text" id="vtitle" placeholder="Untitled video">
-      <!-- What every shot shares — the Video's Generation panel — and, once a
-           shot is made with it, the lock on it. -->
+      <!-- What every shot shares: the Video's Generation panel. -->
       <div class="sbgenrow">
         <button type="button" class="btn" id="vopengen" title="The model, size, frame rate and settings every shot is made with">Generation</button>
         <span class="sub" id="vboardsum"></span>
-      </div>
-      <div class="lockline" id="vlockline" hidden>
-        <span class="sub" id="vlocktext"></span>
-        <button type="button" class="btn" id="vunlock">Unlock</button>
       </div>
       <div id="vboard"></div>
       <button type="button" id="vsceneadd" class="btn">+ Scene</button>
@@ -711,10 +706,6 @@
       <prompt-box>
         <textarea id="vnegative" class="short"></textarea>
       </prompt-box>
-      <div class="lockline" id="vscenelock" hidden>
-        <span class="sub">Locked: shots of this scene were made with these words.</span>
-        <button type="button" class="btn" id="vsceneunlock">Unlock</button>
-      </div>
     </div>
   </section>
   <section class="fpanel fpboth" id="vfold-prompt" aria-label="Shot" hidden>
@@ -753,9 +744,8 @@
     <header class="fphead"><b>Generation</b> <span class="foldstate" id="vsum-gen"></span><button type="button" class="fpclose" aria-label="Close Generation">&times;</button></header>
     <div class="fpbody">
       <!-- The whole video's: shots join only at one model, size and frame
-           rate, so once one is made these hold until unlocked (in the
-           storyboard). -->
-      <p class="sub" id="vgenlocked" hidden>Model, size, frame rate and Hi-res are locked: a shot is made with them. Unlock in the Storyboard.</p>
+           rate, so once one is made a change to these asks first. -->
+      <p class="sub" id="vgenlocked" hidden></p>
       <label for="vmodel">Model</label>
       <div class="withinfo">
         <select id="vmodel"></select>

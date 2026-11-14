@@ -248,8 +248,8 @@ const HELP = [
         + 'carries across a part’s seam, and nothing across a cut, so a face is '
         + 'drawn again from these. Keep actions and dialogue out: they belong to a '
         + 'part. Its {variables} roll once for the scene, so a rolled character is '
-        + 'the same one in every shot of it. Once a shot of the scene is made, these '
-        + 'lock; unlocking marks those shots outdated.' },
+        + 'the same one in every shot of it. Once a shot of the scene is made, a '
+        + 'change asks first: those shots are marked outdated, to generate again.' },
   { ids: ['vloras'],
     text: 'LoRAs for the video model, from models/loras/ — only the ones for this '
         + 'model’s size are offered (a TI2V-5B LoRA does nothing to a 14B). On the '

@@ -419,6 +419,12 @@ fn coerce(k: &Knob, v: &Value, models: &[String], notes: &mut Vec<String>) -> Op
                 notes.push("an empty prompt was left alone".into());
                 return None;
             }
+            // A JSON null written as a word (Gemma 4 26B set the prompt to
+            // "null" when it had nothing to change): no one means it.
+            if s.eq_ignore_ascii_case("null") {
+                notes.push(format!("{} \"null\" was left alone", k.label));
+                return None;
+            }
             let cut: String = s.chars().take(max_chars).collect();
             if cut.len() < s.len() {
                 notes.push(format!("{} was cut to {max_chars} characters", k.label));
@@ -509,6 +515,13 @@ mod tests {
         s["cast"] = json!([{"id": "c1", "words": true, "picture": true}]);
         write(&mut s, knob("model").unwrap(), &json!("flux"));
         assert_eq!(s["cast"], json!([{"id": "c1", "words": true, "picture": false}]));
+    }
+
+    #[test]
+    fn a_prompt_of_the_word_null_is_left_alone() {
+        let mut s = settings();
+        let a = apply(&mut s, &change(json!({"prompt": "null"})), &Rules::default(), &Locks::default(), &[], &|_| None);
+        assert!(a.set.is_empty() && s["prompt"] == json!("a cat"), "{:?}", a.notes);
     }
 
     #[test]

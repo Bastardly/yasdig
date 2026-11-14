@@ -40,9 +40,25 @@ read over by every part. Names in the UI: Storyboard, Shot
   refuses a shot that differs (`check_lock`) until `POST /videos/story {unlock}` clears
   it. Steps/CFG/LoRAs/memory stay free. **Outdated is computed** (`shots.js`
   `shotOutdated`: recorded model/size/fps/hires vs the panel, `every`/negative vs the
-  scene), never stored. A scene's words lock in the page only (`sceneLocked`).
+  scene), never stored. **No Unlock button** (asked for: it was cumbersome): the
+  boxes stay editable and **a change by the person asks first** — `askLetGo`, a
+  capturing `change` on `#vfold-gen` (and `click` on `#vswapwh`), confirms, then sends
+  `unlock`; No puts the lock's values back before the boxes' own listeners run. A made
+  scene's description and negative ask the same way on `beforeinput` (`sceneLocked`,
+  page only; a yes lasts until a shot of the scene is generated again).
+  `<prompt-box>`'s weighting dispatches its own cancelable `beforeinput` (`fromUser`),
+  since `execCommand` fires none. **Only person-made events ask** (`asksFirst`:
+  `isTrusted`): `applySettings`, `syncVideo` and the rest write freely — so none may
+  write a locked Video's values. `joined` measures shots against one made at the lock,
+  so the outdated shot is the one named.
 - **A drawn shot drawn again renders under a new id** (`new_shot_id`) and
-  `replace_shot` swaps it into the scene on success, so a Stop keeps the old one.
+  `replace_shot` swaps it into the scene on success, so a Stop keeps the old one. The
+  new record's `replaces` lists every id it stood for (a film matches its parts through
+  them), written before the swap. **The page follows it** (`storyboard.js` `shotNow`):
+  `setVideo` keeps the open shot through its new id, `loadClips` restages the stage's
+  shot when it was drawn again off the stage, and `showVideo` never appends a shot a
+  listed one `replaces` — it did, and the Video played the old shot again after its end
+  until a page refresh (2026-11-14).
 - **Routes**: `/videos/new {plan, title, scene}`, `/videos/shot {id, scene, at, plan}`,
   `/videos/shot/delete {id}`, `/videos/story {id, title, scenes, unlock}` (refused
   unless the shots named are exactly the Video's), all answering `{video}` with its
@@ -54,7 +70,7 @@ read over by every part. Names in the UI: Storyboard, Shot
   finishes or undoes a crash). The Video keeps the old id.
 - **Page**: `storyboard.js` (board panel, Scene panel, ↑↓ moves across scene edges;
   **the Shot, Scene and Generation panels have no rail button** — only the storyboard
-  opens them (Generation by `#vopengen` under the title, beside the lock and Unlock),
+  opens them (Generation by `#vopengen` under the title),
   so an unsaved video still draws a placeholder Scene 1 · Shot 1 to click;
   **Advanced is a fold at the foot of Generation** (`#vfold-adv`, a `<details>`, no
   panel), and **Cast's rail button shows only on a model with `references`**
@@ -99,7 +115,10 @@ read over by every part. Names in the UI: Storyboard, Shot
   `shift` beside its rows): sent as `flow_shift` over Generation's `#vshift`, the Video's
   default. Not in the lock, never outdated; a drawn shot whose own value changed is
   drawn again whole (`shots.js` `withShift`), since Extend/Redo run on its recorded
-  settings. The Video's default moving marks nothing.
+  settings. The Video's default moving marks nothing. **`vidPayload`'s `own` is the
+  shot's**: the box for the shot on the stage, `ownShift` of its record/draft for one
+  *Generate video* or *Generate scene* presses off the stage (`pressShot`), none for a
+  new shot (`shotPlan`) — the box is the staged shot's alone.
 - **Enhance sees the storyboard** (`shots.js` `partNeighbours`, tested; `enhanceRow`
   builds the order from `rowsOfShot`, the open shot from its rows): `first` the
   scene's opening part, `scene` this shot's part 1, `before` the part before — for

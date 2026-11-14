@@ -7,6 +7,7 @@ import { flushBoard, follow as followBoard, showBoard, showCast } from './board.
 import { openModels } from './getmodels.js';
 import { openCastEditor } from './casteditor.js';
 import { videoSettings } from './video.js';
+import { currentVideo } from './storyboard.js';
 import { wireHints } from './hints.js';
 
 // ---- The Assistant panel ------------------------------------------------------
@@ -71,8 +72,8 @@ const WORDS = {
     placeholder: 'A fox in a red knitted hat, snowy forest — keep trying until the hat is red',
   },
   video: {
-    empty: 'Ask for a short film: the agent writes its shots into the Shots panel and its cast into the '
-      + 'Cast panel, which you change as you like, then Generate clip.',
+    empty: 'Ask for a short film: the agent writes it into a Video of its own — scenes and shots in the '
+      + 'Storyboard, its cast in the Cast panel — which you change as you like, then Generate video.',
     placeholder: 'A one-minute film: two friends meet in the rain at a bus stop',
   },
 };
@@ -327,8 +328,10 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
       if (story) await flushBoard();
       const body = onImage ? settings() : videoSettings();
       if (onImage) sentJSON = JSON.stringify(body);
+      // The panel is a film's only when its Video is the one open.
       await post('/agent/send', {
         chat: id, text, images: attachments.map(({ kind, id }) => ({ kind, id })), video: videoModel(), settings: body,
+        video_id: onImage ? null : currentVideo()?.id ?? null,
       });
       q('atext').value = '';
       attachments = [];
@@ -511,8 +514,13 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
         await openChat(id);
       } else if (d.pickVideo) {
         // The film-model card: the chat's video model, and its story turn.
-        for (const b of t.closest('.chatcard').querySelectorAll('button')) b.disabled = true;
-        await post('/agent/film-model', { chat: id, video: d.pickVideo });
+        const card = [...t.closest('.chatcard').querySelectorAll('button')];
+        for (const b of card) b.disabled = true;
+        // Refused (the chat busy, the model gone): the card can be pressed again.
+        await post('/agent/film-model', { chat: id, video: d.pickVideo }).catch((ex) => {
+          for (const b of card) b.disabled = false;
+          throw ex;
+        });
         soonJobs();
         await openChat(id);
       } else if (d.again) {

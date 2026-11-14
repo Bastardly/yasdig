@@ -73,7 +73,7 @@ function versions() {
 }
 
 // Why version `v` can't be one file, or null: shots it doesn't cover, or
-// shots of another size or rate (made before an unlock). The server's join
+// shots of another size or rate (made before the lock was let go). The server's join
 // refuses the same; said here before a download is started.
 function joinProblem(v) {
   const ver = versions().find((x) => x.n === v);

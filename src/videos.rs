@@ -136,6 +136,11 @@ pub struct Clip {
     /// field reads back. `video.flow_shift` is what it was drawn with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow_shift_own: Option<f32>,
+    /// The ids this shot took the place of, oldest first: a shot drawn again
+    /// lands under a new id (`VideoStore::replace_shot`), and a film's parts
+    /// are matched to it through these (`agent::filmvideo::read_back`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<String>,
     /// The page's unsent edits on this clip (`{rows, every, negative}`), read
     /// from `draft.json` by [`VideoStore::load`] — never part of `clip.json`.
     /// Opaque here: only the page reads it.
@@ -1033,6 +1038,7 @@ t5xxl = "t.gguf"
             shot_starts: Vec::new(),
             rendered: true,
             flow_shift_own: None,
+            replaces: Vec::new(),
             draft: None,
         }
     }

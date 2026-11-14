@@ -2,9 +2,9 @@ import { $, esc, post } from './dom.js';
 import { soonJobs } from './jobs.js';
 import { castHtml, castLabel, framesLabel, keyMissing, rowKeyHtml } from './chatview.js';
 import {
-  addCastToShots, castEntry, clipCast, followVideo, holdVideo, onRowsChange, removeCastFromShots, saveStage, setBoard, videoTakes,
+  addCastToShots, castEntry, clipCast, followVideo, holdVideo, onRowsChange, removeCastFromShots, saveStage, setBoard, videoSettings, videoTakes,
 } from './video.js';
-import { currentShotId, currentVideo } from './storyboard.js';
+import { currentShotId, currentVideo, flushStory } from './storyboard.js';
 import { choosePicture, chooseSound, upload } from './source-slot.js';
 import { askForSound, playSound } from './sounds.js';
 import { chooseCastEntry } from './castpicks.js';
@@ -23,7 +23,6 @@ import { openCastEditor } from './casteditor.js';
 
 let got = null; // the Video Assistant's chat shown, `{ chat, toolkit }`
 let show = null; // the Assistant's `show`, for an answer that is the chat
-let seenModel = null; // the film's video model last put in #vmodel
 let seen = null; // what the film's Video was last followed at: chat, video, busy
 let pickFor = null; // the cast member an upload is for
 
@@ -36,6 +35,9 @@ const err = (msg) => { $('casterr').textContent = msg ?? ''; };
 // The person is in a box of the Cast panel: a redraw would take it away.
 const typing = (root) => root.contains(document.activeElement) && document.activeElement.matches('input, textarea');
 const owns = () => !!film()?.video && film().video === currentVideo()?.id;
+// The Generation panel and the Video it is of: the film's Video is written
+// with it only when that is the one open (`routes::from_film_video`).
+const panel = () => ({ settings: videoSettings(), video_id: currentVideo()?.id ?? null });
 
 // Part 1 of the open shot, as the film has it: its first-frame buttons.
 function partOfShot(id) {
@@ -85,7 +87,6 @@ export function follow(g, showFn) {
     seen = id ? { chat: id, video: null, busy: false } : null;
     return;
   }
-  modelFrom(f);
   // A chat opened, a film's new Video, or a job that just ended: the Video
   // as the server now has it, the hold let go only once it is restaged.
   const fresh = opened || seen.video !== f.video;
@@ -93,17 +94,6 @@ export function follow(g, showFn) {
   seen = { chat: id, video: f.video, busy: false };
   if (fresh || ended) followVideo(f.video, { open: fresh }).finally(() => holdVideo(null));
   else holdVideo(null);
-}
-
-// The film's video model into #vmodel when it moved (picked on the
-// film-model card, or the film was opened): its Video is made with it.
-function modelFrom(f) {
-  if (!f.video_model || f.video_model === seenModel) return;
-  seenModel = f.video_model;
-  const sel = $('vmodel');
-  if (sel.disabled || sel.value === f.video_model || ![...sel.options].some((o) => o.value === f.video_model)) return;
-  sel.value = f.video_model;
-  sel.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 // ---- The Cast panel -------------------------------------------------------------
@@ -182,9 +172,9 @@ async function addToClip(id) {
 async function edit(fields) {
   if (!got) return;
   err('');
-  await saveStage();
+  await flushBoard();
   try {
-    const g = await post('/chats/film', { id: chatId(), ...fields });
+    const g = await post('/chats/film', { id: chatId(), ...fields, ...panel() });
     show?.(g);
     soonJobs();
     if (!busy() && film()?.video) followVideo(film().video);
@@ -198,6 +188,7 @@ async function edit(fields) {
 // the storyboard) would miss what was typed a moment ago.
 export async function flushBoard() {
   await saveStage();
+  await flushStory();
 }
 
 // From the chat's storyboard card: the film's Video on the stage, the
@@ -303,9 +294,11 @@ export function initBoard() {
   // pictures, the rest start a shot from a first frame.
   $('vmodel').addEventListener('change', async () => {
     if (!owns() || busy() || !$('vmodel').value || $('vmodel').value === film()?.video_model) return;
-    seenModel = $('vmodel').value;
     try {
-      show?.(await post('/chats/board', { id: chatId(), video: $('vmodel').value }));
+      // A lock let go on the way (`askLetGo`) lands first: the film is
+      // written with the new model, not the old lock's.
+      await flushStory();
+      show?.(await post('/chats/board', { id: chatId(), video: $('vmodel').value, ...panel() }));
     } catch (e) {
       $('verr').textContent = String(e.message || e);
     }

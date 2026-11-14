@@ -19,9 +19,9 @@
 //! `negative`), rolled off the scene's own seed so every shot of it rolls the
 //! same words. The **lock** is the model, size, fps and Hi-res the rendered
 //! shots were made at: those decide whether two shots can be joined, so a
-//! render that differs is refused until the person unlocks it — after which
-//! the page marks the shots made the old way as outdated (computed, never
-//! stored, like a part's done mark).
+//! render that differs is refused until the person lets it go (the page asks
+//! when one of them is changed) — after which the page marks the shots made
+//! the old way as outdated (computed, never stored, like a part's done mark).
 //!
 //! Clips from before Video 2.0 are converted once at start
 //! ([`VideoStore::convert_old`]), split at their old cut marks.
@@ -50,7 +50,7 @@ pub fn shot_of(id: &str) -> Option<(&str, &str)> {
 }
 
 /// What a join needs every shot to share. Recorded when the first shot is
-/// rendered; `None` until then, and again after the person unlocks it.
+/// rendered; `None` until then, and again after the person lets it go.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VideoLock {
     pub model: String,
@@ -271,8 +271,8 @@ impl VideoStore {
         let v = self.load_video(vid)?;
         if let Some(why) = v.lock.as_ref().and_then(|l| l.differs(want)) {
             bail!(
-                "this video's shots are made with {why}. To change that, unlock it in Generation — \
-                 the shots made the old way are then marked to generate again"
+                "this video's shots are made with {why}. To change that, change it in Generation and say yes \
+                 to generating them again — the shots made the old way are then marked outdated"
             );
         }
         Ok(())
@@ -293,6 +293,13 @@ impl VideoStore {
     /// place in its scene and the old folder goes.
     pub fn replace_shot(&self, old: &str, fresh: &str) -> Result<()> {
         let Some((vid, _)) = shot_of(old) else { bail!("'{old}' is not a shot") };
+        // First, the ids it stands for, so a film still finds its parts. The
+        // fresh record is on disk (`finish` wrote it); an old one that won't
+        // read still has its id carried.
+        let mut now = self.load(fresh).context("reading the shot drawn again")?;
+        now.replaces = self.load(old).map(|w| w.replaces).unwrap_or_default();
+        now.replaces.push(old.to_string());
+        self.save(&now)?;
         self.update_video(vid, |v| {
             for s in &mut v.scenes {
                 for x in &mut s.shots {
@@ -581,8 +588,8 @@ impl VideoStore {
     /// Video `vid` joined: version 0 is the shots as generated, `n` their
     /// enlarged version `n` — which every generated shot must have, or the
     /// sizes would differ. Refused, naming the shots, when they can't be one
-    /// picture: another size or frame rate (an outdated shot, made before an
-    /// unlock) or sound of another rate.
+    /// picture: another size or frame rate (an outdated shot, made before the
+    /// lock was let go) or sound of another rate.
     pub fn joined(&self, vid: &str, version: u32) -> Result<Joined> {
         let v = self.load_video_full(vid)?;
         let names = shot_names(&v);
@@ -602,8 +609,11 @@ impl VideoStore {
                 missing.join(", ")
             );
         }
-        let (width, height) = size(shots[0]).unwrap_or_default();
-        let fps = shots[0].fps;
+        // Measured against a shot made at the lock, when one is: an outdated
+        // shot first in the order must not make the rest look wrong.
+        let anchor = v.lock.as_ref().and_then(|l| shots.iter().find(|c| VideoLock::of(c) == *l)).unwrap_or(&shots[0]);
+        let (width, height) = size(anchor).unwrap_or_default();
+        let fps = anchor.fps;
         let odd: Vec<String> = shots
             .iter()
             .filter(|c| size(c) != Some((width, height)) || c.fps != fps)
@@ -853,15 +863,21 @@ mod tests {
         let b = VideoLock { width: 640, ..a.clone() };
         assert!(store.check_lock(&shot, &b).unwrap_err().to_string().contains("832×480"));
         store.take_lock(&shot, b.clone()).unwrap();
-        assert_eq!(store.load_video(id).unwrap().lock, Some(a), "the first lock holds until unlocked");
+        assert_eq!(store.load_video(id).unwrap().lock, Some(a), "the first lock holds until let go");
 
         store.update_video(id, |v| {
             v.scenes[0].shots.push(format!("{id}-s4"));
             Ok(())
         })
         .unwrap();
+        let mut s4 = crate::videos::tests::clip(&format!("{id}-s4"), 1);
+        s4.replaces = vec![format!("{id}-s2")];
+        store.save(&s4).unwrap();
+        std::fs::create_dir_all(store.root.join(id).join("s5")).unwrap();
+        store.save(&crate::videos::tests::clip(&format!("{id}-s5"), 1)).unwrap();
         store.replace_shot(&format!("{id}-s4"), &format!("{id}-s5")).unwrap();
         assert_eq!(store.load_video(id).unwrap().scenes[0].shots, vec![shot.clone(), format!("{id}-s5")]);
+        assert_eq!(store.load(&format!("{id}-s5")).unwrap().replaces, [format!("{id}-s2"), format!("{id}-s4")], "what it stands for, oldest first");
         assert!(!store.root.join(id).join("s4").exists(), "the old shot's folder goes");
         let v = store.delete_shot(&format!("{id}-s5")).unwrap();
         assert_eq!(v.scenes[0].shots, vec![shot]);
@@ -984,6 +1000,19 @@ mod tests {
         store.save(&c).unwrap();
         let e = store.joined(id, 0).err().unwrap().to_string();
         assert!(e.contains("Shot 2") && e.contains("16×4"), "{e}");
+        // With a lock, the shot made another way is the one named, wherever
+        // it stands: here Shot 1, made before the lock was let go.
+        let mut c = store.load(&shots[1]).unwrap();
+        c.video.width = 16;
+        store.save(&c).unwrap();
+        let lock = VideoLock::of(&store.load(&shots[0]).unwrap());
+        store.update_video(id, |v| {
+            v.lock = Some(lock.clone());
+            Ok(())
+        })
+        .unwrap();
+        let e = store.joined(id, 0).err().unwrap().to_string();
+        assert!(e.contains("8×4") && e.contains("Shot 1 (16×4"), "{e}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }
