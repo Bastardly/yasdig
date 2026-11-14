@@ -455,6 +455,8 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
         name: Option<String>,
         #[serde(default)]
         look: Option<String>,
+        #[serde(default)]
+        speaks: Option<String>,
         /// A picture of the person's (an output), or `null` to draw one again.
         #[serde(default, deserialize_with = "crate::double_option")]
         picture: Option<Option<Pic>>,
@@ -578,6 +580,7 @@ fn film(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
             member: dto.member,
             name: dto.name.clone(),
             look: dto.look.clone(),
+            speaks: dto.speaks.clone(),
             picture: dto.picture.as_ref().map(|p| p.as_ref().map(|_| kept.clone().expect("kept above"))),
             shot: dto.shot,
             text: dto.text.clone(),

@@ -320,6 +320,8 @@ function memberCard(chat, m, k, lock) {
       <input type="text" value="${esc(m.name)}" data-film-member="${k}" data-field="name" aria-label="Name"${lock}>
       <span class="sub">${esc(KIND[m.kind] ?? m.kind)}</span>
       <textarea rows="2" data-film-member="${k}" data-field="look" aria-label="How ${esc(m.name)} looks"${lock}>${esc(m.look)}</textarea>
+      ${m.kind === 'character' ? `<input type="text" value="${esc(m.speaks ?? '')}" data-film-member="${k}" data-field="speaks"
+        placeholder="How they speak, if they talk" aria-label="How ${esc(m.name)} speaks"${lock}>` : ''}
       <div class="btnrow">
         <button type="button" class="btn" data-film-pick="${k}" title="Use a picture from Outputs"${lock}>Choose…</button>
         <button type="button" class="btn" data-film-upload="${k}" title="Use a picture from this computer"${lock}>Upload…</button>

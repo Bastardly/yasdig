@@ -147,6 +147,7 @@ fn story_fields(props: &mut Map<String, Value>, attached: u32, t: &Toolkit) {
     member.insert("name".into(), text(40));
     member.insert("kind".into(), json!({ "enum": ["character", "place", "thing"] }));
     member.insert("look".into(), text(300));
+    member.insert("speaks".into(), text(160));
     member.insert("picture".into(), int(0, attached));
     member.insert("prompt".into(), text(600));
     // A part: one stretch of action, going on from the frame before.
@@ -596,7 +597,7 @@ mod tests {
         t2.film_off = None;
         assert!(output(Mode::Story, &t2, 0, 0, false)["properties"].get("image_model").is_none(), "the chat's model draws them");
         let member = &s["properties"]["cast"]["items"];
-        assert_eq!(keys(member), ["name", "kind", "look", "picture", "prompt"]);
+        assert_eq!(keys(member), ["name", "kind", "look", "speaks", "picture", "prompt"]);
         assert_eq!(member["required"], json!(keys(member)));
         assert_eq!(member["properties"]["picture"]["maximum"], json!(2), "one of the pictures attached, or none");
         let scene = &s["properties"]["scenes"]["items"];

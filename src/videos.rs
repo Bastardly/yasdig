@@ -266,6 +266,9 @@ pub fn shot_prompt(every: &str, text: &str) -> String {
     match (every.trim(), text.trim()) {
         ("", t) => t.to_string(),
         (e, "") => e.to_string(),
+        // A description that ends a sentence itself isn't given a second
+        // full stop: "depth of field.. A boy" was sent to LTX (2026-11-14).
+        (e, t) if e.ends_with(['.', '!', '?']) => format!("{e} {t}"),
         (e, t) => format!("{e}. {t}"),
     }
 }
@@ -1327,6 +1330,7 @@ t5xxl = "t.gguf"
         assert_eq!(shot_prompt("", "she says hello"), "she says hello");
         assert_eq!(shot_prompt("a red-haired woman, film grain", "she waves"), "a red-haired woman, film grain. she waves");
         assert_eq!(shot_prompt("  a beach ", ""), "a beach");
+        assert_eq!(shot_prompt("warm amber light.", "A boy waves."), "warm amber light. A boy waves.");
     }
 
     /// Records from before `segments` read as shots: a long clip's old Prompt

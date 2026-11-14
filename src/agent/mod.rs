@@ -831,7 +831,7 @@ fn enhance_shot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: us
                 picture: None,
                 seconds: Some(shot.frames.map_or(view.shot_seconds(), |f| f as f32 / view.fps.max(1) as f32)),
                 cast: shot.cast.clone(),
-                looks: shot.cast.iter().filter_map(|n| film.member(n)).map(|m| (m.name.clone(), m.look.clone())).collect(),
+                looks: shot.cast.iter().filter_map(|n| film.member(n)).map(|m| (m.name.clone(), m.look_and_voice())).collect(),
                 lines: shot.lines.clone(),
                 sound: shot.sound.clone(),
                 music: shot.music.clone(),

@@ -25,10 +25,10 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 
 /// A reply runs to a 220-word paragraph and a sound line: under 500 tokens.
-const N_PREDICT: u32 = 1024;
+pub(super) const N_PREDICT: u32 = 1024;
 /// The brief and a guide come to a couple of thousand tokens; a picture
 /// adds its tiles. More context than that only costs load time.
-const N_CTX: u32 = 8192;
+pub(super) const N_CTX: u32 = 8192;
 
 /// What to enhance, as `POST /enhance` takes it and a storyboard builds it.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -385,7 +385,7 @@ fn trimmed(req: &Request, t: Target, fixed: usize, budget: usize) -> Option<Requ
 /// with a prompt limit (`VideoFeatures::prompt_chars`, LTX's cliff) — what
 /// is left of it beside the scene's description, which the server joins on
 /// (`videos::shot_prompt`).
-const PROMPT_CHARS: u32 = 2400;
+pub(super) const PROMPT_CHARS: u32 = 2400;
 
 fn prompt_cap(cfg: &Config, req: &Request) -> u32 {
     let limit = (req.kind == "video")
@@ -396,7 +396,7 @@ fn prompt_cap(cfg: &Config, req: &Request) -> u32 {
     limit.map_or(PROMPT_CHARS, |n| n.saturating_sub(every + 2).clamp(200, PROMPT_CHARS))
 }
 
-fn schema(t: Target, max: u32) -> serde_json::Value {
+pub(super) fn schema(t: Target, max: u32) -> serde_json::Value {
     let mut props = serde_json::json!({ "prompt": { "type": "string", "minLength": 1, "maxLength": max } });
     let mut required = vec!["prompt"];
     if t.fields() {
@@ -499,19 +499,13 @@ pub fn run(cfg: &Config, monitor: &Monitor, req: &Request) -> Result<Enhanced> {
     // Only the variables the person's own words use: one Enhance put in
     // unasked rolls a different word into every picture.
     let vars = crate::variables::used(&format!("{}\n{}", req.text, req.sound), &cfg.settings().variables);
-    let system = format!(
-        "{guide}\n\n{}\n\nAnswer with one JSON object: `prompt` is the new prompt alone — no title, no \"Here is\", no quotes around it{}.",
-        variables_line(&vars),
-        if t.fields() { ", and `sound` the shot's sound line (empty when it has one)" } else { "" }
-    );
+    let system = system_text(&guide, &vars, t);
     let n_ctx = tune.n_ctx.min(N_CTX);
     let fixed = super::context::text_tokens(&system) + if sees { super::context::image_tokens(tune.image_side) } else { 0 };
     let budget = (n_ctx as usize).saturating_sub(N_PREDICT as usize + 64);
     let fitted = trimmed(&Request { looks: looks.clone(), ..req.clone() }, t, fixed, budget);
     let req = fitted.as_ref().map_or(req, |r| r);
     let ask = |req: &Request| {
-        let mut content = parts.clone();
-        content.push(llm::Part::Text { text: brief(t, req, &looks, sees) });
         llm::Request {
             v: llm::PROTOCOL,
             model: model.lm.clone(),
@@ -521,7 +515,7 @@ pub fn run(cfg: &Config, monitor: &Monitor, req: &Request) -> Result<Enhanced> {
             thinking: false,
             sampling: Sampling { seed: (super::rand_seed() & 0xffff_ffff) as u32, ..tune.sampling },
             json_schema: Some(schema(t, cap)),
-            messages: vec![llm::Message::text(llm::Role::System, system.clone()), llm::Message { role: llm::Role::User, content }],
+            messages: messages(&system, t, req, &looks, &parts),
         }
     };
     let runner = LlmRunner::watched(cfg, monitor);
@@ -546,6 +540,24 @@ pub fn run(cfg: &Config, monitor: &Monitor, req: &Request) -> Result<Enhanced> {
         eprintln!("enhance: {{{name}}} wasn't in the words it was given; the prompt says \"{name}\"");
     }
     Ok(e)
+}
+
+/// The system text: the family's guide, which variables to keep, the answer's
+/// shape. `run`'s and `agent-check`'s, so a check scores the real call.
+pub(super) fn system_text(guide: &str, vars: &crate::variables::Variables, t: Target) -> String {
+    format!(
+        "{guide}\n\n{}\n\nAnswer with one JSON object: `prompt` is the new prompt alone — no title, no \"Here is\", no quotes around it{}.",
+        variables_line(vars),
+        if t.fields() { ", and `sound` the shot's sound line (empty when it has one)" } else { "" }
+    )
+}
+
+/// The call's messages: the system text, then the first frame (when shown)
+/// and the brief.
+pub(super) fn messages(system: &str, t: Target, req: &Request, looks: &[(String, String)], parts: &[llm::Part]) -> Vec<llm::Message> {
+    let mut content = parts.to_vec();
+    content.push(llm::Part::Text { text: brief(t, req, looks, !parts.is_empty()) });
+    vec![llm::Message::text(llm::Role::System, system.to_string()), llm::Message { role: llm::Role::User, content }]
 }
 
 /// Which `{name}`s the answer keeps: the guides teach "keep a word in

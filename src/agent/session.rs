@@ -342,6 +342,7 @@ pub struct BoardEdit {
     pub member: Option<usize>,
     pub name: Option<String>,
     pub look: Option<String>,
+    pub speaks: Option<String>,
     /// A picture of the person's, or `None` to have it drawn again.
     pub picture: Option<Option<ImageRef>>,
     pub shot: Option<usize>,
@@ -431,6 +432,9 @@ pub fn edit_board(c: &mut Chat, e: &BoardEdit) -> Result<(), String> {
         let m = &mut f.cast[k];
         if let Some(look) = &e.look {
             m.look = look.trim().to_string();
+        }
+        if let Some(speaks) = &e.speaks {
+            m.speaks = speaks.trim().to_string();
         }
         match &e.picture {
             Some(Some(p)) => {
@@ -855,6 +859,9 @@ pub struct CastJson {
     pub kind: String,
     #[serde(default)]
     pub look: String,
+    /// How a speaker sounds: `Member.speaks`.
+    #[serde(default)]
+    pub speaks: String,
     /// The attached picture it is, from 1; 0 is none (drawn from `prompt`).
     #[serde(default)]
     pub picture: u32,
@@ -1046,6 +1053,7 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
             },
             look,
             prompt: plain(&c.prompt),
+            speaks: plain(&c.speaks),
             ..Default::default()
         };
         // One of the person's saved cast: its name as saved, its look word
@@ -2246,6 +2254,24 @@ mod tests {
         for (i, sc) in f.scenes.iter_mut().enumerate() {
             sc.id = format!("c{}", i + 1);
         }
+    }
+
+    /// How a speaker sounds is theirs to keep: written by the story, changed
+    /// in the Cast panel, told to Enhance after the look — never drawn.
+    #[test]
+    fn a_speakers_voice_is_kept_beside_the_look_and_told_to_enhance() {
+        let mut c = film_chat();
+        let t = film_tk(&c, false);
+        let mut b = scenes_board();
+        b["cast"][1]["speaks"] = json!("a boy of ten, quick and bright.");
+        story(&mut c, &t, b);
+        let leo = c.film.as_ref().unwrap().member("Leo").unwrap().clone();
+        assert_eq!(leo.speaks, "a boy of ten, quick and bright.");
+        assert_eq!(leo.look_and_voice(), "a boy in a yellow raincoat. Leo speaks: a boy of ten, quick and bright.");
+        assert_eq!(c.film.as_ref().unwrap().member("Mara").unwrap().look_and_voice(), "a tall woman in a red coat", "no voice, the look alone");
+        let k = c.film.as_ref().unwrap().cast.iter().position(|m| m.name == "Leo").unwrap();
+        edit_board(&mut c, &BoardEdit { member: Some(k), speaks: Some(" hoarse, a whisper ".into()), ..Default::default() }).unwrap();
+        assert_eq!(c.film.as_ref().unwrap().member("Leo").unwrap().speaks, "hoarse, a whisper");
     }
 
     #[test]

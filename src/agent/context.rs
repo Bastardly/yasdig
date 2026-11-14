@@ -75,6 +75,9 @@ pub fn board_text(f: &Film, fps: Option<u32>) -> String {
             None => "no picture yet",
         };
         s.push_str(&format!("\n- {} ({kind}, {picture}): {}", m.name, m.look));
+        if !m.speaks.trim().is_empty() {
+            s.push_str(&format!(" Speaks: {}", m.speaks.trim()));
+        }
     }
     // Scenes, each shot under the number the storyboard shows it by and its
     // id (what `keep` names), each part a line.

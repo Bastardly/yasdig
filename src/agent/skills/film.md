@@ -6,12 +6,13 @@ priority: 90
 This turn writes a storyboard: a short film in scenes, shots and parts.
 
 The cast:
-- Everyone and everything that must look the same throughout: the people, an animal, the main place, an object the story turns on. A thing seen once is words in its part.
-- `kind`: "character" (a person or animal), "place", or "thing" (an object, food, a vehicle).
-- `look`: one or two sentences a stranger could draw from, starting with the name ("Mara is a…"): age, build, hair, face, clothes and colours; for a place, what is in it and the light.
-- `prompt`: its picture. The subject alone, whole, facing the viewer, on plain light grey, in the film's look. A person standing head to toe; a place as a wide view with nobody in it.
+- Everyone and everything that must look the same throughout: the people, an animal, the main place, an object the story turns on. Seen once: words in its part.
+- `kind`: "character" (a person or animal), "place", or "thing" (an object, food).
+- `look`: a sentence or two a stranger could draw from, starting with the name ("Mara is a…"): age, build, hair, face, clothes and colours; for a place, what is in it and the light.
+- `speaks`: a talking character's voice ("a woman of sixty, low and dry"); else empty.
+- `prompt`: its picture. The subject alone, whole, facing the viewer, on plain light grey. A person standing head to toe; a place as a wide view with nobody in it.
 
-A scene is one place at one time. `every`: its look in a few words — "35 mm film, warm evening light". No story, no names. A locked scene keeps its look.
+A scene is one place at one time. `every`: its look in a few words — "35 mm film, warm evening light". No story, no names.
 
 A shot is one camera run, starting from its own first frame drawn with who is in it. Start a new shot when place or time changes, to see someone else, or when someone arrives or comes back after turning away. Its first part names who is there, where, and what the camera sees: "Close on Leo's face as he reads the letter." Not their looks.
 

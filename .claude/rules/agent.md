@@ -181,7 +181,8 @@ Break silently:
 - **Skills** (`agent::skills`): built-ins compiled in, `user/skills/*.md` re-read per
   turn, an `id` match replaces; `BUDGET` drops whole skills, lowest priority first.
 - **Enhance** (`agent::enhance`, `POST /enhance`, `Work::Enhance`, `Kind::Enhance`,
-  `web/js/enhance.js`): one schema-held call (`{prompt, sound?, spoken?}`) per box, with the
+  `web/js/enhance.js`; `agent-check`'s `ENHANCE_CASES` and `PAIR_CASES` (part 2 told part 1's answer, 3 seeds) make the same call through
+  `system_text`/`messages`/`schema` — run them before and after an `enhance-*.md` edit): one schema-held call (`{prompt, sound?, spoken?}`) per box, with the
   family's `modes: [enhance]` guide (`skills::select_enhance`: `Skill.enhance` guides
   plus the family's mode-free style notes; `select` never gives a chat turn one). The
   page writes the answer with `insertText` (undo). H3 keeps names (its `<Subject N>`
@@ -347,4 +348,10 @@ Break silently:
   aliases; `Mode::Take` only so old messages read). The Lines/sound/music are plain
   fields; the H3 layout is the engine's (`video.md`). A board's `video_model` is
   the Video tab's (`set_video`) or the film-model card's.
+- **A speaker's voice is words on the member** (`Member.speaks`, the story schema's
+  `speaks`, the Cast panel's box on a character; not `voice`, which is H3's sound stem):
+  Enhance is told `look_and_voice()` (look, then "Leo speaks: …"), the channel the
+  `PAIR_CASES` showed reaching both parts word for word on 3 of 3 seeds (2026-11-14);
+  a picture prompt takes the look alone. The saved cast library has no `speaks` yet,
+  so a hand-made Video's Enhance voices from its look only.
 - **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.

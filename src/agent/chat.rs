@@ -250,6 +250,11 @@ pub struct Member {
     /// What its picture is drawn from: a sheet on a plain background.
     #[serde(default)]
     pub prompt: String,
+    /// How a character who speaks sounds, in words ("a woman in her sixties,
+    /// low and dry"): Enhance is told it beside the look, so every part
+    /// voices them alike. Never drawn — a picture prompt takes the look only.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub speaks: String,
     /// Its picture: drawn (`item`), or the person's (`output`, `attach`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture: Option<ImageRef>,
@@ -279,6 +284,22 @@ impl Member {
     /// Its picture is the person's, not drawn by the agent.
     pub fn theirs(&self) -> bool {
         self.picture.as_ref().is_some_and(|p| p.kind != "item")
+    }
+
+    /// What Enhance is told of them: the look, then how they speak — the
+    /// channel `agent-check`'s pair case showed reaching every part word
+    /// for word (3 of 3 seeds, 2026-11-14).
+    pub fn look_and_voice(&self) -> String {
+        match self.speaks.trim() {
+            "" => self.look.clone(),
+            v => {
+                let voice = format!("{} speaks: {}.", self.name.trim(), v.trim_end_matches('.'));
+                match self.look.trim().trim_end_matches('.') {
+                    "" => voice,
+                    look => format!("{look}. {voice}"),
+                }
+            }
+        }
     }
 }
 

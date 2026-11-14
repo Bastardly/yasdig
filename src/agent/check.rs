@@ -19,8 +19,9 @@
 use super::chat::{Chat, Film, FilmScene, FilmShot, ImageRef, Member, MemberKind, Mode, Msg};
 use super::knobs::{Locks, Rules};
 use super::session::{CameraJson, ReplyJson};
+use super::enhance::{self, Enhanced, Target};
 use super::{agent_for, context, n_predict, schema, session, skills, toolkit, tuning, user_skills_dir, Staged};
-use crate::config::{Config, ImageFamily};
+use crate::config::{Config, ImageFamily, VideoFamily};
 use crate::llm::{self, LlmRunner, Request, Sampling};
 use anyhow::Result;
 use serde_json::json;
@@ -401,6 +402,23 @@ const CASES: &[Case] = &[
         },
     },
     Case {
+        name: "gives a character who talks a voice",
+        mode: Mode::Story,
+        says: "A short film: at a bus stop at night, Mara tells Leo the last bus has gone, and he laughs.",
+        checks: &[],
+        prompt: None,
+        video: true,
+        film: None,
+        want: |r| {
+            let cast = r.cast.as_deref().unwrap_or_default();
+            let mara = cast.iter().find(|m| m.name.to_lowercase().contains("mara")).ok_or("no Mara in the cast")?;
+            if mara.speaks.split_whitespace().count() < 2 {
+                return Err(format!("Mara talks, and her voice is {:?}", mara.speaks));
+            }
+            Ok(())
+        },
+    },
+    Case {
         name: "writes checks that can be answered by looking",
         mode: Mode::Plan,
         says: "A fox wearing a red knitted hat in a snowy forest.",
@@ -446,6 +464,247 @@ const CASES: &[Case] = &[
                 other => Err(format!("it answered {other:?}; the picture has a red square and no blue circle")),
             }
         },
+    },
+];
+
+/// An Enhance case: one part rewritten for a video model through the real
+/// call (`enhance::system_text`, `messages`, `schema`), scored on the
+/// answer. Enhance is where a film's trouble showed (strangers in an empty
+/// street, the same man drawn and voiced anew each shot), and until
+/// 2026-11-14 nothing measured an edit to its guides.
+struct EnhanceCase {
+    name: &'static str,
+    family: VideoFamily,
+    req: fn() -> enhance::Request,
+    want: fn(&Enhanced) -> Result<(), String>,
+}
+
+fn part(text: &str) -> enhance::Request {
+    enhance::Request { kind: "video".into(), model: "agent-check".into(), text: text.into(), seconds: Some(5.0), ..Default::default() }
+}
+
+/// Lower-case words, punctuation off: what "is it in there" compares.
+fn plain_words(s: &str) -> Vec<String> {
+    s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+}
+
+/// `phrase` appears in `text`, word for word, punctuation aside.
+fn says(text: &str, phrase: &str) -> bool {
+    let (t, p) = (plain_words(text).join(" "), plain_words(phrase).join(" "));
+    format!(" {t} ").contains(&format!(" {p} "))
+}
+
+/// LTX's guide asks for 150–220 words; a little either side is let pass.
+fn ltx_length(p: &str) -> Result<(), String> {
+    match p.split_whitespace().count() {
+        130..=250 => Ok(()),
+        n => Err(format!("{n} words, where the guide asks for 150–220")),
+    }
+}
+
+/// A name means nothing to LTX or Wan: the person is drawn from words.
+fn names_no_one(p: &str, names: &[&str]) -> Result<(), String> {
+    let w = plain_words(p);
+    match names.iter().find(|n| w.contains(&n.to_lowercase())) {
+        Some(n) => Err(format!("it names {n}, which the model can't draw")),
+        None => Ok(()),
+    }
+}
+
+const MARA: &str = "Mara is a grey-haired woman in her seventies in a red wool coat.";
+const LEO: &str = "Leo is a broad man in his forties with a shaved head and a green work jacket.";
+
+const ENHANCE_CASES: &[EnhanceCase] = &[
+    EnhanceCase {
+        name: "LTX: speaks the line word for word, and names no one",
+        family: VideoFamily::Ltx25,
+        req: || enhance::Request {
+            cast: vec!["Leo".into(), "Mara".into()],
+            looks: vec![("Leo".into(), LEO.into()), ("Mara".into(), MARA.into())],
+            lines: vec![crate::videos::Line { who: "Leo".into(), words: "The last bus has gone.".into(), ..Default::default() }],
+            ..part("At the kitchen table Leo tells Mara the bus has gone.")
+        },
+        want: |e| {
+            if !says(&e.prompt, "The last bus has gone") {
+                return Err(format!("the line isn't in it word for word: {:?}", e.prompt));
+            }
+            names_no_one(&e.prompt, &["Leo", "Mara"])?;
+            ltx_length(&e.prompt)
+        },
+    },
+    EnhanceCase {
+        name: "LTX: draws a person from their look",
+        family: VideoFamily::Ltx25,
+        req: || enhance::Request {
+            cast: vec!["Mara".into()],
+            looks: vec![("Mara".into(), MARA.into())],
+            ..part("Mara waits at a bus stop in the rain.")
+        },
+        want: |e| {
+            names_no_one(&e.prompt, &["Mara"])?;
+            for a in ["grey-haired", "red wool coat"] {
+                if !says(&e.prompt, a) {
+                    return Err(format!("her look loses \"{a}\": {:?}", e.prompt));
+                }
+            }
+            ltx_length(&e.prompt)
+        },
+    },
+    EnhanceCase {
+        name: "LTX: an empty place stays empty",
+        family: VideoFamily::Ltx25,
+        req: || part("An empty kitchen at dawn. A kettle on the stove starts to steam."),
+        want: |e| {
+            let w = plain_words(&e.prompt);
+            let people = ["man", "woman", "person", "people", "someone", "he", "she", "his", "her", "him", "girl", "boy", "hand", "hands", "figure"];
+            match people.iter().find(|p| w.contains(&p.to_string())) {
+                Some(p) => Err(format!("it put someone in (\"{p}\"): {:?}", e.prompt)),
+                None => ltx_length(&e.prompt),
+            }
+        },
+    },
+    EnhanceCase {
+        name: "LTX: the scene's sound is heard",
+        family: VideoFamily::Ltx25,
+        req: || enhance::Request {
+            sound: "rain on a tin roof, a distant train, no music".into(),
+            cast: vec!["Mara".into()],
+            looks: vec![("Mara".into(), MARA.into())],
+            ..part("Mara stirs her tea by the window.")
+        },
+        want: |e| {
+            for a in ["rain", "tin roof", "train"] {
+                if !says(&e.prompt, a) {
+                    return Err(format!("the sound loses \"{a}\": {:?}", e.prompt));
+                }
+            }
+            ltx_length(&e.prompt)
+        },
+    },
+    EnhanceCase {
+        name: "Wan: the camera move asked for, and only that",
+        family: VideoFamily::Wan22Ti2v5b,
+        req: || part("A slow dolly in on a lighthouse at dusk."),
+        want: |e| {
+            let w = plain_words(&e.prompt);
+            if !w.iter().any(|x| x.starts_with("dolly") || x == "push" || x == "pushes") {
+                return Err(format!("the dolly in is gone: {:?}", e.prompt));
+            }
+            // A dolly moves the camera; a zoom moves the lens. Static is nothing moving.
+            match ["zoom", "zooms", "static", "pan", "pans", "orbit", "orbits"].iter().find(|m| w.contains(&m.to_string())) {
+                Some(m) => Err(format!("it adds \"{m}\" to the dolly: {:?}", e.prompt)),
+                None => Ok(()),
+            }
+        },
+    },
+    EnhanceCase {
+        name: "H3: no one speaks unless the words say so",
+        family: VideoFamily::MinimaxH3,
+        req: || enhance::Request {
+            cast: vec!["Mara".into()],
+            looks: vec![("Mara".into(), MARA.into())],
+            ..part("Mara walks along the pier at dusk, watching the boats.")
+        },
+        want: |e| {
+            if !e.spoken.is_empty() {
+                return Err(format!("it gave her lines: {:?}", e.spoken));
+            }
+            if e.sound.trim().is_empty() { Err("no sound line".into()) } else { Ok(()) }
+        },
+    },
+    EnhanceCase {
+        name: "H3: a line the words ask for goes into Spoken",
+        family: VideoFamily::MinimaxH3,
+        req: || enhance::Request {
+            cast: vec!["Mara".into(), "Leo".into()],
+            looks: vec![("Leo".into(), LEO.into()), ("Mara".into(), MARA.into())],
+            ..part("Mara turns to Leo and asks him if he is coming home.")
+        },
+        want: |e| match e.spoken.iter().find(|l| l.who.to_lowercase().contains("mara")) {
+            Some(l) if says(&l.words, "coming") || says(&l.words, "home") => Ok(()),
+            Some(l) => Err(format!("Mara's line isn't the question: {:?}", l.words)),
+            None => Err(format!("no line of Mara's: {:?}", e.spoken)),
+        },
+    },
+];
+
+/// The call an Enhance case makes, as `enhance::run` would make it.
+fn enhance_request(family: VideoFamily, req: &enhance::Request, guide: &str, model: &super::AgentModel, tune: &super::Tuning, seed: u32) -> Request {
+    let t = Target::Video(family, family.takes_references());
+    let vars = crate::variables::Variables::new();
+    let every = req.every.trim().chars().count() as u32;
+    let cap = if family.is_ltx() {
+        crate::config::LTX_PROMPT_CHARS.saturating_sub(every + 2).clamp(200, enhance::PROMPT_CHARS)
+    } else {
+        enhance::PROMPT_CHARS
+    };
+    Request {
+        v: llm::PROTOCOL,
+        model: model.lm.clone(),
+        mmproj: None,
+        n_ctx: tune.n_ctx.min(enhance::N_CTX),
+        n_predict: enhance::N_PREDICT,
+        thinking: false,
+        sampling: Sampling { seed, ..tune.sampling },
+        json_schema: Some(enhance::schema(t, cap)),
+        messages: enhance::messages(&enhance::system_text(guide, &vars, t), t, req, &req.looks, &[]),
+    }
+}
+
+/// A pair case: part 1 of a shot, then part 2 told part 1's actual answer
+/// (as `enhance_shot` tells it the part before), scored on whether the two
+/// agree — what a film's drift is, which one part alone can't show. Run on
+/// [`PAIR_SEEDS`] seeds: one seed is thin for a "sometimes".
+struct PairCase {
+    name: &'static str,
+    family: VideoFamily,
+    first: fn() -> enhance::Request,
+    second: fn() -> enhance::Request,
+    want: fn(&Enhanced, &Enhanced) -> Result<(), String>,
+}
+
+const PAIR_SEEDS: u32 = 3;
+
+/// Leo as a film's cast holds him, told to Enhance as `enhance_shot` tells
+/// it (`Member::look_and_voice`): his voice must reach both parts word for word.
+fn leo(text: &str, line: &str) -> enhance::Request {
+    let m = Member { name: "Leo".into(), look: LEO.into(), speaks: "a low, tired voice".into(), ..Default::default() };
+    enhance::Request {
+        cast: vec!["Leo".into()],
+        looks: vec![("Leo".into(), m.look_and_voice())],
+        lines: vec![crate::videos::Line { who: "Leo".into(), words: line.into(), ..Default::default() }],
+        ..part(text)
+    }
+}
+
+const PAIR_CASES: &[PairCase] = &[
+    PairCase {
+        name: "LTX: one man, the same look and voice in both parts",
+        family: VideoFamily::Ltx25,
+        first: || enhance::Request { then_continues: true, ..leo("Leo sits at the kitchen table and says the last bus has gone.", "The last bus has gone.") },
+        second: || leo("Leo stands up and says they will walk.", "Then we walk."),
+        want: |a, b| {
+            for (k, e) in [a, b].into_iter().enumerate() {
+                for w in ["shaved head", "green work jacket", "low, tired voice"] {
+                    if !says(&e.prompt, w) {
+                        return Err(format!("part {} loses \"{w}\": {:?}", k + 1, e.prompt));
+                    }
+                }
+            }
+            Ok(())
+        },
+    },
+    PairCase {
+        name: "LTX: the rain of part 1 goes on in part 2",
+        family: VideoFamily::Ltx25,
+        first: || enhance::Request {
+            then_continues: true,
+            cast: vec!["Mara".into()],
+            looks: vec![("Mara".into(), MARA.into())],
+            ..part("Rain drums on the tin roof of a bus shelter at night. Mara waits inside it, shivering.")
+        },
+        second: || enhance::Request { cast: vec!["Mara".into()], looks: vec![("Mara".into(), MARA.into())], ..part("Mara checks her watch.") },
+        want: |_, b| if says(&b.prompt, "rain") { Ok(()) } else { Err(format!("part 2 has no rain: {:?}", b.prompt)) },
     },
 ];
 
@@ -496,7 +755,7 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
         "[agent-check] {} ({}), {} cases",
         model.label,
         if model.vision() { "sees pictures" } else { "text only" },
-        CASES.len()
+        CASES.len() + ENHANCE_CASES.len() + PAIR_CASES.len()
     );
     let (all_skills, _) = skills::load(&user_skills_dir(cfg));
     let family = ImageFamily::Sdxl;
@@ -620,11 +879,73 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
             Err(why) => println!("[agent-check] FAIL  {}\n                    {why}", case.name),
         }
     }
+    for (k, case) in ENHANCE_CASES.iter().enumerate() {
+        let (guide, used, _) = skills::select_enhance(&all_skills, case.family.as_str());
+        if used.is_empty() {
+            println!("[agent-check] skip  {}: no enhance guide for {}", case.name, case.family.label());
+            continue;
+        }
+        ran += 1;
+        let req = enhance_request(case.family, &(case.req)(), &guide, &model, &tune, 101 + k as u32);
+        let verdict = runner.run(&req, &model.label, "agent-check").map_err(|e| format!("the call failed: {e:#}")).and_then(|reply| {
+            if reply.stats.stop == "length" {
+                return Err("the answer was cut off".to_string());
+            }
+            let e = enhance::parse(&reply.content).map_err(|e| format!("{e:#}"))?;
+            (case.want)(&e)
+        });
+        match verdict {
+            Ok(()) => {
+                passed += 1;
+                println!("[agent-check] ok    {}", case.name);
+            }
+            Err(why) => println!("[agent-check] FAIL  {}\n                    {why}", case.name),
+        }
+    }
+    let enhanced = |req: &Request| -> Result<Enhanced, String> {
+        let reply = runner.run(req, &model.label, "agent-check").map_err(|e| format!("the call failed: {e:#}"))?;
+        if reply.stats.stop == "length" {
+            return Err("the answer was cut off".to_string());
+        }
+        enhance::parse(&reply.content).map_err(|e| format!("{e:#}"))
+    };
+    for (k, case) in PAIR_CASES.iter().enumerate() {
+        let (guide, used, _) = skills::select_enhance(&all_skills, case.family.as_str());
+        if used.is_empty() {
+            println!("[agent-check] skip  {}: no enhance guide for {}", case.name, case.family.label());
+            continue;
+        }
+        ran += 1;
+        let mut fails = Vec::new();
+        for n in 0..PAIR_SEEDS {
+            let seed = 201 + (k as u32) * 10 + n;
+            let verdict = enhanced(&enhance_request(case.family, &(case.first)(), &guide, &model, &tune, seed)).and_then(|a| {
+                let second = enhance::Request { before: a.prompt.clone(), first: a.prompt.clone(), ..(case.second)() };
+                let b = enhanced(&enhance_request(case.family, &second, &guide, &model, &tune, seed))?;
+                (case.want)(&a, &b)
+            });
+            if let Err(why) = verdict {
+                fails.push(format!("seed {seed}: {why}"));
+            }
+        }
+        if fails.is_empty() {
+            passed += 1;
+            println!("[agent-check] ok    {} ({PAIR_SEEDS} of {PAIR_SEEDS} seeds)", case.name);
+        } else {
+            println!(
+                "[agent-check] FAIL  {} ({} of {PAIR_SEEDS} seeds)\n                    {}",
+                case.name,
+                PAIR_SEEDS as usize - fails.len(),
+                fails.join("\n                    ")
+            );
+        }
+    }
     println!("[agent-check] {passed} of {ran} passed");
     if passed < ran {
         println!(
             "[agent-check] A failed case is a choice this model gets wrong on this build's instructions, not a broken install \
-             (`llm-selftest` checks that). The chat turns come first (three of them a Video tab's films), then three storyboard rewrites; the last two are what a session needs."
+             (`llm-selftest` checks that). The chat turns come first (three of them a Video tab's films), then three storyboard \
+             rewrites, the two a session needs, Enhance on LTX, Wan and H3, and last two parts in a row on LTX, which must agree."
         );
     }
     Ok(())
@@ -669,5 +990,29 @@ mod tests {
             assert!(chat.contains(a), "{a} is not offered");
         }
         assert!(image::load_from_memory(&test_picture().unwrap()).is_ok());
+    }
+
+    /// Every Enhance case finds its family's guide, builds its call, and
+    /// refuses an empty answer; the scoring reads words, not characters.
+    #[test]
+    fn every_enhance_case_builds_its_call_and_refuses_an_empty_answer() {
+        let (all, _) = skills::load(std::path::Path::new("/nonexistent"));
+        for case in ENHANCE_CASES {
+            let (guide, used, _) = skills::select_enhance(&all, case.family.as_str());
+            assert!(!used.is_empty(), "{}: no guide", case.name);
+            let t = Target::Video(case.family, case.family.takes_references());
+            let req = (case.req)();
+            let m = enhance::messages(&enhance::system_text(&guide, &Default::default(), t), t, &req, &req.looks, &[]);
+            assert_eq!(m.len(), 2, "{}", case.name);
+            assert!((case.want)(&Enhanced::default()).is_err(), "{} passes an empty answer", case.name);
+        }
+        for case in PAIR_CASES {
+            let (a, b) = ((case.first)(), (case.second)());
+            assert!(!a.text.is_empty() && !b.text.is_empty(), "{}", case.name);
+            assert!((case.want)(&Enhanced::default(), &Enhanced::default()).is_err(), "{} passes empty answers", case.name);
+        }
+        assert!(says("He says, \"The last bus has gone!\" quietly.", "The last bus has gone."));
+        assert!(!says("the lastbus has gone", "last bus"));
+        assert!(names_no_one("a man in a coat", &["Leo"]).is_ok() && names_no_one("Leo's coat", &["Leo"]).is_err());
     }
 }
