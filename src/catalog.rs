@@ -29,8 +29,7 @@
 //! Video models are a table of their own, `[[video]]`, of the same [`Entry`]
 //! shape: a [`VideoFamily`], its [`VideoFamily::slots`] keys, `"high_noise"`
 //! for the A14B's second expert, and every `dest` under the **video dir**. Kept
-//! apart so the Help tab's family table and the image cards never meet one,
-//! and kept out of the image cards' listing.
+//! apart so the image cards' listing never meets one.
 
 use crate::config::{ImageFamily, PartSlot, VideoFamily};
 use crate::discover::{DitKind, Role};

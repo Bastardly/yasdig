@@ -1,0 +1,33 @@
+<!--
+title: Schedulers
+description: The scheduler decides how much noise is left after each step — where the steps are spent. Spending more of them near the end, where little noise is left,…
+-->
+<h1>Schedulers</h1>
+<p>The scheduler decides how much noise is left after each step — where the
+steps are spent. Spending more of them near the end, where little noise is
+left, tends to give cleaner fine detail.</p>
+<p><b>Leave it on Auto unless you have a reason.</b> Auto is not one
+scheduler: sd.cpp picks per model — Flux and Flux.2 get schedules of their
+own, <code>lcm</code> and <code>tcd</code> get <code>lcm</code>,
+<code>ddim_trailing</code> gets <code>simple</code>, and everything else gets
+<code>discrete</code>. Forcing <code>discrete</code> onto a Flux makes it
+worse.</p>
+
+<table class="helptable">
+<thead><tr><th>Scheduler</th><th>What it does</th></tr></thead>
+<tbody><tr><td><code>Auto</code></td><td>The model’s own choice, as above. The default.</td></tr><tr><td><code>discrete</code></td><td>The noise levels the model was trained on, evenly spaced. What Auto picks for SD and SDXL.</td></tr><tr><td><code>karras</code></td><td>Packs more steps into the low-noise end, for cleaner fine detail. The classic partner for DPM++ samplers.</td></tr><tr><td><code>exponential</code></td><td>Evenly spaced on a log scale. Similar in spirit to karras, a different spread.</td></tr><tr><td><code>sgm_uniform</code></td><td>Uniform spacing that ends exactly at zero noise. Common with distilled, few-step models.</td></tr><tr><td><code>simple</code></td><td>A plain even pick from the model’s noise levels.</td></tr><tr><td><code>ays</code></td><td>“Align Your Steps”: schedules tuned for very few steps. <b>SD 1.5 and SDXL only</b> — refused for other models.</td></tr><tr><td><code>lcm</code></td><td>For LCM-distilled models. Auto picks it for the <code>lcm</code> and <code>tcd</code> samplers.</td></tr></tbody>
+</table>
+
+<h3>More</h3>
+
+<table class="helptable">
+<thead><tr><th>Scheduler</th><th>What it does</th></tr></thead>
+<tbody><tr><td><code>gits</code></td><td>Precomputed few-step schedules, like ays.</td></tr><tr><td><code>smoothstep</code></td><td>An S-curve: slow at both ends, quick in the middle.</td></tr><tr><td><code>kl_optimal</code></td><td>Spacing derived to minimise error per step; good at low step counts.</td></tr><tr><td><code>beta</code></td><td>Spends steps at both ends, little in the middle. A common choice in ComfyUI workflows.</td></tr><tr><td><code>bong_tangent</code></td><td>A tangent-shaped curve with a similar both-ends shape. For experimenting.</td></tr><tr><td><code>flux, flux2</code></td><td>Flux’s and Flux.2’s own schedules — what Auto already picks for them.</td></tr></tbody>
+</table>
+
+<h3>Good starting pairs</h3>
+
+<table class="helptable">
+<thead><tr><th>Model</th><th>Sampler + scheduler</th></tr></thead>
+<tbody><tr><td>SDXL, SD 1.5</td><td><code>dpm++2m</code> + <code>karras</code>, 25–30 steps</td></tr><tr><td>Turbo, Lightning, Z-Image</td><td><code>euler</code> + Auto, at the model’s own steps</td></tr><tr><td>LCM LoRA</td><td><code>lcm</code> + Auto, 4–8 steps, CFG 1–2</td></tr><tr><td>Flux, FLUX.3, Krea 2, Qwen-Image</td><td><code>euler</code> + Auto</td></tr></tbody>
+</table>

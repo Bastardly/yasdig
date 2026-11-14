@@ -1,0 +1,75 @@
+<!--
+title: Memory
+description: A run needs two kinds of memory. GPU memory (VRAM, 24 GB on a 7900 XTX) holds the work of drawing — the picture-in-progress, attention — and whatever…
+-->
+<h1>Memory</h1>
+<p>A run needs two kinds of memory. <b>GPU memory</b> (VRAM, 24 GB on a
+7900 XTX) holds the work of drawing — the picture-in-progress, attention —
+and whatever weights are on the card. <b>System memory</b> (RAM) holds the
+weights that aren’t. A big model with its text encoder can be 20 GB or more,
+so where those weights live is what decides whether a run fits.</p>
+
+<h3>The Memory setting</h3>
+<p>In the <i>Models</i> fold, per model (<i>Save as defaults for this
+model</i> keeps it), and on the Video tab.</p>
+
+<table class="helptable">
+<thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+<tbody><tr><td>Auto</td><td>stable-diffusion.cpp measures free memory and places each part: on the card first, then in RAM, then read from the SSD. The default, and right for anything that fits.</td></tr><tr><td>System RAM</td><td>Every weight waits in RAM and moves to the card a piece at a time, so the whole card is free for the drawing. <b>The fix when a big model runs out of GPU memory.</b> The text encoder is read from its file, used for the prompt and then let go, so it doesn’t hold RAM while the picture is drawn. Needs RAM about the size of the model; a little slower.</td></tr><tr><td>Stream from SSD</td><td>The model and its text encoder are re-read from their files as they’re needed. The least memory of the three — for when RAM is what runs out. Slower. It only reads, so it doesn’t wear the drive.</td></tr></tbody>
+</table>
+<p><b>System RAM has a second limit.</b> The graphics card reaches system RAM
+through a window the Linux driver sizes at half your RAM by default (the
+<i>GTT</i> — about 15 GB on a 30 GB machine). Weights kept in RAM have to
+fit in that window, however much RAM is free. A full-precision 9B model
+(17 GB) doesn’t, and the run stops with “device lost”; the error box then
+offers Stream from SSD, which goes from the file straight to the card. The
+window can be made larger with a kernel setting (<code>ttm.pages_limit</code>),
+or a Q8 file of the model fits it as it is.</p>
+<p>Auto guesses how much room the drawing will need and fills the rest of
+the card with weights. A 9B model at two megapixels can need more than
+the guess, which is when System RAM helps.</p>
+
+<h3>Can the text encoder’s result be kept?</h3>
+<p>Not between runs. stable-diffusion.cpp can only remember a prompt’s
+encoding inside one running process, and yasdig starts a fresh one for
+every pass. What it does instead, in System RAM and Stream from SSD, is
+let go of the encoder as soon as it has read the prompt — the encoder is
+the second-largest file in most sets, and it is only needed for the first
+second or two.</p>
+
+<h3>When a run runs out</h3>
+<p>The error says which memory ran out and when — loading the model,
+drawing (with the step), or turning the result into pixels — and offers
+what fits: <b>System RAM</b>, <b>Stream from SSD</b>, a <b>smaller
+size</b>, or a <b>smaller file</b>. Pick one, then <b>Try again</b> re-runs
+exactly what failed. Nothing is saved until you press <i>Save as
+defaults</i>.</p>
+<p>System RAM comes with its figure — <i>needs about 17.6 GB of RAM;
+26.0 GB is free</i> — counted from the model’s own files. When it won’t fit
+with room to spare, it is shown greyed out and Stream from SSD is offered
+instead: a full-precision 9B can need more RAM than a 32 GB machine has
+free.</p>
+<p><b>“Device lost”</b> is a different failure: stable-diffusion.cpp’s own
+check said the work fits, and the graphics driver still had no room for
+it, because the desktop and the browser use the card too. The box then
+offers to <b>keep 3 GB of the card free</b>. That is a setting for this
+machine, not a model, so it is saved at once (Settings → <i>Keep free on
+the GPU</i>) and applies to every run after.</p>
+<p>Running out <b>while turning the result into pixels</b> is the VAE.
+stable-diffusion.cpp already retries that in tiles by itself, so what is
+left is a smaller size.</p>
+<p>Running out of <b>system memory</b> looks different: the system stops the
+run with no message, and yasdig says so. Close what you don’t need, or
+use Stream from SSD.</p>
+
+<h3>The lasting fix: a smaller file</h3>
+<p>A <b>Q8</b> GGUF needs about half the memory of the original, <b>Q6</b>
+a bit less again, and <b>Q4</b> about a quarter — with Q8 indistinguishable
+and Q4 starting to lose fine detail. <b>fp8 files run at twice their
+size</b> on AMD cards. The <b>Models</b> tab has GGUF sets for every
+family, and its <b>Convert</b> panel turns a file you have into one.</p>
+
+<h3>After a run</h3>
+<p>When any weights weren’t on the card, a line under the timings says
+where they were — <i>text encoder in system RAM</i>, <i>model streamed from
+the SSD</i>. That explains a slow run before it becomes a failed one.</p>

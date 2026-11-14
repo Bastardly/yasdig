@@ -63,7 +63,7 @@ A new trap goes in the area's file, not here; a new source file goes in its `pat
 | the cast library, cast picks, cast in clips/films, the agent's `cast` action | `cast.md` | `src/cast.rs`, `cast*.js` |
 | favourites, the Outputs tab, work-item shelves, PNG text chunks | `gallery.md` | `workitems.*`, `pngmeta.rs`, `gridmark.js`, `outputs.js` |
 | the catalog, downloads, Installed, model notes, the Models tab | `downloads.md` | `catalog.*`, `downloads.*`, `inventory.rs`, `notes.*`, `getmodels.js` |
-| memory modes and OOM, live preview, step caching, samplers/schedulers, the Help tab | `sd-cli.md` | `src/sd.rs`, `memory.js`, `help.js` |
+| memory modes and OOM, live preview, step caching, samplers/schedulers | `sd-cli.md` | `src/sd.rs`, `memory.js` |
 | the job queue, Stop/skip, loops, Close server | `jobs.md` | `jobs.*`, `shutdown.rs`, `busy.js`, `alive.js` |
 | the Assistant: driver, chats, sessions, knobs, skills, Enhance, films and the board | `agent.md` | `src/agent/`, `llm.rs`, `agents.rs`, `llm/`, `assistant.js`, `board.js` |
 | Refine & adjust: Redraw, Extend, Edit, Scale, History, References, sliders, area, brushes, text, panes, tooltips | `viewer.md` | `viewer.js`, `redraw.js`, `refs.js`, `redraw.rs`, `area.rs`, `brush.rs`, `edits.rs` |

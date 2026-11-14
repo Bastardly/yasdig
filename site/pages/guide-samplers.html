@@ -1,0 +1,52 @@
+<!--
+title: Samplers
+description: The sampler is how each step removes noise. At enough steps most give a similar picture; what changes is the look (crisp, soft, textured), how few steps…
+-->
+<h1>Samplers</h1>
+<p>The sampler is how each step removes noise. At enough steps most give a
+similar picture; what changes is the <b>look</b> (crisp, soft, textured),
+how <b>few steps</b> they need, and whether the same seed gives the
+<b>same picture</b>.</p>
+<p><b>Start with what the model fills in.</b> Turbo, Lightning, LCM and the
+newer models (Flux, Z-Image, Qwen-Image) are trained for one sampler and
+look wrong on others.</p>
+
+<h3>Good starting points</h3>
+
+<table class="helptable">
+<thead><tr><th>Model</th><th>Sampler</th></tr></thead>
+<tbody><tr><td>Realistic and photo SDXL</td><td><code>dpm++2m_sde</code>, 30 steps — or <code>dpm++2m</code>, 25 steps. With <code>karras</code></td></tr><tr><td>Anime and illustration SDXL</td><td><code>euler_a</code>, 25–30 steps</td></tr><tr><td>SD 1.5</td><td><code>dpm++2m</code> + <code>karras</code>, 20–25 steps</td></tr><tr><td>SDXL Turbo, Lightning, Hyper</td><td><code>euler</code>, the steps on the model’s card (4–8), CFG 1–2</td></tr><tr><td>Anything with an LCM LoRA</td><td><code>lcm</code>, 4–8 steps, CFG 1–2</td></tr><tr><td>Flux, FLUX.3, Krea 2, Qwen-Image, Z-Image</td><td><code>euler</code></td></tr><tr><td>Quick drafts on SDXL</td><td><code>ipndm</code>, 12–15 steps</td></tr></tbody>
+</table>
+
+<h3>Repeatable</h3>
+<p>Same seed, same picture. More steps refine the image rather than change it.</p>
+
+<table class="helptable">
+<thead><tr><th>Sampler</th><th>What you’ll see</th></tr></thead>
+<tbody><tr><td><code>euler</code></td><td>Clean and neutral. The safe first try on any model.</td></tr><tr><td><code>dpm++2m</code></td><td>Crisp and detailed by 20–25 steps. The usual pick for realistic SDXL and SD 1.5.</td></tr><tr><td><code>dpm++2mv2</code></td><td>Like dpm++2m, a little cleaner at low step counts.</td></tr><tr><td><code>ipndm, ipndm_v</code></td><td>Holds together at 10–15 steps, where euler is still blurry. Good for drafts.</td></tr><tr><td><code>heun, dpm2</code></td><td>Slightly cleaner edges than euler. <b>Twice as slow</b> per step — use half the steps.</td></tr><tr><td><code>res_multistep</code></td><td>Sharper than euler at the same steps. Worth a try when a Flux or Qwen-Image looks soft.</td></tr><tr><td><code>res_2s</code></td><td>As above, a bit sharper again. <b>Twice as slow</b> per step.</td></tr><tr><td><code>ddim_trailing</code></td><td>Only when a model’s card asks for DDIM.</td></tr><tr><td><code>lms</code></td><td>An older method. No reason to pick it today.</td></tr></tbody>
+</table>
+
+<h3>Varying</h3>
+<p>Names ending in <code>_a</code> or <code>sde</code> add a little fresh noise each
+step. The picture keeps changing as you add steps, and seeds differ more from
+each other.</p>
+
+<table class="helptable">
+<thead><tr><th>Sampler</th><th>What you’ll see</th></tr></thead>
+<tbody><tr><td><code>euler_a</code></td><td>Softer and smoother, a painterly look. Loved for anime and illustration; can blur fine detail in photos.</td></tr><tr><td><code>dpm++2m_sde</code></td><td>More fine texture: skin pores, fabric, film grain. Needs 25+ steps. Great for realistic portraits.</td></tr><tr><td><code>dpm++2m_sde_bt</code></td><td>Like dpm++2m_sde, a slightly different texture. Try both.</td></tr><tr><td><code>er_sde</code></td><td>Textured like the sde ones, but already good at 15–20 steps.</td></tr><tr><td><code>dpm++2s_a</code></td><td>Detailed with a soft finish. <b>Twice as slow</b> per step.</td></tr></tbody>
+</table>
+
+<h3>Few-step</h3>
+<p>Only for models or LoRAs trained for them; on a normal model they look washed out.</p>
+
+<table class="helptable">
+<thead><tr><th>Sampler</th><th>What you’ll see</th></tr></thead>
+<tbody><tr><td><code>lcm</code></td><td>Smooth, a bit waxy. For LCM models and LoRAs at 4–8 steps, CFG 1–2.</td></tr><tr><td><code>tcd</code></td><td>Like lcm with more detail kept. For TCD LoRAs at 4–8 steps.</td></tr></tbody>
+</table>
+
+<h3>Experimental</h3>
+
+<table class="helptable">
+<thead><tr><th>Sampler</th><th>What you’ll see</th></tr></thead>
+<tbody><tr><td><code>euler_cfg_pp, euler_a_cfg_pp</code></td><td>Variants that need a very low CFG (about 1–2). At a normal CFG they burn the colours.</td></tr><tr><td><code>euler_ge</code></td><td>An Euler variant for experimenting; close to euler in practice.</td></tr></tbody>
+</table>

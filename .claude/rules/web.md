@@ -72,7 +72,6 @@ only `js/app.js`.
 | `convert.js` | the Models tab's Convert panel (`loadConvertModels`, reloaded by `loadInstalled`) |
 | `getmodels.js` | Models tab, `openModels` |
 | `prompt-box.js` / `prompt-weight.js` | the custom element; pure weighting maths |
-| `help.js` | Help tab `TOPICS` — also yasdig.com's `/guide/` pages (`site/build.mjs`; a new `fill` needs a `FILLED` row there) |
 | `settings.js` / `modelsettings.js` | Settings form from `FIELDS`; *Per model* card |
 | `assistant.js` | the Assistant panel (`mountAssistant`, per tab): chats, the composer, following a turn, the Image tab's controls both ways |
 | `board.js` | a Video chat's film: following its own Video (`followVideo`, `holdVideo`), part 1's first-frame buttons, the Cast panel |

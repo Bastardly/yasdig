@@ -51,8 +51,7 @@ const active = (f) => f.state === 'queued' || f.state === 'downloading';
 const needed = (f) => f.state === 'missing' || f.state === 'partial' || f.state === 'failed';
 const fileName = (dest) => dest.split('/').pop();
 
-// One fetch shared by whoever asks in the same moment — this tab and the Help
-// topic's family table.
+// One fetch shared by whoever asks in the same moment.
 export function fetchCatalog() {
   pending ??= getJSON('/catalog').finally(() => { pending = null; });
   return pending;
@@ -333,7 +332,7 @@ async function refresh() {
 }
 
 // Open the tab on one family's panel, in front. For the Image tab's "Get the
-// missing files…", the Assistant's agent link and the Help topic's table;
+// missing files…" and the Assistant's agent link;
 // `upscaler` and `agent` name those categories' panels.
 export function openModels(family) {
   document.querySelector('.tab[data-tab="models"]')?.click();

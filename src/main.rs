@@ -1099,8 +1099,8 @@ fn route(
         // here: a download is network, not GPU, and must neither wait behind a
         // render nor hold one up. The body names a catalog id and nothing else.
         // The third-party notices a release has to carry inside itself — the
-        // repo's THIRD_PARTY_LICENSES.md, compiled in, read by Help → About &
-        // licences. One copy: the file is the source, this serves it.
+        // repo's THIRD_PARTY_LICENSES.md, compiled in, opened by the footer's
+        // Licences link. One copy: the file is the source, this serves it.
         ("GET", "/licences") => conn.respond(
             200,
             "text/plain; charset=utf-8",

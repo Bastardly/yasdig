@@ -1,0 +1,82 @@
+<!--
+title: Intro to models
+description: A model is what draws the picture. It is a big file of learned numbers — 2 to 20 GB — and each one has its own look and its own idea of good settings. The…
+-->
+<h1>Intro to models</h1>
+<p>A <b>model</b> is what draws the picture. It is a big file of learned
+numbers — 2 to 20 GB — and each one has its own look and its own idea of
+good settings. The <b>Models</b> tab downloads a working set for each
+kind this app runs, so this page is for when you want to know what you are
+looking at, or go looking for more.</p>
+
+<h3>One file, or several</h3>
+<p>An <b>SDXL or SD 1.5 checkpoint</b> is one file with everything inside.
+Drop it in <code>models/checkpoints</code> and pick it.</p>
+<p>The newer models — <b>Flux, Klein, FLUX.3, Z-Image, Krea 2, Qwen-Image</b> — come as
+a <b>diffusion model</b> plus separate <b>parts</b>:</p>
+
+<table class="helptable">
+<thead><tr><th>Part</th><th>What it does</th></tr></thead>
+<tbody><tr><td>Text encoder</td><td>Reads your prompt and turns it into something the model understands. Often a whole language model (Qwen3, T5), and often as large as the model itself.</td></tr><tr><td>VAE</td><td>Turns the model’s compressed result into pixels at the end. Small, but it has to be the right one: the wrong VAE gives coloured noise.</td></tr></tbody>
+</table>
+<p>The parts must match the model <b>exactly</b>. A text encoder of the
+wrong size loads without complaint and quietly ignores your prompt. yasdig
+reads every file to find out what it is, so file names and folders don’t
+matter — but it can only pick from what you have. Each model’s parts are in
+the <i>Models</i> fold on the Image tab.</p>
+
+<h3>What each family needs</h3>
+<p>The <a href="/models/">Models page</a> lists the families and what each takes on the card;
+in the app, the <i>Models</i> tab shows each family's parts, the recommended set and which
+files you already have.</p>
+
+<h3>File types</h3>
+
+<table class="helptable">
+<thead><tr><th>Ending</th><th>What it is</th></tr></thead>
+<tbody><tr><td><code>.safetensors</code></td><td>The usual format. Often full precision (fp16 or bf16) — the largest version of a model.</td></tr><tr><td><code>.gguf</code></td><td>A packed format that can be <b>quantized</b>: stored in fewer bits, so smaller and lighter on memory.</td></tr><tr><td><code>.ckpt, .pt, .pth</code></td><td>Older formats. Fine for upscalers; prefer .safetensors for anything else.</td></tr></tbody>
+</table>
+<p><b>Quantization</b> is the <code>Q8_0</code>, <code>Q6_K</code>,
+<code>Q4_K</code> in a GGUF’s name: the bits per number. <b>Q8</b> looks the
+same as the original at half the size. <b>Q6</b> and <b>Q5</b> are very close.
+<b>Q4</b> is about a quarter of the size and starts to lose fine detail — the
+way to fit a 20B model on one card.</p>
+<p><b>Avoid fp8 files</b> on this app. AMD cards can’t compute in fp8, so an
+fp8 file runs at twice its size. <b>Models → Convert</b> turns one into a
+GGUF that runs at its real size.</p>
+
+<h3>Where to find more</h3>
+<p><b>Hugging Face</b> (<code>huggingface.co</code>) is where models are
+published: the original releases, and GGUF versions by people like
+<code>city96</code>, <code>leejet</code>, <code>unsloth</code> and
+<code>QuantStack</code>. A repository holds many files; open its
+<i>Files</i> tab and download <b>one</b> — the quantization that fits your
+card — not the whole thing. Some repositories ask you to log in and accept a
+licence first.</p>
+<p><b>Civitai</b> (<code>civitai.com</code>) is the community’s shelf:
+thousands of fine-tuned checkpoints and <b>LoRAs</b>, mostly SDXL, Pony,
+Illustrious and SD 1.5. Check the <i>Base model</i> on a page before
+downloading. Some downloads need a free account.</p>
+<p><b>Check the licence.</b> Every model, checkpoint and LoRA comes with
+its own terms, and they differ a lot: some allow anything, some forbid
+commercial use of the images, some are for research only, and some ask
+you to accept terms before downloading. The licence is on the model’s page
+(on Hugging Face, in the model card and the <i>License</i> tag; on Civitai,
+under the model’s permissions). A quantized copy — a GGUF someone else made —
+is still under the original model’s licence. That includes the files the
+Models tab downloads; each card links their pages.</p>
+<p>A <b>LoRA</b> is a small add-on (10–300 MB) that teaches a model a style,
+a character or a detail. It only works on the family it was trained for —
+an SDXL LoRA does nothing on Flux — and the LoRA picker greys out the ones
+that don’t fit. They go in <code>models/loras</code>.</p>
+
+<h3>Where files go</h3>
+
+<table class="helptable">
+<thead><tr><th>Folder</th><th>What goes in it</th></tr></thead>
+<tbody><tr><td><code>models/checkpoints</code></td><td>One-file models: SDXL, SD 1.5, and their fine-tunes</td></tr><tr><td><code>models/diffusion_models</code></td><td>Diffusion models that need parts: Flux, Klein, FLUX.3, Z-Image, Krea 2, Qwen-Image, MOSS-Image, Iris</td></tr><tr><td><code>models/text_encoders</code></td><td>Text encoders: Qwen, T5, CLIP-L</td></tr><tr><td><code>models/vae</code></td><td>VAEs</td></tr><tr><td><code>models/loras</code></td><td>LoRAs</td></tr><tr><td><code>models/upscalers</code></td><td>Upscaler models (ESRGAN, SPAN, SwinIR…)</td></tr></tbody>
+</table>
+<p>These are the folders ComfyUI uses, so its download instructions work
+here. They are for you: yasdig reads every file under
+<code>models/</code>, so a model is found wherever it is — except that
+LoRAs and upscalers must be in their own folders.</p>

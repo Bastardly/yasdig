@@ -10,9 +10,8 @@
 //   site/pages/*.html       one body per route; a leading comment holds its
 //                           title and description (`meta`)
 //   site/partials/*.html    pasted in by `<!-- include name -->`
-//   web/js/help.js TOPICS   the guide: one page per Help topic, the app's own
-//                           text, so a sentence is written once (help.js's rule)
-//   site/pages/guide-*.html guide pages the app's Help doesn't have (`GUIDE`)
+//   site/pages/guide-*.html the guide, a page per `GUIDE` row (the app's Help
+//                           tab was retired for it; the app links here)
 //   web/tokens.css          the app's tokens, copied as they are — the site
 //                           can't drift from the app's palette
 //
@@ -32,7 +31,7 @@ const ORIGIN = 'https://yasdig.com';
 const REPO = 'https://github.com/Bastardly/yasdig';
 
 // The rail, top to bottom. `path` is the route; the page body is
-// `site/pages/{page}.html`. The Guide's rows are added from TOPICS below.
+// `site/pages/{page}.html`. The Guide's rows follow, from `GUIDE`.
 const FEATURES = [
   { page: 'image', path: '/image/', label: 'Image' },
   { page: 'refine', path: '/refine/', label: 'Refine & adjust' },
@@ -46,67 +45,21 @@ const TOP = [
   { page: 'download', path: '/download/', label: 'Download' },
 ];
 
-// Guide pages written for the site alone (`site/pages/guide-{id}.html`, the
-// same leading comment as a feature page, `title:` being the rail's label),
-// each placed after the Help topic `after` names. The app's Help is to give
-// way to the site's guide, so a new guide page goes here, not in help.js.
-const GUIDE = [
-  { id: 'video', after: 'cast' },
-];
-
-// A Help topic whose `fill(el)` asks the running server for part of its page
-// can't do that here: its placeholder becomes a pointer instead. A new topic
-// with a `fill` and no row here stops the build, rather than shipping
-// "Loading…" forever.
-const FILLED = {
-  models: [/<div id="helpfamilies">[\s\S]*?<\/div>/,
-    `<p>In the app, this is a table of every family with the parts it needs, the
-     recommended set and which files you already have. The
-     <a href="/models/">Models page</a> lists the families and what each takes on the card.</p>`],
-  about: [/<pre class="licences" id="licencetext">[\s\S]*?<\/pre>/,
-    `<p>They are in <a href="${REPO}/blob/master/THIRD_PARTY_LICENSES.md">THIRD_PARTY_LICENSES.md</a>
-     beside the source, and in the app under Help → <i>About &amp; licences</i>.</p>`],
-};
+// The guide: `site/pages/guide-{id}.html` each, with the same leading comment
+// as a feature page (`title:` is the rail's label). A new guide page is a file
+// and a row here. The rail shows `PINNED` first, then the rest by title.
+const GUIDE = ['about', 'models', 'cast', 'memory', 'references', 'redraw', 'samplers', 'schedulers', 'stepcache', 'video'];
+const PINNED = ['about', 'models'];
 
 const read = (p) => readFileSync(p, 'utf8');
 const esc = (s) => String(s).replace(/[&<>"]/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-// The Help tab's topics, read the way `modules.test.js` evaluates the page's
-// module graph: with just enough DOM stubbed for `<prompt-box>` to be declared.
-// No module reads `document` at load (web.md's rule), so nothing else is needed.
-async function helpTopics() {
-  globalThis.HTMLElement ??= class {};
-  globalThis.customElements ??= { define() {} };
-  // The query makes a fresh copy each build, so `serve.mjs` shows a Help edit
-  // on reload (Node caches a module by its URL; help.js's imports stay cached,
-  // and TOPICS doesn't depend on them).
-  const help = await import(`${pathToFileURL(join(ROOT, 'web/js/help.js')).href}?t=${Date.now()}`);
-  return help.menuOrder().map((t) => {
-    let html = t.html;
-    if (t.fill) {
-      const f = FILLED[t.id];
-      if (!f) throw new Error(`Help topic "${t.id}" has a fill(el): add a FILLED row in site/build.mjs`);
-      if (!f[0].test(html)) throw new Error(`Help topic "${t.id}": FILLED's placeholder no longer matches`);
-      html = html.replace(f[0], f[1]);
-    }
-    // The topic's heading is the page's one h1.
-    html = html.replace(/<h2>([\s\S]*?)<\/h2>/, '<h1>$1</h1>');
-    const first = /<p>([\s\S]*?)<\/p>/.exec(html);
-    return { id: t.id, title: t.title, html, description: first ? summary(first[1]) : t.title };
-  });
-}
-
-// A meta description from a paragraph: the text alone, one line, cut at a
-// word near 155 characters (about what a results page shows). Plain text for
-// sure, not just mostly: one pass of tag stripping leaves `<script` from
-// `<scr<b>ipt`, so any `<`/`>` left is dropped too. (Callers `esc` it anyway.)
-function summary(html) {
-  const text = html.replace(/<[^>]*>/g, '').replace(/[<>]/g, '')
-    .replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
-    .replace(/&amp;/g, '&');
-  if (text.length <= 155) return text;
-  return text.slice(0, 155).replace(/\s+\S*$/, '') + '…';
+// A guide page's topic: its meta and body, its heading the page's one h1.
+function guideTopic(id) {
+  const { meta: m, body } = meta(read(join(SITE, 'pages', `guide-${id}.html`)));
+  if (!m.title || !m.description) throw new Error(`site/pages/guide-${id}.html: its comment needs title: and description:`);
+  return { id, title: m.title, html: body, description: m.description };
 }
 
 // `<!-- key: value … -->` at the head of a page body.
@@ -234,13 +187,9 @@ export async function build(opts = {}) {
   missing.length = 0;
   rmSync(OUT, { recursive: true, force: true });
   mkdirSync(OUT, { recursive: true });
-  const topics = await helpTopics();
-  for (const g of GUIDE) {
-    const { meta: m, body } = meta(read(join(SITE, 'pages', `guide-${g.id}.html`)));
-    if (!m.title || !m.description) throw new Error(`site/pages/guide-${g.id}.html: its comment needs title: and description:`);
-    const at = topics.findIndex((t) => t.id === g.after);
-    topics.splice(at < 0 ? topics.length : at + 1, 0, { id: g.id, title: m.title, html: body, description: m.description, site: true });
-  }
+  const all = GUIDE.map(guideTopic);
+  const topics = [...PINNED.map((id) => all.find((t) => t.id === id)),
+    ...all.filter((t) => !PINNED.includes(t.id)).sort((a, b) => a.title.localeCompare(b.title))];
   const routes = [];
 
   for (const r of [...TOP, ...FEATURES, { page: '404', path: '/404.html' }]) {
@@ -260,7 +209,7 @@ export async function build(opts = {}) {
       path, current: path, topics,
       title: `${t.title} — YASDIG guide`,
       description: t.description,
-      body: `<p class="crumb"><a href="/guide/">Guide</a>${t.site ? '' : " · from the app's Help tab"}</p>
+      body: `<p class="crumb"><a href="/guide/">Guide</a></p>
 <article class="card helpdoc">${media(includes(t.html), `guide-${t.id}`)}</article>`,
     }));
     routes.push(path);

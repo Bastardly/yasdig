@@ -28,7 +28,6 @@ import { initAssistants, mountAssistant } from './assistant.js';
 import { initBoard } from './board.js';
 import { initConvert } from './convert.js';
 import { initSettings, layoutSettingsTab } from './settings.js';
-import { initHelp, openHelp } from './help.js';
 import { initModels, layoutModelsTab } from './getmodels.js';
 import { initModelSettings } from './modelsettings.js';
 import { stopPlayback } from './player.js';
@@ -65,7 +64,6 @@ function showTab(name) {
   $('tab-cast').hidden = name !== 'cast';
   $('tab-video').hidden = name !== 'video';
   $('tab-models').hidden = name !== 'models';
-  $('tab-help').hidden = name !== 'help';
   $('tab-settings').hidden = name !== 'settings';
   // A hidden workspace has no size: its panels are placed once it shows.
   if (name === 'image') layoutImageTab();
@@ -117,10 +115,6 @@ function initTabs() {
     b.addEventListener('click', () => showTab(b.dataset.tab));
   }
   $('closeserver').addEventListener('click', closeServer);
-  $('licenceslink').addEventListener('click', (e) => {
-    e.preventDefault();
-    openHelp('about');
-  });
   showVersion();
 }
 
@@ -215,7 +209,6 @@ initAssistants();
 initBoard();
 initConvert();
 initModels();
-initHelp();
 // After initImage(), because it applies the stored hi-res scale through
 // `setUpFactor`, which addresses a select initImage() fills the options of.
 // That puts it after initHints(), so it wires its own generated labels — the

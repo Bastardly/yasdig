@@ -3,7 +3,7 @@
 yasdig is licensed under the Apache License 2.0 (see `LICENSE`). A release
 executable carries the components below inside it, and their licences ask
 that these notices travel with every copy. The same notices are in the app,
-under Help → About & licences.
+behind the footer's Licences link.
 
 Models are not part of yasdig. Every model you download has its own licence,
 set by its authors; check it on the model's own page before using what you make.

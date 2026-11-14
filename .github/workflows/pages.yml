@@ -9,9 +9,9 @@ name: pages
 on:
   push:
     branches: [master]
-    # The site, and the app files it is built from: the Help topics become
-    # /guide/, and the tokens are the site's palette.
-    paths: ["site/**", "web/js/help.js", "web/tokens.css", ".github/workflows/pages.yml"]
+    # The site, and the app file it is built from: the tokens are the site's
+    # palette. (The guide is the site's own, site/pages/guide-*.html.)
+    paths: ["site/**", "web/tokens.css", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:

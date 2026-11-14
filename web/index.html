@@ -19,7 +19,10 @@
     <button type="button" class="btn btn-choice tab" data-tab="outputs">Outputs</button>
     <button type="button" class="btn btn-choice tab" data-tab="cast">Cast</button>
     <button type="button" class="btn btn-choice tab" data-tab="models">Models</button>
-    <button type="button" class="btn btn-choice tab" data-tab="help">Help</button>
+    <!-- Not a tab: the guide is yasdig.com's (the Help tab was retired for it,
+         so it is written and kept in one place, `site/pages/guide-*.html`). -->
+    <a class="btn btn-choice" href="https://yasdig.com/guide/" target="_blank" rel="noopener noreferrer"
+      title="The guide on yasdig.com: models, memory, samplers, video and more. Opens in a new tab">Guide ↗</a>
     <button type="button" class="btn btn-choice tab" data-tab="settings">Settings</button>
     <!-- Not a tab, so not `.tab`: it opens the queue in a dialog over whatever
          tab you are on rather than taking you away from it. Hidden while the
@@ -264,7 +267,7 @@
       </div>
     </div>
     <!-- How the noise is walked. The list is sd.cpp's whole set, grouped as
-         the Help tab's Samplers page groups them; `config::SAMPLERS` and
+         yasdig.com's guide groups them (Samplers); `config::SAMPLERS` and
          `SCHEDULERS` are the server's copy, and a cargo test checks every
          option here against them. Settings and the Video tab clone these
          options rather than listing them again. -->
@@ -996,14 +999,6 @@
        this comment. -->
   </div>
 
-  <!-- ==================== Help ====================
-       A menu and a page, at the Image tab's two column widths. Both are drawn
-       by `help.js` from its `TOPICS` table; adding a topic is a row there. -->
-  <div class="layout" id="tab-help" hidden>
-    <nav class="card col-controls helpnav" id="helpnav" aria-label="Help topics"></nav>
-    <article class="card col-result helpdoc" id="helpdoc"></article>
-  </div>
-
   <!-- ==================== Settings ====================
        `user/settings.toml`, as a form. Every field in it is the default for a
        control on one of the tabs above, so the form is *generated* from a table
@@ -1056,8 +1051,6 @@
   </div>
 </div>
 
-  <!-- Credits, and the way to the licence notices a one-file release has to
-       carry inside itself (Help → About & licences). -->
   <!-- The heartbeat's banner (`alive.js`): a popover, so it shows over an
        open modal dialog too. Outside `.app`, which Close server rewrites. -->
   <div id="serverdown" class="serverdown" popover="manual" role="alert">
@@ -1069,7 +1062,9 @@
     Powered by
     <a href="https://github.com/leejet/stable-diffusion.cpp" target="_blank" rel="noopener noreferrer">stable-diffusion.cpp</a>
     and <a href="https://www.vulkan.org/" target="_blank" rel="noopener noreferrer">Vulkan</a>
-    · <a href="#" id="licenceslink">Licences</a>
+    <!-- The licence notices a one-file release has to carry inside itself,
+         served from the binary (`GET /licences`). -->
+    · <a href="/licences" target="_blank" rel="noopener noreferrer">Licences</a>
     · <a href="https://ko-fi.com/yasdig" target="_blank" rel="noopener noreferrer">Support yasdig on Ko-fi</a>
   </footer>
 

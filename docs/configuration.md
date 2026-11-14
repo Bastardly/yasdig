@@ -19,8 +19,8 @@ licence** — some forbid commercial use or are for research only, and a GGUF
 repackage carries the original's — so check it before using what you make; every
 card links the pages its files come from. Its **Upscalers** cards fetch upscaler models
 into the upscaler folder the same way. Downloads run beside renders,
-not in their queue. **Help → Intro to models** explains what the files are and where
-to find more.
+not in their queue. [Intro to models](https://yasdig.com/guide/models/) on yasdig.com
+explains what the files are and where to find more.
 
 **Installed**, at the top of the same rail, lists what is already on disk by kind —
 checkpoints, video models, LoRAs, text encoders, VAEs, upscalers, agent models, voice
@@ -208,7 +208,7 @@ If a model runs out of memory, the error says which memory and when, and offers 
 ways out as buttons — chiefly the **Memory** setting in the *Models* fold: *System RAM*
 keeps the weights in RAM and leaves the card for the work, *Stream from SSD* re-reads
 them from the file when RAM is what ran out. *Save as defaults for this model* keeps the
-choice for that model only. Help → Memory explains the three.
+choice for that model only. [Memory](https://yasdig.com/guide/memory/) on yasdig.com explains the three.
 
 ### Smoke-test sd.cpp on its own
 
@@ -336,7 +336,7 @@ from, and what a template inherits whatever it doesn't name. Tuned for standard
 | `prompt` / `negative` | what the prompt boxes contain when the page loads. The default prompt is `a lovely {animal} with {color} hair, cinematic lighting, sharp, in focus`, drawing from the default variables below. Not per-model — a checkpoint has a house step count, none has an opinion about what you usually want to draw |
 | `width` / `height` | base generation size, default `768` each (small = fast) |
 | `steps`, `cfg_scale`, `sampler` | sd.cpp params; defaults `30`, `6.0`, `euler` (Turbo → few steps, cfg 1). `sampler` is any of sd.cpp's 21 (`config::SAMPLERS`) |
-| `scheduler` | sd.cpp's `--scheduler`, default `auto`: no flag, so sd.cpp picks the model's own (`flux`/`flux2` for those families, `discrete` for SD and SDXL). `ays` is refused outside SD 1.5 and SDXL, the only models it has tables for. The Help tab compares them |
+| `scheduler` | sd.cpp's `--scheduler`, default `auto`: no flag, so sd.cpp picks the model's own (`flux`/`flux2` for those families, `discrete` for SD and SDXL). `ays` is refused outside SD 1.5 and SDXL, the only models it has tables for. [yasdig.com's guide](https://yasdig.com/guide/schedulers/) compares them |
 | `memory` | Where the weights live while a pass runs: `auto` (default — sd.cpp's auto-fit places each part on the card, then in RAM, then on disk, by free memory), `ram` (`--params-backend "*=cpu,te=disk"`: every weight in RAM, leaving the card for the work — the fix for a big model out of GPU memory — except the text encoder, which is read from its file, used for the prompt and released, so it holds no RAM while the picture is drawn. sd.cpp keeps those weights in the GPU's pinned host memory, amdgpu's **GTT**, which the kernel caps at half of RAM by default: a model bigger than that — a 17 GB fp16 9B on a 30 GB machine — can't run this way however much RAM is free, and fails with a lost device. The out-of-memory box checks the GTT and offers `disk` instead) or `disk` (`--params-backend diffusion=disk,te=disk`: re-read from the file, the least RAM, slower). Every pass uses it, Refine and Hi-res included. Per model through *Save as defaults for this model*; a `--params-backend` in `extra_args` wins over it |
 | `gpu_reserve_gb` | GB of the graphics card kept free while a model draws: `--max-vram -N` on every run, in every Memory mode. Default `0`, sd.cpp's own packing (free memory minus 512 MiB). When the desktop, browser and driver need more slack, RADV stops a run with *"Not enough memory for command submission"* and a lost device; the out-of-memory box offers 3 GB then, and saves it here. Page-level: it describes the machine, not a model |
 | `reference_size` | The side, in pixels, each reference image is drawn at: `--ref-image-args vae_input_max_pixels=N²` on a generate with references. Default `512` (the likeness held there on Klein 9B); `0` is sd.cpp's own (each reference resized to the output's area, up to a megapixel — *up* as well as down, so shrinking the files ourselves would be undone). The biggest speed knob with references: on a Q8 Klein 9B at 1024² with four references, 153 s full-size, 54 s at 768 and 33.6 s at 512 (22 s with none). Not applied to Edit, whose first reference is the image being changed. Page-level |

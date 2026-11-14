@@ -2,7 +2,6 @@
 paths:
   - "src/sd.rs"
   - "web/js/memory.js"
-  - "web/js/help.js"
 ---
 
 # Driving sd-cli: memory, preview, caching, samplers
@@ -90,7 +89,7 @@ until measured per family.
 - **The skip line is the proof**: `parse_cache_skip`, read straight after the txt2img.
 - **Video not wired yet.**
 
-## Samplers, schedulers and the Help tab
+## Samplers and schedulers
 
 `config::SAMPLERS`/`SCHEDULERS` transcribe sd-cli's tables; `check_sampling` refuses
 anything else. The page's lists are `#sampler`/`#scheduler` markup
@@ -115,5 +114,6 @@ memory prints `unknown`/`unlimited` (hence `parse_shortfall` reads by label).
 - **`ays` only has SD 1.5/SDXL tables**; `check_sampling` takes the family.
 - **`ltx2`, `logit_normal`, `llada_image` are left out** until their families exist.
 
-Help tab (`help.js`): a `TOPICS` table (id, title, HTML, optional `fill()`). Tooltips
-point to Help rather than repeating it.
+Choosing between them is yasdig.com's guide (`site/pages/guide-samplers.html`,
+`guide-schedulers.html`; the app's Help tab was retired for it, 2026-11-14). Tooltips
+point there rather than repeating it.

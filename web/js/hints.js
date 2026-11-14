@@ -95,11 +95,11 @@ const HELP = [
     text: 'The method that turns noise into the picture, step by step. Keep '
         + 'the one the model fills in unless you have a reason: few-step and '
         + 'turbo models are trained for one sampler and look wrong on others. '
-        + 'The Help tab compares them.' },
+        + 'yasdig.com’s guide compares them.' },
   { ids: ['scheduler'],
     text: 'Where the steps are spent between full noise and none. Auto lets '
         + 'sd.cpp pick the model’s own, which is the right answer for Flux and '
-        + 'Flux.2. The Help tab compares them.' },
+        + 'Flux.2. yasdig.com’s guide compares them.' },
   { ids: ['rdeditprompt'],
     text: 'What Edit should change, as an instruction — "make it night", "remove '
         + 'the hat". The picture itself goes to the model as image 1, and any '
@@ -153,12 +153,12 @@ const HELP = [
         + 'them to the card as needed, leaving the whole card for the work: the '
         + 'fix when a big model runs out of GPU memory. It also lets go of the text '
         + 'encoder once the prompt is read. Stream from SSD re-reads '
-        + 'them from the file, for when RAM runs out; slower. The Help tab says more.' },
+        + 'them from the file, for when RAM runs out; slower. yasdig.com’s guide says more.' },
   { ids: ['cachemode'],
     text: 'Skips denoising steps whose result can be predicted, so Generate '
         + 'finishes sooner, at some cost in exactness. Refine and Hi-res always '
         + 'run every step. Leave it Off for few-step models, which have nothing '
-        + 'to skip; the Help tab says what the two modes do.' },
+        + 'to skip; yasdig.com’s guide says what the two modes do.' },
   { ids: ['layout'],
     text: 'MOSS-Image can be told where things go. Each box is placed on the '
         + 'picture and says what is in it: an Object, a Character, or Text — whose '

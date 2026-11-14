@@ -3,6 +3,15 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+### Changed
+
+- **The Help tab is now yasdig.com's guide.** The tab row's **Guide ↗** opens
+  [yasdig.com/guide](https://yasdig.com/guide/) in a new tab — the same pages, plus
+  Video, kept in one place. Tooltips that pointed to Help point there, and the footer's
+  *Licences* opens the licence notices directly.
+
 ## 0.11.0 — 2026-11-14
 
 ### Added

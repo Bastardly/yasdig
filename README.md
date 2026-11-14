@@ -224,8 +224,8 @@ The app's **Help** tab explains all of it, and every control has an ⓘ.
 YASDIG is licensed under the [Apache License 2.0](LICENSE). It is powered by
 [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) (MIT), which is
 built into the program; its notices and those of everything else inside are in
-[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and in the app under Help → *About &
-licences*. **Models are not part of YASDIG.** Every model has its own licence, set by
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and in the app behind the footer's
+*Licences* link. **Models are not part of YASDIG.** Every model has its own licence, set by
 the people who made it, and some forbid commercial use: check the page each Models tab
 card links before using what you make.
 

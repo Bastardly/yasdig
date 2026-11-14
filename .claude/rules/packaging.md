@@ -67,7 +67,7 @@ Five things break silently:
 `/releases` with pre-releases included.
 
 **Releasing** (`v*` tag → `release.yml`, ~9 min; pushing `master` also deploys the
-site when `site/`, `web/js/help.js` or `web/tokens.css` changed):
+site when `site/` or `web/tokens.css` changed):
 
 1. Commit the work. In `CHANGELOG.md` turn `## Unreleased` into `## X.Y.Z — date`;
    bump `version` in `Cargo.toml` and `yasdig`'s entry in `Cargo.lock`; `cargo build`;
@@ -133,13 +133,11 @@ so they read `sdxl/x` on Windows too.
   - **Tokens are the app's**: `web/tokens.css` is copied in as is; the site's own
     tokens (`--sp-8`, `--page-w`, …) are in `site/style.css`'s `:root`. The build
     **fails on a `var(--x)` nothing defines** — a renamed app token shows up here.
-  - **`/guide/<id>/` is the app's Help tab**: the build imports `web/js/help.js`
-    (stubs as in `modules.test.js`) and writes each `TOPICS` row in `menuOrder()`. A
-    topic with `fill(el)` needs a `FILLED` row (its placeholder → a link) or the
-    build stops. Adding a Help topic adds a page and a rail item, nothing else.
-    **A guide page the app's Help doesn't have** is `site/pages/guide-{id}.html` plus a
-    `GUIDE` row (`after:` the topic it follows): Video is one (asked for, 2026-11-14:
-    the Help tab is to give way to the site's guide, so new guide pages go here).
+  - **`/guide/<id>/` is the site's guide**: `site/pages/guide-{id}.html` per `GUIDE` row
+    in `build.mjs` (About and Intro to models pinned, the rest by title). **The app's
+    Help tab was retired for it** (asked for, 2026-11-14): the tab row's *Guide ↗* links
+    here, tooltips name "yasdig.com's guide", and the footer's *Licences* opens
+    `GET /licences`. A guide page is written once, here; the app holds no copy.
   - **`<media src=…>`** in a page: a file from `site/media/` (picture, or a muted
     looping webm that plays while in view). A missing file is a labelled empty frame
     **in the preview only** (`build({preview})`, `--preview`); the deploy leaves it

@@ -2,7 +2,7 @@
 // then http://127.0.0.1:8090/. No packages; Node ≥ 20.
 //
 // Each page request rebuilds `_site/` first (build.mjs, well under a second),
-// so an edit to a page, the layout, the stylesheet or the app's Help topics
+// so an edit to a page, the layout, the stylesheet or a guide page
 // shows on reload — the app's own rule for web/ (`web::serve` reads fresh).
 // Files are served as GitHub Pages serves them: `/image/` is
 // `_site/image/index.html`, and anything missing is the 404 page.
@@ -76,8 +76,8 @@ createServer(async (req, res) => {
     res.writeHead(404, { 'content-type': TYPES['.html'] });
     res.end(nf ? nf.body : 'Not found');
   } catch (e) {
-    // A build error (a page missing its title, a Help topic that won't
-    // evaluate) is shown in the browser rather than as a dead page.
+    // A build error (a page or guide page missing its title or
+    // description) is shown in the browser rather than as a dead page.
     res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
     res.end(`The site didn't build:\n\n${e.stack || e}`);
   }

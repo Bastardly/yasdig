@@ -652,8 +652,8 @@ pub struct CatalogView {
     /// Video models. Their own
     /// list for the reason `upscalers` has one.
     videos: Vec<EntryView>,
-    /// A list of their own, so the Help tab's family table — which reads
-    /// `entries` — never meets one.
+    /// A list of their own, so the image families' cards — which read
+    /// `entries` — never meet one.
     upscalers: Vec<EntryView>,
     /// The Agent tab's models, apart for the same reason.
     agents: Vec<EntryView>,
