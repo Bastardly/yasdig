@@ -76,6 +76,12 @@ pub struct Request {
     pub cast: Vec<String>,
     #[serde(default)]
     pub looks: Vec<(String, String)>,
+    /// Of `cast`, the names whose look the server puts in front of the
+    /// prompt itself (the Image tab's word picks, `cast::compose`). Told by
+    /// name only: written into the box too, Elias's whole look ran twice
+    /// and buried what he was doing (2026-11-16, `specs/assistant.md`).
+    #[serde(default)]
+    pub added: Vec<String>,
     #[serde(default)]
     pub lines: Vec<Line>,
     #[serde(default)]
@@ -109,14 +115,14 @@ pub enum Target {
 }
 
 impl Target {
-    fn family(self) -> &'static str {
+    pub(crate) fn family(self) -> &'static str {
         match self {
             Target::Image(f) => f.as_str(),
             Target::Video(f, _) => f.as_str(),
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Target::Image(f) => f.label(),
             Target::Video(f, _) => f.label(),
@@ -173,13 +179,37 @@ pub fn brief(t: Target, req: &Request, looks: &[(String, String)], sees_picture:
              A place with no one in it stays empty.\n",
         );
     }
+    let added = |n: &str| req.added.iter().any(|a| a.trim().eq_ignore_ascii_case(n.trim()));
+    let said: Vec<&str> = named.iter().map(|n| n.trim()).filter(|n| added(n)).collect();
     if !named.is_empty() {
         out.push_str("\nWho is in it:\n");
         for n in named {
+            // The look is shown for fit (a cowboy's ranch), marked as said.
+            if added(n) {
+                match looks.iter().find(|(m, _)| m.eq_ignore_ascii_case(n)) {
+                    Some((_, l)) if !l.trim().is_empty() => {
+                        out.push_str(&format!("- {n} (yasdig adds this look itself): {}\n", l.trim()))
+                    }
+                    _ => out.push_str(&format!("- {n}\n")),
+                }
+                continue;
+            }
             match looks.iter().find(|(m, _)| m.eq_ignore_ascii_case(n)) {
                 Some((_, l)) if !l.trim().is_empty() => out.push_str(&format!("- {n}: {}\n", l.trim())),
                 _ => out.push_str(&format!("- {n}\n")),
             }
+        }
+        if !said.is_empty() {
+            let who = said.join(", ");
+            out.push_str(&format!(
+                "\n{who}: yasdig puts their look in front of your prompt itself, so call them by name and don't \
+                 describe them again: leave out every detail that repeats the look, even where the person's \
+                 words repeat it. Keep what the person wrote that differs from it or adds to it (\"in a blue \
+                 shirt\"): that is a change they asked for. A detail of the look may come in where the scene \
+                 touches it (the cat against his coat, the light on something he wears), never as a description \
+                 of them. Spend the words on what they are doing, their expression, and what the look leaves \
+                 open: the place, the light, the framing.\n"
+            ));
         }
     }
     if matches!(t, Target::Video(..)) {
@@ -601,6 +631,28 @@ mod tests {
 
     fn shot(text: &str) -> super::Request {
         super::Request { kind: "video".into(), model: "m".into(), text: text.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn a_look_the_server_adds_is_named_not_asked_for() {
+        let looks = vec![
+            ("Elias".to_string(), "Elias is a weathered cowboy.".to_string()),
+            ("Mara".to_string(), "Mara is a woman in a red coat.".to_string()),
+        ];
+        let r = super::Request {
+            kind: "image".into(),
+            cast: vec!["Elias".into(), "Mara".into()],
+            added: vec!["elias".into()],
+            ..shot("Elias holding a cat")
+        };
+        let b = brief(Target::Image(ImageFamily::Flux), &r, &looks, false);
+        assert!(b.contains("- Elias (yasdig adds this look itself): Elias is a weathered cowboy."));
+        assert!(b.contains("\nElias: yasdig puts their look in front of your prompt itself"));
+        // A pick for its picture only is described as before.
+        assert!(b.contains("- Mara: Mara is a woman in a red coat."));
+        assert!(!b.contains("Mara: yasdig"));
+        let none = brief(Target::Image(ImageFamily::Flux), &super::Request { added: vec![], ..r }, &looks, false);
+        assert!(!none.contains("yasdig adds"));
     }
 
     #[test]

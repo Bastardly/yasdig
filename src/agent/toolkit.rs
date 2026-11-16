@@ -99,6 +99,11 @@ pub struct Toolkit {
     /// agent may write in braces, each with its words.
     #[serde(skip)]
     pub variables: crate::variables::Variables,
+    /// The cast picked on the Image tab for their words (the chat's
+    /// `cast`), each with its look: the server puts the look in front of
+    /// the prompt (`cast::compose`), so the prompt calls them by name only.
+    #[serde(skip)]
+    pub cast_added: Vec<(String, String)>,
 }
 
 /// A saved cast entry as a story turn is shown it.
@@ -385,6 +390,21 @@ pub fn locks_for(cfg: &Config, profile: Option<&Profile>, settings: &Value) -> L
     Locks::of(p.family.cfg_locked(), distilled, turbo.as_deref())
 }
 
+/// The chat's word picks (`Profile.cast`, `words`), as names and looks. A
+/// pick whose entry is gone is left out, as `cast::resolve` would refuse it.
+fn cast_added(cfg: &Config, settings: &serde_json::Value) -> Vec<(String, String)> {
+    let Some(picks) = settings.get("cast").and_then(|c| c.as_array()) else { return Vec::new() };
+    let store = crate::cast::CastStore::of(cfg);
+    picks
+        .iter()
+        .filter(|p| p.get("words").and_then(|w| w.as_bool()).unwrap_or(false))
+        .filter_map(|p| p.get("id")?.as_str())
+        .filter_map(|id| store.load(id).ok())
+        .filter(|e| !e.name.trim().is_empty())
+        .map(|e| (e.name.trim().to_string(), e.look.trim().to_string()))
+        .collect()
+}
+
 /// The chat's toolkit under the rules in `user/settings.toml` now.
 pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     let settings = crate::settings::Settings::load_or_default(&cfg.user_dir());
@@ -453,6 +473,7 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     t.video = video;
     t.videos = installed;
     t.variables = variables;
+    t.cast_added = cast_added(cfg, &chat.settings);
     t
 }
 
@@ -564,6 +585,7 @@ pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelCh
         rules: rules.clone(),
         library: Vec::new(),
         variables: Default::default(),
+        cast_added: Vec::new(),
     }
 }
 

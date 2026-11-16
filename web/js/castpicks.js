@@ -40,6 +40,10 @@ export function castPayload(withPictures) {
 // The names picked, for the Prompts panel's line.
 export const castNames = () => picks.map((p) => entry(p.id)?.name).filter(Boolean);
 
+// The names whose look the server puts in front of the prompt (`cast::compose`):
+// Enhance names them and repeats none of it, or the look is written twice.
+export const castWordNames = () => picks.filter((p) => p.words).map((p) => entry(p.id)?.name).filter(Boolean);
+
 // Put a reopened image's picks back (a sidecar's or a PNG's `profile.cast`).
 // False when one is no longer in the cast: the caller then shows the prompt
 // that ran, every look written out, rather than the short one without its

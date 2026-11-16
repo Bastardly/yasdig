@@ -838,6 +838,9 @@ fn enhance_shot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: us
                     .filter_map(|n| film.member(n))
                     .map(|m| (m.name.clone(), if view.sounds && m.voice.is_some() { m.look.clone() } else { m.look_and_voice() }))
                     .collect(),
+                // A shot's prompt is the only place its people's looks reach
+                // the video model: nothing is added for it.
+                added: Vec::new(),
                 lines: shot.lines.clone(),
                 sound: shot.sound.clone(),
                 music: shot.music.clone(),

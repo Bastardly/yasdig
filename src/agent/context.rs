@@ -248,6 +248,28 @@ fn variables_text(vars: &crate::variables::Variables) -> Option<String> {
     Some(s)
 }
 
+/// The Image tab's word picks, for a turn that writes the prompt: yasdig
+/// puts each look in front of the prompt, so a prompt that describes them
+/// says it twice (`specs/assistant.md`, 2026-11-16).
+fn cast_added_text(cast: &[(String, String)]) -> Option<String> {
+    if cast.is_empty() {
+        return None;
+    }
+    let mut s = String::from(
+        "\n\nThe person's cast, picked for this picture. yasdig puts each one's look in front of the prompt \
+         itself, so in the prompt call them by name and leave out every detail that repeats their look, \
+         including where the current prompt repeats it. Keep what the person wrote that differs from the \
+         look or adds to it (\"in a blue shirt\"): that is their change. A detail of the look may come in where \
+         the scene touches it (the light on something they wear), never as a description of them. Write what \
+         they are doing and what the look leaves open:",
+    );
+    for (name, look) in cast.iter().take(VARS_MAX) {
+        let look: String = look.chars().take(300).collect();
+        s.push_str(&format!("\n- {name}: {look}"));
+    }
+    Some(s)
+}
+
 pub fn system(t: &Toolkit, turn: &Turn) -> String {
     let mut s = String::new();
     s.push_str(turn.skills);
@@ -338,6 +360,12 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                 "\n- The speed LoRA {turbo} is picked. Keep steps and CFG there unless the person asks; \
                  both can still be changed."
             ));
+        }
+        // A critique writes the next round's prompt too (`schema`); a sweep's
+        // critique writes checks only.
+        let next_prompt = matches!(turn.mode, Mode::Chat | Mode::Plan) || (turn.mode == Mode::Critique && !turn.sweep);
+        if let Some(cast) = cast_added_text(&t.cast_added).filter(|_| next_prompt && schema::writes_prompt(t)) {
+            s.push_str(&cast);
         }
         if matches!(turn.mode, Mode::Chat | Mode::Plan) {
             s.push_str(if schema::writes_prompt(t) {
@@ -885,6 +913,18 @@ mod tests {
         assert!(labelled, "the reference comes first, named");
         let text: String = last.iter().filter_map(|p| match p { Part::Text { text } => Some(text.as_str()), _ => None }).collect();
         assert!(text.contains("the 2 picture(s) just drawn") && text.contains("Picture 2:") && !text.contains("Picture 3:"));
+    }
+
+    /// A word pick is named with its look and the rule not to write it; a
+    /// chat with none hears nothing of it.
+    #[test]
+    fn the_picked_cast_is_named_and_its_look_left_to_the_server() {
+        let mut t = toolkit();
+        assert!(!system(&t, &turn(Mode::Chat, vec![])).contains("cast, picked"));
+        t.cast_added = vec![("Elias".into(), "Elias is a weathered cowboy.".into())];
+        let s = system(&t, &turn(Mode::Chat, vec![]));
+        assert!(s.contains("call them by name and leave out") && s.contains("- Elias: Elias is a weathered cowboy."), "{s}");
+        assert!(system(&t, &turn(Mode::Critique, vec![])).contains("- Elias: Elias"), "a critique writes the next prompt");
     }
 
     /// The agent hears of variables only when there are some, by name with a

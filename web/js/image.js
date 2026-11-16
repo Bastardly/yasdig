@@ -8,7 +8,7 @@ import { loraPicker, turboMemory } from './loras.js';
 import { sourceSlot } from './source-slot.js';
 import { wireHints } from './hints.js';
 import { onRefsChange, references, refsActive, syncRefs } from './refs.js';
-import { castNames, castPayload, initCastPicks, syncCastPicks } from './castpicks.js';
+import { castNames, castPayload, castWordNames, initCastPicks, syncCastPicks } from './castpicks.js';
 import { openModels } from './getmodels.js';
 import { setInfo } from './notes.js';
 import { floatPanels } from './panels.js';
@@ -1481,7 +1481,7 @@ export function initImage() {
   initPngSettings();
   $('enhance').addEventListener('click', () => {
     const note = $('enhanceerr');
-    enhance($('enhance'), $('prompt'), { kind: 'image', model: $('template').value, text: $('prompt').value, cast: castNames() }, {
+    enhance($('enhance'), $('prompt'), { kind: 'image', model: $('template').value, text: $('prompt').value, cast: castNames(), added: castWordNames() }, {
       onError: (m) => { note.textContent = m; note.hidden = !m; },
     });
   });

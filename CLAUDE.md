@@ -27,7 +27,7 @@ cargo run --release -- fsr-selftest         # full wgpu path, no sd.cpp or check
 cargo run --release -- fsr in.png out.png [scale] [sharpness] [clarity]
 cargo run --release -- upscale in.png out.png <model> [factor]  # model enlarge + consistency dB
 cargo run --release -- sr-selftest          # `src/sr/` shader ops vs CPU references, matmul TFLOPS
-cargo run --release -- agent-check [agent]  # 16 scored agent turns, 7 Enhance calls, 2 two-part Enhance cases on 3 seeds (`agent/check.rs`): run before and after a skill edit
+cargo run --release -- agent-check [agent]  # 16 scored agent turns, 10 Enhance calls (3 image), 2 two-part Enhance cases on 3 seeds (`agent/check.rs`): run before and after a skill edit
 cargo run --release -- fold-scales f.gguf   # fold a scaled-fp8 GGUF's scales into its weights, in place
 node --test 'web/js/*.test.js'              # prompt-weight maths, OOM box choices, module graph evaluates.
                                             #   Node's built-in runner; no npm/package.json; runtime needs no Node.
@@ -42,6 +42,13 @@ scale 1.0 with all filters at 0 is byte-exact, checks each grade knob (`check_gr
 and prints per-band movement of planted gratings at 1536² and 3072² (invariant 6).
 Band rows are printed, not asserted, because `rcas_radius` is a step function; turning
 them into an assertion is the next move. The DFT's own correctness is in `cargo test`.
+
+## Specs
+
+**`specs/` says what a feature is *for*, in the person's words**, for the fuzzy parts
+only (today: `specs/assistant.md`). Read it before changing how that feature behaves.
+✅ is the person's word and ❓ is an inference; a code/spec disagreement is raised,
+never silently fixed either way (`specs/README.md`).
 
 ## Where the traps are
 

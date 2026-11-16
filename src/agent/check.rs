@@ -467,16 +467,32 @@ const CASES: &[Case] = &[
     },
 ];
 
-/// An Enhance case: one part rewritten for a video model through the real
+/// An Enhance case: one box rewritten for a video or image model through the real
 /// call (`enhance::system_text`, `messages`, `schema`), scored on the
 /// answer. Enhance is where a film's trouble showed (strangers in an empty
 /// street, the same man drawn and voiced anew each shot), and until
 /// 2026-11-14 nothing measured an edit to its guides.
 struct EnhanceCase {
     name: &'static str,
-    family: VideoFamily,
+    target: fn() -> Target,
     req: fn() -> enhance::Request,
     want: fn(&Enhanced) -> Result<(), String>,
+}
+
+fn video(f: VideoFamily) -> Target {
+    Target::Video(f, f.takes_references())
+}
+fn ltx() -> Target {
+    video(VideoFamily::Ltx25)
+}
+fn wan() -> Target {
+    video(VideoFamily::Wan22Ti2v5b)
+}
+fn h3() -> Target {
+    video(VideoFamily::MinimaxH3)
+}
+fn qwen_image() -> Target {
+    Target::Image(crate::config::ImageFamily::QwenImage21)
 }
 
 fn part(text: &str) -> enhance::Request {
@@ -517,7 +533,7 @@ const LEO: &str = "Leo is a broad man in his forties with a shaved head and a gr
 const ENHANCE_CASES: &[EnhanceCase] = &[
     EnhanceCase {
         name: "LTX: speaks the line word for word, and names no one",
-        family: VideoFamily::Ltx25,
+        target: ltx,
         req: || enhance::Request {
             cast: vec!["Leo".into(), "Mara".into()],
             looks: vec![("Leo".into(), LEO.into()), ("Mara".into(), MARA.into())],
@@ -534,7 +550,7 @@ const ENHANCE_CASES: &[EnhanceCase] = &[
     },
     EnhanceCase {
         name: "LTX: draws a person from their look",
-        family: VideoFamily::Ltx25,
+        target: ltx,
         req: || enhance::Request {
             cast: vec!["Mara".into()],
             looks: vec![("Mara".into(), MARA.into())],
@@ -552,7 +568,7 @@ const ENHANCE_CASES: &[EnhanceCase] = &[
     },
     EnhanceCase {
         name: "LTX: an empty place stays empty",
-        family: VideoFamily::Ltx25,
+        target: ltx,
         req: || part("An empty kitchen at dawn. A kettle on the stove starts to steam."),
         want: |e| {
             let w = plain_words(&e.prompt);
@@ -565,7 +581,7 @@ const ENHANCE_CASES: &[EnhanceCase] = &[
     },
     EnhanceCase {
         name: "LTX: the scene's sound is heard",
-        family: VideoFamily::Ltx25,
+        target: ltx,
         req: || enhance::Request {
             sound: "rain on a tin roof, a distant train, no music".into(),
             cast: vec!["Mara".into()],
@@ -583,7 +599,7 @@ const ENHANCE_CASES: &[EnhanceCase] = &[
     },
     EnhanceCase {
         name: "Wan: the camera move asked for, and only that",
-        family: VideoFamily::Wan22Ti2v5b,
+        target: wan,
         req: || part("A slow dolly in on a lighthouse at dusk."),
         want: |e| {
             let w = plain_words(&e.prompt);
@@ -599,7 +615,7 @@ const ENHANCE_CASES: &[EnhanceCase] = &[
     },
     EnhanceCase {
         name: "H3: no one speaks unless the words say so",
-        family: VideoFamily::MinimaxH3,
+        target: h3,
         req: || enhance::Request {
             cast: vec!["Mara".into()],
             looks: vec![("Mara".into(), MARA.into())],
@@ -614,7 +630,7 @@ const ENHANCE_CASES: &[EnhanceCase] = &[
     },
     EnhanceCase {
         name: "H3: a line the words ask for goes into Spoken",
-        family: VideoFamily::MinimaxH3,
+        target: h3,
         req: || enhance::Request {
             cast: vec!["Mara".into(), "Leo".into()],
             looks: vec![("Leo".into(), LEO.into()), ("Mara".into(), MARA.into())],
@@ -626,14 +642,76 @@ const ENHANCE_CASES: &[EnhanceCase] = &[
             None => Err(format!("no line of Mara's: {:?}", e.spoken)),
         },
     },
+    // The Image tab puts a picked member's look in front of the prompt; the
+    // box saying it too ran Elias's look twice (2026-11-16).
+    EnhanceCase {
+        name: "Image: a picked cast member is named, not described",
+        target: qwen_image,
+        req: || picked("Elias holding a cat"),
+        want: |e| image_names_without_look(&e.prompt),
+    },
+    EnhanceCase {
+        name: "Image: the person's change to a picked look stays",
+        target: qwen_image,
+        req: || picked("Elias in a blue shirt holding a cat"),
+        want: |e| {
+            image_names_without_look(&e.prompt)?;
+            // "a blue cotton shirt" keeps it as well as "a blue shirt" does.
+            let w = plain_words(&e.prompt);
+            if !(w.contains(&"blue".to_string()) && w.contains(&"shirt".to_string())) {
+                return Err(format!("the person's blue shirt is gone: {:?}", e.prompt));
+            }
+            Ok(())
+        },
+    },
+    EnhanceCase {
+        name: "Image: a look the person wrote beside a pick is taken out",
+        target: qwen_image,
+        req: || picked("Elias, a weathered fisherman with a grey beard, holding a cat on a pier"),
+        want: |e| image_names_without_look(&e.prompt),
+    },
 ];
 
 /// The call an Enhance case makes, as `enhance::run` would make it.
-fn enhance_request(family: VideoFamily, req: &enhance::Request, guide: &str, model: &super::AgentModel, tune: &super::Tuning, seed: u32) -> Request {
-    let t = Target::Video(family, family.takes_references());
+const ELIAS: &str = "Elias is a weathered fisherman in his fifties with a grey beard and a yellow oilskin coat.";
+
+/// An Image tab Enhance with Elias picked for his words.
+fn picked(text: &str) -> enhance::Request {
+    enhance::Request {
+        kind: "image".into(),
+        model: "agent-check".into(),
+        text: text.into(),
+        cast: vec!["Elias".into()],
+        looks: vec![("Elias".into(), ELIAS.into())],
+        added: vec!["Elias".into()],
+        ..Default::default()
+    }
+}
+
+/// Elias by name, the cat kept, his look not written out again. One detail
+/// where the scene touches it is wanted ("the cat against his yellow oilskin
+/// coat", as Oliver's compass caught the light, 2026-11-16); two or more is
+/// the look described.
+fn image_names_without_look(p: &str) -> Result<(), String> {
+    let w = plain_words(p);
+    if !w.contains(&"elias".to_string()) {
+        return Err(format!("Elias isn't named: {p:?}"));
+    }
+    if !w.contains(&"cat".to_string()) {
+        return Err(format!("the cat is gone: {p:?}"));
+    }
+    // Phrases, not words: a weathered pier is no repeat of a weathered face.
+    let found: Vec<&str> = ["grey beard", "oilskin", "fifties", "weathered fisherman"].into_iter().filter(|a| says(p, a)).collect();
+    if found.len() >= 2 {
+        return Err(format!("his look is written out ({}), which yasdig adds itself: {p:?}", found.join(", ")));
+    }
+    Ok(())
+}
+
+fn enhance_request(t: Target, req: &enhance::Request, guide: &str, model: &super::AgentModel, tune: &super::Tuning, seed: u32) -> Request {
     let vars = crate::variables::Variables::new();
     let every = req.every.trim().chars().count() as u32;
-    let cap = if family.is_ltx() {
+    let cap = if matches!(t, Target::Video(f, _) if f.is_ltx()) {
         crate::config::LTX_PROMPT_CHARS.saturating_sub(every + 2).clamp(200, enhance::PROMPT_CHARS)
     } else {
         enhance::PROMPT_CHARS
@@ -880,13 +958,14 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
         }
     }
     for (k, case) in ENHANCE_CASES.iter().enumerate() {
-        let (guide, used, _) = skills::select_enhance(&all_skills, case.family.as_str());
+        let t = (case.target)();
+        let (guide, used, _) = skills::select_enhance(&all_skills, t.family());
         if used.is_empty() {
-            println!("[agent-check] skip  {}: no enhance guide for {}", case.name, case.family.label());
+            println!("[agent-check] skip  {}: no enhance guide for {}", case.name, t.label());
             continue;
         }
         ran += 1;
-        let req = enhance_request(case.family, &(case.req)(), &guide, &model, &tune, 101 + k as u32);
+        let req = enhance_request(t, &(case.req)(), &guide, &model, &tune, 101 + k as u32);
         let verdict = runner.run(&req, &model.label, "agent-check").map_err(|e| format!("the call failed: {e:#}")).and_then(|reply| {
             if reply.stats.stop == "length" {
                 return Err("the answer was cut off".to_string());
@@ -919,9 +998,9 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
         let mut fails = Vec::new();
         for n in 0..PAIR_SEEDS {
             let seed = 201 + (k as u32) * 10 + n;
-            let verdict = enhanced(&enhance_request(case.family, &(case.first)(), &guide, &model, &tune, seed)).and_then(|a| {
+            let verdict = enhanced(&enhance_request(video(case.family), &(case.first)(), &guide, &model, &tune, seed)).and_then(|a| {
                 let second = enhance::Request { before: a.prompt.clone(), first: a.prompt.clone(), ..(case.second)() };
-                let b = enhanced(&enhance_request(case.family, &second, &guide, &model, &tune, seed))?;
+                let b = enhanced(&enhance_request(video(case.family), &second, &guide, &model, &tune, seed))?;
                 (case.want)(&a, &b)
             });
             if let Err(why) = verdict {
@@ -998,9 +1077,9 @@ mod tests {
     fn every_enhance_case_builds_its_call_and_refuses_an_empty_answer() {
         let (all, _) = skills::load(std::path::Path::new("/nonexistent"));
         for case in ENHANCE_CASES {
-            let (guide, used, _) = skills::select_enhance(&all, case.family.as_str());
+            let t = (case.target)();
+            let (guide, used, _) = skills::select_enhance(&all, t.family());
             assert!(!used.is_empty(), "{}: no guide", case.name);
-            let t = Target::Video(case.family, case.family.takes_references());
             let req = (case.req)();
             let m = enhance::messages(&enhance::system_text(&guide, &Default::default(), t), t, &req, &req.looks, &[]);
             assert_eq!(m.len(), 2, "{}", case.name);
@@ -1014,5 +1093,9 @@ mod tests {
         assert!(says("He says, \"The last bus has gone!\" quietly.", "The last bus has gone."));
         assert!(!says("the lastbus has gone", "last bus"));
         assert!(names_no_one("a man in a coat", &["Leo"]).is_ok() && names_no_one("Leo's coat", &["Leo"]).is_err());
+        // Gemma 26B's answers of 2026-11-16: one detail where the cat touches him is no re-description.
+        assert!(image_names_without_look("Elias cradles the cat against his yellow oilskin coat on the weathered planks of a pier.").is_ok());
+        assert!(image_names_without_look("Elias, a weathered fisherman with a grey beard, holds a cat.").is_err());
+        assert!(image_names_without_look("A man holds a cat.").is_err(), "Elias must be named");
     }
 }

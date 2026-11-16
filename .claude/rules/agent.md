@@ -13,6 +13,9 @@ paths:
 
 # The agent
 
+**Before changing what the Assistant does, read `specs/assistant.md`**: the person's
+intent, examples and open questions. The traps below are the *how*.
+
 ## The agent
 
 The Assistant (`src/agent/`, `src/llm.rs`, `src/agents.rs`, `llm/yasdig-llm.cpp`,
@@ -356,4 +359,12 @@ Break silently:
   the editor's *How they speak*), adopted with the look by a story that names the entry,
   and told to the Video tab's Enhance through the library looks. **On H3 a voice sound
   wins**: a member with `voice` (or an entry with `voice.wav`) is told its look alone.
+- **A word pick's look is the server's** (`cast::compose` leads the prompt with it), so
+  the Image tab's Enhance sends those names as `added` (`castWordNames`) and the brief
+  shows each look *marked as added*: name them, drop what repeats the look, keep what the
+  person wrote that differs from it; an Image chat gets
+  the same from `Toolkit.cast_added` (its settings' `cast` picks with `words`) in
+  `cast_added_text`. A film's shot sends none: its prompt is the only road a look has
+  to LTX/Wan (`specs/assistant.md`, *Cast in a prompt*). The three image `ENHANCE_CASES`
+  hold it, the person's own change kept (a blue shirt).
 - **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.
