@@ -160,11 +160,24 @@ and the first one taken on.
   detail and fails at two. *Examples: "Image: a picked
   cast member is named, not described", "Image: the person's change to a picked look
   stays", "Image: a look the person wrote beside a pick is taken out".*
-- **Video, open.** Here the shot's prompt is the *only* way a look reaches LTX or Wan.
-  Nothing adds it, and the video model can't read a name. So the look can't simply be
-  dropped. The fix is for yasdig to add it at generation time, as the Image tab does.
-  The box then holds the action, which is also the likely cure for "it loses the
-  scene" under job 7.
+- **H3, done 2026-11-16, awaiting a GPU run.** A part that sends a member's picture
+  as a reference already has their look written into H3's subject lines by yasdig,
+  so Enhance names them and doesn't describe them. Their voice isn't added, so it
+  stays in the words. *Example: "H3: a member shown by a reference is named, not
+  described".*
+- ✅ **H3 works fine, and it builds the story parts pretty well** (the person, 2026-11-16).
+- ✅ **The A/B on LTX 2.5 distilled passed** (2026-11-16): a look paragraph followed by
+  a short named action ("Mara is… Mara waits at a bus stop") drew as well as the
+  enhanced prose. With two people ("Mara hands Leo an umbrella") each kept their own
+  look. So on LTX 2.5 the server may add the look. LTX 2.3 (a Gemma 3 encoder) and Wan
+  (umT5) are untested.
+- **Wan and LTX, as it was before the A/B:** Here the shot's prompt is the *only* way a look
+  reaches the model. Nothing adds it, and the Enhance guides say these models can't
+  read a name. yasdig could add the look at generation time, as the Image tab does,
+  but that only works if the model ties "Mara is…" to "Mara waits…". The A/B is the
+  person's to run (see *Next*). If it does tie them, the plumbing follows: the look
+  rides on the shot, continued parts carry it on, and it's counted against LTX's
+  length limit. That's also the likely cure for "it loses the scene" under job 7.
 
 ---
 
@@ -180,7 +193,7 @@ and the first one taken on.
 ## Next, in order
 
 1. ~~Cast looks out of the Image tab's prompts~~: built, awaiting a GPU run.
-2. Cast looks out of video prompts: yasdig adds them when it renders (see above).
+2. Cast looks out of video prompts. H3: built. Wan/LTX: the A/B first (see above).
 3. Enhance: a shot's parts go on from each other, not from the first frame (job 6).
 4. Steering a running session from the chat (job 3).
 5. Suggestions before a dramatic rewrite, with *Just do it* (*Who's in charge*).

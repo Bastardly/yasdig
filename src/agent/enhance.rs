@@ -210,6 +210,10 @@ pub fn brief(t: Target, req: &Request, looks: &[(String, String)], sees_picture:
                  of them. Spend the words on what they are doing, their expression, and what the look leaves \
                  open: the place, the light, the framing.\n"
             ));
+            // H3's subject lines carry the look, never the voice.
+            if matches!(t, Target::Video(..)) {
+                out.push_str("How they speak is not added: keep that as given.\n");
+            }
         }
     }
     if matches!(t, Target::Video(..)) {
@@ -651,6 +655,9 @@ mod tests {
         // A pick for its picture only is described as before.
         assert!(b.contains("- Mara: Mara is a woman in a red coat."));
         assert!(!b.contains("Mara: yasdig"));
+        assert!(!b.contains("How they speak"), "an image has no voice");
+        let h3 = brief(Target::Video(VideoFamily::MinimaxH3, true), &r, &looks, false);
+        assert!(h3.contains("yasdig adds this look itself") && h3.contains("How they speak is not added"));
         let none = brief(Target::Image(ImageFamily::Flux), &super::Request { added: vec![], ..r }, &looks, false);
         assert!(!none.contains("yasdig adds"));
     }

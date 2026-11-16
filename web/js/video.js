@@ -208,16 +208,20 @@ function enhanceRow(row, btn) {
   const fps = m?.forced_fps ?? (parseInt($('vfps').value, 10) || 0);
   const frames = r.frames ?? (m ? alignFrames(m.frames, m.frame_grid) : null);
   const note = row.querySelector('.shotenhanceerr');
+  const sent = sentRow(r, k, takeOf(m));
   const body = {
     kind: 'video',
     model: $('vmodel').value,
     text: r.text,
     every: $('veverytext').value,
     ...partNeighbours(...storyOrder(els), k),
-    picture: sentRow(r, k, takeOf(m)).key || null,
+    picture: sent.key || null,
     seconds: fps && frames ? frames / fps : null,
     cast: r.cast,
     looks: (r.subjects ?? []).filter((x) => x.name && x.look).map((x) => [x.name, x.look]),
+    // H3 writes a sent reference's look into its subject lines itself
+    // (`h3prompt::compose`): Enhance names them and repeats none of it.
+    added: sent.subjects.filter((x) => x.name && x.look?.trim()).map((x) => x.name),
     lines: r.lines,
     sound: r.sound,
     music: r.music,

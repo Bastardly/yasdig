@@ -309,6 +309,7 @@ read over by every part. Names in the UI: Storyboard, Shot
   `[Shot 1]` survive. Page: the rows' *Who is in it* / *Spoken* / *Sound* / *Music*
   (`m.sounds`; *Who is in it* on every model but narrated, a fresh part only — on
   Wan/LTX names only, no chip pictures: Enhance looks each up in the cast for its look
+  (on H3 a sent reference's look is the subject line's, so Enhance names them only)
   and `speaks`, and a film's names pick which pictures a first frame is drawn from), names in the borrowed
   References/Sounds dialogs (`editRefs(…, names)`, `editSounds(…, voices)`).
 - **References are H3's alone** (`VideoFamily::takes_references`,

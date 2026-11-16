@@ -364,7 +364,10 @@ Break silently:
   shows each look *marked as added*: name them, drop what repeats the look, keep what the
   person wrote that differs from it; an Image chat gets
   the same from `Toolkit.cast_added` (its settings' `cast` picks with `words`) in
-  `cast_added_text`. A film's shot sends none: its prompt is the only road a look has
-  to LTX/Wan (`specs/assistant.md`, *Cast in a prompt*). The three image `ENHANCE_CASES`
+  `cast_added_text`. **On H3 the subject lines are the server's too**
+  (`h3prompt::compose` writes each sent reference's `Subject.look`): `enhanceRow` sends
+  `sentRow`'s subjects with a look, the film's Enhance `shot_spec`'s, and the brief adds
+  that the voice isn't added. Anywhere else (Wan, LTX, a continue) none: the prompt is
+  the only road a look has to the video model (`specs/assistant.md`, *Cast in a prompt*). The three image `ENHANCE_CASES`
   hold it, the person's own change kept (a blue shirt).
 - **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.

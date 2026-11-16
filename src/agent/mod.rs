@@ -838,9 +838,18 @@ fn enhance_shot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: us
                     .filter_map(|n| film.member(n))
                     .map(|m| (m.name.clone(), if view.sounds && m.voice.is_some() { m.look.clone() } else { m.look_and_voice() }))
                     .collect(),
-                // A shot's prompt is the only place its people's looks reach
-                // the video model: nothing is added for it.
-                added: Vec::new(),
+                // On H3 a part that sends the cast's pictures has each one's
+                // look written into its subject lines (`h3prompt::compose`);
+                // anywhere else the prompt is the only road a look has to the
+                // video model, so nothing is added.
+                added: session::shot_spec(&film, k)
+                    .0
+                    .words
+                    .subjects
+                    .iter()
+                    .filter(|m| !m.look.trim().is_empty())
+                    .map(|m| m.name.clone())
+                    .collect(),
                 lines: shot.lines.clone(),
                 sound: shot.sound.clone(),
                 music: shot.music.clone(),

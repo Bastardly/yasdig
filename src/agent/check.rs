@@ -642,6 +642,28 @@ const ENHANCE_CASES: &[EnhanceCase] = &[
             None => Err(format!("no line of Mara's: {:?}", e.spoken)),
         },
     },
+    // H3 writes a referenced member's look into its subject lines itself.
+    EnhanceCase {
+        name: "H3: a member shown by a reference is named, not described",
+        target: h3,
+        req: || enhance::Request {
+            cast: vec!["Leo".into()],
+            looks: vec![("Leo".into(), LEO.into())],
+            added: vec!["Leo".into()],
+            ..part("Leo waits at the bus stop in the rain and checks his watch.")
+        },
+        want: |e| {
+            if !plain_words(&e.prompt).contains(&"leo".to_string()) {
+                return Err(format!("Leo isn't named: {:?}", e.prompt));
+            }
+            let found: Vec<&str> =
+                ["shaved head", "green work jacket", "forties", "broad man"].into_iter().filter(|a| says(&e.prompt, a)).collect();
+            if found.len() >= 2 {
+                return Err(format!("his look is written out ({}), which H3's subject lines carry: {:?}", found.join(", "), e.prompt));
+            }
+            Ok(())
+        },
+    },
     // The Image tab puts a picked member's look in front of the prompt; the
     // box saying it too ran Elias's look twice (2026-11-16).
     EnhanceCase {
