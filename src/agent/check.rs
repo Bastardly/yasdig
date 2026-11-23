@@ -819,6 +819,38 @@ fn leo(text: &str, line: &str) -> enhance::Request {
     }
 }
 
+/// A shot of several parts enhanced in order, as *Enhance every part* does:
+/// each told its neighbours by the real rule (`enhance::part_neighbours`) on
+/// the answers before it. Part 3 is the first to see the shot's opening as
+/// "the scene opens with", where a man went outside again (2026-11-23).
+struct ChainCase {
+    name: &'static str,
+    family: VideoFamily,
+    parts: &'static [&'static str],
+    want: fn(&[Enhanced]) -> Result<(), String>,
+}
+
+/// Words that say someone comes out again: the act of part 1 repeated.
+const GOES_OUT: &[&str] = &["door", "doorway", "steps out", "stepping out", "walks out", "goes outside", "exits", "emerges", "threshold"];
+
+const CHAIN_CASES: &[ChainCase] = &[ChainCase {
+    name: "LTX: each part goes on from the last, none goes outside again",
+    family: VideoFamily::Ltx25,
+    parts: &["A man goes outside.", "The man looks up at the sky.", "The man lights a cigar and smokes it."],
+    want: |e| {
+        for (k, a) in e.iter().enumerate().skip(1) {
+            if let Some(w) = GOES_OUT.iter().find(|w| says(&a.prompt, w)) {
+                return Err(format!("part {} goes outside again (\"{w}\"): {:?}", k + 1, a.prompt));
+            }
+        }
+        match e.get(2) {
+            Some(c) if says(&c.prompt, "cigar") => Ok(()),
+            Some(c) => Err(format!("part 3 has no cigar: {:?}", c.prompt)),
+            None => Err("part 3 is missing".into()),
+        }
+    },
+}];
+
 const PAIR_CASES: &[PairCase] = &[
     PairCase {
         name: "LTX: one man, the same look and voice in both parts",
@@ -909,7 +941,7 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
         "[agent-check] {} ({}), {} cases",
         model.label,
         if model.vision() { "sees pictures" } else { "text only" },
-        CASES.len() + ENHANCE_CASES.len() + PAIR_CASES.len()
+        CASES.len() + ENHANCE_CASES.len() + PAIR_CASES.len() + CHAIN_CASES.len()
     );
     let (all_skills, _) = skills::load(&user_skills_dir(cfg));
     let family = ImageFamily::Sdxl;
@@ -1095,6 +1127,53 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
             );
         }
     }
+    for (k, case) in CHAIN_CASES.iter().enumerate() {
+        let (guide, used, _) = skills::select_enhance(&all_skills, case.family.as_str());
+        if used.is_empty() {
+            println!("[agent-check] skip  {}: no enhance guide for {}", case.name, case.family.label());
+            continue;
+        }
+        ran += 1;
+        let mut fails = Vec::new();
+        for n in 0..PAIR_SEEDS {
+            let seed = 301 + (k as u32) * 10 + n;
+            let mut got: Vec<Enhanced> = Vec::new();
+            let verdict = (|| {
+                for j in 0..case.parts.len() {
+                    // The parts so far as enhanced, the rest as typed: what the page sends.
+                    let words: Vec<&str> =
+                        (0..case.parts.len()).map(|i| got.get(i).map_or(case.parts[i], |e| e.prompt.as_str())).collect();
+                    let n = enhance::part_neighbours(&[(0, words)], 0, j);
+                    let req = enhance::Request {
+                        first: n.first,
+                        scene: n.scene,
+                        before: n.before,
+                        cut: n.cut,
+                        then_continues: n.then_continues,
+                        next: n.next,
+                        ..part(case.parts[j])
+                    };
+                    let e = enhanced(&enhance_request(video(case.family), &req, &guide, &model, &tune, seed))?;
+                    got.push(e);
+                }
+                (case.want)(&got)
+            })();
+            if let Err(why) = verdict {
+                fails.push(format!("seed {seed}: {why}"));
+            }
+        }
+        if fails.is_empty() {
+            passed += 1;
+            println!("[agent-check] ok    {} ({PAIR_SEEDS} of {PAIR_SEEDS} seeds)", case.name);
+        } else {
+            println!(
+                "[agent-check] FAIL  {} ({} of {PAIR_SEEDS} seeds)\n                    {}",
+                case.name,
+                PAIR_SEEDS as usize - fails.len(),
+                fails.join("\n                    ")
+            );
+        }
+    }
     println!("[agent-check] {passed} of {ran} passed");
     if passed < ran {
         println!(
@@ -1160,6 +1239,10 @@ mod tests {
             let m = enhance::messages(&enhance::system_text(&guide, &Default::default(), t), t, &req, &req.looks, &[]);
             assert_eq!(m.len(), 2, "{}", case.name);
             assert!((case.want)(&Enhanced::default()).is_err(), "{} passes an empty answer", case.name);
+        }
+        for case in CHAIN_CASES {
+            let none = vec![Enhanced::default(); case.parts.len()];
+            assert!((case.want)(&none).is_err(), "{} passes empty answers", case.name);
         }
         for case in PAIR_CASES {
             let (a, b) = ((case.first)(), (case.second)());

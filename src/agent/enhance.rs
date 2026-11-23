@@ -316,22 +316,31 @@ fn continuity(out: &mut String, req: &Request, sees_picture: bool) {
     if sees_picture {
         out.push_str("\nThe shot starts from the picture shown: it is the first frame.\n");
     }
-    if !first.is_empty() && first != before {
+    // Inside a shot, the part before already carries the shot on; its
+    // opening quoted again as "the scene opens with … keep to it" had a man
+    // go outside again in a later part, now and then (2026-11-23).
+    let in_shot = !req.cut && !before.is_empty() && !scene.is_empty();
+    if !first.is_empty() && first != before && !(in_shot && first == scene) {
         out.push_str(&format!(
             "\nThe scene opens with:\n{}\nKeep to what it set up — the place, the light, the time of day, the \
-             colours, how its people look and dress — unless this part's words change them.\n",
+             colours, how its people look and dress — unless this part's words change them. What happens in it \
+             is over: never show it again.\n",
             quote(first, NEIGHBOUR_CHARS)
         ));
     }
     if !scene.is_empty() && scene != first && scene != before {
-        out.push_str(&format!("\nThis camera shot began with:\n{}\n", quote(scene, NEIGHBOUR_CHARS)));
+        out.push_str(&format!(
+            "\nThis camera shot began with (already shown, over now):\n{}\n",
+            quote(scene, NEIGHBOUR_CHARS)
+        ));
     }
     if !req.cut {
         if !before.is_empty() && !sees_picture {
             out.push_str(&format!(
                 "\nThis goes on from the last frame of the part before, which was:\n{}\nCarry on the same place, \
                  light, people and clothes, and describe what happens next and what changes; don't set the scene \
-                 again.\n",
+                 again. What the part before showed happening is done: this part begins where it ended, so no one \
+                 arrives, leaves or does again what they did there. Begin with this part's own action.\n",
                 quote(before, NEIGHBOUR_CHARS)
             ));
         }
@@ -777,7 +786,7 @@ mod tests {
         (r.first, r.scene, r.before, r.cut) = (n.first, n.scene, n.before, true);
         let b = brief(t, &r, &[], false);
         assert!(b.contains("opens with:\nDusk on a pier, orange light.\nKeep to what it set up"), "{b}");
-        assert!(b.contains("camera shot began with:\nLeo in a cafe."), "{b}");
+        assert!(b.contains("camera shot began with (already shown, over now):\nLeo in a cafe."), "{b}");
         assert!(b.contains("a new camera shot of the same film. It cuts from:\nHe sips."), "{b}");
         assert!(!b.contains("nothing carried over"), "{b}");
         // A continue goes on from the shot before; shot 1 isn't quoted twice.
@@ -787,6 +796,15 @@ mod tests {
         let b = brief(t, &r, &[], false);
         assert!(b.contains("which was:\nDusk on a pier") && b.contains("don't set the scene again"), "{b}");
         assert!(!b.contains("opens with"), "{b}");
+        // Part 3 of the scene's first shot: the part before carries it on, and
+        // the shot's opening isn't held up again as something to keep to.
+        let order = [(0, vec!["A man goes outside.", "He looks up.", "He smokes a cigar."])];
+        let n = part_neighbours(&order, 0, 2);
+        let mut r = shot("He smokes a cigar.");
+        (r.first, r.scene, r.before) = (n.first, n.scene, n.before);
+        let b = brief(t, &r, &[], false);
+        assert!(!b.contains("goes outside"), "{b}");
+        assert!(b.contains("which was:\nHe looks up.") && b.contains("no one arrives, leaves or does again"), "{b}");
         // Shot 1 has none of it.
         assert!(!brief(t, &shot("Dusk on a pier."), &[], false).contains("part before"));
         // One the next shot goes on from ends with its people in view.

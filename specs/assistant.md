@@ -108,6 +108,11 @@ Assistant may come up short. That's fine.
   "Man goes outside", "Man looks up", "Man smokes a cigar" and enhanced them. Each
   part re-described the first frame, so he "went outside" several times instead of
   the story moving on. **Each part should go on from where the last one ended.**
+  **Fixed 2026-11-23** (the person: "I think it works"): from part 3 on, the brief
+  quoted the shot's enhanced part 1 as "the scene opens with… keep to what it set up",
+  and some seeds went outside again. Now a part inside a shot is carried on by the
+  part before alone, told that what happened there is over. *Example: "LTX: each part
+  goes on from the last, none goes outside again" (three parts, 3 seeds).*
 - *Examples: the seven video Enhance cases, the two two-part cases, and the two image
   cast cases.*
 
@@ -199,7 +204,7 @@ and the first one taken on.
 1. ~~Cast looks out of the Image tab's prompts~~: built, awaiting a GPU run.
 2. Cast looks out of video prompts. H3: built. LTX 2.5: built, awaiting a GPU run.
    Wan and LTX 2.3: an A/B on each, if wanted.
-3. Enhance: a shot's parts go on from each other, not from the first frame (job 6).
+3. ~~Enhance: a shot's parts go on from each other~~: done 2026-11-23.
 4. Steering a running session from the chat (job 3).
 5. Suggestions before a dramatic rewrite, with *Just do it* (*Who's in charge*).
 6. Offering to draw two pictures when that answers a question (job 1).
