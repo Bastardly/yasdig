@@ -817,6 +817,10 @@ fn enhance_shot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: us
                 groups.iter().map(|g| (film.shots[g.start].scene, film.shots[g.clone()].iter().map(|s| s.text.as_str()).collect())).collect();
             let s = groups.iter().position(|g| g.contains(&k)).unwrap_or(0);
             let n = enhance::part_neighbours(&order, s, k - groups.get(s).map_or(0, |g| g.start));
+            // LTX 2.5: the shot's cast looks lead every part's prompt once the
+            // part is written naming them (`FilmShot.looks`) — this one is now.
+            let adds = v.family.adds_looks();
+            let cast: Vec<String> = if adds { film.shot_cast(k).to_vec() } else { shot.cast.clone() };
             let req = enhance::Request {
                 kind: "video".into(),
                 model: v.name.clone(),
@@ -830,26 +834,29 @@ fn enhance_shot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: us
                 cut: n.cut,
                 picture: None,
                 seconds: Some(shot.frames.map_or(view.shot_seconds(), |f| f as f32 / view.fps.max(1) as f32)),
-                cast: shot.cast.clone(),
                 // On H3 a member with a voice sound is voiced by it, not by words.
-                looks: shot
-                    .cast
+                looks: cast
                     .iter()
                     .filter_map(|n| film.member(n))
                     .map(|m| (m.name.clone(), if view.sounds && m.voice.is_some() { m.look.clone() } else { m.look_and_voice() }))
                     .collect(),
                 // On H3 a part that sends the cast's pictures has each one's
-                // look written into its subject lines (`h3prompt::compose`);
-                // anywhere else the prompt is the only road a look has to the
-                // video model, so nothing is added.
-                added: session::shot_spec(&film, k)
-                    .0
-                    .words
-                    .subjects
-                    .iter()
-                    .filter(|m| !m.look.trim().is_empty())
-                    .map(|m| m.name.clone())
-                    .collect(),
+                // look written into its subject lines (`h3prompt::compose`); on
+                // LTX 2.5 the shot's looks lead the prompt. Anywhere else the
+                // prompt is the only road a look has, so nothing is added.
+                added: if adds {
+                    film.shot_looks(k).into_iter().map(|m| m.name).collect()
+                } else {
+                    session::shot_spec(film, k)
+                        .0
+                        .words
+                        .subjects
+                        .iter()
+                        .filter(|m| !m.look.trim().is_empty())
+                        .map(|m| m.name.clone())
+                        .collect()
+                },
+                cast,
                 lines: shot.lines.clone(),
                 sound: shot.sound.clone(),
                 music: shot.music.clone(),
@@ -864,9 +871,11 @@ fn enhance_shot(engine: &mut Engine, store: &ChatStore, chat: &chat::Chat, k: us
         }
     }
     let text = shot.text.clone();
+    let looks = !film.shot_looks(k).is_empty()
+        && cfg.video_models().into_iter().any(|m| m.name == film.video_model && m.family.adds_looks());
     let result = result.map_err(|e| format!("{e:#}"));
     store.update(&chat.id, |c| {
-        session::shot_enhanced(c, k, &text, result.as_ref());
+        session::shot_enhanced(c, k, &text, looks, result.as_ref());
         Ok(())
     })?;
     Ok(())

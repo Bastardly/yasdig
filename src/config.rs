@@ -1973,6 +1973,15 @@ impl VideoFamily {
         matches!(self, VideoFamily::MinimaxH3)
     }
 
+    /// The cast's looks may lead a part's prompt, a paragraph each, its words
+    /// naming them (`ShotWords::looks`). LTX 2.5 only: its Gemma 4 kept
+    /// "Mara is… Leo is… Mara hands Leo an umbrella" apart, each look on its
+    /// own person (the user's A/B, 2026-11-16). 2.3's Gemma 3 and Wan's umT5
+    /// are untried; there the look stays in the words.
+    pub fn adds_looks(self) -> bool {
+        matches!(self, VideoFamily::Ltx25)
+    }
+
     /// The settings a model of this family should arrive with.
     ///
     /// These are the numbers every example for that family in sd.cpp's
@@ -2635,6 +2644,8 @@ pub struct VideoFeatures {
     /// it under each part's prompt; the agent is told it, and Enhance's
     /// paragraph is capped by it.
     pub prompt_chars: Option<u32>,
+    /// A part's cast looks lead its prompt ([`VideoFamily::adds_looks`]).
+    pub looks: bool,
 }
 
 /// LTX's prompt limit, in characters. sd.cpp keeps a prompt's real Gemma
@@ -2675,6 +2686,7 @@ impl VideoModel {
             films: continues && !narrated,
             about,
             prompt_chars: f.is_ltx().then_some(LTX_PROMPT_CHARS),
+            looks: f.adds_looks(),
         }
     }
 

@@ -156,6 +156,26 @@ test("a row holds what every model takes, and sends its model's part", () => {
   assert.equal(shotState(rs, c, true).action, 'redo', 'on H3 it would follow the references instead');
 });
 
+test("a part's looks go only to a model that leads with them, on any part, and changing one redoes it", () => {
+  const looks = [{ name: 'Mara', look: 'Mara is a woman in a red coat.' }];
+  const ltx = { references: false, sounds: false, looks: true };
+  assert.deepEqual(sentRow({ text: 'she waits', looks }, 1, ltx).looks, looks, 'a continue keeps them');
+  assert.deepEqual(sentRow({ text: 'she waits', looks }, 0, { references: false, sounds: false }).looks, []);
+  const c = { segments: [{ ...seg('Mara waits', 0), looks }] };
+  const r = [{ ...rows('Mara waits')[0], looks }];
+  assert.equal(shotState(r, c, true, ltx).action, 'none');
+  r[0].looks = [{ name: 'Mara', look: 'Mara is a woman in a blue coat.' }];
+  assert.equal(shotState(r, c, true, ltx).action, 'generate', 'a new look is a new prompt');
+  // An old clip and an old row have none: still done.
+  assert.equal(shotState(rows('Mara waits'), clip('Mara waits'), true, ltx).action, 'none');
+});
+
+test('a part counts the looks that lead it', () => {
+  assert.equal(promptChars('', 'she waits', [{ name: 'Mara', look: 'Mara is tall.' }]), 'Mara is tall.\n\nshe waits'.length);
+  assert.equal(promptChars('', 'she waits', [{ name: 'Leo', look: 'A broad man.' }]), 'Leo: A broad man.\n\nshe waits'.length);
+  assert.equal(promptChars('', 'she waits', [{ name: 'Leo', look: ' ' }]), 9, 'an empty look adds nothing');
+});
+
 test('a narrated shot is one picture, its parts read over it; a part\'s length is its speech', () => {
   const take = { references: false, sounds: false, narrated: true };
   // As drawn: lengths from the speech, part 2 read over part 1's picture.

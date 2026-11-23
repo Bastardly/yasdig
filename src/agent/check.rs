@@ -642,6 +642,16 @@ const ENHANCE_CASES: &[EnhanceCase] = &[
             None => Err(format!("no line of Mara's: {:?}", e.spoken)),
         },
     },
+    // LTX 2.5 leads the part with the look itself (`ShotWords::looks`).
+    EnhanceCase {
+        name: "LTX: a member whose look yasdig adds is named, not described",
+        target: ltx,
+        req: || mara_added("Mara waits at a bus stop in the rain."),
+        want: |e| {
+            mara_named_not_described(&e.prompt)?;
+            ltx_length_with_look(&e.prompt)
+        },
+    },
     // H3 writes a referenced member's look into its subject lines itself.
     EnhanceCase {
         name: "H3: a member shown by a reference is named, not described",
@@ -765,6 +775,38 @@ struct PairCase {
 
 const PAIR_SEEDS: u32 = 3;
 
+/// An LTX 2.5 part whose shot carries Mara's look, as a part given her by
+/// *Add cast…* is enhanced.
+fn mara_added(text: &str) -> enhance::Request {
+    enhance::Request {
+        cast: vec!["Mara".into()],
+        looks: vec![("Mara".into(), MARA.into())],
+        added: vec!["Mara".into()],
+        ..part(text)
+    }
+}
+
+/// Mara by name; at most one detail of her look, where the scene touches it.
+fn mara_named_not_described(p: &str) -> Result<(), String> {
+    if !plain_words(p).contains(&"mara".to_string()) {
+        return Err(format!("Mara isn't named, which her added look is written under: {p:?}"));
+    }
+    let found: Vec<&str> = ["grey-haired", "red wool coat", "seventies"].into_iter().filter(|a| says(p, a)).collect();
+    if found.len() >= 2 {
+        return Err(format!("her look is written out ({}), which yasdig adds itself: {p:?}", found.join(", ")));
+    }
+    Ok(())
+}
+
+/// The look ahead of it takes some of LTX's room, so the part may run shorter
+/// than the guide's 150–220 words; still past a sentence or two.
+fn ltx_length_with_look(p: &str) -> Result<(), String> {
+    match p.split_whitespace().count() {
+        60..=250 => Ok(()),
+        n => Err(format!("{n} words, where the guide asks for 150–220 (less with a look ahead of it)")),
+    }
+}
+
 /// Leo as a film's cast holds him, told to Enhance as `enhance_shot` tells
 /// it (`Member::look_and_voice`): his voice must reach both parts word for word.
 fn leo(text: &str, line: &str) -> enhance::Request {
@@ -790,6 +832,18 @@ const PAIR_CASES: &[PairCase] = &[
                         return Err(format!("part {} loses \"{w}\": {:?}", k + 1, e.prompt));
                     }
                 }
+            }
+            Ok(())
+        },
+    },
+    PairCase {
+        name: "LTX: both parts name Mara when yasdig adds her look",
+        family: VideoFamily::Ltx25,
+        first: || enhance::Request { then_continues: true, ..mara_added("Mara steps out of the house into the rain.") },
+        second: || mara_added("Mara looks up at the sky."),
+        want: |a, b| {
+            for (k, e) in [a, b].into_iter().enumerate() {
+                mara_named_not_described(&e.prompt).map_err(|why| format!("part {}: {why}", k + 1))?;
             }
             Ok(())
         },

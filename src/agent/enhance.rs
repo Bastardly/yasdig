@@ -122,6 +122,11 @@ impl Target {
         }
     }
 
+    /// The server leads the prompt with the cast's looks (`ShotWords::looks`).
+    fn leads_with_looks(self) -> bool {
+        matches!(self, Target::Video(f, _) if f.adds_looks())
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Target::Image(f) => f.label(),
@@ -184,7 +189,22 @@ pub fn brief(t: Target, req: &Request, looks: &[(String, String)], sees_picture:
     if !named.is_empty() {
         out.push_str("\nWho is in it:\n");
         for n in named {
-            // The look is shown for fit (a cowboy's ranch), marked as said.
+            // The look is shown for fit (a cowboy's ranch), marked as said —
+            // except on a model that leads with it (LTX 2.5): its guide asks
+            // for each person's look, and Gemma 26B copied the one shown
+            // word for word on 3 of 4 tries (agent-check, 2026-11-23). There
+            // only the voice is shown, which the look ahead doesn't carry.
+            if added(n) && t.leads_with_looks() {
+                let voice = looks
+                    .iter()
+                    .find(|(m, _)| m.eq_ignore_ascii_case(n))
+                    .and_then(|(_, l)| l.find(&format!("{n} speaks:")).map(|at| l[at..].trim().to_string()));
+                match voice {
+                    Some(v) => out.push_str(&format!("- {n} (yasdig writes their look ahead of your prompt). {v}\n")),
+                    None => out.push_str(&format!("- {n} (yasdig writes their look ahead of your prompt)\n")),
+                }
+                continue;
+            }
             if added(n) {
                 match looks.iter().find(|(m, _)| m.eq_ignore_ascii_case(n)) {
                     Some((_, l)) if !l.trim().is_empty() => {
@@ -213,6 +233,14 @@ pub fn brief(t: Target, req: &Request, looks: &[(String, String)], sees_picture:
             // H3's subject lines carry the look, never the voice.
             if matches!(t, Target::Video(..)) {
                 out.push_str("How they speak is not added: keep that as given.\n");
+            }
+            // The guide's "names mean nothing" holds for everyone else.
+            if t.leads_with_looks() {
+                out.push_str(&format!(
+                    "Your guide says to call people by their look; not {who}: the look written ahead of your \
+                     prompt begins with their name, so their name is how the model finds them. Call {who} by \
+                     name only, every time, and write nothing of how they look.\n"
+                ));
             }
         }
     }
@@ -422,13 +450,24 @@ fn trimmed(req: &Request, t: Target, fixed: usize, budget: usize) -> Option<Requ
 pub(super) const PROMPT_CHARS: u32 = 2400;
 
 fn prompt_cap(cfg: &Config, req: &Request) -> u32 {
-    let limit = (req.kind == "video")
-        .then(|| cfg.video_models().into_iter().find(|m| m.name == req.model))
-        .flatten()
-        .and_then(|m| m.features().prompt_chars);
+    let model = (req.kind == "video").then(|| cfg.video_models().into_iter().find(|m| m.name == req.model)).flatten();
+    let limit = model.as_ref().and_then(|m| m.features().prompt_chars);
     let every = req.every.trim().chars().count() as u32;
-    limit.map_or(PROMPT_CHARS, |n| n.saturating_sub(every + 2).clamp(200, PROMPT_CHARS))
+    // The looks the server puts ahead of it share the limit (a paragraph and
+    // a blank line each). `looks` may carry the voice too: counted, it errs short.
+    let looks: u32 = if model.is_some_and(|m| m.family.adds_looks()) {
+        req.added
+            .iter()
+            .filter_map(|n| req.looks.iter().find(|(m, _)| m.eq_ignore_ascii_case(n)))
+            // + "Name: " when the look doesn't start with it, and the blank line.
+            .map(|(_, l)| l.trim().chars().count() as u32 + 22)
+            .sum()
+    } else {
+        0
+    };
+    limit.map_or(PROMPT_CHARS, |n| n.saturating_sub(every + 2 + looks).clamp(200, PROMPT_CHARS))
 }
+
 
 pub(super) fn schema(t: Target, max: u32) -> serde_json::Value {
     let mut props = serde_json::json!({ "prompt": { "type": "string", "minLength": 1, "maxLength": max } });
@@ -658,6 +697,10 @@ mod tests {
         assert!(!b.contains("How they speak"), "an image has no voice");
         let h3 = brief(Target::Video(VideoFamily::MinimaxH3, true), &r, &looks, false);
         assert!(h3.contains("yasdig adds this look itself") && h3.contains("How they speak is not added"));
+        // LTX 2.5 isn't shown the look it would copy; the voice stays.
+        let voiced = vec![("Elias".to_string(), "Elias is a weathered cowboy. Elias speaks: low and slow.".to_string())];
+        let ltx = brief(Target::Video(VideoFamily::Ltx25, false), &super::Request { cast: vec!["Elias".into()], ..r.clone() }, &voiced, false);
+        assert!(!ltx.contains("weathered") && ltx.contains("Elias speaks: low and slow.") && ltx.contains("Call Elias by name only"), "{ltx}");
         let none = brief(Target::Image(ImageFamily::Flux), &super::Request { added: vec![], ..r }, &looks, false);
         assert!(!none.contains("yasdig adds"));
     }

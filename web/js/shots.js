@@ -38,6 +38,7 @@ const words = (x, fresh = true) => JSON.stringify([
   String(x.music ?? '').trim(),
   (x.subjects ?? []).map((m) => [m.name ?? '', m.look ?? '']),
   x.voices ?? [],
+  (x.looks ?? []).map((m) => [m.name ?? '', m.look ?? '']),
 ]);
 
 // What row `k` sends to a model that takes `take` ({references, sounds}, as
@@ -50,12 +51,12 @@ const words = (x, fresh = true) => JSON.stringify([
 // every part is read over it with at most one sound, the voice; nothing else
 // is read, and a part's length is its speech's, so `frames` is null —
 // never compared.
-export const ALL = { references: true, sounds: true };
+export const ALL = { references: true, sounds: true, looks: true };
 export function sentRow(r, k, take = ALL) {
   if (take.narrated) {
     return {
       ...r, frames: null, cut: false, refs: [], audio: (r.audio ?? []).slice(0, 1), key: k === 0 ? r.key ?? null : null,
-      subjects: [], voices: [], cast: [], lines: [], sound: '', music: '',
+      subjects: [], voices: [], cast: [], lines: [], sound: '', music: '', looks: [],
     };
   }
   const fresh = k === 0 || !!r.cut;
@@ -73,6 +74,9 @@ export function sentRow(r, k, take = ALL) {
     lines: said ? r.lines ?? [] : [],
     sound: said ? r.sound ?? '' : '',
     music: said ? r.music ?? '' : '',
+    // The looks that lead the part's prompt (LTX 2.5), on any part that took
+    // them: a continue's words name the shot's people as part 1's do.
+    looks: take.looks ? r.looks ?? [] : [],
   };
 }
 
@@ -181,10 +185,17 @@ export function withShift(st, own, c) {
 // How long the prompt a part is sent is, in characters (code points, as
 // Rust counts them): the scene's description and the part's words joined
 // as `videos::shot_prompt` joins them. What `features.prompt_chars` limits.
-export function promptChars(every, text) {
+export function promptChars(every, text, looks = []) {
   const e = (every ?? '').trim();
   const t = (text ?? '').trim();
-  return [...(e && t ? `${e}. ${t}` : e || t)].length;
+  const body = [...(e && t ? `${e}. ${t}` : e || t)].length;
+  // `cast::look_paragraph` + `compose`: each look a paragraph ahead, "Name: "
+  // when it doesn't start with the name.
+  return looks.filter((m) => (m.look ?? '').trim()).reduce((n, m) => {
+    const look = m.look.trim();
+    const named = look.toLowerCase().startsWith((m.name ?? '').trim().toLowerCase());
+    return n + [...look].length + (named ? 0 : [...(m.name ?? '').trim()].length + 2) + 2;
+  }, body);
 }
 
 // Pure: whether an edit of the locked things asks before it goes on — only

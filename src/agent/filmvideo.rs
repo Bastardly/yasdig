@@ -45,6 +45,7 @@ pub fn rows_of(c: &Clip) -> Vec<RowIn> {
             key: if j == 0 { c.source.clone() } else { None },
             refs: s.references.clone(),
             audio: s.audio.clone(),
+            looks: s.words.looks.clone(),
             key_ref: None,
         })
         .collect()
@@ -249,6 +250,7 @@ fn same_rows(a: &[RowIn], b: &[RowIn]) -> bool {
                 && x.key.as_deref().filter(|k| !k.is_empty()) == y.key.as_deref().filter(|k| !k.is_empty())
                 && x.refs == y.refs
                 && x.audio == y.audio
+                && x.looks == y.looks
         })
 }
 
@@ -821,16 +823,38 @@ t5xxl = "t.gguf"
             let (dir, cfg) = tmp(if h3 { "rt-h3" } else { "rt-wan" });
             let mut f = film();
             f.references = h3;
+            // Shot 1's parts name Mara, her look leading each (LTX 2.5's way);
+            // shot 2's describes Leo in its words and takes none.
+            f.cast[0].look = "Mara is a woman in a red coat.".into();
+            f.cast[1].look = "Leo is a broad man.".into();
+            f.shots[0].looks = true;
+            f.shots[1].looks = true;
             let once = round(&cfg, &f);
             let twice = round(&cfg, &once);
             assert_eq!(once.shots.len(), 3);
             for (a, b) in f.shots.iter().zip(&once.shots) {
                 assert_eq!((&a.text, &a.brief, a.frames, &a.key_stem, &a.keyframe, a.no_key, a.cut, a.scene), (&b.text, &b.brief, b.frames, &b.key_stem, &b.keyframe, b.no_key, b.cut, b.scene), "h3 {h3}");
                 assert_eq!((&a.references, &a.audio, &a.cast), (&b.references, &b.audio, &b.cast), "h3 {h3}: the cast's own come back out");
+                assert_eq!(a.looks, b.looks, "h3 {h3}: a part keeps whether its words lean on the looks");
             }
             assert_eq!(once, twice, "h3 {h3}: a second round changes nothing");
             std::fs::remove_dir_all(&dir).ok();
         }
+    }
+
+    /// A part's looks are its shot's cast's — a continue's too, which has no
+    /// cast of its own — and only when the part was written naming them.
+    #[test]
+    fn a_part_carries_its_shots_looks_only_when_written_for_them() {
+        let mut f = film();
+        f.cast[0].look = "Mara is a woman in a red coat.".into();
+        f.shots[1].looks = true;
+        let looks = |f: &Film, k: usize| session::shot_spec(f, k).0.words.looks;
+        assert!(looks(&f, 0).is_empty(), "part 1 describes her in its words");
+        assert_eq!(looks(&f, 1), vec![crate::videos::Subject { name: "Mara".into(), look: "Mara is a woman in a red coat.".into() }]);
+        f.shots[2].looks = true;
+        assert!(looks(&f, 2).is_empty(), "Leo has no look to lead with");
+        assert_eq!(session::row_json(&f, 1)["looks"][0]["name"], "Mara");
     }
 
     /// A draft of the person's on a generated shot — here only a new length

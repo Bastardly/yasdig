@@ -179,6 +179,7 @@ function readRow(el) {
     music: el.querySelector('.shotmusic').value.trim(),
     subjects: JSON.parse(el.dataset.subjects || '[]'),
     voices: JSON.parse(el.dataset.voices || '[]'),
+    looks: JSON.parse(el.dataset.looks || '[]'),
   };
 }
 
@@ -208,7 +209,12 @@ function enhanceRow(row, btn) {
   const fps = m?.forced_fps ?? (parseInt($('vfps').value, 10) || 0);
   const frames = r.frames ?? (m ? alignFrames(m.frames, m.frame_grid) : null);
   const note = row.querySelector('.shotenhanceerr');
-  const sent = sentRow(r, k, takeOf(m));
+  const take = takeOf(m);
+  const sent = sentRow(r, k, take);
+  // LTX 2.5: the shot's looks (part 1's, which a continue goes on with) lead
+  // the prompt, so Enhance names those people; the part keeps them after.
+  const looks = take.looks ? (k ? json(els[0], 'looks') : r.looks ?? []) : [];
+  const lookNames = looks.map((x) => x.name);
   const body = {
     kind: 'video',
     model: $('vmodel').value,
@@ -217,11 +223,12 @@ function enhanceRow(row, btn) {
     ...partNeighbours(...storyOrder(els), k),
     picture: sent.key || null,
     seconds: fps && frames ? frames / fps : null,
-    cast: r.cast,
-    looks: (r.subjects ?? []).filter((x) => x.name && x.look).map((x) => [x.name, x.look]),
+    cast: [...(r.cast ?? []), ...lookNames.filter((n) => !(r.cast ?? []).some((c) => same(c, n)))],
+    looks: [...(r.subjects ?? []), ...looks].filter((x) => x.name && x.look).map((x) => [x.name, x.look]),
     // H3 writes a sent reference's look into its subject lines itself
-    // (`h3prompt::compose`): Enhance names them and repeats none of it.
-    added: sent.subjects.filter((x) => x.name && x.look?.trim()).map((x) => x.name),
+    // (`h3prompt::compose`), LTX 2.5 the part's looks ahead of its prompt:
+    // Enhance names them and repeats none of it.
+    added: [...sent.subjects.filter((x) => x.name && x.look?.trim()).map((x) => x.name), ...lookNames],
     lines: r.lines,
     sound: r.sound,
     music: r.music,
@@ -237,6 +244,11 @@ function enhanceRow(row, btn) {
       };
       fill(row.querySelector('.shotsnd'), a.sound);
       fill(row.querySelector('.shotlines'), linesText(a.spoken ?? []));
+      // Written naming them: the looks now lead this part's prompt too.
+      if (looks.length && row.isConnected) {
+        row.dataset.looks = JSON.stringify(looks);
+        rowsChanged();
+      }
     },
   });
 }
@@ -369,6 +381,12 @@ function castOnRow(el, c) {
   el.dataset.subjects = JSON.stringify(refs.map((_, k) => subjects[k] ?? { name: '', look: '' }));
   el.dataset.audio = JSON.stringify(audio);
   el.dataset.voices = JSON.stringify(audio.map((_, k) => voices[k] ?? ''));
+  // LTX 2.5 puts the look ahead of the part's prompt (`ShotWords::looks`):
+  // adding them here is the part's opting in, so its words may just name them.
+  if (take.looks && (c.look ?? '').trim()) {
+    const looks = json(el, 'looks').filter((x) => !same(x.name, c.name));
+    el.dataset.looks = JSON.stringify([...looks, { name: c.name, look: c.look.trim() }]);
+  }
   const names = rowCast(el);
   if (!names.some((n) => same(n, c.name))) setRowCast(el, [...names, c.name]);
   return full;
@@ -472,6 +490,7 @@ export function removeCastFromShots(name, rows = rowEls()) {
     const keepA = audio.map((_, k) => !same(voices[k], name));
     el.dataset.audio = JSON.stringify(audio.filter((_, k) => keepA[k]));
     el.dataset.voices = JSON.stringify(voices.filter((_, k) => keepA[k]));
+    el.dataset.looks = JSON.stringify(json(el, 'looks').filter((x) => !same(x.name, name)));
     setRowCast(el, rowCast(el).filter((n) => !same(n, name)));
   }
   rowsChanged();
@@ -501,11 +520,13 @@ const rowsOf = (c) => (c.segments ?? []).map((s, k) => ({
 // wire sends it.
 const wordsOf = (s) => ({
   cast: s.cast ?? [], lines: s.lines ?? [], sound: s.sound ?? '', music: s.music ?? '',
-  subjects: s.subjects ?? [], voices: s.voices ?? [],
+  subjects: s.subjects ?? [], voices: s.voices ?? [], looks: s.looks ?? [],
 });
 
 // What a model takes of a row (`sentRow`), from its `/video-models` entry.
-const takeOf = (m) => ({ references: !!m?.references, sounds: !!m?.sounds, narrated: !!m?.narrated });
+const takeOf = (m) => ({
+  references: !!m?.references, sounds: !!m?.sounds, narrated: !!m?.narrated, looks: !!m?.features?.looks,
+});
 
 // The wire's shape for a row, what a model that takes `take` takes of it; a
 // blank Frames box is the model's. Shot 1's image goes as the clip's `source`.
@@ -528,7 +549,7 @@ const chains = (c) => !!c && videoModels.some((m) => m.family === c.video?.famil
 // change, never as drawn).
 const clipTake = (c) => {
   const m = videoModels.find((v) => v.family === c?.video?.family);
-  if (!m && c?.video?.family === 'narrated') return { references: false, sounds: false, narrated: true };
+  if (!m && c?.video?.family === 'narrated') return { references: false, sounds: false, narrated: true, looks: false };
   return m ? takeOf(m) : ALL;
 };
 
@@ -545,6 +566,7 @@ export function drawShots(rows) {
     <div class="shotrow${folded ? ' folded' : ''}" data-cut="0" data-refs="${esc(JSON.stringify(r.refs ?? []))}"
       data-subjects="${esc(JSON.stringify(r.subjects ?? []))}" data-audio="${esc(JSON.stringify(r.audio ?? []))}"
       data-voices="${esc(JSON.stringify(r.voices ?? []))}" data-key="${esc(r.key ?? '')}"
+      data-looks="${esc(JSON.stringify(r.looks ?? []))}"
       data-cast="${esc(JSON.stringify(r.cast ?? []))}">
       <div class="shothead">
         <button type="button" class="shotfold" aria-expanded="${!folded}" title="Fold or unfold this part">
@@ -894,7 +916,7 @@ function countPrompt(el, m) {
   const max = m?.features?.prompt_chars;
   out.hidden = !max;
   if (!max) return;
-  const n = promptChars($('veverytext').value, el.querySelector('textarea').value);
+  const n = promptChars($('veverytext').value, el.querySelector('textarea').value, videoTakes().looks ? json(el, 'looks') : []);
   out.textContent = `${n} / ${max}`;
   out.classList.toggle('over', n > max);
   out.title = `Keep a part under ${max} characters on ${m.name}, the scene's description included: `

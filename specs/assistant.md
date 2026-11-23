@@ -171,13 +171,17 @@ and the first one taken on.
   enhanced prose. With two people ("Mara hands Leo an umbrella") each kept their own
   look. So on LTX 2.5 the server may add the look. LTX 2.3 (a Gemma 3 encoder) and Wan
   (umT5) are untested.
-- **Wan and LTX, as it was before the A/B:** Here the shot's prompt is the *only* way a look
-  reaches the model. Nothing adds it, and the Enhance guides say these models can't
-  read a name. yasdig could add the look at generation time, as the Image tab does,
-  but that only works if the model ties "Mara is…" to "Mara waits…". The A/B is the
-  person's to run (see *Next*). If it does tie them, the plumbing follows: the look
-  rides on the shot, continued parts carry it on, and it's counted against LTX's
-  length limit. That's also the likely cure for "it loses the scene" under job 7.
+- **LTX 2.5, built 2026-11-23, awaiting a GPU run.** A part can carry its shot's cast
+  looks, and yasdig puts them ahead of its prompt, a paragraph each. A part opts in:
+  on the Video tab by *Add cast…*, in a film by being enhanced from now on. Its words
+  then name the people. A continued part carries part 1's looks. **A part written
+  before keeps its looks in its prose and gets none added**, so nothing is said twice.
+  The looks count against LTX's length limit. That's also the hoped-for cure for "it
+  loses the scene" under job 7. *Examples: "LTX: a member whose look yasdig adds is
+  named, not described", and the pair "LTX: both parts name Mara when yasdig adds her
+  look".*
+- **Wan and LTX 2.3: unchanged.** The look stays in the words, because nobody has
+  checked whether umT5 or Gemma 3 tie "Mara is…" to "Mara waits…".
 
 ---
 
@@ -193,7 +197,8 @@ and the first one taken on.
 ## Next, in order
 
 1. ~~Cast looks out of the Image tab's prompts~~: built, awaiting a GPU run.
-2. Cast looks out of video prompts. H3: built. Wan/LTX: the A/B first (see above).
+2. Cast looks out of video prompts. H3: built. LTX 2.5: built, awaiting a GPU run.
+   Wan and LTX 2.3: an A/B on each, if wanted.
 3. Enhance: a shot's parts go on from each other, not from the first frame (job 6).
 4. Steering a running session from the chat (job 3).
 5. Suggestions before a dramatic rewrite, with *Just do it* (*Who's in charge*).

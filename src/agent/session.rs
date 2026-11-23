@@ -128,6 +128,7 @@ pub fn row_json(f: &Film, k: usize) -> Value {
             "cast": w.cast,
             "subjects": w.subjects,
             "voices": w.voices,
+            "looks": w.looks,
             // What the row's first-frame buttons offer (Draw again, Remove,
             // Draw a first frame) and whether the one there is stale.
             "fresh": fresh,
@@ -193,6 +194,8 @@ pub fn shot_spec(f: &Film, k: usize) -> (crate::pipeline::ShotSpec, Option<Strin
         cast: s.cast.clone(),
         subjects: pictured.iter().map(|m| crate::videos::Subject { name: m.name.clone(), look: m.look.clone() }).collect(),
         voices: voiced.iter().map(|m| m.name.clone()).collect(),
+        // Only a part enhanced to name them: its words lean on the looks.
+        looks: if s.looks { f.shot_looks(k) } else { Vec::new() },
     };
     let spec = crate::pipeline::ShotSpec {
         text: s.text.clone(),
@@ -235,6 +238,10 @@ pub struct RowIn {
     pub refs: Vec<String>,
     #[serde(default)]
     pub audio: Vec<String>,
+    /// The looks that lead its prompt (`ShotWords::looks`): its words name
+    /// those people, so the part keeps `FilmShot.looks`.
+    #[serde(default)]
+    pub looks: Vec<crate::videos::Subject>,
     #[serde(skip)]
     pub key_ref: Option<ImageRef>,
 }
@@ -278,6 +285,7 @@ pub fn row_shot(f: &Film, names: &[String], row: &RowIn, fresh: bool, first: boo
         music: row.music.trim().to_string(),
         seed: row.seed,
         frames: row.frames,
+        looks: !row.looks.is_empty(),
         ..Default::default()
     };
     // The text as enhanced, untouched: the story's words still stand behind it.
@@ -1418,7 +1426,9 @@ pub fn apply_story(chat: &mut Chat, r: &mut ReplyJson, t: &Toolkit, notes: &mut 
 /// its text (and H3's sound line where it had none). A shot that changed
 /// meanwhile keeps what it has. A failure stops the rest: the board is whole
 /// as the story wrote it.
-pub fn shot_enhanced(c: &mut Chat, k: usize, text: &str, r: Result<&super::enhance::Enhanced, &String>) {
+/// `looks`: it was written naming the shot's cast, whose looks then lead
+/// its prompt (`FilmShot.looks`).
+pub fn shot_enhanced(c: &mut Chat, k: usize, text: &str, looks: bool, r: Result<&super::enhance::Enhanced, &String>) {
     let Some(f) = c.film.as_mut() else { return };
     match r {
         Ok(e) => {
@@ -1426,6 +1436,7 @@ pub fn shot_enhanced(c: &mut Chat, k: usize, text: &str, r: Result<&super::enhan
                 if s.enhance && s.text == text {
                     s.brief = text.to_string();
                     s.text = e.prompt.clone();
+                    s.looks = looks;
                     if s.sound.trim().is_empty() && !e.sound.is_empty() {
                         s.sound = e.sound.clone();
                     }
@@ -2177,10 +2188,12 @@ mod tests {
         let long = |s: &str| super::super::enhance::Enhanced { prompt: format!("{s} In full."), sound: "Rain.".into(), ..Default::default() };
         for k in 0..3 {
             let text = c.film.as_ref().unwrap().shots[k].text.clone();
-            shot_enhanced(&mut c, k, &text, Ok(&long(&text)));
+            // Part 2 as LTX 2.5 writes it, naming the cast its looks lead.
+            shot_enhanced(&mut c, k, &text, k == 1, Ok(&long(&text)));
         }
         assert_eq!(next_step(&c), Step::End);
         let f = c.film.as_ref().unwrap();
+        assert_eq!(f.shots.iter().map(|s| s.looks).collect::<Vec<_>>(), [false, true, false]);
         assert_eq!((f.shots[0].text.as_str(), f.shots[0].brief.as_str()), ("Mara opens the door. In full.", "Mara opens the door."));
         assert_eq!(f.shots[0].sound, "Rain.", "a sound line where there was none");
         assert!(super::super::context::board_text(f, None).contains("  - Mara opens the door. [Mara]"), "the story sees its words");
@@ -2193,7 +2206,7 @@ mod tests {
         assert!(!f.shots[0].enhance && f.shots[2].enhance && f.shots[2].brief.is_empty());
         assert_eq!(next_step(&c), Step::Enhance(2));
         // A failure leaves the rest as written and says so.
-        shot_enhanced(&mut c, 2, "Leo runs.", Err(&"no agent".to_string()));
+        shot_enhanced(&mut c, 2, "Leo runs.", false, Err(&"no agent".to_string()));
         assert_eq!(next_step(&c), Step::End);
         assert_eq!(c.film.as_ref().unwrap().shots[2].text, "Leo runs.");
         // The rows read back unchanged keep the story's words; an edited one is the person's.

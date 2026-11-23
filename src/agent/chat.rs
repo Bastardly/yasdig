@@ -380,6 +380,11 @@ pub struct FilmShot {
     /// out never removes it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub theirs: bool,
+    /// Its words name its shot's cast, whose looks lead its prompt
+    /// (`ShotWords::looks`, LTX 2.5): set when it is enhanced so. A part
+    /// written before has the looks in its prose and none added.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub looks: bool,
 }
 
 impl FilmShot {
@@ -420,11 +425,29 @@ impl Default for FilmShot {
             brief: String::new(),
             enhance: false,
             theirs: false,
+            looks: false,
         }
     }
 }
 
 impl Film {
+    /// Who is in part `k`'s shot: its first part's cast (a continue has none
+    /// of its own).
+    pub fn shot_cast(&self, k: usize) -> &[String] {
+        let start = self.groups().into_iter().find(|g| g.contains(&k)).map_or(k, |g| g.start);
+        self.shots.get(start).map_or(&[], |s| s.cast.as_slice())
+    }
+
+    /// Part `k`'s shot's cast with a look, as `ShotWords::looks` sends them.
+    pub fn shot_looks(&self, k: usize) -> Vec<crate::videos::Subject> {
+        self.shot_cast(k)
+            .iter()
+            .filter_map(|n| self.member(n))
+            .filter(|m| !m.look.trim().is_empty())
+            .map(|m| crate::videos::Subject { name: m.name.clone(), look: m.look.trim().to_string() })
+            .collect()
+    }
+
     /// Its parts grouped into shots, in order: a shot starts at the first
     /// part and at every cut.
     pub fn groups(&self) -> Vec<std::ops::Range<usize>> {

@@ -310,6 +310,12 @@ read over by every part. Names in the UI: Storyboard, Shot
   (`m.sounds`; *Who is in it* on every model but narrated, a fresh part only — on
   Wan/LTX names only, no chip pictures: Enhance looks each up in the cast for its look
   (on H3 a sent reference's look is the subject line's, so Enhance names them only)
+  **LTX 2.5 leads a part with its looks** (`ShotWords::looks`, `adds_looks`, composed in
+  `plan_shots` by `cast::compose`, recorded on the segment): a row's `data-looks`, set
+  by `castOnRow` on part 1 and kept by `enhanceRow` once a part is written naming
+  them (a continue takes part 1's); `sentRow` sends them only when `take.looks`
+  (`features.looks`), `words()` compares them, `promptChars` counts them. Opt-in per
+  part, so an old part with the look in its prose isn't doubled
   and `speaks`, and a film's names pick which pictures a first frame is drawn from), names in the borrowed
   References/Sounds dialogs (`editRefs(…, names)`, `editSounds(…, voices)`).
 - **References are H3's alone** (`VideoFamily::takes_references`,

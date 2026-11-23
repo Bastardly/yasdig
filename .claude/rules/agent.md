@@ -367,7 +367,12 @@ Break silently:
   `cast_added_text`. **On H3 the subject lines are the server's too**
   (`h3prompt::compose` writes each sent reference's `Subject.look`): `enhanceRow` sends
   `sentRow`'s subjects with a look, the film's Enhance `shot_spec`'s, and the brief adds
-  that the voice isn't added. Anywhere else (Wan, LTX, a continue) none: the prompt is
-  the only road a look has to the video model (`specs/assistant.md`, *Cast in a prompt*). The three image `ENHANCE_CASES`
+  that the voice isn't added. **On LTX 2.5 the shot's looks lead each part that opted
+  in** (`VideoFamily::adds_looks`, `ShotWords::looks`): the film's Enhance names
+  `Film::shot_looks(k)` (part 1's cast, a continue's too) and `shot_enhanced` sets
+  `FilmShot.looks`; only then does `shot_spec` send them, so a part written earlier
+  (looks in its prose) is never doubled. `prompt_cap` subtracts the looks. **The LTX brief shows an added member's name and voice, never the look** (`Target::leads_with_looks`): shown, Gemma 26B copied it on 3 of 4 tries; and `enhance-ltx.md`'s "names mean nothing" stays as written — loosened, it named Leo where no look is added. Wan, LTX 2.3
+  and H3 continues: none, the prompt is the only road a look has (`specs/assistant.md`,
+  *Cast in a prompt*). The three image `ENHANCE_CASES`
   hold it, the person's own change kept (a blue shirt).
 - **No `data-help` on a `<button>`**: `wireHints` would nest a button in it.

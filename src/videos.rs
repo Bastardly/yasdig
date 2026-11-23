@@ -223,6 +223,13 @@ pub struct ShotWords {
     /// Whose voice each sound is (`""` no one's), in `audio`'s order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub voices: Vec<String>,
+    /// The looks yasdig puts in front of this part's prompt
+    /// (`VideoFamily::adds_looks`), a paragraph each, so its words name the
+    /// people rather than describe them. Per part and opted into (a cast
+    /// member added, the part enhanced so): a part written with the look in
+    /// its prose has none, or the look would run twice (2026-11-16).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub looks: Vec<Subject>,
 }
 
 impl ShotWords {

@@ -5394,6 +5394,10 @@ fn plan_shots(
             let mut voices = w.voices.clone();
             voices.resize(shot.audio.len(), String::new());
             crate::h3prompt::compose(every, &view, &ids, &subjects, &voices, from_frame)
+        } else if m.family.adds_looks() && !shot.words.looks.is_empty() {
+            let looks: Vec<String> =
+                shot.words.looks.iter().filter_map(|c| crate::cast::look_paragraph(&c.name, &c.look)).collect();
+            crate::cast::compose(&looks, &shot_prompt(every, &rolled))
         } else {
             shot_prompt(every, &rolled)
         };
@@ -5586,6 +5590,34 @@ mod tests {
         req.source = Some("../x".into());
         assert!(super::plan_clip(&cfg, &items, &videos, &req).is_err(), "stems are whitelisted");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// LTX 2.5 leads a part's prompt with the looks it carries, a paragraph
+    /// each and the scene's words after; elsewhere, or with none, the prompt
+    /// is as it was.
+    #[test]
+    fn ltx_25_leads_a_part_with_its_cast_looks() {
+        let vars = Default::default();
+        let with_looks = |mut s: ShotSpec| {
+            s.words.looks = vec![
+                crate::videos::Subject { name: "Mara".into(), look: "Mara is a woman in a red coat.".into() },
+                crate::videos::Subject { name: "Leo".into(), look: "A broad man.".into() },
+            ];
+            s
+        };
+        let segs = plan_shots(&vars, &video("ltx_2_5"), &[with_looks(shot("Mara hands Leo an umbrella.", 1, None))], "rain at night", &[], false)
+            .unwrap();
+        assert_eq!(
+            segs[0].conditioned,
+            "Mara is a woman in a red coat.\n\nLeo: A broad man.\n\nrain at night. Mara hands Leo an umbrella."
+        );
+        assert_eq!(segs[0].words.looks.len(), 2, "recorded, so a Redo adds them again");
+        for family in ["ltx_2_3", "wan22_ti2v_5b"] {
+            let segs = plan_shots(&vars, &video(family), &[with_looks(shot("Mara waits.", 1, None))], "", &[], false).unwrap();
+            assert_eq!(segs[0].conditioned, "Mara waits.", "{family} adds no look");
+        }
+        let segs = plan_shots(&vars, &video("ltx_2_5"), &[shot("Mara waits.", 1, None)], "", &[], false).unwrap();
+        assert_eq!(segs[0].conditioned, "Mara waits.", "a part that didn't opt in");
     }
 
     /// Narrated stills: a shot is one picture, its first frame, and its parts
