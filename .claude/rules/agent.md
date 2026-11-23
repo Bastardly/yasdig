@@ -130,6 +130,20 @@ Break silently:
   `start_proposal_sized`) set `Session.sized`, which the plan turn's own sizes never
   overwrite. The card's number boxes are the only thing typed into the log, so
   `draw()` in assistant.js carries their values across a redraw.
+- **A comparison can be just shown** (`/agent/session {show}` → `show_proposal`,
+  `Session.shown`): `rounds` = values, `per_round` 1, mode Critique (so `start_round`
+  writes each value and `close_session` puts it back) but no checks: `image_done` calls
+  `shown_round_done` — the next value, or after the last `close_session` and a note. No
+  turn at all. The compare instruction offers it for a question a picture answers.
+- **CFG is told around the model's own** (`Toolkit.model_cfg`, `toolkit::model_cfg`:
+  the chat's CFG unset, then `with_turbo` and the profile) **in the family's step**
+  (`ImageFamily::cfg_step`: 1 on SD/SDXL, 0.3 on the DiTs — the person's numbers): the
+  knob line says both, and the compare example is `Toolkit::cfg_values`, three values a
+  step apart, none under 1. Half-to-double jumped too far (2026-11-23). **And the
+  grammar holds it**: with a ladder (`Toolkit::cfg_ladder`, own ± 3 steps) the chat
+  schema's CFG compare is a branch of its own whose `values` are that enum, the other
+  knobs another branch — told the steps, Gemma still offered 1 and 10 on Flux.
+  `agent-check` sets 6 and 1, its SDXL chat's.
 - **A message while an improve session runs steers it** (`Session::steerable`: busy,
   Plan/Critique, no sweep; `routes::send` → `Msg::User` + `Session.steers`, no job): the
   next plan/critique turn quotes them (`context::steered_text`), a critique's schema
@@ -176,16 +190,19 @@ Break silently:
   `Profile::validate` (`MAX_CFG` is in `config.rs`, `settings.js` and the inputs).
   `apply` never trusts the grammar (no float ranges, no property count): unknown, off or
   locked keys are dropped with a note, numbers clamped to `hard_bounds`.
-- **Locks** (`toolkit::locks_for`): a `Catalog::distilled` file locks steps and CFG;
-  `ImageFamily::cfg_locked` (recipe CFG 1) locks CFG; a CFG lock locks the negative. **A
+- **Locks** (`toolkit::locks_for`): a `Catalog::distilled` file locks steps and CFG,
+  and so the negative. **A family never locks CFG** (2026-11-23): a recipe CFG of 1 is
+  a default, the Image tab takes more (its negative box shows once CFG leaves 1,
+  `syncNegative`), and the old family lock had the agent switch a Flux chat to SDXL to
+  show "what does CFG do?". The knob line says what 1 means instead. **A
   Turbo LoRA locks nothing** (`Locks.turbo` is advice: what it was tuned for), as the
   Image tab's Turbo only sets steps/CFG — MOSS's DMD LoRA takes a real CFG. `with_turbo`
   fills steps/CFG only where the chat has none, and its sigmas only with its own steps.
   **Locks are the model's, not the chat's**: with Model allowed, a locked knob is still
   in the `change` schema and `compare`'s `vary`; `knobs::apply` writes `model` first and
   checks the rest against `locks_of` the new one (`ModelChoice.locks`, from `runnable`),
-  and a comparison that switched checks its values the same way. Without it, "best CFG?"
-  on Flux had only the model to vary and wrote `name:3` as model values.
+  and a comparison that switched checks its values the same way. A locked knob is told
+  as "offer another model, switch only when the person asks".
 - **Pictures a turn sees are staged into scratch** at the agent's `image_side` and
   removed after (invariant 8; `user/` isn't a sandbox root on Windows). A chat keeps its
   own copies under `img/`, so deleting a work item never breaks it.

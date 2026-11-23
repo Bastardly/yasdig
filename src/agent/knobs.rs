@@ -261,17 +261,17 @@ pub struct Locks {
 }
 
 impl Locks {
-    /// `family_cfg_locked`: `ImageFamily::cfg_locked`. `distilled`: a catalog
-    /// file distilled to fixed settings (`Catalog::distilled`). `turbo`: a
-    /// speed LoRA among the chat's picks, described.
-    pub fn of(family_cfg_locked: bool, distilled: bool, turbo: Option<&str>) -> Locks {
+    /// `distilled`: a catalog file distilled to fixed settings
+    /// (`Catalog::distilled`). `turbo`: a speed LoRA among the chat's picks,
+    /// described. A family whose recipe CFG is 1 locks nothing: the Image tab
+    /// takes more on it, and the agent locking it switched a Flux chat to
+    /// SDXL to answer "what does CFG do?" (2026-11-23).
+    pub fn of(distilled: bool, turbo: Option<&str>) -> Locks {
         let mut l = Locks { turbo: turbo.map(str::to_string), ..Locks::default() };
         if distilled {
             let why = "this model file is distilled to its own steps and CFG".to_string();
             l.steps = Some(why.clone());
             l.cfg_scale = Some(why);
-        } else if family_cfg_locked {
-            l.cfg_scale = Some("this model runs without CFG (it stays at 1)".into());
         }
         if l.cfg_scale.is_some() {
             l.negative = Some("without CFG the model ignores the negative prompt".into());
@@ -543,8 +543,8 @@ mod tests {
         let mut s = settings();
         s["template"] = json!("flux");
         let models = ["flux".to_string(), "sdxl".to_string()];
-        let no_cfg = Locks::of(true, false, None);
-        let locks_of = |m: &str| Some(if m == "sdxl" { Locks::default() } else { Locks::of(true, false, None) });
+        let no_cfg = Locks::of(true, None);
+        let locks_of = |m: &str| Some(if m == "sdxl" { Locks::default() } else { Locks::of(true, None) });
         // CFG named before the model, as a reply may: still checked on SDXL.
         let a = apply(&mut s, &change(json!({"cfg_scale": 7.0, "model": "sdxl"})), &Rules::default(), &no_cfg, &models, &locks_of);
         assert_eq!((s["template"].clone(), s["cfg_scale"].clone()), (json!("sdxl"), json!(7.0)), "{:?}", a.notes);
@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn a_locked_knob_is_never_written() {
         let mut s = settings();
-        let locks = Locks::of(true, false, None);
+        let locks = Locks::of(true, None);
         let a = apply(&mut s, &change(json!({"cfg_scale": 3.0, "negative": "blur"})), &Rules::default(), &locks, &[], &|_| None);
         assert_eq!(s["cfg_scale"], json!(6.0));
         assert!(s.get("negative").is_none());

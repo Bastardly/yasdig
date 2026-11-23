@@ -1149,7 +1149,10 @@ description, a session that improves or a comparison.
   passed every check, and each check's tally — and the agent answers from them. The value
   it picks is set as a change you can **Undo**; with no answer the setting goes back to
   what it was. A value it may not use (an unticked setting, a locked CFG) is left out with a
-  note, and a comparison needs two values.
+  note, and a comparison needs two values. **Just show me** on the card skips the judging:
+  one picture per value on the same seed, side by side in the chat, and the setting goes
+  back after. A question a picture answers ("what does CFG do?") gets an answer and this
+  card, so you can see it too.
 - **Either way**, the pictures
   land on the stage and in Current like any generation. Each is marked with its answers
   (✓✗), the ones the agent kept, and — since a small model is a lenient judge of its

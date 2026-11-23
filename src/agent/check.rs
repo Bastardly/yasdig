@@ -483,6 +483,35 @@ const CASES: &[Case] = &[
             }
         },
     },
+    // Asked for 2026-11-16: a question seeing answers is offered as pictures.
+    Case {
+        name: "answers a question, and offers to show it as a comparison",
+        mode: Mode::Chat,
+        says: "What does CFG scale do?",
+        checks: &[],
+        prompt: None,
+        video: false,
+        film: None,
+        steer: None,
+        want: |r| {
+            action(r, "compare")?;
+            if r.vary.as_deref() != Some("cfg_scale") {
+                return Err(format!("it compares {:?}, not CFG", r.vary));
+            }
+            let n = r.values.as_ref().map_or(0, |v| v.len());
+            if n < 2 {
+                return Err(format!("{n} value(s) offered"));
+            }
+            // Near this model's own 6, a step of 1 apart (the person's word):
+            // 3–9 at most.
+            let num = |v: &serde_json::Value| v.as_f64().or_else(|| v.as_str()?.trim().parse().ok());
+            let off: Vec<&serde_json::Value> = r.values.iter().flatten().filter(|v| num(v).is_none_or(|x| !(3.0..=9.0).contains(&x))).collect();
+            if !off.is_empty() {
+                return Err(format!("values too far from this model's own 6 (3–9): {off:?}"));
+            }
+            if r.reply.trim().len() < 40 { Err(format!("no answer to the question: {:?}", r.reply)) } else { Ok(()) }
+        },
+    },
     // Asked for 2026-11-16: a dramatic redo comes as key suggestions first.
     Case {
         name: "offers ideas for a wholesale rework, and draws nothing yet",
@@ -1046,6 +1075,9 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
         tk.steering = case.steer.is_some();
         // An Image tab chat's, as the app builds it: offered a rework too.
         tk.image_tab = !case.video && case.film.is_none();
+        // The SDXL chat's own CFG and its step, as `toolkit::resolve` reads them.
+        tk.model_cfg = Some(6.0);
+        tk.cfg_step = Some(f64::from(family.cfg_step()));
         if case.video {
             let h3 = toolkit::VideoView {
                 name: "h3".into(),

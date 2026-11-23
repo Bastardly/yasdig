@@ -827,6 +827,9 @@ fn answer_proposal(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u
         /// *Draw one*: the proposal's first prompt, once, instead of the session.
         #[serde(default)]
         draw_one: bool,
+        /// *Just show me*: a comparison drawn a picture per value, unjudged.
+        #[serde(default)]
+        show: bool,
         /// The card's sizes, where the person set them.
         #[serde(default)]
         rounds: Option<u32>,
@@ -842,7 +845,9 @@ fn answer_proposal(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u
         if !dto.start {
             return session::decline_proposal(c).map_err(|e| anyhow::anyhow!(e)).map(|_| c.clone());
         }
-        if dto.draw_one {
+        if dto.show {
+            session::show_proposal(c).map_err(|e| anyhow::anyhow!(e))?;
+        } else if dto.draw_one {
             session::draw_proposal(c).map_err(|e| anyhow::anyhow!(e))?;
         } else {
             session::start_proposal_sized(c, dto.rounds, dto.count).map_err(|e| anyhow::anyhow!(e))?;

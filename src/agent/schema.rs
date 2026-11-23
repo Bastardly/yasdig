@@ -427,19 +427,28 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32, sweep: bool) -> 
                 cast.insert("reply".into(), text(REPLY_CHARS));
                 branches.push(object(cast));
             }
-            if !vary.is_empty() {
-                let mut compare = props;
-                compare.insert("action".into(), json!({ "const": "compare" }));
-                with_change(&mut compare, t, false);
-                compare.insert("goal".into(), text(GOAL_CHARS));
-                compare.insert("vary".into(), json!({ "enum": vary }));
-                compare.insert(
-                    "values".into(),
-                    json!({ "type": "array", "items": text(1000), "minItems": 2, "maxItems": MAX_ROUNDS }),
-                );
-                compare.insert("count".into(), int(1, MAX_BATCH));
-                compare.insert("reply".into(), text(REPLY_CHARS));
-                branches.push(object(compare));
+            // CFG is compared on this model's ladder (`Toolkit::cfg_ladder`):
+            // told the small steps, Gemma still offered 1 and 10 on Flux
+            // (2026-11-23), so the grammar holds the values, and the reply,
+            // written after them, names what will be drawn.
+            let ladder = t.cfg_ladder().filter(|_| vary.contains(&"cfg_scale"));
+            let compare = |vary: &[&str], values: Value| {
+                let mut c = props.clone();
+                c.insert("action".into(), json!({ "const": "compare" }));
+                with_change(&mut c, t, false);
+                c.insert("goal".into(), text(GOAL_CHARS));
+                c.insert("vary".into(), json!({ "enum": vary }));
+                c.insert("values".into(), json!({ "type": "array", "items": values, "minItems": 2, "maxItems": MAX_ROUNDS }));
+                c.insert("count".into(), int(1, MAX_BATCH));
+                c.insert("reply".into(), text(REPLY_CHARS));
+                object(c)
+            };
+            if let Some(ladder) = &ladder {
+                branches.push(compare(&["cfg_scale"], json!({ "enum": ladder })));
+            }
+            let rest: Vec<&str> = vary.iter().copied().filter(|k| ladder.is_none() || *k != "cfg_scale").collect();
+            if !rest.is_empty() {
+                branches.push(compare(&rest, text(1000)));
             }
             json!({ "anyOf": branches })
         }
@@ -452,6 +461,28 @@ mod tests {
     use super::super::toolkit::{build, ModelChoice};
     use super::*;
     use crate::config::ImageFamily;
+
+    /// A CFG comparison draws from the model's ladder, by grammar; the rest
+    /// of the knobs compare as written.
+    #[test]
+    fn cfg_is_compared_on_the_models_ladder() {
+        let mut t = toolkit(&Rules::default(), &Locks::default());
+        let compares = |t: &Toolkit| -> Vec<Value> {
+            output(Mode::Chat, t, 0, 0, false)["anyOf"].as_array().unwrap().iter()
+                .filter(|b| b["properties"]["action"]["const"] == "compare").map(|b| b["properties"].clone()).collect()
+        };
+        let plain = compares(&t);
+        assert_eq!(plain.len(), 1, "no ladder without the model's own CFG");
+        t.model_cfg = Some(1.0);
+        t.cfg_step = Some(0.3);
+        let c = compares(&t);
+        assert_eq!(c[0]["vary"]["enum"], json!(["cfg_scale"]));
+        assert_eq!(c[0]["values"]["items"]["enum"], json!(["1", "1.3", "1.6", "1.9"]));
+        assert!(!c[1]["vary"]["enum"].as_array().unwrap().contains(&json!("cfg_scale")));
+        t.model_cfg = Some(6.0);
+        t.cfg_step = Some(1.0);
+        assert_eq!(compares(&t)[0]["values"]["items"]["enum"], json!(["3", "4", "5", "6", "7", "8", "9"]));
+    }
 
     fn models() -> Vec<ModelChoice> {
         vec![
@@ -505,13 +536,13 @@ mod tests {
         assert_eq!(keys(&talk["properties"]["change"]), ["prompt", "negative", "cfg_scale", "size", "model"]);
         assert_eq!(talk["properties"]["change"]["properties"]["model"]["enum"], json!(["sdxl", "klein"]), "every runnable model");
         // Locked here, but a switch of model in the same change may take it.
-        let locked = toolkit(&Rules::default(), &Locks::of(true, false, None));
+        let locked = toolkit(&Rules::default(), &Locks::of(true, None));
         let s = output(Mode::Chat, &locked, 4, 2, false);
         let (talk, _) = branches(&s);
         assert_eq!(keys(&talk["properties"]["change"]), ["prompt", "negative", "cfg_scale", "size", "model"]);
         let mut fixed = Rules::default();
         fixed.knobs.remove("model");
-        let s = output(Mode::Chat, &toolkit(&fixed, &Locks::of(true, false, None)), 4, 2, false);
+        let s = output(Mode::Chat, &toolkit(&fixed, &Locks::of(true, None)), 4, 2, false);
         let (talk, _) = branches(&s);
         assert_eq!(keys(&talk["properties"]["change"]), ["prompt", "size"]);
     }
@@ -595,7 +626,7 @@ mod tests {
 
     #[test]
     fn a_describe_offers_a_negative_only_where_the_model_reads_one() {
-        let t = toolkit(&Rules::default(), &Locks::of(true, false, None));
+        let t = toolkit(&Rules::default(), &Locks::of(true, None));
         assert!(output(Mode::Describe, &t, 0, 0, false)["properties"].get("negative").is_none());
         let t = toolkit(&Rules::default(), &Locks::default());
         assert!(output(Mode::Describe, &t, 0, 0, false)["properties"].get("negative").is_some());

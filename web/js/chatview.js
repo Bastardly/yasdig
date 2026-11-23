@@ -119,6 +119,7 @@ function batchPictures(chat, m, judged) {
 // that (*Draw one*) — the rounds are the expensive half. The sizes are the
 // person's to set; blank is the agent's own pick. The server clamps them
 // (`knobs::MAX_ROUNDS`/`MAX_BATCH`), these maxima only stop the spinner.
+// A comparison can also be just shown (`show`): a picture per value, unjudged.
 function proposalCard(p) {
   const what = p.sweep
     ? `Compare ${esc(KNOB_LABEL[p.sweep.knob] ?? p.sweep.knob)}: ${p.sweep.values.map((v) => esc(valueText(p.sweep.knob, v))).join(', ')}`
@@ -137,6 +138,7 @@ function proposalCard(p) {
     <div class="btnrow">
       <button type="button" class="btn" data-proposal="start">Start</button>
       ${p.prompt ? '<button type="button" class="btn" data-proposal="one">Draw one</button>' : ''}
+      ${p.sweep ? `<button type="button" class="btn" data-proposal="show" title="One picture per value on the same seed, nothing judged; the setting goes back after">Just show me</button>` : ''}
       <button type="button" class="btn" data-proposal="no">No thanks</button>
     </div></div>`;
 }

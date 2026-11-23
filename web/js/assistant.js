@@ -507,11 +507,12 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
     try {
       if (d.undo) {
         show(await post('/agent/undo', { chat: id, change: Number(d.undo) }), { scroll: false });
-      } else if (d.proposal === 'start' || d.proposal === 'one') {
+      } else if (d.proposal === 'start' || d.proposal === 'one' || d.proposal === 'show') {
         // The card's sizes go only where the person filled one in: blank is
         // the agent's own pick.
         const body = { chat: id, start: true };
         if (d.proposal === 'one') body.draw_one = true;
+        else if (d.proposal === 'show') body.show = true;
         else for (const el of t.closest('.chatcard').querySelectorAll('[data-size]')) {
           const n = Math.round(Number(el.value));
           if (el.value.trim() && n >= 1) body[el.dataset.size] = n;

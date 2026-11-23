@@ -104,6 +104,15 @@ pub struct Toolkit {
     /// the prompt (`cast::compose`), so the prompt calls them by name only.
     #[serde(skip)]
     pub cast_added: Vec<(String, String)>,
+    /// The chat's model's own CFG (its Turbo LoRA's when a round adds one,
+    /// else its profile's), whatever the chat set: what a sensible CFG is
+    /// measured from. Told only yasdig's 1–30, "what does CFG do?" was shown
+    /// with values the chat's model doesn't take (2026-11-23).
+    #[serde(skip)]
+    pub model_cfg: Option<f64>,
+    /// A CFG step that shows on this family (`ImageFamily::cfg_step`).
+    #[serde(skip)]
+    pub cfg_step: Option<f64>,
     /// The person spoke while the session ran (`Session::steers`), so a
     /// critique may add checks. Set by a turn, as `vision` is.
     #[serde(skip)]
@@ -396,7 +405,7 @@ pub fn locks_for(cfg: &Config, profile: Option<&Profile>, settings: &Value) -> L
         None => turbo_lora(cfg, p.family),
     };
     let turbo = turbo.map(|l| format!("{}, tuned for {} steps at CFG {}", l.label, l.turbo.steps, l.turbo.cfg_scale));
-    Locks::of(p.family.cfg_locked(), distilled, turbo.as_deref())
+    Locks::of(distilled, turbo.as_deref())
 }
 
 /// The chat's word picks (`Profile.cast`, `words`), as names and looks. A
@@ -483,7 +492,42 @@ pub fn resolve(cfg: &Config, chat: &Chat) -> Toolkit {
     t.videos = installed;
     t.variables = variables;
     t.cast_added = cast_added(cfg, &chat.settings);
+    t.model_cfg = model_cfg(cfg, chat, profile);
+    t.cfg_step = profile.map(|p| f64::from(p.family.cfg_step()));
     t
+}
+
+/// The model's own CFG, as a round would draw with the chat's CFG unset.
+fn model_cfg(cfg: &Config, chat: &Chat, profile: Option<&Profile>) -> Option<f64> {
+    let mut s = chat.settings.clone();
+    s.as_object_mut()?.remove("cfg_scale");
+    super::with_turbo(cfg, &mut s);
+    if let (Some(p), Some(o)) = (profile, s.as_object_mut()) {
+        fill_from(o, p);
+    }
+    s.get("cfg_scale")?.as_f64()
+}
+
+impl Toolkit {
+    /// The CFG values a comparison may draw on this model: its own and three
+    /// steps either side (none under 1), as text the grammar can list.
+    pub fn cfg_ladder(&self) -> Option<Vec<String>> {
+        let (own, step) = (self.model_cfg?, self.cfg_step?);
+        let r = |x: f64| (x * 10.0).round() / 10.0;
+        let mut v: Vec<String> = (-3..=3).map(|i| r(own + step * f64::from(i))).filter(|x| *x >= 1.0).map(|x| x.to_string()).collect();
+        v.dedup();
+        Some(v)
+    }
+
+    /// Three CFG values a step apart around the model's own, none under 1:
+    /// what a comparison of CFG offers. Small steps are enough to see (the
+    /// person's word, `ImageFamily::cfg_step`); half-to-double jumped too far.
+    pub fn cfg_values(&self) -> Option<Vec<f64>> {
+        let (own, step) = (self.model_cfg?, self.cfg_step?);
+        let r = |x: f64| (x * 10.0).round() / 10.0;
+        let low = if own - step >= 1.0 { own - step } else { own };
+        Some((0..3).map(|i| r(low + step * f64::from(i))).collect())
+    }
 }
 
 /// The settings a round of the chat draws with, as the agent is shown them:
@@ -595,6 +639,8 @@ pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelCh
         library: Vec::new(),
         variables: Default::default(),
         cast_added: Vec::new(),
+        model_cfg: None,
+        cfg_step: None,
         steering: false,
     }
 }
@@ -678,7 +724,7 @@ mod tests {
         let t = build(
             &Rules::default(),
             &serde_json::json!({"prompt": "x", "cfg_scale": 1.0}),
-            &Locks::of(true, false, None),
+            &Locks::of(true, None),
             vec![choice("z", ImageFamily::ZImage)],
             Some(ImageFamily::ZImage),
         );
@@ -695,7 +741,7 @@ mod tests {
         let t = build(
             &rules,
             &serde_json::json!({"prompt": "x"}),
-            &Locks::of(false, false, Some("MOSS DMD, tuned for 8 steps at CFG 1")),
+            &Locks::of(false, Some("MOSS DMD, tuned for 8 steps at CFG 1")),
             vec![choice("moss", ImageFamily::MossImage)],
             Some(ImageFamily::MossImage),
         );

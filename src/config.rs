@@ -1513,12 +1513,16 @@ impl ImageFamily {
         }
     }
 
-    /// Whether the family is distilled to run without classifier-free
-    /// guidance: its recipe's CFG is 1, where sd.cpp also ignores the negative
-    /// prompt. The agent's CFG and negative knobs are locked on one; the page
-    /// hides the negative box on the same test (`syncNegative`).
-    pub fn cfg_locked(self) -> bool {
-        self.recipe().cfg_scale == Some(1.0)
+    /// A CFG step that already shows in a picture, for the agent's
+    /// comparisons: the person's word (2026-11-23), 1 on SD and SDXL, 0.3 on
+    /// the DiTs (Flux, Krea 2, MOSS). CFG is never locked by family: a recipe
+    /// of 1 is a default, and sd.cpp takes more (with the negative prompt, at
+    /// about twice the time per step).
+    pub fn cfg_step(self) -> f32 {
+        match self {
+            ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl => 1.0,
+            _ => 0.3,
+        }
     }
 
     /// Flags this family always runs with, whatever the settings say.

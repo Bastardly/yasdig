@@ -355,6 +355,22 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                     }
                     _ => String::new(),
                 };
+                // The clamp is yasdig's; what suits the model is its own CFG.
+                let range = match (k.key, t.model_cfg, t.cfg_step) {
+                    ("cfg_scale", Some(own), Some(step)) => {
+                        let one = if own <= 1.0 {
+                            " At 1 it ignores the negative prompt; above 1 the negative counts and each step takes \
+                             about twice as long."
+                        } else {
+                            ""
+                        };
+                        // Named here too, as a talk reply is free text: it
+                        // offered "CFG 1 and 10" while the card drew 1–1.9.
+                        let ladder = t.cfg_ladder().map(|l| format!(" Values to compare on it: {}.", l.join(", "))).unwrap_or_default();
+                        format!("{range} This model's own is {own}; a step of {step} already shows.{ladder}{one}")
+                    }
+                    _ => range,
+                };
                 s.push_str(&format!("\n- {}: {} Now: {}.{range}", k.key, k.about, k.value));
             }
         }
@@ -362,7 +378,7 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
         for k in t.knobs.iter().filter(|k| k.locked.is_some() && k.allowed) {
             s.push_str(&format!("\n- {} is fixed on this model: {}.", k.label, k.locked.as_deref().unwrap_or("")));
             if switch {
-                s.push_str(" Another model may take it: set `model` in the same change, or compare on it.");
+                s.push_str(" Another model may take it: say so and offer it, but switch only when the person asks.");
             }
         }
         if let Some(turbo) = &t.locks.turbo {
@@ -405,7 +421,8 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                     "\n\nWhat you do this turn is your `action`, chosen from what the person asked. Start \
                      `notes` by naming it: talk, a drawing, a description, an improvement{rework} or a comparison.\n\
                      - \"talk\": answer, and change settings if asked. \"Give me a prompt for a castle\", \
-                     \"what does CFG do?\"\n\
+                     \"what is a sampler?\". Don't offer a comparison or a session in a talk reply: offer it \
+                     with its own action, whose card holds what would be drawn.\n\
                      - \"draw\": draw once. `count` is how many pictures the person asked for (1 to {}; 1 \
                      when they didn't say). `seeds` \"same\" keeps the last round's compositions, to try a \
                      change on the same pictures; \"new\" draws different ones. \"Draw a fox\", \"three more\", \
@@ -465,13 +482,22 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                     ));
                 }
                 if t.offered_knobs().any(|k| super::knobs::COMPARABLE.contains(&k.key)) {
-                    s.push_str(
+                    // The example is this model's: a fixed "3, 5, 7, 9" is SD's,
+                    // and a small model copies an example's values.
+                    let cfg_example = match t.cfg_values() {
+                        Some(v) => format!("[{}]", v.iter().map(|x| format!("\"{x}\"")).collect::<Vec<_>>().join(", ")),
+                        None => "[\"5\", \"6\", \"7\"] on SD".to_string(),
+                    };
+                    s.push_str(&format!(
                         "\n- \"compare\": find out which value of one setting works best: the same seeds drawn \
                          once per value, every picture judged, then the answer. \"What is the best CFG?\" → \
-                         `vary` cfg_scale, `values` [\"3\", \"5\", \"7\", \"9\"]; \"which model draws hands \
+                         `vary` cfg_scale, `values` {cfg_example}; \"which model draws hands \
                          better?\" → `vary` model, a value per model; two wordings → `vary` prompt. `count` is \
-                         pictures per value, 2 when the person didn't say. `goal`: the question, in one sentence.",
-                    );
+                         pictures per value, 2 when the person didn't say. `goal`: the question, in one sentence. \
+                         A question that seeing answers best (\"what does CFG do?\", \"do more steps help?\") \
+                         is a compare too: answer it in `reply`, and offer two values this model takes, far \
+                         enough apart to see, unless the person said not to draw."
+                    ));
                 }
                 s.push_str(
                     "\n\nAn improvement or a comparison is offered to the person, who starts it or turns it \
@@ -937,6 +963,23 @@ mod tests {
         assert!(blind.contains("The current prompt, already set") && blind.contains("Never ask for it:\na fox"));
         let seeing = system(&toolkit(), &turn(Mode::Chat, vec!["/w/a.png".into()]));
         assert!(seeing.contains("\"describe\""));
+    }
+
+    /// CFG is offered around the model's own, not SD's 3–9 or yasdig's 1–30.
+    #[test]
+    fn cfg_is_offered_around_the_models_own() {
+        let mut t = toolkit();
+        t.model_cfg = Some(6.0);
+        t.cfg_step = Some(1.0);
+        let s = system(&t, &turn(Mode::Chat, vec![]));
+        assert!(s.contains("This model's own is 6; a step of 1 already shows.") && !s.contains("ignores the negative"), "{s}");
+        assert!(s.contains("`values` [\"5\", \"6\", \"7\"]"), "{s}");
+        // Flux's recipe 1 is a default, not a lock: up from it, in small steps.
+        t.model_cfg = Some(1.0);
+        t.cfg_step = Some(0.3);
+        let s = system(&t, &turn(Mode::Chat, vec![]));
+        assert!(s.contains("a step of 0.3 already shows. Values to compare on it: 1, 1.3, 1.6, 1.9. At 1 it ignores"), "{s}");
+        assert!(s.contains("`values` [\"1\", \"1.3\", \"1.6\"]"), "{s}");
     }
 
     #[test]

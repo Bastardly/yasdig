@@ -781,11 +781,37 @@ pub fn image_done(chat: &mut Chat, img: super::chat::ImageRef) {
                 let size = whole(*size);
                 if images.len() as u32 >= size {
                     chat.session.next = if judge { Next::Critique } else { Next::Nothing };
+                    if chat.session.shown {
+                        shown_round_done(chat);
+                    }
                 }
                 return;
             }
         }
     }
+}
+
+/// A *Just show me* round is whole: the next value on the same seed, or,
+/// after the last, the setting back as it was and the session closed. No
+/// turn: what each value looks like is the answer, and the person reads it.
+fn shown_round_done(chat: &mut Chat) {
+    if session_rounds(chat) < session_limit(chat) {
+        chat.session.next = Next::Batch;
+        return;
+    }
+    // Unset before is the model's own value, not "(unset)".
+    let back = chat
+        .session
+        .sweep
+        .as_ref()
+        .and_then(|sw| match &sw.before {
+            Value::Null => Some(format!("{} back to the model's own", knobs::knob(&sw.knob)?.label)),
+            v => Some(format!("{} back to {}", knobs::knob(&sw.knob)?.label, knobs::value_label(&sw.knob, v))),
+        })
+        .unwrap_or_default();
+    close_session(chat);
+    chat.session.next = Next::Nothing;
+    chat.note(format!("That's each value on the same seed, with {back}."));
 }
 
 /// A reply as the schema shapes it. Every field optional: the server reads
@@ -1560,6 +1586,7 @@ pub fn close_session(chat: &mut Chat) {
     s.checks.clear();
     s.steers.clear();
     s.sweep = None;
+    s.shown = false;
     s.proposal = None;
     s.pick = None;
     s.rethink = None;
@@ -1624,6 +1651,31 @@ pub fn draw_proposal(chat: &mut Chat) -> Result<(), String> {
     set_prompt(chat, &prompt, p.n, "the proposed session's first prompt, drawn once");
     chat.session.mode = Mode::Chat;
     chat.session.count = 1;
+    chat.session.fresh = true;
+    chat.session.next = Next::Batch;
+    Ok(())
+}
+
+/// *Just show me* on a comparison card: a round per value, one picture each
+/// on the same seed, and nothing judged — for a question that seeing answers
+/// ("what does CFG do?"). Asked for 2026-11-16. The knob goes back after
+/// (`shown_round_done`), or on a stop (`close_session`).
+pub fn show_proposal(chat: &mut Chat) -> Result<(), String> {
+    if chat.session.proposal.as_ref().ok_or("there is no comparison waiting")?.sweep.is_none() {
+        return Err("only a comparison can be shown without judging".into());
+    }
+    let p = chat.session.proposal.take().expect("checked");
+    let mut sw = p.sweep.expect("checked");
+    begin(chat, &p.goal);
+    if let Some(k) = knobs::knob(&sw.knob) {
+        sw.before = knobs::value_of(&chat.settings, k);
+    }
+    chat.session.rounds = sw.values.len() as u32;
+    chat.session.per_round = 1;
+    chat.session.sweep = Some(sw);
+    chat.session.shown = true;
+    // Critique, so `start_round` writes each value and a stop puts it back.
+    chat.session.mode = Mode::Critique;
     chat.session.fresh = true;
     chat.session.next = Next::Batch;
     Ok(())
@@ -3378,6 +3430,32 @@ mod tests {
         assert!(!c.session.steerable(), "a chat turn takes no steer");
     }
 
+    /// *Just show me*: a picture per value on one seed, no turn between, and
+    /// the setting back after.
+    #[test]
+    fn a_comparison_shown_draws_each_value_once_and_puts_the_setting_back() {
+        let mut c = chat();
+        c.settings["cfg_scale"] = json!(6.0);
+        c.session.proposal = Some(Proposal { n: 1, goal: "What CFG does".into(), per_round: 2, rounds: 2, prompt: None,
+            sweep: Some(Sweep { knob: "cfg_scale".into(), values: vec![json!(3.0), json!(9.0)], before: json!(0.0) }) });
+        show_proposal(&mut c).unwrap();
+        assert!(c.session.proposal.is_none() && !c.session.steerable());
+        start_round(&mut c, 77);
+        assert_eq!(c.settings["cfg_scale"], json!(3.0));
+        image_done(&mut c, img("a"));
+        assert_eq!(c.session.next, Next::Batch, "the next value, no turn");
+        start_round(&mut c, 99);
+        assert_eq!((c.settings["cfg_scale"].clone(), c.session.base_seed), (json!(9.0), 77), "the same seed");
+        image_done(&mut c, img("b"));
+        assert_eq!(c.session.next, Next::Nothing);
+        assert_eq!(c.settings["cfg_scale"], json!(6.0), "the setting back");
+        assert!(c.session.sweep.is_none() && !c.session.shown && c.session.mode == Mode::Chat);
+        assert!(c.messages.iter().filter(|m| matches!(m, Msg::Batch { size: 1, .. })).count() == 2);
+        // An improvement has nothing to show.
+        c.session.proposal = Some(Proposal { n: 1, goal: "g".into(), per_round: 0, rounds: 0, prompt: None, sweep: None });
+        assert!(show_proposal(&mut c).is_err());
+    }
+
     /// A rework is offered, not drawn: its ideas lead the reply, its prompt
     /// waits for *Just do it*, which sets it (undoable) and draws once; a new
     /// message sets it aside.
@@ -3609,7 +3687,7 @@ mod tests {
         c.session.mode = Mode::Chat;
         let t = tk(&c);
         let ask = json!({"notes": "", "action": "compare", "goal": "best CFG", "vary": "cfg_scale", "values": ["3", "7"], "count": 2, "reply": ""});
-        apply_reply(&mut c, Mode::Chat, reply(ask), &t, &Locks::of(true, false, None), vec![], Default::default());
+        apply_reply(&mut c, Mode::Chat, reply(ask), &t, &Locks::of(true, None), vec![], Default::default());
         assert_eq!(next_step(&c), Step::End);
         assert!(c.session.sweep.is_none() && c.session.goal.is_empty());
         let notes: Vec<String> = c.messages.iter().filter_map(|m| match m { Msg::Note { text, .. } => Some(text.clone()), _ => None }).collect();
@@ -3622,11 +3700,11 @@ mod tests {
         c.settings = json!({"prompt": "a cat", "template": "klein"});
         c.session.goal.clear();
         c.session.mode = Mode::Chat;
-        let mut t = build(&Rules::default(), &c.settings, &Locks::of(true, false, None), vec![
-            ModelChoice { name: "klein".into(), family: "flux2-klein-4b", label: "FLUX.2 Klein 4B", references: false, locks: Locks::of(true, false, None) },
+        let mut t = build(&Rules::default(), &c.settings, &Locks::of(true, None), vec![
+            ModelChoice { name: "klein".into(), family: "flux2-klein-4b", label: "FLUX.2 Klein 4B", references: false, locks: Locks::of(true, None) },
             ModelChoice { name: "moss".into(), family: "moss_image", label: "MOSS-Image", references: false, locks: Locks::default() },
         ], Some(ImageFamily::Sdxl));
-        t.locks = Locks::of(true, false, None);
+        t.locks = Locks::of(true, None);
         let ask = |model: &str| reply(json!({"notes": "", "action": "compare", "change": {"model": model}, "reason": "",
             "goal": "best CFG", "vary": "cfg_scale", "values": ["3", "5", "7"], "count": 2, "reply": ""}));
         apply_reply(&mut c, Mode::Chat, ask("moss"), &t, &t.locks.clone(), vec![], Default::default());

@@ -859,6 +859,10 @@ pub struct Session {
     /// A comparison, when this session is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep: Option<Sweep>,
+    /// *Just show me* on a comparison: each value drawn once on the same
+    /// seed, nothing judged, the setting put back after (`show_proposal`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shown: bool,
     /// The pictures the person attached when the session began: what the
     /// plan and every critique judge against.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
