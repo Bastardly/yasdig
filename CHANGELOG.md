@@ -3,6 +3,38 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## 0.12.0 — 2026-11-23
+
+### Added
+
+- **Steer a running session.** While the Assistant improves a picture, you can type
+  into the chat: "a sword, not an axe". It takes your point as a check from the next
+  round on, drops any check your words overturn, restates the goal, and draws again.
+- **Ideas before a rework.** Ask for something wholesale ("reimagine it", "far more
+  dramatic") and the Assistant answers with a few key ideas and the prompt they make.
+  **Just do it** draws it (undoable), or say what you'd change. A change to one thing
+  is still simply drawn, keeping the rest of your prompt.
+- **See the answer.** A question a picture answers ("what does CFG do?") gets an
+  answer and a comparison card. Its new **Just show me** draws one picture per value
+  on the same seed, side by side, with nothing judged, and puts the setting back
+  after. It's on every comparison card.
+
+### Changed
+
+- **A cast member's look is written once.** When yasdig adds a picked member's look
+  to the prompt itself (on the Image tab, on MiniMax H3's subjects, and now on LTX 2.5,
+  where a part's cast looks lead its prompt), Enhance and the Assistant name them
+  instead of describing them again, and keep anything you changed about them.
+- **The Assistant stays on your model for CFG.** It no longer treats a model whose
+  usual CFG is 1 (Flux, Krea 2, Klein) as unable to take CFG, so it doesn't switch
+  you to another model to show it. CFG comparisons stay close to the model's own
+  value, in steps that show: 1 on SD and SDXL, 0.3 on the newer models.
+
+### Fixed
+
+- **Enhance on a shot's later parts** goes on from the part before, instead of
+  starting the shot over from its opening.
+
 ## 0.11.3 — 2026-11-14
 
 0.11.1's and 0.11.2's releases failed to build, so neither shipped downloads; 0.11.3
