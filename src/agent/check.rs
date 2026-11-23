@@ -483,6 +483,49 @@ const CASES: &[Case] = &[
             }
         },
     },
+    // Asked for 2026-11-16: a dramatic redo comes as key suggestions first.
+    Case {
+        name: "offers ideas for a wholesale rework, and draws nothing yet",
+        mode: Mode::Chat,
+        says: "Reimagine this completely — something far more dramatic.",
+        checks: &[],
+        prompt: None,
+        video: false,
+        film: None,
+        steer: None,
+        want: |r| {
+            action(r, "rethink")?;
+            let ideas = r.ideas.iter().filter(|i| !i.trim().is_empty()).count();
+            if ideas < 2 {
+                return Err(format!("{ideas} idea(s) offered: {:?}", r.ideas));
+            }
+            match r.prompt.as_deref().map(str::trim) {
+                Some(p) if !p.is_empty() && p != PROMPT => Ok(()),
+                p => Err(format!("no reworked prompt for Just do it: {p:?}")),
+            }
+        },
+    },
+    // "The current prompt is the source of truth": one change is just drawn.
+    Case {
+        name: "draws a change to one thing, keeping the rest of the prompt",
+        mode: Mode::Chat,
+        says: "Make the light golden instead.",
+        checks: &[],
+        prompt: None,
+        video: false,
+        film: None,
+        steer: None,
+        want: |r| {
+            action(r, "draw")?;
+            let p = new_prompt(r).unwrap_or("").to_lowercase();
+            for w in ["fox", "snow", "golden"] {
+                if !p.contains(w) {
+                    return Err(format!("the prompt it would draw has no \"{w}\": {p:?}"));
+                }
+            }
+            Ok(())
+        },
+    },
     // Asked for 2026-11-23: the knight's two shields, pointed out mid-session.
     Case {
         name: "takes a point made mid-session as a check, drops the one it overturns, and acts on it",
@@ -1001,6 +1044,8 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
         let mut tk = toolkit::build(&Rules::default(), &settings, &Locks::default(), models, Some(family));
         tk.vision = model.vision();
         tk.steering = case.steer.is_some();
+        // An Image tab chat's, as the app builds it: offered a rework too.
+        tk.image_tab = !case.video && case.film.is_none();
         if case.video {
             let h3 = toolkit::VideoView {
                 name: "h3".into(),

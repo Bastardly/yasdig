@@ -380,6 +380,16 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32, sweep: bool) -> 
             }
             improve.insert("reply".into(), text(REPLY_CHARS));
             branches.push(object(improve));
+            // A wholesale rework, offered before it is drawn: on an Image
+            // chat with a prompt to rework, and the prompt the agent's to write.
+            if let Some(k) = t.offered_knobs().find(|k| k.key == "prompt").filter(|_| t.image_tab && t.has_prompt()) {
+                let mut rethink = props.clone();
+                rethink.insert("action".into(), json!({ "const": "rethink" }));
+                rethink.insert("ideas".into(), json!({ "type": "array", "items": text(160), "minItems": 2, "maxItems": 4 }));
+                rethink.insert("prompt".into(), knob_schema(k, t));
+                rethink.insert("reply".into(), text(REPLY_CHARS));
+                branches.push(object(rethink));
+            }
             // A comparison: one knob, the values to try, pictures per value.
             // The values are strings, since the grammar can't type each item
             // by the knob; the server reads them (`knobs::parse_value`).
@@ -529,6 +539,14 @@ mod tests {
         let s = output(Mode::Critique, &toolkit(&r, &Locks::default()), 4, 3, false);
         assert_eq!(keys(&s), ["notes", "checks", "keepers", "action", "count", "seeds", "escalate", "change", "reason", "reply"]);
         assert_eq!(s["required"], json!(keys(&s)));
+        // A rework is offered on an Image chat with a prompt to rework only.
+        let branches = |t: &Toolkit| -> Vec<String> {
+            output(Mode::Chat, t, 0, 0, false)["anyOf"].as_array().unwrap().iter().map(|b| b["properties"]["action"]["const"].as_str().unwrap_or("").to_string()).collect()
+        };
+        let mut img = toolkit(&r, &Locks::default());
+        assert!(!branches(&img).contains(&"rethink".to_string()), "not on a Video chat");
+        img.image_tab = true;
+        assert!(branches(&img).contains(&"rethink".to_string()));
         // The person spoke while it ran: their points must become checks.
         let mut steered = toolkit(&r, &Locks::default());
         steered.steering = true;

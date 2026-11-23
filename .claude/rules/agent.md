@@ -138,6 +138,13 @@ Break silently:
   axe" otherwise kept both checks and an axe goal (2026-11-23). `steers_taken(c, seen)` drains only what the turn saw — one that came while
   it ran is the next turn's, and a session about to stop goes `Next::Critique` again
   for it. A comparison 409s (its table needs the same checks per value); pictures too.
+- **A rework is offered, never drawn** (`action: "rethink"`, Image chats with a prompt
+  only: `Toolkit::has_prompt`, `image_tab`): its `ideas` are appended to the reply as
+  lines (so the next turn's history has them), its prompt is `Session.rethink`, a card
+  under message `n`; *Just do it* is `/agent/rethink` → `draw_rethink` (set as an
+  undoable change, one picture, no turn). `close_session` drops it, so an answer does.
+  `agent-check` builds its toolkit with `image_tab` for the Image cases, so every draw
+  case also faces the rethink branch.
 - **Again is the server's** (`POST /agent/again` → `session::draw_again`):
   `close_session`, then a chat draw on new seeds with no turn. The page offers it under
   the newest round only, never while the chat's job runs.

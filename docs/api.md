@@ -25,7 +25,7 @@ yasdig doctor [models.toml]      # run the startup checks and report, without st
 yasdig upscale in.png out.png <model> [factor=2.0] [models.toml]  # the model enlarge alone
 yasdig fold-scales <file.gguf>...  # fold a scaled-fp8 GGUF's scales into its weights
 yasdig llm-selftest [agent|-] [picture.png] [models.toml]  # one agent turn, no server
-yasdig agent-check [agent|-] [models.toml]  # 17 scored turns, 12 Enhance calls, 3 two-part and 1 three-part Enhance cases: what this agent model gets right
+yasdig agent-check [agent|-] [models.toml]  # 19 scored turns, 12 Enhance calls, 3 two-part and 1 three-part Enhance cases: what this agent model gets right
 yasdig fsr in.png out.png [upscale=2.0] [sharpness=0.35] [clarity=0.0]  # no colour knobs: UI only
 yasdig fsr-selftest [out.png]    # synthesize patterns and check the filters
 yasdig sr-selftest               # the upscaler shaders against CPU references, plus speed
@@ -848,6 +848,9 @@ the chat, whose `rev` moves on every write.
 - `POST /agent/again` — `{ chat, count? }`: draw the chat's settings again on new seeds,
   `count` pictures (1), with no agent turn; answers `{job}`. `409` with no round yet, a
   blank prompt, or while the agent is working on the chat.
+- `POST /agent/rethink` — `{ chat }`: *Just do it* on a rework card — its prompt set as the
+  agent's change (undoable) and drawn once on new seeds, with no agent turn; answers `{job}`.
+  `409` with no card waiting or while the agent is working. A new `/agent/send` drops it.
 - `POST /agent/stop` — `{ chat }`: end the chat's leg, killing a reply or a render in flight.
 - `POST /chats/delete` / `POST /favorite-chats/delete` — `{ ids }`, one shelf each.
   `/favorite-chats/add` and `/favorite-chats/remove` move chats between the two. A chat

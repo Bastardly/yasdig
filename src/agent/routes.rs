@@ -45,6 +45,7 @@ pub fn route(
         ("POST", "/agent/session") => answer_proposal(conn, cfg, lanes, body),
         ("POST", "/agent/film-model") => answer_film_model(conn, cfg, lanes, body),
         ("POST", "/agent/again") => again(conn, cfg, lanes, body),
+        ("POST", "/agent/rethink") => rethink(conn, cfg, lanes, body),
         ("GET", p) if p.starts_with("/chats/") => {
             let rest = &p["/chats/".len()..];
             let parts: Vec<&str> = rest.split('/').collect();
@@ -878,6 +879,32 @@ fn again(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Res
             anyhow::bail!("the agent is working on this chat — stop it, or wait");
         }
         session::draw_again(c, dto.count.unwrap_or(1)).map_err(|e| anyhow::anyhow!(e))?;
+        c.session.state = State::Queued;
+        c.session.job = None;
+        c.session.error = None;
+        Ok(c.clone())
+    });
+    let c = match r {
+        Ok(c) => c,
+        Err(e) => return err(conn, 409, &format!("{e:#}")),
+    };
+    let job = enqueue(lanes, &store, &c)?;
+    ok(conn, json!({ "job": job }))
+}
+
+/// *Just do it* on a rework card: its prompt, drawn once (`session::draw_rethink`).
+fn rethink(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Dto {
+        chat: String,
+    }
+    let Some(dto) = parse_json::<Dto>(conn, body)? else { return Ok(()) };
+    let store = super::store(cfg);
+    let r = store.update(&dto.chat, |c| {
+        if c.session.busy() {
+            anyhow::bail!("the agent is working on this chat — stop it, or wait");
+        }
+        session::draw_rethink(c).map_err(|e| anyhow::anyhow!(e))?;
         c.session.state = State::Queued;
         c.session.job = None;
         c.session.error = None;

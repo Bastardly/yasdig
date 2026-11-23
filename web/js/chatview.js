@@ -141,6 +141,16 @@ function proposalCard(p) {
     </div></div>`;
 }
 
+// A wholesale rework, offered before it is drawn: its ideas are the reply
+// above, the prompt they make is here. *Just do it* draws it once
+// (`/agent/rethink`); answering instead sets it aside, as with a proposal.
+function rethinkCard(r) {
+  return `<div class="chatcard">
+    <details class="chatfold"><summary>The prompt it would draw</summary><p class="chatprompt">${esc(r.prompt)}</p></details>
+    <p class="sub">Or say what you'd change, and it rethinks.</p>
+    <div class="btnrow"><button type="button" class="btn" data-rethink>Just do it</button></div></div>`;
+}
+
 // A film asked for while the Video tab's model can't make one: the person
 // picks the model (`/agent/film-model`, `data-pick-video`: the Cast panel's
 // image-model select is `data-film-model`), and nothing is written until then.
@@ -186,6 +196,7 @@ function agentMessage(chat, m) {
     ${checks}${describe}${board}${changes.map(changeCard).join('')}${action ? actionCard(chat, action) : ''}
     ${chat.session.proposal?.n === m.n ? proposalCard(chat.session.proposal) : ''}
     ${chat.session.pick?.n === m.n ? filmPickCard(chat.session.pick) : ''}
+    ${chat.session.rethink?.n === m.n ? rethinkCard(chat.session.rethink) : ''}
     <div class="chatfoot">${notesOf(stats)}</div></div>`;
 }
 

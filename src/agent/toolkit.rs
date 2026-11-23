@@ -337,6 +337,11 @@ impl Toolkit {
         self.film_off.is_some() && !self.film_pick.is_empty()
     }
 
+    /// The chat has a prompt to rework (`rethink`).
+    pub fn has_prompt(&self) -> bool {
+        self.knob("prompt").and_then(|k| k.value.as_str()).is_some_and(|p| !p.trim().is_empty())
+    }
+
     /// It may make a cast member: allowed in Settings → Agent, and an image
     /// model to draw it with.
     pub fn casts(&self) -> bool {

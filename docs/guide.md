@@ -1135,6 +1135,11 @@ description, a session that improves or a comparison.
   two shields" joins the session — the next turn makes a check of it (judged from the
   next round on) and changes the prompt for it. Words only; a comparison takes none, as
   its checks must be the same for every value.
+- **Rework.** Ask for something wholesale — "reimagine it", "make it far more dramatic",
+  "a completely different take". It doesn't draw yet: it answers with a few key ideas and
+  a card with the prompt they make. **Just do it** draws that once (undoable like any
+  change); or say what you'd change and it rethinks. A change to one thing ("make the
+  light golden") is simply drawn, keeping the rest of your prompt.
 - **Compare.** Ask it to find something out ("what's the best CFG for this?", "which
   model draws hands better?"). The agent picks the setting and the values to try (CFG,
   steps, the prompt, the negative prompt or the model, whichever it may change) and asks

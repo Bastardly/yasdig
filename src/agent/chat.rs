@@ -542,6 +542,18 @@ pub struct Proposal {
     pub prompt: Option<String>,
 }
 
+/// A wholesale rework the agent offers rather than draws (a "rethink"):
+/// the person presses *Just do it* (`/agent/rethink`), or answers, which
+/// sets it aside as a new message sets a proposal aside. Asked for
+/// 2026-11-16: a dramatic redo comes as key suggestions first.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Rethink {
+    /// The agent message that offered it, which the card is drawn under.
+    pub n: u32,
+    /// The prompt *Just do it* draws.
+    pub prompt: String,
+}
+
 /// A film asked for while the Video tab's model can't make one: the
 /// person picks the model from the card's buttons (`/agent/film-model`),
 /// and the story turn runs on it. The agent only recommends.
@@ -859,6 +871,9 @@ pub struct Session {
     /// A film waiting for the person to pick its video model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pick: Option<VideoPick>,
+    /// A rework waiting for *Just do it*.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rethink: Option<Rethink>,
     /// What the person said while the session ran, not yet taken up by a
     /// turn (`routes::send`'s steer): the next plan or critique turn makes
     /// checks of it and acts on it. Asked for 2026-11-23: a knight with two

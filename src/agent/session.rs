@@ -831,6 +831,10 @@ pub struct ReplyJson {
     /// what is being found out.
     #[serde(default)]
     pub goal: Option<String>,
+    /// Chat, action "rethink": the key ideas of a wholesale rework, offered
+    /// before anything is drawn.
+    #[serde(default)]
+    pub ideas: Vec<String>,
     /// Chat, action "compare": the knob, and its values as written.
     #[serde(default)]
     pub vary: Option<String>,
@@ -1558,6 +1562,7 @@ pub fn close_session(chat: &mut Chat) {
     s.sweep = None;
     s.proposal = None;
     s.pick = None;
+    s.rethink = None;
     s.rounds = 0;
     s.per_round = 0;
     s.count = 0;
@@ -1617,6 +1622,18 @@ pub fn draw_proposal(chat: &mut Chat) -> Result<(), String> {
         .ok_or("this proposal has no prompt to draw")?;
     let p = chat.session.proposal.take().expect("checked");
     set_prompt(chat, &prompt, p.n, "the proposed session's first prompt, drawn once");
+    chat.session.mode = Mode::Chat;
+    chat.session.count = 1;
+    chat.session.fresh = true;
+    chat.session.next = Next::Batch;
+    Ok(())
+}
+
+/// *Just do it* on a rework: its prompt set as the agent's change (undoable)
+/// and drawn once on new seeds, with no turn.
+pub fn draw_rethink(chat: &mut Chat) -> Result<(), String> {
+    let r = chat.session.rethink.take().ok_or("there is no rework waiting — ask again")?;
+    set_prompt(chat, &r.prompt, r.n, "the rework, as offered");
     chat.session.mode = Mode::Chat;
     chat.session.count = 1;
     chat.session.fresh = true;
@@ -1982,6 +1999,27 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
                         Next::Nothing
                     }
                 },
+                // A wholesale rework is offered, not drawn: its ideas lead the
+                // reply (so the next turn sees what was offered), and its
+                // prompt waits on the card for *Just do it*.
+                Some("rethink") => {
+                    let ideas: Vec<String> = r.ideas.iter().map(|i| i.trim().to_string()).filter(|i| !i.is_empty()).collect();
+                    let prompt = r
+                        .prompt
+                        .take()
+                        .filter(|_| super::schema::writes_prompt(t))
+                        .map(|p| known_variables(p.trim(), t, &mut notes_out))
+                        .filter(|p| !p.is_empty());
+                    if !ideas.is_empty() {
+                        let list: Vec<String> = ideas.iter().map(|i| format!("- {i}")).collect();
+                        r.reply = format!("{}\n{}", r.reply.trim(), list.join("\n")).trim().to_string();
+                    }
+                    match prompt {
+                        Some(prompt) => chat.session.rethink = Some(super::chat::Rethink { n, prompt }),
+                        None => notes_out.push("The agent offered a rework but wrote no prompt for it.".into()),
+                    }
+                    Next::Nothing
+                }
                 Some("compare") => {
                     let goal = r.goal.as_deref().map(str::trim).filter(|g| !g.is_empty()).unwrap_or("a comparison").to_string();
                     // Its change is in already: a switch of model brings that model's locks.
@@ -3338,6 +3376,35 @@ mod tests {
         close_session(&mut c);
         c.session.state = State::Running;
         assert!(!c.session.steerable(), "a chat turn takes no steer");
+    }
+
+    /// A rework is offered, not drawn: its ideas lead the reply, its prompt
+    /// waits for *Just do it*, which sets it (undoable) and draws once; a new
+    /// message sets it aside.
+    #[test]
+    fn a_rework_is_offered_then_drawn_on_just_do_it() {
+        let mut c = chat();
+        c.session.mode = Mode::Chat;
+        let t = tk(&c);
+        let go = |c: &mut Chat| {
+            apply_reply(c, Mode::Chat, reply(json!({"notes": "a rework", "action": "rethink", "reply": "Some ways to go:",
+                "ideas": ["A noir alley at night", " ", "Oil painting, storm light"], "prompt": "a fox, film noir, rain"})),
+                &t, &Locks::default(), vec![], Default::default())
+        };
+        go(&mut c);
+        assert_eq!(next_step(&c), Step::End, "nothing drawn yet");
+        let Some(Msg::Agent { n, reply, .. }) = c.messages.last().cloned() else { panic!() };
+        assert_eq!(reply, "Some ways to go:\n- A noir alley at night\n- Oil painting, storm light");
+        assert_eq!(c.session.rethink.as_ref().map(|r| (r.n, r.prompt.as_str())), Some((n, "a fox, film noir, rain")));
+        assert_ne!(c.settings["prompt"], json!("a fox, film noir, rain"), "the prompt waits");
+        draw_rethink(&mut c).unwrap();
+        assert_eq!(c.settings["prompt"], json!("a fox, film noir, rain"));
+        assert_eq!((c.session.next, c.session.count), (Next::Batch, 1));
+        assert!(c.changes.iter().any(|ch| ch.set.get("prompt").is_some()), "undoable");
+        assert!(draw_rethink(&mut c).is_err(), "once");
+        go(&mut c);
+        close_session(&mut c);
+        assert!(c.session.rethink.is_none(), "an answer sets it aside");
     }
 
     #[test]

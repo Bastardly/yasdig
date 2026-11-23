@@ -398,16 +398,19 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                     )),
                     None => s.push_str("\n\nThere is no prompt yet."),
                 }
+                // Named only where it is offered: a Video chat's text stays as
+                // it was, and its film cases with it (agent-check, 2026-11-23).
+                let rework = if schema::writes_prompt(t) && t.image_tab && t.has_prompt() { ", a rework" } else { "" };
                 s.push_str(&format!(
                     "\n\nWhat you do this turn is your `action`, chosen from what the person asked. Start \
-                     `notes` by naming it: talk, a drawing, a description, an improvement or a comparison.\n\
+                     `notes` by naming it: talk, a drawing, a description, an improvement{rework} or a comparison.\n\
                      - \"talk\": answer, and change settings if asked. \"Give me a prompt for a castle\", \
                      \"what does CFG do?\"\n\
                      - \"draw\": draw once. `count` is how many pictures the person asked for (1 to {}; 1 \
                      when they didn't say). `seeds` \"same\" keeps the last round's compositions, to try a \
                      change on the same pictures; \"new\" draws different ones. \"Draw a fox\", \"three more\", \
                      \"now with a blue sky\".",
-                    super::knobs::MAX_BATCH
+                    super::knobs::MAX_BATCH,
                 ));
                 if turn.images.len() > turn.reference {
                     s.push_str(
@@ -425,6 +428,16 @@ pub fn system(t: &Toolkit, turn: &Turn) -> String {
                     s.push_str(
                         " `prompt`: the whole prompt its first round would draw, written out; the current one \
                          unchanged when it already asks for everything.",
+                    );
+                }
+                if schema::writes_prompt(t) && t.image_tab && t.has_prompt() {
+                    s.push_str(
+                        "\n- \"rethink\": the person asks to rework the picture wholesale — a new style, setting or \
+                         mood, \"make it completely different\", \"reimagine it\", \"something more dramatic\". Don't \
+                         draw: offer 2 to 4 `ideas` (a few words each: what you'd change and how), and in `prompt` \
+                         the whole prompt you'd draw from them. The person presses Just do it, or answers. A change \
+                         to one thing (a colour, a hat, the light) is \"draw\": the current prompt is theirs, so keep \
+                         everything they didn't ask to change.",
                     );
                 }
                 if t.picks_film_model() {

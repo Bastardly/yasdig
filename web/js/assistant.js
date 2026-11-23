@@ -531,6 +531,11 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
         });
         soonJobs();
         await openChat(id);
+      } else if (d.rethink != null) {
+        t.disabled = true;
+        await post('/agent/rethink', { chat: id }).catch((ex) => { t.disabled = false; throw ex; });
+        soonJobs();
+        await openChat(id);
       } else if (d.again) {
         t.disabled = true;
         await post('/agent/again', { chat: id, count: Number(d.again) });
