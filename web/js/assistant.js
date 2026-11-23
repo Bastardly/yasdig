@@ -123,6 +123,10 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
 
   const chatId = () => data?.chat.id ?? null;
   const busy = () => ['queued', 'running'].includes(data?.chat.session.state);
+  // A running "keep trying" session takes what is said into it (the server's
+  // `Session::steerable`): a comparison doesn't, its checks fixed for every value.
+  const steerable = () => busy() && ['plan', 'critique'].includes(data?.chat.session.mode) && !data?.chat.session.sweep;
+  const STEER_HINT = 'Point something out, and it joins the session: "the knight holds two shields"';
   const err = (msg) => { q('aerr').textContent = msg ?? ''; };
   const onImage = pane === 'image';
   const story = pane === 'video';
@@ -230,7 +234,10 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
   function syncButtons() {
     const b = busy();
     q('astop').hidden = !b;
-    q('asend').disabled = b;
+    const steer = steerable();
+    q('asend').disabled = b && !steer;
+    q('asend').title = steer ? 'Add this to the running session (Enter): it becomes a check and the next prompt acts on it' : 'Send (Enter)';
+    q('atext').placeholder = steer ? STEER_HINT : WORDS[pane].placeholder;
     q('adel').hidden = !data;
     q('astar').hidden = !data;
     q('astar').innerHTML = data?.favorite ? '&#9733;' : '&#9734;';
@@ -322,6 +329,7 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
     err('');
     const text = q('atext').value.trim();
     if (!text && !attachments.length) return;
+    if (busy() && !steerable()) return;
     try {
       const id = await ensureChat();
       clearTimeout(editTimer);
@@ -585,7 +593,7 @@ export function mountAssistant({ pane, panel, settings = null, apply = null, edi
     // Enter sends, as a chat does; Shift+Enter is a new line.
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      if (!busy()) send();
+      if (!busy() || steerable()) send();
     }
   });
   q('apick').addEventListener('click', () => choosePicture(attachOutput));

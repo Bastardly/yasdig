@@ -81,6 +81,15 @@ Assistant may come up short. That's fine.
   chat, rather than it being locked until it ends. Their example: a knight fighting a
   dragon looked awesome, but the knight held two shields and looked the wrong way.
   They wanted to point at those while it worked, and have the checks take them on.
+  **Built 2026-11-23, awaiting a GPU run:** while a "keep trying" session runs, the
+  composer stays open. What's typed joins the session: the next turn quotes it, turns
+  each point into a check (judged from the next round on), and changes the prompt for
+  it. A comparison doesn't take it, since its checks must be the same for every value.
+  ✅ **A steer replaces as well as adds** (2026-11-23): "a sword, not an axe" left the
+  axe's check and goal in place, so later rounds were judged on both. Now the checks
+  it overturns go, and the goal is restated with the change.
+  *Example: "takes a point made mid-session as a check, drops the one it overturns,
+  and acts on it".*
   **Q:** this was written under job 5 (look at a picture). It's filed here because
   "while the assistant was working" sounds like a session. Right?
 - *Examples: "proposes a session for 'keep trying'", "writes checks that can be
@@ -205,7 +214,7 @@ and the first one taken on.
 2. Cast looks out of video prompts. H3: built. LTX 2.5: built, awaiting a GPU run.
    Wan and LTX 2.3: an A/B on each, if wanted.
 3. ~~Enhance: a shot's parts go on from each other~~: done 2026-11-23.
-4. Steering a running session from the chat (job 3).
+4. Steering a running session from the chat (job 3): built, awaiting a GPU run.
 5. Suggestions before a dramatic rewrite, with *Just do it* (*Who's in charge*).
 6. Offering to draw two pictures when that answers a question (job 1).
 

@@ -315,6 +315,20 @@ pub fn output(mode: Mode, t: &Toolkit, batch: u32, checks: u32, sweep: bool) -> 
                     ]
                 })
             });
+            // The person's points, as checks: asked for, so never left out.
+            // What they overturn goes (an axe that is a sword now), and the goal
+            // is restated with it, or each round is pulled back to the old one.
+            if t.steering {
+                props.insert(
+                    "add_checks".into(),
+                    json!({ "type": "array", "items": text(120), "minItems": 1, "maxItems": 3 }),
+                );
+                props.insert(
+                    "drop_checks".into(),
+                    json!({ "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": checks.max(1) }, "maxItems": checks.max(1) }),
+                );
+                props.insert("goal".into(), text(300));
+            }
             props.insert("action".into(), json!({ "enum": actions }));
             // The next round's size and seeds, read when the action is "generate".
             props.insert("count".into(), int(1, MAX_BATCH));
@@ -514,6 +528,13 @@ mod tests {
         r.actions.insert("hires".into());
         let s = output(Mode::Critique, &toolkit(&r, &Locks::default()), 4, 3, false);
         assert_eq!(keys(&s), ["notes", "checks", "keepers", "action", "count", "seeds", "escalate", "change", "reason", "reply"]);
+        assert_eq!(s["required"], json!(keys(&s)));
+        // The person spoke while it ran: their points must become checks.
+        let mut steered = toolkit(&r, &Locks::default());
+        steered.steering = true;
+        let s = output(Mode::Critique, &steered, 4, 3, false);
+        assert_eq!(&keys(&s)[3..6], ["add_checks", "drop_checks", "goal"]);
+        assert_eq!(s["properties"]["drop_checks"]["items"]["maximum"], json!(3));
         assert_eq!(s["required"], json!(keys(&s)));
         let s = output(Mode::Plan, &t, 0, 0, false);
         assert_eq!(keys(&s), ["notes", "checks", "rounds", "count", "change", "reason", "reply"]);

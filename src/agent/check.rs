@@ -44,6 +44,8 @@ struct Case {
     /// A story turn's storyboard as the person left it (on Wan): the turn
     /// rewrites it.
     film: Option<fn() -> Film>,
+    /// A critique: what the person said while the session ran (`Session::steers`).
+    steer: Option<&'static str>,
     /// What a model that understood wrote, or what was wrong.
     want: fn(&ReplyJson) -> Result<(), String>,
 }
@@ -183,6 +185,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: false,
         film: None,
+        steer: None,
         want: |r| {
             action(r, "draw")?;
             let p = new_prompt(r).unwrap_or("").to_lowercase();
@@ -203,6 +206,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: false,
         film: None,
+        steer: None,
         want: |r| {
             action(r, "draw")?;
             if r.count == Some(3) { Ok(()) } else { Err(format!("count {:?} where 3 were asked for", r.count)) }
@@ -216,6 +220,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: false,
         film: None,
+        steer: None,
         want: |r| {
             action(r, "talk")?;
             match new_prompt(r) {
@@ -233,6 +238,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: false,
         film: None,
+        steer: None,
         want: |r| {
             action(r, "improve")?;
             let g = r.goal.as_deref().unwrap_or("").to_lowercase();
@@ -252,6 +258,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: false,
         film: None,
+        steer: None,
         want: |r| {
             action(r, "compare")?;
             if r.vary.as_deref() != Some("cfg_scale") {
@@ -278,6 +285,7 @@ const CASES: &[Case] = &[
         prompt: Some(VAR_PROMPT),
         video: false,
         film: None,
+        steer: None,
         want: |r| {
             action(r, "draw")?;
             let p = new_prompt(r).unwrap_or("");
@@ -296,6 +304,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: false,
         film: None,
+        steer: None,
         want: |r| {
             action(r, "cast")?;
             let m = r.member.as_ref().ok_or("no member")?;
@@ -318,6 +327,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: true,
         film: None,
+        steer: None,
         want: films,
     },
     Case {
@@ -328,6 +338,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: true,
         film: None,
+        steer: None,
         want: films,
     },
     Case {
@@ -338,6 +349,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: true,
         film: None,
+        steer: None,
         want: films,
     },
     Case {
@@ -349,6 +361,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: false,
         film: Some(drifted),
+        steer: None,
         want: |r| {
             none_left_out(r, &["s9", "s6", "s7", "s3"])?;
             match shot_words(r, "s6") {
@@ -368,6 +381,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: false,
         film: Some(drifted),
+        steer: None,
         want: |r| {
             none_left_out(r, &["s9", "s6", "s7", "s3"])?;
             match shot_words(r, "s9") {
@@ -389,6 +403,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: false,
         film: Some(hand_edited),
+        steer: None,
         want: |r| {
             none_left_out(r, &["s6", "s7", "s3"])?;
             let f = hand_edited();
@@ -409,6 +424,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: true,
         film: None,
+        steer: None,
         want: |r| {
             let cast = r.cast.as_deref().unwrap_or_default();
             let mara = cast.iter().find(|m| m.name.to_lowercase().contains("mara")).ok_or("no Mara in the cast")?;
@@ -426,6 +442,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: false,
         film: None,
+        steer: None,
         want: |r| {
             let checks: Vec<&str> = r.checks.as_ref().and_then(|c| c.as_array()).into_iter().flatten().filter_map(|c| c.as_str()).collect();
             if !(2..=5).contains(&checks.len()) {
@@ -449,6 +466,7 @@ const CASES: &[Case] = &[
         prompt: None,
         video: false,
         film: None,
+        steer: None,
         want: |r| {
             let row: Vec<bool> = r
                 .checks
@@ -463,6 +481,31 @@ const CASES: &[Case] = &[
                 [true, true] => Err("it said the blue circle is there: it answers from the goal, not the picture".into()),
                 other => Err(format!("it answered {other:?}; the picture has a red square and no blue circle")),
             }
+        },
+    },
+    // Asked for 2026-11-23: the knight's two shields, pointed out mid-session.
+    Case {
+        name: "takes a point made mid-session as a check, drops the one it overturns, and acts on it",
+        mode: Mode::Critique,
+        says: "A red square and a blue circle on a white background.",
+        checks: &["Is there a red square?"],
+        prompt: None,
+        video: false,
+        film: None,
+        steer: Some("The square should be green, not red."),
+        want: |r| {
+            if !r.add_checks.iter().any(|c| c.to_lowercase().contains("green")) {
+                return Err(format!("no check for the green square: {:?}", r.add_checks));
+            }
+            // "Is there a red square?" is what they overturned (an axe, then a sword: 2026-11-23).
+            if !r.drop_checks.contains(&1) {
+                return Err(format!("the red square's check stays beside the green one: drop_checks {:?}", r.drop_checks));
+            }
+            let prompt = r.change.as_ref().and_then(|c| c.get("prompt")).and_then(|p| p.as_str()).unwrap_or("");
+            if r.action.as_deref() != Some("generate") || !prompt.to_lowercase().contains("green") {
+                return Err(format!("it didn't draw again with a green square: action {:?}, prompt {prompt:?}", r.action));
+            }
+            Ok(())
         },
     },
 ];
@@ -917,6 +960,7 @@ fn chat_for(case: &Case) -> Chat {
         Mode::Critique => {
             chat.session.goal = case.says.into();
             chat.session.checks = case.checks.iter().map(|c| c.to_string()).collect();
+            chat.session.steers = case.steer.map(|s| vec![s.to_string()]).unwrap_or_default();
             chat.session.round = 1;
             let image = ImageRef { kind: "item".into(), id: "check".into(), file: "check.png".into(), seed: Some(1) };
             chat.messages.push(Msg::Batch {
@@ -956,6 +1000,7 @@ pub fn run(cfg: &Config, name: Option<&str>) -> Result<()> {
         };
         let mut tk = toolkit::build(&Rules::default(), &settings, &Locks::default(), models, Some(family));
         tk.vision = model.vision();
+        tk.steering = case.steer.is_some();
         if case.video {
             let h3 = toolkit::VideoView {
                 name: "h3".into(),

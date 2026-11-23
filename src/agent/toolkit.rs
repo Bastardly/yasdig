@@ -104,6 +104,10 @@ pub struct Toolkit {
     /// the prompt (`cast::compose`), so the prompt calls them by name only.
     #[serde(skip)]
     pub cast_added: Vec<(String, String)>,
+    /// The person spoke while the session ran (`Session::steers`), so a
+    /// critique may add checks. Set by a turn, as `vision` is.
+    #[serde(skip)]
+    pub steering: bool,
 }
 
 /// A saved cast entry as a story turn is shown it.
@@ -586,6 +590,7 @@ pub fn build(rules: &Rules, settings: &Value, locks: &Locks, models: Vec<ModelCh
         library: Vec::new(),
         variables: Default::default(),
         cast_added: Vec::new(),
+        steering: false,
     }
 }
 

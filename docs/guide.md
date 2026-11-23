@@ -1131,7 +1131,10 @@ description, a session that improves or a comparison.
   for every picture, changes one or two settings and draws again — until a picture
   passes, it decides it can't do better, or the rounds run out. A picture attached to the
   message that starts it is the **picture to match**: the checks are written from it, and
-  every round is judged beside it.
+  every round is judged beside it. **While it runs you can still type**: "the knight holds
+  two shields" joins the session — the next turn makes a check of it (judged from the
+  next round on) and changes the prompt for it. Words only; a comparison takes none, as
+  its checks must be the same for every value.
 - **Compare.** Ask it to find something out ("what's the best CFG for this?", "which
   model draws hands better?"). The agent picks the setting and the values to try (CFG,
   steps, the prompt, the negative prompt or the model, whichever it may change) and asks

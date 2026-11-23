@@ -814,6 +814,13 @@ pub struct ReplyJson {
     /// Plan: the questions. Critique: one row of answers per picture.
     #[serde(default)]
     pub checks: Option<Value>,
+    /// Critique, while the person steers: checks made of what they said,
+    /// judged from the next round on, and the numbers (from 1) of those
+    /// their words overturn.
+    #[serde(default)]
+    pub add_checks: Vec<String>,
+    #[serde(default)]
+    pub drop_checks: Vec<u32>,
     #[serde(default)]
     pub keepers: Vec<u32>,
     #[serde(default)]
@@ -1501,6 +1508,30 @@ pub fn parse_reply(text: &str) -> anyhow::Result<ReplyJson> {
 /// it holds — left open, the next chat "draw" filled it, at the session's
 /// size and on the session's changes. A comparison stopped part way puts its
 /// knob back. The goal stays, so the Session panel says what ran.
+/// A turn has taken up the first `seen` of the person's steers. One that
+/// came while it ran is still to be answered: a session that would stop
+/// here judges its round again with it, while it has rounds left.
+pub fn steers_taken(chat: &mut Chat, seen: usize) {
+    let s = &mut chat.session;
+    s.steers.drain(..seen.min(s.steers.len()));
+    if s.steers.is_empty() || !matches!(s.mode, Mode::Plan | Mode::Critique) || s.sweep.is_some() {
+        return;
+    }
+    if s.next == Next::Nothing {
+        if session_rounds(chat) < session_limit(chat) && chat.messages.iter().any(|m| matches!(m, Msg::Batch { .. })) {
+            chat.session.mode = Mode::Critique;
+            chat.session.next = Next::Critique;
+        } else {
+            chat.session.steers.clear();
+            chat.note("Your message came as the session ended: send it again to go on from here.".to_string());
+        }
+    }
+}
+
+/// The most checks a steered session judges: the plan's six and the
+/// person's points beside them.
+pub const MAX_STEERED_CHECKS: usize = super::schema::MAX_CHECKS as usize * 2;
+
 pub fn close_session(chat: &mut Chat) {
     let s = &mut chat.session;
     if matches!(s.mode, Mode::Plan | Mode::Critique) {
@@ -1523,6 +1554,7 @@ pub fn close_session(chat: &mut Chat) {
         }
     }
     s.checks.clear();
+    s.steers.clear();
     s.sweep = None;
     s.proposal = None;
     s.pick = None;
@@ -1857,6 +1889,32 @@ pub fn apply_reply(chat: &mut Chat, mode: Mode, mut r: ReplyJson, t: &Toolkit, l
             }
             keepers = r.keepers.iter().copied().filter(|k| (1..=batch).contains(k)).collect();
             keepers.dedup();
+            // The person's points, as checks from the next round on (after
+            // this round's answers, which are to the checks it was drawn for).
+            // What they overturn goes first: "a sword, not an axe" left "Is he
+            // carrying an axe?" beside "…a sword?", failing every picture.
+            if !r.add_checks.is_empty() {
+                let mut drop: Vec<usize> = r.drop_checks.iter().filter_map(|k| (*k as usize).checked_sub(1)).collect();
+                drop.sort_unstable();
+                drop.dedup();
+                let have = chat.session.checks.len();
+                for i in drop.into_iter().rev().filter(|i| *i < have) {
+                    let gone = chat.session.checks.remove(i);
+                    notes_out.push(format!("Dropped a check: {gone}"));
+                }
+                if let Some(g) = r.goal.as_deref().map(str::trim).filter(|g| !g.is_empty() && *g != chat.session.goal.trim()) {
+                    chat.session.goal = g.to_string();
+                    notes_out.push(format!("The goal now: {g}"));
+                }
+            }
+            for c in r.add_checks.iter().map(|c| c.trim()).filter(|c| !c.is_empty()) {
+                let have = &chat.session.checks;
+                if have.iter().any(|h| h.eq_ignore_ascii_case(c)) || have.len() >= MAX_STEERED_CHECKS {
+                    continue;
+                }
+                chat.session.checks.push(c.to_string());
+                notes_out.push(format!("Added a check: {c}"));
+            }
             let action = r.action.as_deref().unwrap_or("done");
             chat.session.next = match action {
                 // A comparison's rounds are the server's: the next value, the
@@ -3238,6 +3296,48 @@ mod tests {
         apply_reply(&mut c, Mode::Critique, r, &t, &Locks::default(), vec![], Default::default());
         assert_eq!(c.session.next, Next::Nothing, "round 2 of 2 was the last");
         assert_eq!(next_step(&c), Step::End);
+    }
+
+    /// What the person says while a session runs becomes checks from the
+    /// next round on; one said while a turn ran waits for the next turn, and
+    /// a session about to stop judges its round again for it.
+    #[test]
+    fn the_person_steers_a_running_session() {
+        let mut c = chat();
+        let t = tk(&c);
+        let go = |c: &mut Chat, mode: Mode, v: Value| apply_reply(c, mode, reply(v), &t, &Locks::default(), vec![], Default::default());
+        go(&mut c, Mode::Plan, json!({"notes": "", "checks": ["Is there a knight?"], "rounds": 3, "count": 1, "reply": ""}));
+        start_round(&mut c, 100);
+        image_done(&mut c, img("a"));
+        c.session.state = State::Running;
+        assert!(c.session.steerable());
+        c.session.steers = vec!["He holds two shields".into(), "late".into()];
+        // The turn saw the first; the second came while it ran.
+        go(&mut c, Mode::Critique, json!({"notes": "", "checks": [[true]], "keepers": [], "action": "done", "reply": "",
+                                          "add_checks": ["Is the knight holding one shield?", "is there a knight?", " "],
+                                          "drop_checks": [7], "goal": ""}));
+        steers_taken(&mut c, 1);
+        assert_eq!(c.session.checks, ["Is there a knight?", "Is the knight holding one shield?"], "added once, blanks dropped");
+        assert_eq!(c.session.steers, ["late"]);
+        assert_eq!(c.session.next, Next::Critique, "the round is judged again for what came late");
+        go(&mut c, Mode::Critique, json!({"notes": "", "checks": [[true, false]], "keepers": [], "action": "generate", "reply": ""}));
+        steers_taken(&mut c, 1);
+        assert!(c.session.steers.is_empty());
+        assert_eq!(c.session.next, Next::Batch);
+        // A sword, not an axe: the axe's check goes and the goal says so.
+        c.session.checks.push("Is he carrying an axe?".into());
+        go(&mut c, Mode::Critique, json!({"notes": "", "checks": [[true, true, true]], "keepers": [], "action": "done", "reply": "",
+                                          "add_checks": ["Is he carrying a sword?"], "drop_checks": [3, 3, 9],
+                                          "goal": "A knight with a sword and one shield."}));
+        assert_eq!(c.session.checks, ["Is there a knight?", "Is the knight holding one shield?", "Is he carrying a sword?"]);
+        assert_eq!(c.session.goal, "A knight with a sword and one shield.");
+        // An answer with no steer in it changes neither.
+        go(&mut c, Mode::Critique, json!({"notes": "", "checks": [[true, true, true]], "keepers": [], "action": "done", "reply": "",
+                                          "drop_checks": [1], "goal": "something else"}));
+        assert_eq!((c.session.checks.len(), c.session.goal.as_str()), (3, "A knight with a sword and one shield."));
+        close_session(&mut c);
+        c.session.state = State::Running;
+        assert!(!c.session.steerable(), "a chat turn takes no steer");
     }
 
     #[test]

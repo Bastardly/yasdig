@@ -130,6 +130,14 @@ Break silently:
   `start_proposal_sized`) set `Session.sized`, which the plan turn's own sizes never
   overwrite. The card's number boxes are the only thing typed into the log, so
   `draw()` in assistant.js carries their values across a redraw.
+- **A message while an improve session runs steers it** (`Session::steerable`: busy,
+  Plan/Critique, no sweep; `routes::send` → `Msg::User` + `Session.steers`, no job): the
+  next plan/critique turn quotes them (`context::steered_text`), a critique's schema
+  gains `add_checks`, `drop_checks` and `goal` (`Toolkit.steering`), applied after this
+  round's answers: dropped first, then the goal restated, then added — "a sword, not an
+  axe" otherwise kept both checks and an axe goal (2026-11-23). `steers_taken(c, seen)` drains only what the turn saw — one that came while
+  it ran is the next turn's, and a session about to stop goes `Next::Critique` again
+  for it. A comparison 409s (its table needs the same checks per value); pictures too.
 - **Again is the server's** (`POST /agent/again` → `session::draw_again`):
   `close_session`, then a chat draw on new seeds with no turn. The page offers it under
   the newest round only, never while the chat's job runs.

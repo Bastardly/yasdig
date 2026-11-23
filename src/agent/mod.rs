@@ -388,6 +388,10 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
     };
     let mut tk = tk;
     tk.vision = model.vision();
+    // What the person said while the session ran, as this turn sees it; the
+    // ones that arrive while it runs are the next turn's.
+    let steers = if matches!(mode, Mode::Plan | Mode::Critique) { chat.session.steers.len() } else { 0 };
+    tk.steering = steers > 0 && mode == Mode::Critique && sweep.is_none();
     let schema = schema::output(mode, &tk, shown, checks.len() as u32, sweep.is_some());
     // A reply is usually a few hundred tokens, so that is what the first try
     // reserves; the grammar allows several times it (`schema::max_tokens`), and
@@ -463,6 +467,7 @@ fn turn(engine: &mut Engine, store: &ChatStore, chat: &mut chat::Chat, mode: Mod
         tk.vision = model.vision();
         let locks = tk.locks.clone();
         session::apply_reply(c, mode, parsed, &tk, &locks, used.clone(), stats.clone());
+        session::steers_taken(c, steers);
         Ok(())
     })?;
     if mode == Mode::Story {

@@ -859,6 +859,12 @@ pub struct Session {
     /// A film waiting for the person to pick its video model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pick: Option<VideoPick>,
+    /// What the person said while the session ran, not yet taken up by a
+    /// turn (`routes::send`'s steer): the next plan or critique turn makes
+    /// checks of it and acts on it. Asked for 2026-11-23: a knight with two
+    /// shields, looking the wrong way, could only be pointed out after.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steers: Vec<String>,
     /// The job carrying the session now, while queued or running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<u64>,
@@ -870,6 +876,13 @@ impl Session {
     /// Whether a job is carrying the chat.
     pub fn busy(&self) -> bool {
         matches!(self.state, State::Queued | State::Running)
+    }
+
+    /// A message now joins the running session rather than waiting: an
+    /// improve session's, not a comparison's (its checks must be the same
+    /// for every value, or its table compares nothing).
+    pub fn steerable(&self) -> bool {
+        self.busy() && matches!(self.mode, Mode::Plan | Mode::Critique) && self.sweep.is_none()
     }
 }
 

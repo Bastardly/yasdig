@@ -697,6 +697,28 @@ fn send(conn: &mut Connection, cfg: &Config, lanes: &Lanes, body: &[u8]) -> Resu
     // The pictures are copied into the chat now, so the message keeps them
     // whatever happens to the originals.
     let n = match store.load(&dto.chat) {
+        // Said while a session runs: it joins the session (`Session::steers`).
+        Ok(c) if c.session.steerable() => {
+            if !dto.images.is_empty() {
+                return err(conn, 409, "while the session runs, say what to change in words — attach pictures once it ends, or stop it");
+            }
+            let r = store.update(&dto.chat, |c| {
+                if !c.session.steerable() {
+                    anyhow::bail!("the session has just ended — send it again");
+                }
+                let n = c.next_n();
+                c.messages.push(Msg::User { n, ms: super::chat::now_ms(), text: text.clone(), images: Vec::new() });
+                c.session.steers.push(text.clone());
+                Ok(())
+            });
+            return match r {
+                Ok(()) => ok(conn, json!({ "steered": true })),
+                Err(e) => err(conn, 409, &format!("{e:#}")),
+            };
+        }
+        Ok(c) if c.session.busy() && c.session.sweep.is_some() => {
+            return err(conn, 409, "a comparison judges every value by the same checks, so it can't take more on the way — stop it, or wait")
+        }
         Ok(c) if c.session.busy() => return err(conn, 409, "the agent is still working on this chat — stop it, or wait"),
         Ok(c) => c.next_n(),
         Err(e) => return err(conn, 404, &format!("{e:#}")),

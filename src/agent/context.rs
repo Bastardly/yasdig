@@ -270,6 +270,16 @@ fn cast_added_text(cast: &[(String, String)]) -> Option<String> {
     Some(s)
 }
 
+/// What the person said while the session ran, quoted for the turn that
+/// takes it up, with what to do about it; empty when they said nothing.
+fn steered_text(steers: &[String], what: &str) -> String {
+    if steers.is_empty() {
+        return String::new();
+    }
+    let said: Vec<String> = steers.iter().map(|s| format!("- \"{}\"", s.trim())).collect();
+    format!("\n\nWhile you worked, the person added:\n{}\n{what}", said.join("\n"))
+}
+
 pub fn system(t: &Toolkit, turn: &Turn) -> String {
     let mut s = String::new();
     s.push_str(turn.skills);
@@ -616,10 +626,12 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
             );
             parts.push(Part::Text {
                     text: format!(
-                        "Goal: {}\nThe prompt now: {prompt}\nWrite the checks for this goal. {next}{rolls}\nSet `rounds` and \
+                        "Goal: {}{}\nThe prompt now: {prompt}\nWrite the checks for this goal. {next}{rolls}\nSet `rounds` and \
                          `count` (pictures per round) from the person's words: \"try 2 rounds of 2\" is 2 and 2. \
                          When they don't say, 3 rounds of 4. At most {} rounds of {}.",
                         turn.goal,
+                        steered_text(&chat.session.steers, "Make each thing they point out one of your checks, and \
+                            write the prompt to meet it."),
                         super::knobs::MAX_ROUNDS,
                         super::knobs::MAX_BATCH
                     ),
@@ -672,7 +684,23 @@ pub fn messages(chat: &Chat, t: &Toolkit, turn: &Turn) -> Vec<Message> {
             }
             let checks: Vec<String> = turn.checks.iter().enumerate().map(|(i, c)| format!("{}. {c}", i + 1)).collect();
             parts.push(Part::Text {
-                text: format!("Answer each check for each picture, in order:\n{}", checks.join("\n")),
+                text: format!(
+                    "Answer each check for each picture, in order:\n{}{}",
+                    checks.join("\n"),
+                    if sweep.is_some() {
+                        String::new()
+                    } else {
+                        steered_text(
+                            &chat.session.steers,
+                            "Answer the checks above as they are, then put each thing they point out in `add_checks`, \
+                             as a yes/no question answered by looking (\"Is the knight holding one shield?\"); those \
+                             are judged from the next round. Where they change what a check above asks for (a \
+                             sword, not an axe), put that check's number in `drop_checks`, and write `goal` as it \
+                             stands now with their change. Act on it now: unless this round already shows it, \
+                             change the prompt and draw again, and say in `reply` what you changed.",
+                        )
+                    }
+                ),
             });
             push(&mut out, Role::User, parts);
         }
@@ -917,6 +945,20 @@ mod tests {
 
     /// A word pick is named with its look and the rule not to write it; a
     /// chat with none hears nothing of it.
+    #[test]
+    fn what_the_person_added_mid_session_is_quoted_to_the_critique() {
+        let mut c = chat();
+        let t = toolkit();
+        let text = |c: &Chat| -> String {
+            let m = messages(c, &t, &Turn { checks: &["Is there a hat?".to_string()], ..turn(Mode::Critique, vec!["/w/a.png".into()]) });
+            m.last().unwrap().content.iter().filter_map(|p| match p { Part::Text { text } => Some(text.clone()), _ => None }).collect()
+        };
+        assert!(!text(&c).contains("the person added"));
+        c.session.steers = vec!["the hat is green, not red".into()];
+        let s = text(&c);
+        assert!(s.contains("While you worked, the person added:\n- \"the hat is green, not red\"") && s.contains("`add_checks`"), "{s}");
+    }
+
     #[test]
     fn the_picked_cast_is_named_and_its_look_left_to_the_server() {
         let mut t = toolkit();
