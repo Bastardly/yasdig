@@ -49,7 +49,7 @@ env:
   # The sd.cpp commit yasdig is tested against. Bump deliberately: yasdig
   # parses sd-cli's progress output and reads its source for several behaviours
   # (see CLAUDE.md), so a newer commit is a change to test, not a free upgrade.
-  SD_CPP_REF: b13a48219d5cdf408edcb93da6cd69b612ed03d3
+  SD_CPP_REF: 9e7eed71e42d2b87ad496b236793b14747c2e9c8
   # The llama.cpp commit the agent's driver (`llm/yasdig-llm.cpp`) is built
   # against: master of 2026-11-09, past v0.9.0 for Chatterbox Multilingual's
   # guidance metadata (#31698) — the commit narrated stills' voices were

@@ -568,7 +568,12 @@ impl<'a> SdRunner<'a> {
         let err_tail = self.run_tail(cmd, "upscale")?;
         if err_tail
             .iter()
-            .any(|l| l.contains("new_upscaler_ctx failed") || l.contains("upscale failed"))
+            // `sd_upscaler_create failed` since 9e7eed7; `new_upscaler_ctx failed` before.
+            .any(|l| {
+                l.contains("sd_upscaler_create failed")
+                    || l.contains("new_upscaler_ctx failed")
+                    || l.contains("upscale failed")
+            })
         {
             bail!(
                 "sd-cli could not run {} as an ESRGAN upscaler, though its tensor \

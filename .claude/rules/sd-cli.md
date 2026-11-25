@@ -96,8 +96,12 @@ anything else. The page's lists are `#sampler`/`#scheduler` markup
 (`every_sampler_and_scheduler_option_is_one_sd_cpp_takes`). **Re-transcribe when sd.cpp
 is bumped.**
 
-**The clone is at `b13a482`** (bumped 2026-10-18; CI builds `SD_CPP_REF` in
-`release.yml` — bump both). sd.cpp references here name
+**The clone is at `9e7eed7`** (bumped 2026-11-25; CI builds `SD_CPP_REF` in
+`release.yml` — bump both). **It is the last commit before `6cd0ef1` (DGL,
+2026-11-22)**, which replaced `src/pipeline/` with graph templates
+(`src/api/templates/*.dgl`): our LTX patch has nothing to apply to past it, so the
+next bump re-expresses that patch as DGL (control frames are refused today unless
+VACE or "an explicit DGL workflow", `generation_video.cpp`). sd.cpp references here name
 functions/files; line numbers drift — search by name. Log format is `[I] msg -
 file:line`; parsers match contents and have fixtures in both formats; unmeasured
 memory prints `unknown`/`unlimited` (hence `parse_shortfall` reads by label).
