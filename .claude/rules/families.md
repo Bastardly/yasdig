@@ -71,7 +71,10 @@ Things that break silently:
   VAE has the video VAE's markers at 1024 wide (`decoder.x_embedder.bias`) — 2048 is
   the video one. Both H3s share one encoder row (`config::H3_LLM`). The recipe streams
   (`memory = disk`) and sends no `--sigmas`: sd.cpp's default discrete schedule *is*
-  its PDD grid, so img2img trims it like any other.
+  its PDD grid. **Its img2img passes must not be stretched** (`ImageFamily::distilled_grid`):
+  sd.cpp picks an output head by snapping each step to that grid, so 6/strength steps
+  ran one segment's head many times (crosshatched, overcooked). They send `--steps 6`
+  with `strength_as_noise_level,force_first_sigma`, entering the grid at the strength.
 - **`classify` order**: image models before either VAE branch (a bundled SDXL's VAE
   looks like Wan's); LDM-VAE before Wan VAE; unsupported markers before supported
   families (Hunyuan Video has `double_blocks`, SVD is a UNet); FLUX.3 before every

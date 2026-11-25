@@ -183,6 +183,24 @@ impl<'a> SdRunner<'a> {
         // (`pipeline/image.cpp`), so an area refine can follow one.
         push_refs(&mut cmd, p, refs, ref_side);
         cmd.args(["--strength", &format!("{strength}")]);
+        if let Some(grid) = p.family.distilled_grid() {
+            // A distilled model with one output head per step of its own grid
+            // (H3 Image's six PDD heads): sd.cpp picks the head by snapping the
+            // step's sigmas to that grid, so the stretched schedule below put
+            // every step of a pass inside one segment and ran its jump-to-the-
+            // end head over and over — a crosshatched, overcooked picture at
+            // any strength. Instead: the grid itself, entered at the strength
+            // (`strength_as_noise_level` picks the first grid sigma below it,
+            // `force_first_sigma` starts exactly there), so each step is one
+            // the model was distilled for. The steps knob has nothing to set.
+            cmd.args(["--steps", &grid.to_string()]);
+            cmd.args(["--extra-sample-args", "strength_as_noise_level=true,force_first_sigma=true"]);
+            eprintln!("[yasdig] {label}: the model's own {grid}-step grid from strength {strength}");
+            if big_image {
+                cmd.arg("--vae-tiling");
+            }
+            return cmd;
+        }
         // Effective steps have to scale with strength, or the pass is simply
         // under-resolved. `strength` decides how far up the sigma schedule the
         // pass starts, so the range those steps must cover grows with it, while
@@ -2946,6 +2964,28 @@ binary = "/opt/sd-cli"
         // A preset is its own family's; anything else is refused.
         assert!(Profile { family: crate::config::ImageFamily::MossImage, ..p.clone() }.validate().is_err());
         assert!(Profile { sigmas: "1.0,0.5,0.0".into(), ..p }.validate().is_err());
+    }
+
+    /// H3 Image's passes step on its own six-sigma grid, entered at the
+    /// strength — never the stretched, trimmed schedule that ran one head over
+    /// and over. Other families keep the stretch.
+    #[test]
+    fn a_distilled_grid_pass_enters_the_grid_at_its_strength() {
+        let cfg: Config = toml::from_str("[sd]\nbinary = \"/opt/sd-cli\"\n").unwrap();
+        let r = SdRunner::new(&cfg);
+        let pass = |family, steps| {
+            let p = Profile { model: PathBuf::from("/models/m.safetensors"), family, steps: 6, ..Default::default() };
+            argv(&r.img2img_cmd(&p, "x", None, 1, Path::new("i.png"), Path::new("o.png"), 0.1, steps, 1.0, false, "x", &[], None))
+        };
+        for steps in [4, 12] {
+            let a = pass(crate::config::ImageFamily::MinimaxH3Image, steps);
+            assert_eq!(flag(&a, "--steps"), Some("6"), "{steps}");
+            assert_eq!(flag(&a, "--extra-sample-args"), Some("strength_as_noise_level=true,force_first_sigma=true"));
+            assert_eq!(flag(&a, "--strength"), Some("0.1"));
+        }
+        let z = pass(crate::config::ImageFamily::ZImage, 4);
+        assert_eq!(flag(&z, "--steps"), Some("40"));
+        assert_eq!(flag(&z, "--extra-sample-args"), None);
     }
 
     #[test]

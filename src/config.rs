@@ -1408,6 +1408,17 @@ impl ImageFamily {
         matches!(self, ImageFamily::MossImage)
     }
 
+    /// The step count of a schedule this family was distilled to step on
+    /// exactly, with an output head per step — H3 Image's six (PDD). An
+    /// img2img pass then enters that grid at its strength rather than
+    /// stretching and trimming a longer schedule (`SdRunner::img2img_cmd`).
+    pub fn distilled_grid(self) -> Option<u32> {
+        match self {
+            ImageFamily::MinimaxH3Image => Some(6),
+            _ => None,
+        }
+    }
+
     /// Whether sd-cli conditions this family on reference images (`-r`). The
     /// Flux.2 and FLUX.3 Kleins do, natively (sd.cpp's `flux2` preset), and so
     /// does H3 Image — up to 16, which its prompt names `<Picture 1>`,
