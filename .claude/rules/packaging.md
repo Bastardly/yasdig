@@ -63,7 +63,12 @@ Five things break silently:
 
 **A master push builds Windows alone** (same `release.yml`, the Linux job skipped,
 `publish`/`scan` tag-only): a 14-day workflow artifact to try on a Windows PC, and
-`cargo test` on Windows. Never a rolling pre-release — the site's buttons read
+`cargo test` on Windows. **Not when its commit already has a `v*` tag** (the `tagged`
+job, `git ls-remote`): a release pushes both, and the tag's run does it all.
+**sd-cli and yasdig-llm are cached** (`native/`, keyed on both refs, the Vulkan
+version, `build.rs`, `patches/`, `llm/` and `release.yml`): a hit skips the clones
+and C++ builds and the Build step hands them to build.rs as `YASDIG_SD_CLI`/
+`YASDIG_LLM` — **that step's env only**, or `cargo test` embeds 93 MB per test binary. Never a rolling pre-release — the site's buttons read
 `/releases` with pre-releases included.
 
 **Releasing** (`v*` tag → `release.yml`, ~9 min; pushing `master` also deploys the

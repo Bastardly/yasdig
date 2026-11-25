@@ -88,34 +88,63 @@ jobs:
           echo "$SDK/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=$SDK/lib" >> "$GITHUB_ENV"
 
+      # sd-cli and yasdig-llm are most of a build (17 of Windows' 21 minutes,
+      # 2026-11-23) and change only with what they are built from: the two
+      # pinned commits, our patches and driver, build.rs, this file and the
+      # Vulkan SDK — all in the key. A hit skips both clones and the C++
+      # builds, and build.rs embeds the cached files (YASDIG_SD_CLI/YASDIG_LLM).
+      # A tag's run may restore what a master run saved, not the reverse.
+      - name: Native binaries from the cache
+        id: native
+        uses: actions/cache@v6
+        with:
+          path: native
+          key: native-${{ runner.os }}-${{ env.SD_CPP_REF }}-${{ env.LLAMA_CPP_REF }}-${{ env.VULKAN_VERSION }}-${{ hashFiles('build.rs', 'patches/**', 'llm/**', '.github/workflows/release.yml') }}
+
       - name: Fetch stable-diffusion.cpp
         # Where build.rs looks for it, so the build below is the same
         # `cargo build --release` as on a desk.
+        # Blob-less, and without thirdparty/cutlass (NVIDIA's, for the CUDA
+        # build alone; this one never compiles it).
+        if: steps.native.outputs.cache-hit != 'true'
         run: |
-          git clone https://github.com/leejet/stable-diffusion.cpp
+          git clone --filter=blob:none https://github.com/leejet/stable-diffusion.cpp
           git -C stable-diffusion.cpp checkout "$SD_CPP_REF"
-          git -C stable-diffusion.cpp submodule update --init --recursive
+          git -C stable-diffusion.cpp submodule update --init --recursive -- ggml examples/server/frontend thirdparty/libwebp thirdparty/libwebm
 
       - name: Fetch llama.cpp
         # For the agent's driver, which build.rs builds from llm/ against it.
+        if: steps.native.outputs.cache-hit != 'true'
         run: |
-          git clone https://github.com/ggml-org/llama.cpp
+          git clone --filter=blob:none https://github.com/ggml-org/llama.cpp
           git -C llama.cpp checkout "$LLAMA_CPP_REF"
 
       # Third-party actions are pinned to a commit, not a movable tag or branch:
       # a moved tag would run someone else's code inside the release build.
       # The comment says what the hash was when pinned; bump both together.
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable, 2026-10-13
+      # Dependencies' build output, for Build and Test both.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3, 2026-10-20
 
       - name: Build
         # LDFLAGS is read by cmake's first configure: a static libstdc++ here,
         # where the runner has it, and not in build.rs, because Fedora doesn't.
+        # The YASDIG_* variables are this step's only: in Test they would
+        # embed 93 MB in every test binary.
         env:
           LDFLAGS: -static-libstdc++ -static-libgcc
+          HIT: ${{ steps.native.outputs.cache-hit }}
         run: |
+          if [ "$HIT" = true ]; then
+            export YASDIG_SD_CLI="$PWD/native/sd-cli" YASDIG_LLM="$PWD/native/yasdig-llm"
+          fi
           cargo build --release
-          echo "SD_CLI=stable-diffusion.cpp/build-yasdig/bin/sd-cli" >> "$GITHUB_ENV"
-          echo "LLM=llama.cpp/build-yasdig/bin/yasdig-llm" >> "$GITHUB_ENV"
+          if [ "$HIT" != true ]; then
+            mkdir -p native
+            cp stable-diffusion.cpp/build-yasdig/bin/sd-cli llama.cpp/build-yasdig/bin/yasdig-llm native/
+          fi
+          echo "SD_CLI=native/sd-cli" >> "$GITHUB_ENV"
+          echo "LLM=native/yasdig-llm" >> "$GITHUB_ENV"
 
       - name: Dependencies
         # Anything beyond the Vulkan loader and glibc's own libraries is a
@@ -149,7 +178,27 @@ jobs:
           name: yasdig-linux-x86_64
           path: yasdig-linux-x86_64.tar.gz
 
+  # A release pushes master and its tag together, and each ran the same
+  # 25-minute Windows build of one commit. The tag's run does all the master
+  # one does (artifact and tests), so a master push whose commit already has a
+  # v* tag builds nothing.
+  tagged:
+    if: github.event_name == 'push' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    outputs:
+      tagged: ${{ steps.look.outputs.tagged }}
+    steps:
+      - id: look
+        run: |
+          if git ls-remote --tags "https://github.com/$GITHUB_REPOSITORY" 'refs/tags/v*' | grep -q "^$GITHUB_SHA"; then
+            echo "tagged=true" >> "$GITHUB_OUTPUT"
+          fi
+
   windows:
+    needs: tagged
+    # Skipped `tagged` (a tag push, a manual run) still builds; so does a
+    # failed one, whose output is empty.
+    if: ${{ !cancelled() && needs.tagged.outputs.tagged != 'true' }}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
@@ -166,33 +215,62 @@ jobs:
 
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
+      # sd-cli and yasdig-llm are most of a build (17 of Windows' 21 minutes,
+      # 2026-11-23) and change only with what they are built from: the two
+      # pinned commits, our patches and driver, build.rs, this file and the
+      # Vulkan SDK — all in the key. A hit skips both clones and the C++
+      # builds, and build.rs embeds the cached files (YASDIG_SD_CLI/YASDIG_LLM).
+      # A tag's run may restore what a master run saved, not the reverse.
+      - name: Native binaries from the cache
+        id: native
+        uses: actions/cache@v6
+        with:
+          path: native
+          key: native-${{ runner.os }}-${{ env.SD_CPP_REF }}-${{ env.LLAMA_CPP_REF }}-${{ env.VULKAN_VERSION }}-${{ hashFiles('build.rs', 'patches/**', 'llm/**', '.github/workflows/release.yml') }}
+
       - name: Fetch stable-diffusion.cpp
         # LF as upstream has it: build.rs applies patches/stable-diffusion.cpp/
         # to this tree, and the runner's autocrlf would make every context
         # line of them differ by a CR.
+        # Blob-less and without cutlass, as on Linux.
+        if: steps.native.outputs.cache-hit != 'true'
         run: |
-          git -c core.autocrlf=false clone https://github.com/leejet/stable-diffusion.cpp
+          git -c core.autocrlf=false clone --filter=blob:none https://github.com/leejet/stable-diffusion.cpp
           git -C stable-diffusion.cpp checkout $env:SD_CPP_REF
-          git -C stable-diffusion.cpp submodule update --init --recursive
+          git -C stable-diffusion.cpp submodule update --init --recursive -- ggml examples/server/frontend thirdparty/libwebp thirdparty/libwebm
 
       - name: Fetch llama.cpp
+        if: steps.native.outputs.cache-hit != 'true'
         run: |
-          git clone https://github.com/ggml-org/llama.cpp
+          git clone --filter=blob:none https://github.com/ggml-org/llama.cpp
           git -C llama.cpp checkout $env:LLAMA_CPP_REF
 
       # Pinned to a commit, as in the Linux job.
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable, 2026-10-13
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3, 2026-10-20
 
       - name: Build
         # The static CRT for yasdig itself too; build.rs gives sd-cli /MT.
+        # YASDIG_* for this step only, as on Linux. pwsh doesn't stop at a
+        # failed native command, hence the explicit check.
         env:
           RUSTFLAGS: -C target-feature=+crt-static
+          HIT: ${{ steps.native.outputs.cache-hit }}
         run: |
+          $native = "$env:GITHUB_WORKSPACE\native"
+          if ($env:HIT -eq 'true') {
+            $env:YASDIG_SD_CLI = "$native\sd-cli.exe"
+            $env:YASDIG_LLM = "$native\yasdig-llm.exe"
+          }
           cargo build --release
-          $exe = Get-ChildItem -Recurse stable-diffusion.cpp\build-yasdig\bin -Filter sd-cli.exe | Select-Object -First 1
-          Add-Content $env:GITHUB_ENV "SD_CLI=$($exe.FullName)"
-          $llm = Get-ChildItem -Recurse llama.cpp\build-yasdig\bin -Filter yasdig-llm.exe | Select-Object -First 1
-          Add-Content $env:GITHUB_ENV "LLM=$($llm.FullName)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:HIT -ne 'true') {
+            New-Item -ItemType Directory -Force $native | Out-Null
+            Get-ChildItem -Recurse stable-diffusion.cpp\build-yasdig\bin -Filter sd-cli.exe | Select-Object -First 1 | Copy-Item -Destination $native
+            Get-ChildItem -Recurse llama.cpp\build-yasdig\bin -Filter yasdig-llm.exe | Select-Object -First 1 | Copy-Item -Destination $native
+          }
+          Add-Content $env:GITHUB_ENV "SD_CLI=$native\sd-cli.exe"
+          Add-Content $env:GITHUB_ENV "LLM=$native\yasdig-llm.exe"
 
       - name: Dependencies
         # vulkan-1.dll comes with every GPU driver; KERNEL32 and the rest are
