@@ -8,7 +8,7 @@
 // `_site/image/index.html`, and anything missing is the 404 page.
 //
 // The GitHub API the download buttons ask is answered here from site/mock/
-// (download.js points at /mock-api on localhost): `?mock=flagged` and the rest
+// (download.js points at /mock-api on localhost): `?mock=noattest` and the rest
 // of `SCENARIOS` show every state the dialogs have; they are listed in the
 // console on start.
 

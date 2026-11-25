@@ -3,7 +3,7 @@
 // except that the GitHub API's address is one constant: `serve.mjs` answers
 // it from site/mock/ when the page is opened on this computer.
 
-// On this computer, the preview's mock of the API; `?mock=flagged` (and the
+// On this computer, the preview's mock of the API; `?mock=noattest` (and the
 // other scenarios in site/mock/releases.mjs) picks what it answers.
 const LOCAL = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
 const API = LOCAL ? '/mock-api' : 'https://api.github.com';
@@ -38,10 +38,9 @@ const api = (path) => `${API}${path}${MOCK ? `${path.includes('?') ? '&' : '?'}m
       const a = rel.assets.find((x) => test.test(x.name));
       if (a) document.getElementById(id).href = a.browser_download_url;
     }
-    const scan = scanOf(rel.body);
     for (const [os, test] of [['win', WIN], ['linux', LINUX]]) {
       const a = rel.assets.find((x) => test.test(x.name));
-      if (a) askFirst(os, a, rel, scan);
+      if (a) askFirst(os, a, rel);
     }
     const date = new Date(rel.published_at).toLocaleDateString(undefined,
       { day: 'numeric', month: 'short', year: 'numeric' });
@@ -50,14 +49,6 @@ const api = (path) => `${API}${path}${MOCK ? `${path.includes('?') ? '&' : '?'}m
   } catch { /* keep the Releases page links */ }
 })();
 
-// The scan the release pipeline put in the notes (.github/scripts/
-// scan-notes.sh): one `<!-- yasdig-scan {…} -->` comment, scan.json minified.
-// Change both or neither. No comment, or one that doesn't parse: no scan yet.
-function scanOf(body) {
-  const m = /<!-- yasdig-scan (\{.*?\}) -->/.exec(body || '');
-  try { return m ? JSON.parse(m[1]) : null; } catch { return null; }
-}
-
 const esc = (s) => String(s).replace(/[&<>"]/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const day = (iso) => new Date(iso).toLocaleDateString(undefined,
@@ -65,38 +56,16 @@ const day = (iso) => new Date(iso).toLocaleDateString(undefined,
 
 // What is known about this download, for its dialog: the version, the file's
 // SHA-256 (GitHub's own `digest` of the asset, so it is there from the moment
-// the file is), VirusTotal's verdicts on the archive and on the program inside
-// it, and whether GitHub attests it built the file (filled in on open).
-function checked(os, asset, rel, scan) {
+// the file is), and whether GitHub attests it built the file (filled in on
+// open). No VirusTotal line since 2026-11-25: the release pipeline still
+// scans (scan.yml), but a machine-learning guess shown as "1 engine flagged it"
+// reads as "a trojan" to most visitors, whatever the note under it says.
+function checked(os, asset, rel) {
   const hash = (asset.digest || '').replace(/^sha256:/, '');
-  const mine = (scan?.files || []).filter((f) => f.os === (os === 'win' ? 'windows' : 'linux'));
-  const archive = mine.find((f) => f.kind === 'archive');
-  const program = mine.find((f) => f.kind === 'program');
-  const done = (f) => f && f.status === 'completed';
-  const flagged = mine.filter(done).reduce((n, f) => n + f.malicious + f.suspicious, 0);
-  let vt;
-  // Windows isn't scanned since 2026-11-01 (scan.yml); no line rather than a
-  // "not scanned yet" that never comes.
-  if (os === 'win' && !mine.length) {
-    vt = '';
-  } else if (done(archive) || done(program)) {
-    const part = (f, what) => (done(f)
-      ? `<a href="${esc(f.report)}">${f.malicious + f.suspicious} of ${f.engines}</a> engines flagged ${what}` : null);
-    vt = `<p${flagged ? ' class="flagged"' : ''}><b>VirusTotal:</b> ${
-      [part(archive, 'the download'), part(program, 'the program inside')].filter(Boolean).join(' · ')}
-      <span class="sub">— scanned ${day((archive || program).scanned)}</span></p>`
-      + (flagged ? `<p class="sub">A few engines flag most new programs that aren't signed yet: their
-        verdict is a guess from how the file looks, not something found in it. The report
-        lists each engine and what it said.</p>` : '');
-  } else {
-    vt = `<p><b>VirusTotal:</b> <span class="sub">not scanned yet — the results appear a few
-      minutes after a release${hash ? `, or <a href="https://www.virustotal.com/gui/file/${hash}">look the file up</a>` : ''}.</span></p>`;
-  }
   const check = os === 'win'
     ? `certutil -hashfile ${asset.name} SHA256` : `sha256sum ${asset.name}`;
   return `<h3>Checked</h3>
     <p><b>Version:</b> ${esc(rel.tag_name)} <span class="sub">· ${day(rel.published_at)}</span></p>
-    ${vt}
     ${hash ? `<p><b>SHA-256:</b> <button type="button" class="copy" data-copy="${hash}">Copy</button></p>
       <p class="hash"><code>${hash}</code></p>
       <p class="sub">Check yours with <code>${esc(check)}</code>: it should print the same.</p>` : ''}
@@ -108,12 +77,12 @@ function checked(os, asset, rel, scan) {
 // Each button explains before it downloads (#win-dialog, #linux-dialog). The
 // dialog's own link does the downloading, so the browser sees an ordinary click
 // on a file link and nothing here has to start a download by script.
-function askFirst(os, asset, rel, scan) {
+function askFirst(os, asset, rel) {
   const dlg = document.getElementById(`${os}-dialog`);
   const go = document.getElementById(`${os}-go`);
   const box = document.getElementById(`${os}-checked`);
   go.href = asset.browser_download_url;
-  box.innerHTML = checked(os, asset, rel, scan);
+  box.innerHTML = checked(os, asset, rel);
   // Whether GitHub signed for this build: asked once, on first open. Releases
   // from before the attestations simply don't show the line.
   let asked = false;

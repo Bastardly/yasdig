@@ -362,16 +362,32 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes $files
           fi
+      - name: Checking a download, in the notes
+        # The SHA-256s and how to verify them, appended below the notes written
+        # by hand. Between markers, so a re-run replaces it rather than adding a
+        # second copy. No VirusTotal here: that result stays in `scan`'s run.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BEGIN='<!-- yasdig-check-begin -->' END='<!-- yasdig-check-end -->'
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body -q .body \
+            | awk -v b="$BEGIN" -v e="$END" 'index($0, b) { s = 1; next } index($0, e) { s = 0; next } !s' \
+            | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > notes.md
+          {
+            printf '\n%s\n## Checking a download\n\n**SHA-256**\n\n```\n' "$BEGIN"
+            cat SHA256SUMS
+            printf '```\n\n`SHA256SUMS` lists both archives. Check a download with `sha256sum -c SHA256SUMS` (Linux) or `certutil -hashfile <file> SHA256` (Windows), and where it was built with `gh attestation verify <file> --repo %s`.\n%s\n' "$GITHUB_REPOSITORY" "$END"
+          } >> notes.md
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
 
   # VirusTotal, after the archives are public: never in the way of a release.
-  # A scan that fails or times out leaves the release as it is, and the site
-  # says "not scanned yet". `scan.yml` is also run by hand to (re-)scan a tag.
+  # Its result stays in its own run (summary, warning, artifact), not on the
+  # release or the site. `scan.yml` is also run by hand to (re-)scan a tag.
   scan:
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish.result == 'success' }}
     needs: publish
     permissions:
-      contents: write
-      actions: write
+      contents: read
     uses: ./.github/workflows/scan.yml
     with:
       tag: ${{ github.ref_name }}

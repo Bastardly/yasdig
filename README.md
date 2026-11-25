@@ -1,7 +1,6 @@
 # YASDIG
 
 [![Latest release](https://img.shields.io/github/v/release/Bastardly/yasdig?include_prereleases)](https://github.com/Bastardly/yasdig/releases)
-[![VirusTotal](https://img.shields.io/endpoint?url=https%3A%2F%2Fyasdig.com%2Fbadge.json)](https://github.com/Bastardly/yasdig/releases/latest)
 [![Release build](https://img.shields.io/github/actions/workflow/status/Bastardly/yasdig/release.yml?label=release%20build)](https://github.com/Bastardly/yasdig/actions/workflows/release.yml)
 [![Downloads](https://img.shields.io/github/downloads/Bastardly/yasdig/total)](https://github.com/Bastardly/yasdig/releases)
 [![Licence](https://img.shields.io/github/license/Bastardly/yasdig)](LICENSE)
@@ -132,13 +131,8 @@ share pictures without that information, turn off *Settings inside saved PNGs* i
 Settings → **General**.
 
 **Checking a download.** YASDIG isn't signed with a paid certificate yet, so every
-release can be checked three other ways, and the download dialog on
-[yasdig.com](https://yasdig.com) shows all three:
-- **VirusTotal** scans the Linux archive and the program inside it when a release
-  is published; the release page links the reports, and the badge above is theirs.
-  The Windows build isn't scanned: until it is signed, an engine or two flag every
-  new unsigned Windows program as unknown, so its report would say nothing about
-  the file. The SHA-256 and the attestation below cover both.
+release can be checked two other ways, and the download dialog on
+[yasdig.com](https://yasdig.com) shows both:
 - **The SHA-256** of each archive is on the release page and in `SHA256SUMS`: compare
   it with `sha256sum <file>` (Linux) or `certutil -hashfile <file> SHA256` (Windows).
 - **GitHub vouches for the build**: `gh attestation verify <file> --repo

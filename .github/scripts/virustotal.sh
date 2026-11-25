@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Scan release files with VirusTotal and print what it found, as JSON, for
-# `scan.yml` to put in the release (the site reads it from there — see
-# `scan-notes.sh`). Bash, curl and jq: no Python anywhere in the build.
+# `scan.yml`'s job summary and artifact (not the release: see scan.yml).
+# Bash, curl and jq: no Python anywhere in the build.
 #
 #   VT_API_KEY=… virustotal.sh <kind>:<os>:<file> …
 #

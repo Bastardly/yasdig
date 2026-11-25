@@ -1,11 +1,15 @@
 # VirusTotal for a release's Linux download: the archive, and the program
-# inside it, so both what is downloaded and what runs have a report. Windows
-# isn't scanned (since 2026-11-01): an unsigned exe draws a guess-flag from an
-# engine or two on every release, and without a certificate there is no way to
-# stop that, so its report said nothing about the file. The results go into the
-# release (`scan-notes.sh`: a visible section, and a JSON comment yasdig.com
-# reads), plus `scan.json`, `badge.json` (the README's badge) and, for a
-# release older than this, `SHA256SUMS`.
+# inside it. Windows isn't scanned (since 2026-11-01): an unsigned exe draws a
+# guess-flag from an engine or two on every release, and without a certificate
+# there is no way to stop that.
+#
+# **The result stays in this run** (since 2026-11-25): the job summary, a
+# warning annotation when an engine flags something, and `scan.json` as the
+# run's artifact. It is no longer put in the release notes, on yasdig.com or
+# in a README badge: v0.13.1's program drew Microsoft's machine-learning guess
+# `Trojan:Script/Wacatac.C!ml` (1 of 62, the archive holding it 0 of 61), and
+# to most visitors "1 engine flagged it" reads as "a trojan". So this is a
+# check for us — a real detection would show here first.
 #
 # Called by release.yml after `publish`; run by hand from the Actions tab to
 # scan (or re-scan) any tag. Needs the repository secret VT_API_KEY — a free
@@ -27,9 +31,7 @@ on:
         required: true
 
 permissions:
-  contents: write
-  # To redeploy yasdig.com, which serves the README's badge (pages.yml).
-  actions: write
+  contents: read
 
 jobs:
   virustotal:
@@ -39,7 +41,7 @@ jobs:
     concurrency:
       group: virustotal
       cancel-in-progress: false
-    # Uploads, then waits for up to four analyses at the Public API's pace.
+    # Uploads, then waits for up to two analyses at the Public API's pace.
     timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
@@ -49,23 +51,14 @@ jobs:
         with:
           sparse-checkout: .github/scripts
 
-      - name: Download the archives
+      - name: Download the archive
         run: |
           mkdir dl
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dl \
-            -p 'yasdig-linux-x86_64.tar.gz' -p 'yasdig-windows-x86_64.zip'
+            -p 'yasdig-linux-x86_64.tar.gz'
           mkdir -p prog/linux
           tar -xzf dl/yasdig-linux-x86_64.tar.gz -C prog/linux yasdig/yasdig
           ls -l dl prog/linux/yasdig
-
-      # Releases from before the checksums were part of `publish` — the
-      # reason the Windows zip is still downloaded.
-      - name: Checksums
-        run: |
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -qx SHA256SUMS; then
-            (cd dl && sha256sum yasdig-linux-x86_64.tar.gz yasdig-windows-x86_64.zip > ../SHA256SUMS)
-            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" SHA256SUMS
-          fi
 
       - name: Scan
         env:
@@ -77,28 +70,24 @@ jobs:
             | jq -s --arg tag "$TAG" '{tag: $tag, files: .}' > scan.json
           cat scan.json
 
-      # The README's VirusTotal badge: shields.io's endpoint format, read from
-      # the newest release (`releases/latest/download/badge.json`), so it
-      # follows every release with nothing to edit. Green when no engine
-      # flagged either file, amber when some did, grey while one is
-      # still being scanned.
-      - name: Badge
+      # A flag is a warning on the run, not a failure: the release is already
+      # public, and most flags are one engine's guess. Open the report and
+      # read the detection name before acting (a `!ml` suffix is Microsoft's
+      # machine-learning guess, not a signature).
+      - name: Summary
         run: |
-          jq '[.files[] | select(.status == "completed")] as $done
-            | ($done | map(.malicious + .suspicious) | add // 0) as $n
-            | {schemaVersion: 1, label: "VirusTotal",
-               message: (if ($done | length) < (.files | length) then "scanning"
-                         elif $n == 0 then "clean" else "\($n) flagged" end),
-               color: (if ($done | length) < (.files | length) then "lightgrey"
-                       elif $n == 0 then "brightgreen" else "orange" end)}' scan.json > badge.json
-          cat badge.json
+          jq -r '
+            def verdict: if .status != "completed" then "still being scanned"
+              elif (.malicious + .suspicious) == 0 then "0 of \(.engines) engines flagged it"
+              else "**\(.malicious + .suspicious) of \(.engines)** engines flagged it" end;
+            "## VirusTotal — \(.tag)", "",
+            "| File | Result | Report |", "|---|---|---|",
+            (.files[] | "| `\(.name)` | \(verdict) | [report](\(.report)) |")
+          ' scan.json >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.files[] | select(.status == "completed" and (.malicious + .suspicious) > 0)
+            | "::warning title=VirusTotal::\(.name): \(.malicious + .suspicious) of \(.engines) engines flagged it — \(.report)"' scan.json
 
-      - name: Into the release
-        run: |
-          bash .github/scripts/scan-notes.sh "$TAG" scan.json
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber scan.json badge.json
-
-      # yasdig.com serves the badge (shields.io won't read from github.com):
-      # deploying again picks up the newest release's badge.json.
-      - name: Redeploy the site
-        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref master
+      - uses: actions/upload-artifact@v7
+        with:
+          name: scan-${{ inputs.tag }}
+          path: scan.json

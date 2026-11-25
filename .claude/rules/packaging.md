@@ -85,7 +85,7 @@ site when `site/` or `web/tokens.css` changed):
    workflow's publish job finds the release and only uploads the archives to it,
    keeping title and notes. If it already ran, `gh release edit vX.Y.Z --notes-file`.
 4. Watch it (`gh run watch`); check both archives are on the release, and — about
-   20 minutes later — the *VirusTotal* section (Linux only) in its notes.
+   20 minutes later — the `scan` job's summary (Linux only) in the run.
 
 **Trust without a certificate**: `publish` also writes `SHA256SUMS` and a build
 provenance attestation (`actions/attest-build-provenance`); then the `scan` job
@@ -94,19 +94,23 @@ the **Linux** archive and the program inside it to VirusTotal — **Windows isn'
 scanned** (dropped 2026-11-01: an unsigned exe drew a 1/69 guess-flag every release
 and no certificate is in reach; old releases' notes keep theirs)
 (`.github/scripts/virustotal.sh`: bash, curl, jq; secret **`VT_API_KEY`**, Public API
-at 4 calls/min) and appends the result to the release notes
-(`scan-notes.sh`, between `<!-- yasdig-scan-begin/end -->`, replaced on a re-run, the
-notes above kept), plus `scan.json`. It runs after the release is public and never
-blocks one.
+at 4 calls/min). It runs after the release is public and never blocks one.
 
-- **The site parses that notes section**: one `<!-- yasdig-scan {scan.json} -->`
-  comment (`scanOf` in `site/js/download.js`). Change both or neither.
-- **The hash shown is GitHub's own `digest` of the asset**, there from upload,
-  not the scan's.
-- **The README's VirusTotal badge reads `https://yasdig.com/badge.json`** (shields.io
-  endpoint format). **shields.io refuses github.com URLs**, so `pages.yml` copies the
-  newest release's `badge.json` into the site on every deploy, and `scan.yml` starts
-  a deploy when it is done (`actions: write`).
+- **The scan is private to the pipeline** (asked for, 2026-11-25): job summary, a
+  `::warning` when an engine flags, `scan.json` as the run's artifact — **never the
+  release notes, yasdig.com or a README badge**. v0.13.1's program drew Microsoft's
+  `Trojan:Script/Wacatac.C!ml` (1/62; the archive holding it 0/61), and non-technical
+  visitors read "1 engine flagged it" as "a trojan". A `!ml` name is a model's guess
+  that reappears when the bundled sd-cli/llm changes; submit the hash to Microsoft
+  (wdsi file submission, *software developer*) rather than investigating from scratch.
+  Releases v0.2.0–v0.13.1 keep their old VirusTotal notes section
+  (`<!-- yasdig-scan-begin/end -->`) and `scan.json`/`badge.json` assets, on purpose.
+- **`publish` writes the notes' *Checking a download* block** (SHA-256s from
+  `SHA256SUMS`, the `sha256sum`/`certutil`/`gh attestation verify` lines) between
+  `<!-- yasdig-check-begin/end -->`, below the hand-written notes, replaced on a
+  re-run. A later `gh release edit --notes-file` drops it: re-run `publish` or
+  keep the block in the file.
+- **The site's dialog hash is GitHub's own `digest` of the asset**, there from upload.
 
 `build.rs` is a table of two native builds (`BUILDS`): sd.cpp's `sd-cli`, and the
 agent's `yasdig-llm` from our `llm/` against a gitignored `./llama.cpp/` clone (into
@@ -133,7 +137,7 @@ so they read `sdxl/x` on Windows too.
   absolute paths throughout (`404.html` is served at any depth).
   - **Preview**: `node site/serve.mjs` (127.0.0.1:8090) rebuilds per page request and
     answers the GitHub API from `site/mock/releases.mjs` — `download.js` points at
-    `/mock-api` on localhost; `?mock=flagged|unscanned|oldwin|prerelease|noattest|nolinux|down`
+    `/mock-api` on localhost; `?mock=prerelease|noattest|nolinux|down`
     shows each dialog state. Mocks never reach `_site/`.
   - **Tokens are the app's**: `web/tokens.css` is copied in as is; the site's own
     tokens (`--sp-8`, `--page-w`, …) are in `site/style.css`'s `:root`. The build
@@ -156,9 +160,8 @@ so they read `sdxl/x` on Windows too.
   and `/download/`): buttons repoint via `api.github.com/…/releases` (not `releases/latest`, which skips
   pre-releases); failure leaves the Releases link. **Both buttons open a dialog
   first** (`#win-dialog`, `#linux-dialog`, `askFirst`): how to start it, then a
-  *Checked* block (`checked()`): version, VirusTotal's verdicts (Linux; the Windows
-  dialog has no line when the scan lists no Windows file), the SHA-256 with a
-  copy button, and — when `api.github.com/…/attestations/<digest>` has one — the
+  *Checked* block (`checked()`): version, the SHA-256 with a copy button (no
+  VirusTotal line, on purpose: see the scan above), and — when `api.github.com/…/attestations/<digest>` has one — the
   build attestation. Asset names
   (`yasdig-windows-x86_64.zip`, `yasdig-linux-x86_64.tar.gz`; the regexes still match
   the bare files older releases carry) must match `release.yml`. The Windows dialog

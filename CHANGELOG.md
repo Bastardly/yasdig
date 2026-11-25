@@ -3,6 +3,14 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## Unreleased
+
+- VirusTotal's results are no longer shown on yasdig.com's download dialog, in the
+  release notes or as a README badge. Every release is still scanned, but a single
+  engine's machine-learning guess read as "a trojan" to anyone who didn't know how
+  those guesses work. The SHA-256 and GitHub's build attestation are still there for
+  checking a download, on the dialog and in each release's notes.
+
 ## 0.13.1 — 2026-11-25
 
 v0.13.0 again, with its files: that release's build finished, but nothing was
