@@ -173,6 +173,19 @@ rest and can go anywhere under `models/`:
 | the tokenizer | [`tokenizer.json`](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/tree/main/tokenizer) |
 | the VAE — Flux.2's | the same file as Flux.2 Klein's, above |
 
+**MiniMax H3 Image** — about 21 GB of transformer on the card with the INT8 file,
+13 GB with W4A8. Distilled: 6 steps at CFG 1 on sd.cpp's default schedule. Its text
+encoder is MiniMax H3 video's Qwen3-VL-32B, which is too big to sit in RAM beside
+it, so the model streams from the SSD (*Memory: Stream from SSD*, its default). The
+encoder can stay under `models/video/`, where the H3 video card puts it; the Image tab
+finds it there. Its VAE is its own: H3 video's does not decode it.
+
+| file | where to get it |
+|---|---|
+| the model | from [Comfy-Org](https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/diffusion_models): `pruned_int8_convrot` (21 GB, the Models tab's default) or `pruned_w4a8` (12.5 GB); `pruned_bf16` (40 GB) is the unquantized original |
+| the text encoder — Qwen3-VL-32B | leejet's [GGUF](https://huggingface.co/leejet/MiniMax-H3-GGUF/tree/main) (`qwen3vl_32b_minimax_h3-Q4_K_M.gguf`, 18.2 GB), the same file as MiniMax H3 video's |
+| the VAE | [`minimax_h3_image_vae_fp16.safetensors`](https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/main/vae) (1.2 GB) |
+
 **Agent models** (the [Assistant](guide.md#the-agent)) are a language model and,
 for one that sees pictures, its vision projector (an `mmproj` file), both GGUF, in a
 folder of their own under `models/agents/`. A folder holding one model and one

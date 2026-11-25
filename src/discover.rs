@@ -443,6 +443,10 @@ pub enum VaeKind {
     /// MiniMax H3's own video VAE: a convolutional encoder and a transformer
     /// decoder (`decoder.register_tokens`, `decoder.x_embedder`).
     MinimaxH3,
+    /// MiniMax H3 Image's: the video VAE's markers, its decoder 1024 wide
+    /// rather than 2048 and patching one frame rather than four — sd.cpp's
+    /// `vit_decoder_2d`. Neither decodes the other's latents.
+    MinimaxH3Image,
     /// Qwen-Image 2.1's: the Wan layout with 2-D kernels, 64 latent channels,
     /// and four image channels (RGBA). An image VAE that looks like a video
     /// one, so it is a kind here, beside the VAE it is shaped like.
@@ -472,6 +476,7 @@ impl Role {
             Role::Dit(DitKind::Ltx(v)) => format!("{} video transformer", v.label()),
             Role::Tokenizer(TokenizerKind::Qwen35) => "Qwen3.5 tokenizer.json — MOSS-Image".into(),
             Role::Vae(VaeKind::MinimaxH3) => "MiniMax H3 video VAE".into(),
+            Role::Vae(VaeKind::MinimaxH3Image) => "MiniMax H3 Image VAE".into(),
             Role::Vae(VaeKind::Wan21) => "wan_2.1 VAE — Krea 2, Qwen-Image, and every Wan except the TI2V-5B".into(),
             Role::Vae(VaeKind::Wan22) => "wan2.2 VAE — TI2V-5B only".into(),
             Role::Vae(VaeKind::QwenImage21) => "Qwen-Image 2.1 VAE (64 channels, RGBA)".into(),
@@ -498,7 +503,7 @@ impl Role {
             Role::Llm(LlmKind::Qwen3Vl { dim: 2560 }) => "Qwen3-VL-4B text encoder — Krea 2".into(),
             Role::Llm(LlmKind::Qwen3Vl { dim: 4096 }) => "Qwen3-VL-8B text encoder — Qwen-Image 2.1".into(),
             Role::Llm(LlmKind::Qwen3Vl { dim: 5120 }) => {
-                "Qwen3-VL-32B text encoder — MiniMax H3 (video)".into()
+                "Qwen3-VL-32B text encoder — MiniMax H3 (video) and H3 Image".into()
             }
             Role::Llm(LlmKind::Qwen3Vl { dim }) => format!("Qwen3-VL text encoder ({dim} wide)"),
             Role::Llm(LlmKind::Qwen25Vl { dim: 3584 }) => {
@@ -897,7 +902,13 @@ pub fn classify(t: &Tensors) -> Role {
     // convolutional (`encoder.down.N.block.N.conv2`), so it has the Wan shape
     // and read as one with 128 latent channels. The decoder is a transformer,
     // and its register tokens and patch embedder are the marker.
+    // H3 Image's is the same shape at half the width: its decoder's patch
+    // embedder is 1024 wide where the video one's is 2048 (both off
+    // Comfy-Org's headers, 2026-11-25).
     if t.has("decoder.register_tokens") && t.has("decoder.x_embedder.") {
+        if t.vector_len("decoder.x_embedder.bias") == Some(1024) {
+            return Role::Vae(VaeKind::MinimaxH3Image);
+        }
         return Role::Vae(VaeKind::MinimaxH3);
     }
     // H3's audio VAE: a BigVGAN decoder (`activation_post`, its anti-aliased
@@ -1380,6 +1391,14 @@ fn image_model(t: &Tensors) -> Option<Role> {
         && (t.has("cond_stage_model.") || t.has("conditioner.") || t.has("text_encoders."));
     let image = |family| Some(Role::Image { family, bundled });
 
+    // H3 Image is H3's transformer without the audio half: the video patch
+    // projection and the text `condition_proj`, and no `audio_patch_proj` —
+    // `classify` sends the video model (which has it) elsewhere first. sd.cpp's
+    // own test for `VERSION_MINIMAX_H3_IMAGE`; read off Comfy-Org's INT8 header
+    // (bare names, 2026-11-25).
+    if t.has("video_patch_proj.weight") && t.has("condition_proj.weight") {
+        return image(ImageFamily::MinimaxH3Image);
+    }
     // FLUX.3, sd.cpp's own pair of markers (`model_loader.cpp`, checked
     // before every other family there too). First here as well: it keeps
     // `single_blocks`, which Flux.1's arm below would claim. `ref_time_in` is
@@ -2892,6 +2911,54 @@ mod tests {
         assert_eq!(classify(&audio), Role::AudioVae(AudioVaeKind::MinimaxH3));
     }
 
+    /// H3 Image off Comfy-Org's headers (2026-11-25): the transformer is H3's
+    /// without `audio_patch_proj`, the VAE the video one's markers at 1024
+    /// wide. Neither is mistaken for its video twin, nor the twin for it, and
+    /// the two VAEs don't fill each other's slot.
+    #[test]
+    fn h3_image_is_not_h3_video() {
+        let image_dit = t(&[
+            ("video_patch_proj.weight", &[5376, 96]),
+            ("video_patch_proj.bias", &[5376]),
+            ("condition_proj.weight", &[5376, 5120]),
+            ("token_refiner.blocks.0.attn.qkv_proj.weight", &[21504, 5376]),
+            ("blocks.0.attn.qkv_proj.weight", &[21504, 5376]),
+            ("final_layer.video_out.weight", &[576, 5376]),
+        ]);
+        assert_eq!(classify(&image_dit), Role::Image { family: ImageFamily::MinimaxH3Image, bundled: false });
+        let video_dit = t(&[
+            ("video_patch_proj.weight", &[5376, 96]),
+            ("audio_patch_proj.weight", &[5376, 64]),
+            ("condition_proj.weight", &[5376, 5120]),
+        ]);
+        assert_eq!(classify(&video_dit), Role::Dit(DitKind::MinimaxH3));
+
+        let vae = |w: u64| {
+            t(&[
+                ("decoder.register_tokens", &[1, 4, w]),
+                ("decoder.x_embedder.weight", &[w, 24]),
+                ("decoder.x_embedder.bias", &[w]),
+                ("encoder.down.0.block.0.conv2.weight", &[128, 128, 3, 3, 3]),
+            ])
+        };
+        let image_vae = classify(&vae(1024));
+        let video_vae = classify(&vae(2048));
+        assert_eq!(image_vae, Role::Vae(VaeKind::MinimaxH3Image));
+        assert_eq!(video_vae, Role::Vae(VaeKind::MinimaxH3));
+        let image_slot = |r: &Role| ImageFamily::MinimaxH3Image.slots().iter().any(|s| s.key == "vae" && (s.fits)(r));
+        let video_slot = |r: &Role| VideoFamily::MinimaxH3.slots().iter().any(|s| s.key == "vae" && (s.fits)(r));
+        assert!(image_slot(&image_vae) && !image_slot(&video_vae));
+        assert!(video_slot(&video_vae) && !video_slot(&image_vae));
+
+        // One encoder for both H3s, and no other image family takes it.
+        let te = Role::Llm(LlmKind::Qwen3Vl { dim: 5120 });
+        for f in ImageFamily::ALL {
+            let takes = f.slots().iter().any(|s| s.key == "llm" && (s.fits)(&te));
+            assert_eq!(takes, f == ImageFamily::MinimaxH3Image, "{f:?}");
+        }
+        assert!(VideoFamily::MinimaxH3.slots().iter().any(|s| s.key == "llm" && (s.fits)(&te)));
+    }
+
     /// A tokenizer is found by what it holds, and any other JSON in a model
     /// folder is left out of the scan rather than listed as unknown.
     #[test]
@@ -2962,6 +3029,7 @@ mod tests {
             Role::ImageVae(ImageVaeKind::Flux2),
             Role::Vae(VaeKind::Wan21),
             Role::Vae(VaeKind::QwenImage21),
+            Role::Vae(VaeKind::MinimaxH3Image),
             Role::ClipL,
             Role::T5xxl,
             Role::Llm(LlmKind::Qwen3 { dim: 2560 }),
@@ -2970,6 +3038,7 @@ mod tests {
             Role::Llm(LlmKind::Qwen3Vl { dim: 4096 }),
             Role::Llm(LlmKind::Qwen25Vl { dim: 3584 }),
             Role::Llm(LlmKind::Qwen35 { dim: 4096 }),
+            Role::Llm(LlmKind::Qwen3Vl { dim: 5120 }),
             Role::Tokenizer(TokenizerKind::Qwen35),
         ];
         for f in ImageFamily::ALL {

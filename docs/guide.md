@@ -314,10 +314,13 @@ Everything else in `work/` is scratch and is still cleared at startup.
 
 ## References
 
-With a model that takes reference images — Flux.2 Klein 4B and 9B, FLUX.3 Klein and its base — a
+With a model that takes reference images — Flux.2 Klein 4B and 9B, FLUX.3 Klein and its base,
+MiniMax H3 Image — a
 **References** button appears in the Generation section. It opens a small dialog with
 four numbered slots (Choose, Upload, drag in or paste); the prompt names them by
-number: *"the woman from image 1 wearing the jacket from image 2, in a market"*. They
+number: *"the woman from image 1 wearing the jacket from image 2, in a market"*.
+MiniMax H3 Image is shown them as `<Picture 1>`, `<Picture 2>`… in that order, so name them that way, as
+sd.cpp's example does: *"the woman in <Picture 1> wearing the jacket from <Picture 2>"*. They
 reach sd-cli as `-r`, on the generate only — Refine and Hi-res finish the picture, they
 don't redraw it toward a reference. Large pictures are shrunk to the model's size
 first, since each reference costs about as much as the image. Picks survive switching
@@ -661,7 +664,7 @@ split by a line you drag; *Compare with* picks the step. Both halves carry the s
 grade and sharpening, and a smaller earlier step is stretched to the same box, so what
 you see is what the pass changed.
 
-**Edit** (Flux.2 and FLUX.3 Klein images; its own panel, shown only for them) changes the whole
+**Edit** (Flux.2 and FLUX.3 Klein and MiniMax H3 Image images; its own panel, shown only for them) changes the whole
 picture by instruction, with no painting: type what to change — "make it night", "remove the hat" — and press Edit.
 The image goes to the model as reference 1 and any References picks follow it (the
 panel's **References…** button opens the same dialog as the Generation panel's), so the

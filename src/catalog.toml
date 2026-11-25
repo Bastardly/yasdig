@@ -394,6 +394,63 @@ dest = "vae/flux2-vae.safetensors"
 bytes = 336211292
 sha256 = "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
 
+# MiniMax H3 Image: Comfy-Org's repack of the pruned transformer and its own
+# VAE, and leejet's GGUF of H3's Qwen3-VL-32B — the H3 video card's encoder,
+# from the same URL (checked 2026-11-25). There is no GGUF of the image model;
+# the INT8 file is ComfyUI's `int8_tensorwise` + convrot (as MOSS-Image's), the
+# W4A8 one `asym_w4a8_int8`, which sd.cpp runs on Vulkan too. A video-dir
+# encoder counts as had here (`scan_images` shares video-dir parts), so someone
+# with the H3 video card fetches only the transformer and the VAE.
+[[entry]]
+id = "minimax-h3-image-int8"
+family = "minimax_h3_image"
+label = "MiniMax H3 Image (pruned, INT8)"
+card_gb = 21
+note = "A distilled model: 6 steps at CFG 1. About 40 GB of files, and 21 GB of transformer on the card: its text encoder is the 18 GB Qwen3-VL-32B the MiniMax H3 video card uses (with that card installed, only the transformer and VAE are fetched), so it streams from the SSD rather than sitting in RAM. Takes up to four reference pictures, named <Picture 1>, <Picture 2>… in the prompt. Its licence restricts where it may be used; read it on the model's page before downloading."
+
+[[entry.file]]
+slot = "model"
+url = "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors"
+dest = "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors"
+bytes = 20979314802
+
+[[entry.file]]
+slot = "llm"
+url = "https://huggingface.co/leejet/MiniMax-H3-GGUF/resolve/main/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+dest = "text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+bytes = 18218065024
+
+[[entry.file]]
+slot = "vae"
+url = "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/vae/minimax_h3_image_vae_fp16.safetensors"
+dest = "vae/minimax_h3_image_vae_fp16.safetensors"
+bytes = 1168505312
+
+[[entry]]
+id = "minimax-h3-image-w4a8"
+family = "minimax_h3_image"
+label = "MiniMax H3 Image (pruned, W4A8)"
+card_gb = 13
+note = "The same model in 4-bit weights: 12.5 GB of transformer instead of 21, for a card the INT8 file doesn't fit. Same encoder and VAE."
+
+[[entry.file]]
+slot = "model"
+url = "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/diffusion_models/minimax_h3_image_pruned_w4a8.safetensors"
+dest = "diffusion_models/minimax_h3_image_pruned_w4a8.safetensors"
+bytes = 12549794530
+
+[[entry.file]]
+slot = "llm"
+url = "https://huggingface.co/leejet/MiniMax-H3-GGUF/resolve/main/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+dest = "text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+bytes = 18218065024
+
+[[entry.file]]
+slot = "vae"
+url = "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/vae/minimax_h3_image_vae_fp16.safetensors"
+dest = "vae/minimax_h3_image_vae_fp16.safetensors"
+bytes = 1168505312
+
 # Iris-3B (Sperid Labs, Apache-2.0): Krea 2's Qwen3-VL-4B and no VAE — it
 # draws in pixel space (checked 2026-10-20). Two cards. The Turbo is the same
 # network distilled to 4 steps (`turbo/`, BF16), and its header can't tell it

@@ -167,6 +167,7 @@ Not sure where to start? The ones marked *Recommended* there and in the model li
 | Qwen-Image 2.1 | 7B, strong lettering, trained at 2048²; 8 steps with Turbo | about 18 GB |
 | Iris-3B Turbo / Iris-3B | small: draws in pixels with no VAE, loads at Q8; Turbo in 4 steps | about 8 GB |
 | MOSS-Image | layout and lettering; 50 steps at real CFG, so not fast | about 16 GB (INT8) / 21 GB (BF16) |
+| MiniMax H3 Image | distilled, 6 steps; takes reference images and can **Edit**; shares H3 video's 18 GB encoder, streamed from the SSD | about 21 GB (INT8) / 13 GB (W4A8) |
 | FLUX.1 Fill | powers **Extend**; not used for generating | about 18.5 GB |
 
 **Video.** Wan 2.2 (TI2V-5B and the I2V-A14B pair), Wan 2.1 VACE and dense models,

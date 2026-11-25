@@ -1,4 +1,4 @@
-//! Loads `models.toml` into strongly-typed config.
+//! Loads `models.toml` into stongly-typed config.
 //!
 //! The *defaults* a model runs with are not in here — they live in
 //! `user/settings.toml` ([`crate::settings`]), because that is the file the
@@ -793,6 +793,19 @@ pub struct PartSlot {
     pub optional: bool,
 }
 
+/// MiniMax H3's text encoder, Qwen3-VL-32B (5120 wide), under leejet's release
+/// name: one row for both H3s, the video model and H3 Image, so the file the
+/// Video tab found is the one the Image tab offers (`scan_images` shares
+/// video-dir parts).
+const H3_LLM: PartSlot = PartSlot {
+    key: "llm",
+    label: "Text encoder",
+    fits: |r| matches!(r, crate::discover::Role::Llm(crate::discover::LlmKind::Qwen3Vl { dim: 5120 })),
+    dir: "text_encoders",
+    file: "qwen3vl_32b_minimax_h3-Q4_K_M.gguf",
+    optional: false,
+};
+
 impl Profile {
     /// Whether `model` carries its own VAE and text encoder, and so runs as
     /// `-m` — with any [`Components`] then *overriding* its own, which sd.cpp
@@ -1347,12 +1360,19 @@ pub enum ImageFamily {
     /// for generating — from noise it has nothing to fill. Flux.1's own parts.
     #[serde(rename = "flux_fill")]
     FluxFill,
+    /// MiniMax H3 Image: H3's transformer without its audio half — no
+    /// `audio_patch_proj`, which is how sd.cpp tells it from the video model
+    /// (`get_sd_version`). Distilled to six steps (its PDD heads), so CFG 1. The
+    /// video model's 5120-wide Qwen3-VL-32B is its encoder, shared with the
+    /// Video tab; its VAE is its own, a 2-D one (`VaeKind::MinimaxH3Image`).
+    #[serde(rename = "minimax_h3_image")]
+    MinimaxH3Image,
 }
 
 impl ImageFamily {
     /// Every variant. Tests hold across it, and [`Config::scan_images`] asks it
     /// which roles some family has a slot for.
-    pub const ALL: [ImageFamily; 16] = [
+    pub const ALL: [ImageFamily; 17] = [
         ImageFamily::Sd1,
         ImageFamily::Sd2,
         ImageFamily::Sdxl,
@@ -1369,6 +1389,7 @@ impl ImageFamily {
         ImageFamily::MossImage,
         ImageFamily::Iris,
         ImageFamily::FluxFill,
+        ImageFamily::MinimaxH3Image,
     ];
 
     /// Can the Image tab run this family yet?
@@ -1381,17 +1402,19 @@ impl ImageFamily {
     /// rather than offered and then failing minutes in. Every family listed
     /// today has both; the match stays exhaustive so a new variant has to
     /// decide.
-    /// Whether sd-cli conditions this family on reference images (`-r`). The
-    /// Flux.2 and FLUX.3 Kleins do, natively (sd.cpp's `flux2` preset); every other
-    /// runnable family here either has no reference path or needs an edit
-    /// checkpoint or LoRA this build doesn't run yet. Served on `/models`, so
-    /// the page's References button follows it rather than a copy of it.
     /// Whether it reads a JSON layout as its prompt (`crate::layout`).
     /// MOSS-Image alone: its encoder was trained on that schema.
     pub fn takes_layout(self) -> bool {
         matches!(self, ImageFamily::MossImage)
     }
 
+    /// Whether sd-cli conditions this family on reference images (`-r`). The
+    /// Flux.2 and FLUX.3 Kleins do, natively (sd.cpp's `flux2` preset), and so
+    /// does H3 Image — up to 16, which its prompt names `<Picture 1>`,
+    /// `<Picture 2>`… in the order sent; every other runnable family here
+    /// either has no reference path or needs an edit checkpoint or LoRA this
+    /// build doesn't run yet. Served on `/models`, so the page's References
+    /// button follows it rather than a copy of it.
     pub fn takes_references(self) -> bool {
         matches!(
             self,
@@ -1399,6 +1422,7 @@ impl ImageFamily {
                 | ImageFamily::Flux2Klein9b
                 | ImageFamily::Flux3Klein
                 | ImageFamily::Flux3KleinBase
+                | ImageFamily::MinimaxH3Image
         )
     }
 
@@ -1419,7 +1443,8 @@ impl ImageFamily {
             | ImageFamily::QwenImage21
             | ImageFamily::MossImage
             | ImageFamily::Iris
-            | ImageFamily::FluxFill => true,
+            | ImageFamily::FluxFill
+            | ImageFamily::MinimaxH3Image => true,
         }
     }
 
@@ -1510,6 +1535,14 @@ impl ImageFamily {
             // Black Forest Labs' reference for Fill: 28–50 steps at a distilled
             // guidance of 30 (`flags`), CFG 1.
             ImageFamily::FluxFill => dit(28, 1.0),
+            // sd.cpp's `docs/models/minimax_h3_image.md`: six steps at CFG 1, euler.
+            // Its `minimax-h3-image` sigmas are what the default (discrete)
+            // schedule already gives it — `MiniMaxH3ImageDenoiser` reads its PDD
+            // grid off the timestep — so no `--sigmas`, and an img2img pass
+            // trims that schedule by strength like any other (invariant 2).
+            // Streamed from the SSD, as H3 video is: the 18 GB encoder alone is
+            // past the GTT that System RAM pins weights in (15.2 GiB on a 30 GB box).
+            ImageFamily::MinimaxH3Image => PartialSettings { memory: Some("disk".into()), ..dit(6, 1.0) },
         }
     }
 
@@ -1683,6 +1716,17 @@ impl ImageFamily {
             file: "qwen_2.5_vl_7b.safetensors",
             optional: false,
         };
+        // H3 Image's own VAE: the video one's markers at half the width (1024),
+        // patching one frame — sd.cpp's `vit_decoder_2d`. The two don't cross
+        // (`docs/models/minimax_h3_image.md`).
+        const H3_IMAGE_VAE: PartSlot = PartSlot {
+            key: "vae",
+            label: "VAE",
+            fits: |r| matches!(r, Role::Vae(VaeKind::MinimaxH3Image)),
+            dir: "vae",
+            file: "minimax_h3_image_vae_fp16.safetensors",
+            optional: false,
+        };
         match self {
             ImageFamily::Sd1 | ImageFamily::Sd2 | ImageFamily::Sdxl => &[SD_VAE],
             // Fill runs with Flux.1's own parts: its VAE and both encoders.
@@ -1699,6 +1743,7 @@ impl ImageFamily {
             ImageFamily::MossImage => &[FLUX2_VAE, QWEN35_9B, QWEN35_TOKENIZER],
             // Pixel space: no VAE slot, so sd-cli is never handed `--vae`.
             ImageFamily::Iris => &[QWEN3_VL_4B],
+            ImageFamily::MinimaxH3Image => &[H3_IMAGE_VAE, H3_LLM],
         }
     }
 
@@ -1721,6 +1766,7 @@ impl ImageFamily {
             ImageFamily::MossImage => "MOSS-Image",
             ImageFamily::Iris => "Iris",
             ImageFamily::FluxFill => "FLUX.1 Fill",
+            ImageFamily::MinimaxH3Image => "MiniMax H3 Image",
         }
     }
 
@@ -1743,6 +1789,7 @@ impl ImageFamily {
             ImageFamily::MossImage => "moss_image",
             ImageFamily::Iris => "iris",
             ImageFamily::FluxFill => "flux_fill",
+            ImageFamily::MinimaxH3Image => "minimax_h3_image",
         }
     }
 }
@@ -2147,14 +2194,6 @@ impl VideoFamily {
             fits: |r| matches!(r, Role::Vae(VaeKind::MinimaxH3)),
             dir: "vae",
             file: "minimax_h3_video_vae_fp16.safetensors",
-            optional: false,
-        };
-        const H3_LLM: PartSlot = PartSlot {
-            key: "llm",
-            label: "Text encoder",
-            fits: |r| matches!(r, Role::Llm(LlmKind::Qwen3Vl { dim: 5120 })),
-            dir: "text_encoders",
-            file: "qwen3vl_32b_minimax_h3-Q4_K_M.gguf",
             optional: false,
         };
         const H3_AUDIO_VAE: PartSlot = PartSlot {
@@ -5061,7 +5100,7 @@ lora_dir = "adapters"
     }
 
     #[test]
-    fn references_are_klein_only_four_at_most_and_stems() {
+    fn references_are_klein_and_h3_image_only_four_at_most_and_stems() {
         for f in ImageFamily::ALL {
             assert_eq!(
                 f.takes_references(),
@@ -5071,6 +5110,7 @@ lora_dir = "adapters"
                         | ImageFamily::Flux2Klein9b
                         | ImageFamily::Flux3Klein
                         | ImageFamily::Flux3KleinBase
+                        | ImageFamily::MinimaxH3Image
                 ),
                 "{f:?}"
             );

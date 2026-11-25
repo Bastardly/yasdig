@@ -3,7 +3,20 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
-## 0.12.0 — 2026-11-23
+## Unreleased
+
+### Added
+
+- **MiniMax H3 Image.** MiniMax's image model, distilled to 6 steps, with two cards on
+  the Models tab: INT8 (21 GB on the card) and W4A8 (13 GB). It takes reference
+  images and can **Edit**; name references `<Picture 1>`, `<Picture 2>` in the
+  prompt. Its text encoder is MiniMax H3 video's, so if you have that card, only
+  the transformer and VAE are downloaded. It streams from the SSD by default.
+
+### Changed
+
+- **stable-diffusion.cpp updated** to `9e7eed7` (2026-11-22), which brings H3 Image.
+
 
 ### Added
 

@@ -1,6 +1,6 @@
 ---
 id: enhance-image
-families: [sd1, sd2, sdxl, flux, flux_schnell, flux2_klein_4b, flux2_klein_9b, flux3_klein, flux3_klein_base, z_image, krea2, qwen_image, qwen_image_21, moss_image, iris]
+families: [sd1, sd2, sdxl, flux, flux_schnell, flux2_klein_4b, flux2_klein_9b, flux3_klein, flux3_klein_base, z_image, krea2, qwen_image, qwen_image_21, moss_image, iris, minimax_h3_image]
 modes: [enhance]
 priority: 90
 ---

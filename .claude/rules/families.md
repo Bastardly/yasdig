@@ -66,6 +66,12 @@ Things that break silently:
   is tested before Qwen-Image's `img_mlp` LoRA arm. `sigmas` (`SIGMA_PRESETS`, each
   tied to a family) is request-only, sent by Turbo, on txt2img only (a fixed list
   can't be strength-trimmed).
+- **H3 Image is not H3**: the same transformer without `audio_patch_proj` (the video
+  arm, which needs it, runs first; the image one is `image_model`'s first), and its
+  VAE has the video VAE's markers at 1024 wide (`decoder.x_embedder.bias`) — 2048 is
+  the video one. Both H3s share one encoder row (`config::H3_LLM`). The recipe streams
+  (`memory = disk`) and sends no `--sigmas`: sd.cpp's default discrete schedule *is*
+  its PDD grid, so img2img trims it like any other.
 - **`classify` order**: image models before either VAE branch (a bundled SDXL's VAE
   looks like Wan's); LDM-VAE before Wan VAE; unsupported markers before supported
   families (Hunyuan Video has `double_blocks`, SVD is a UNet); FLUX.3 before every
