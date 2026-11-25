@@ -3,7 +3,7 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
-## Unreleased
+## 0.13.0 — 2026-11-25
 
 ### Added
 
@@ -17,6 +17,13 @@ What changed in each release of yasdig. Each release's executables are on the
 
 - **stable-diffusion.cpp updated** to `9e7eed7` (2026-11-22), which brings H3 Image.
 
+### Fixed
+
+- **The out-of-memory box names the stage it failed in** when the text encoder runs
+  out (it said "while loading the model"), and no longer suggests System RAM for a
+  model too big for the card's window onto RAM.
+
+## 0.12.0 — 2026-11-23
 
 ### Added
 
