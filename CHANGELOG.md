@@ -3,6 +3,11 @@
 What changed in each release of yasdig. Each release's executables are on the
 [Releases page](https://github.com/Bastardly/yasdig/releases).
 
+## 0.13.1 — 2026-11-25
+
+v0.13.0 again, with its files: that release's build finished, but nothing was
+attached to it. Nothing in the program changed.
+
 ## 0.13.0 — 2026-11-25
 
 ### Added
