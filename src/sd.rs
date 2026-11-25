@@ -1034,6 +1034,11 @@ fn oom_phase<'a>(
         ("decoding", s, n)
     } else if said(&["failed to encode reference image", "vae encode compute failed"]) {
         ("references", 0, 0)
+    } else if said(&["failed to encode prompt", "LLM prompt encoding failed"]) {
+        // The text encoder, which reads any reference pictures too (H3 Image's
+        // Qwen3-VL runs its vision tower over each). No progress bar of its own,
+        // so the last one is the load before it, which said "loading".
+        ("prompt", 0, 0)
     } else if said(&["sampling failed", "diffusion model compute failed"]) {
         ("drawing", s, n)
     } else {
@@ -1052,7 +1057,7 @@ fn oom_phase<'a>(
 pub struct OutOfMemory {
     /// `gpu`, or `ram` for system memory.
     pub kind: &'static str,
-    /// `loading`, `references`, `drawing` or `decoding` — see [`oom_phase`].
+    /// `loading`, `references`, `prompt`, `drawing` or `decoding` — see [`oom_phase`].
     pub phase: &'static str,
     pub step: u32,
     pub steps: u32,
@@ -1112,12 +1117,18 @@ impl std::fmt::Display for OutOfMemory {
             "drawing" if self.steps > 0 => format!("while drawing (step {} of {})", self.step, self.steps),
             "drawing" => "at the start of drawing".to_string(),
             "references" => "while reading the reference images".to_string(),
+            "prompt" => "while encoding the prompt".to_string(),
             "decoding" => "while turning the result into pixels (the VAE decode)".to_string(),
             _ => "while loading the model".to_string(),
         };
         let fix = match (self.kind, self.phase, self.mode) {
             ("ram", ..) => "Set Memory to Stream from SSD, or use a smaller file of the model.",
             (_, "decoding", _) => "sd.cpp already retried the decode in tiles; a smaller size is what fits.",
+            // System RAM pins its weights inside the GTT; past it the driver
+            // refuses the work, so the SSD is the advice there.
+            (_, _, "auto") if self.ram_needed.zip(self.gtt_free).is_some_and(|(n, g)| n > g) => {
+                "Set Memory to Stream from SSD: the weights are too big for the card's window onto RAM (GTT), so System RAM can't hold them."
+            }
             (_, _, "auto") => "Set Memory to System RAM: the weights then wait in RAM and the whole card is free for the work.",
             _ => "Try a smaller size, Stream from SSD, or a smaller file of the model.",
         };
@@ -2855,6 +2866,25 @@ binary = "/opt/sd-cli"
             &["-p", "x"],
         );
         assert_eq!(oom.unwrap().phase, "references");
+        // H3 Image on Auto, its Qwen3-VL reading a cast picture: the encoder's
+        // load bar was the last progress, but it died encoding — the run this
+        // was found on read "while loading the model" (2026-11-25).
+        let (_, oom) = run(
+            "printf '  |####| 551/551 - 2.93GB/s\\n'; \
+             echo 'radv/amdgpu: Not enough memory for command submission.' >&2; \
+             echo '[E] qwen3vl graph execution failed on Vulkan0: vk::Queue::submit: ErrorDeviceLost --- execution_engine.cpp:977' >&2; \
+             echo '[E] LLM prompt encoding failed --- conditioner.hpp:2440' >&2; \
+             echo '[E] failed to encode prompt --- image.cpp:575' >&2; exit 1",
+            &["-p", "x"],
+        );
+        let oom = oom.unwrap();
+        assert_eq!((oom.kind, oom.phase, oom.mode), ("gpu", "prompt", "auto"));
+        assert!(oom.to_string().contains("while encoding the prompt"), "{oom}");
+        // Past the GTT, System RAM is not the advice: it can't hold the weights.
+        let big = OutOfMemory { ram_needed: Some(40_000_000_000), gtt_free: Some(16_000_000_000), ..oom.clone() };
+        assert!(big.to_string().contains("Set Memory to Stream from SSD"), "{big}");
+        let small = OutOfMemory { ram_needed: Some(8_000_000_000), gtt_free: Some(16_000_000_000), ..oom };
+        assert!(small.to_string().contains("Set Memory to System RAM"), "{small}");
         // The driver refusing a submission sd.cpp's own check let through: a
         // lost device, with the reserve the command ran with read back.
         let (_, oom) = run(

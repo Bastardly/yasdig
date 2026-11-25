@@ -7,8 +7,10 @@ import { adoptSaved } from './settings.js';
 // The server types the failure (`sd::OutOfMemory`) and sends it as `oom` beside
 // the message — on a run's notice and on a waiting request's error body — so
 // this never matches words in a sentence. What it knows: `kind` (gpu or ram),
-// `phase` (loading, drawing, decoding), the step, where auto-fit had put the
-// weights, and the memory mode the command ran with.
+// `phase`, the step, where auto-fit had put the
+// weights, and the memory mode the command ran with. `phase` is loading,
+// references, prompt (the text encoder, which also reads H3 Image's reference
+// pictures), drawing or decoding.
 //
 // A button sets a control and nothing else: the Memory select, or the size
 // box. *Try again* re-runs exactly what failed — the caller hands that in — so a
@@ -27,7 +29,8 @@ export function headline(o) {
     ? (o.steps ? `while drawing (step ${o.step} of ${o.steps})` : 'at the start of drawing')
     : o.phase === 'decoding' ? 'while turning the result into pixels'
       : o.phase === 'references' ? 'while reading the reference images'
-        : 'while loading the model';
+        : o.phase === 'prompt' ? 'while encoding the prompt'
+          : 'while loading the model';
   const refs = o.references > 0
     ? `, with ${o.references} reference image${o.references > 1 ? 's' : ''}` : '';
   return `Ran out of ${what} ${when}${refs}.`;
