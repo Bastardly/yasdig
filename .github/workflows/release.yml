@@ -321,7 +321,10 @@ jobs:
         run: cargo test
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Stated outright: a job skips when anything upstream skipped, and on a tag
+    # push `tagged` (windows' need) always does — v0.13.0 built both archives
+    # and published neither.
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.linux.result == 'success' && needs.windows.result == 'success' }}
     needs: [linux, windows]
     runs-on: ubuntu-latest
     permissions:
@@ -364,7 +367,7 @@ jobs:
   # A scan that fails or times out leaves the release as it is, and the site
   # says "not scanned yet". `scan.yml` is also run by hand to (re-)scan a tag.
   scan:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.publish.result == 'success' }}
     needs: publish
     permissions:
       contents: write
